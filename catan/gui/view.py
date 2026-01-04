@@ -2,7 +2,7 @@
 # Game view class implementation with pygame
 
 import pygame
-from catan.game_engine.hex_grid import *
+from catan.engine.geometry import *
 
 pygame.init()
 

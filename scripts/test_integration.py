@@ -1,7 +1,12 @@
-import gymnasium as gym
 import numpy as np
-from catan.rl_logic.catan_gym_env import CatanEnv
-from catan.game_engine.dice import StackedDice
+import gymnasium as gym
+from catan.rl.env import CatanEnv
+from catan.engine.dice import StackedDice
+import sys
+import os
+
+# Add project root to sys.path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def test_integration():

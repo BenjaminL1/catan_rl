@@ -1,8 +1,8 @@
 # Settlers of Catan
 # Heuristic AI class implementation
 
-from catan.game_engine.board import *
-from catan.game_engine.player import *
+from catan.engine.board import *
+from catan.engine.player import *
 import numpy as np
 
 # Class definition for an AI player

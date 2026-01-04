@@ -1,7 +1,7 @@
 import pygame
 import sys
-from catan.game_engine.board import catanBoard
-from catan.game_engine.hex_grid import *
+from catan.engine.board import catanBoard
+from catan.engine.geometry import *
 
 
 class DebugBoardView:

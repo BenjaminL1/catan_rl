@@ -1,10 +1,10 @@
 # Settlers of Catan
 # Model state class for AI training
 
-from catan.game_engine.board import *
-from catan.game_engine.catanGame import *
-from catan.game_engine.player import *
-from catan.game_engine.heuristicAIPlayer import *
+from catan.engine.board import *
+from catan.engine.game import *
+from catan.engine.player import *
+from catan.agents.heuristic import *
 
 
 class modelState():

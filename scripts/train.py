@@ -1,22 +1,19 @@
-from stable_baselines3.common.env_checker import check_env
-from catan.rl_logic.catan_gym_env import CatanEnv
-import os
-import glob
-import gymnasium as gym
-import numpy as np
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from sb3_contrib import MaskablePPO
-from sb3_contrib.common.wrappers import ActionMasker
-import sys
 import torch
-
-# Enable anomaly detection for debugging
-# torch.autograd.set_detect_anomaly(True)
+from sb3_contrib.common.wrappers import ActionMasker
+from sb3_contrib import MaskablePPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
+import numpy as np
+import gymnasium as gym
+import glob
+from catan.rl.env import CatanEnv
+from stable_baselines3.common.env_checker import check_env
+import sys
+import os
 
 # Ensure we can import from the catan directory
-# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def mask_fn(env: gym.Env) -> np.ndarray:

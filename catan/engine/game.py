@@ -1,9 +1,12 @@
 # Settlers of Catan
 # Gameplay class with pygame
 
-from board import *
-from gameView import *
-from player import *
+from catan.engine.board import *
+from catan.gui.view import *
+from catan.engine.player import *
+from catan.agents.heuristic import *
+from catan.engine.dice import StackedDice
+from catan.engine.tracker import ResourceTracker
 import queue
 import numpy as np
 import sys
@@ -14,74 +17,120 @@ import pygame
 
 class catanGame():
     # Create new gameboard
-    def __init__(self):
-        print("Initializing Settlers of Catan Board...")
+    def __init__(self, render_mode="human"):
+        # print("Initializing Settlers of Catan Board...")
         self.board = catanBoard()
+        self.dice = StackedDice()
+        self.last_player_to_roll_7 = None
+        self.last_broadcast_event = None  # Track broadcast events (Discard, YOP, etc.)
+        self.resource_tracker = None  # Will be initialized after players are set up
 
         # Game State variables
         self.gameOver = False
         self.maxPoints = 15
         self.numPlayers = 2
 
-        print("Initializing game with {} players...".format(self.numPlayers))
-        print("Note that Player 1 goes first, Player 2 second and so forth.")
-
         # Initialize blank player queue and initial set up of roads + settlements
         self.playerQueue = queue.Queue(self.numPlayers)
         self.gameSetup = True  # Boolean to take care of setup phase
+        self.currentPlayer = None  # Keep track of current player
 
         # Initialize boardview object
-        self.boardView = catanGameView(self.board, self)
+        if render_mode == "human":
+            self.boardView = catanGameView(self.board, self)
+        else:
+            class DummyView:
+                def __getattr__(self, name):
+                    return lambda *args, **kwargs: None
+            self.boardView = DummyView()
 
         # Run functions to view board and vertex graph
         # self.board.printGraph()
 
         # Functiont to go through initial set up
-        self.build_initial_settlements()
+        if render_mode == "human":
+            self.build_initial_settlements()
+            # Display initial board
+            self.boardView.displayGameScreen()
+        else:
+            self.setup_players()
 
-        # Display initial board
-        self.boardView.displayGameScreen()
+    def setup_players(self):
+        playerColors = ['black', 'darkslateblue', 'magenta4', 'orange1']
+        for i in range(self.numPlayers):
+            newPlayer = player(f"Player {i+1}", playerColors[i])
+            self.playerQueue.put(newPlayer)
 
     # Function to initialize players + build initial settlements for players
 
     def build_initial_settlements(self):
         # Initialize new players with names and colors
         playerColors = ['black', 'darkslateblue', 'magenta4', 'orange1']
-        for i in range(self.numPlayers):
-            playerNameInput = input("Enter Player {} name: ".format(i+1))
+        for i in range(self.numPlayers - 1):
+            # playerNameInput = input("Enter Player {} name: ".format(i+1))
+            playerNameInput = f'Player {i+1}'
             newPlayer = player(playerNameInput, playerColors[i])
             self.playerQueue.put(newPlayer)
 
+        test_AI_player = heuristicAIPlayer(
+            'Random-Greedy-AI', playerColors[self.numPlayers - 1])  # Add the AI Player last
+        test_AI_player.updateAI()
+        self.playerQueue.put(test_AI_player)
+
         playerList = list(self.playerQueue.queue)
 
+        # Initialize Resource Tracker
+        self.resource_tracker = ResourceTracker([p.name for p in playerList])
+
         self.boardView.displayGameScreen()  # display the initial gameScreen
-        print("Displaying Initial GAMESCREEN!")
+        # print("Displaying Initial GAMESCREEN!")
 
         # Build Settlements and roads of each player forwards
         for player_i in playerList:
-            self.build(player_i, 'SETTLE')
-            self.boardView.displayGameScreen()
+            self.currentPlayer = player_i
+            if (player_i.isAI):
+                print(f"DEBUG: Calling AI {player_i.name} setup (Forward)...", flush=True)
+                player_i.initial_setup(self.board)
 
-            self.build(player_i, 'ROAD')
-            self.boardView.displayGameScreen()
+            else:
+                print(f"DEBUG: Human {player_i.name} setup (Forward)...", flush=True)
+                self.build(player_i, 'SETTLE', is_free=True)
+                self.boardView.displayGameScreen()
+
+                self.build(player_i, 'ROAD', is_free=True)
+                self.boardView.displayGameScreen()
 
         # Build Settlements and roads of each player reverse
         playerList.reverse()
         for player_i in playerList:
-            self.build(player_i, 'SETTLE')
-            self.boardView.displayGameScreen()
+            self.currentPlayer = player_i
+            if (player_i.isAI):
+                print(f"DEBUG: Calling AI {player_i.name} setup (Reverse)...", flush=True)
+                player_i.initial_setup(self.board)
+                self.boardView.displayGameScreen()
 
-            self.build(player_i, 'ROAD')
-            self.boardView.displayGameScreen()
+            else:
+                print(f"DEBUG: Human {player_i.name} setup (Reverse)...", flush=True)
+                self.build(player_i, 'SETTLE', is_free=True)
+                self.boardView.displayGameScreen()
+
+                self.build(player_i, 'ROAD', is_free=True)
+                self.boardView.displayGameScreen()
 
             # Initial resource generation
             # check each adjacent hex to latest settlement
-            for adjacentHex in self.board.boardGraph[player_i.buildGraph['SETTLEMENTS'][-1]].adjacentHexList:
+            initial_resources = []
+            for adjacentHex in self.board.boardGraph[player_i.buildGraph['SETTLEMENTS'][-1]].adjacent_hex_indices:
                 resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                 if (resourceGenerated != 'DESERT'):
                     player_i.resources[resourceGenerated] += 1
-                    print("{} collects 1 {} from Settlement".format(
-                        player_i.name, resourceGenerated))
+                    initial_resources.append(resourceGenerated)
+                    # print("{} collects 1 {} from Settlement".format(
+                    #     player_i.name, resourceGenerated))
+
+            # Track initial resources if tracker exists
+            if hasattr(self, 'resource_tracker'):
+                self.resource_tracker.track_initial_resources(player_i.name, initial_resources)
 
         self.gameSetup = False
 
@@ -89,7 +138,7 @@ class catanGame():
 
     # Generic function to handle all building in the game - interface with gameView
 
-    def build(self, player, build_flag):
+    def build(self, player, build_flag, is_free=False):
         if (build_flag == 'ROAD'):  # Show screen with potential roads
             if (self.gameSetup):
                 potentialRoadDict = self.board.get_setup_roads(player)
@@ -99,7 +148,7 @@ class catanGame():
             roadToBuild = self.boardView.buildRoad_display(
                 player, potentialRoadDict)
             if (roadToBuild != None):
-                player.build_road(roadToBuild[0], roadToBuild[1], self.board)
+                player.build_road(roadToBuild[0], roadToBuild[1], self.board, is_free)
 
         if (build_flag == 'SETTLE'):  # Show screen with potential settlements
             if (self.gameSetup):
@@ -111,7 +160,7 @@ class catanGame():
             vertexSettlement = self.boardView.buildSettlement_display(
                 player, potentialVertexDict)
             if (vertexSettlement != None):
-                player.build_settlement(vertexSettlement, self.board)
+                player.build_settlement(vertexSettlement, self.board, is_free)
 
         if (build_flag == 'CITY'):
             potentialCityVertexDict = self.board.get_potential_cities(player)
@@ -124,7 +173,7 @@ class catanGame():
 
     def robber(self, player):
         potentialRobberDict = self.board.get_robber_spots()
-        print("Move Robber!")
+        print("DEBUG: Move Robber! Click on a hex to move the robber.")
 
         hex_i, playerRobbed = self.boardView.moveRobber_display(
             player, potentialRobberDict)
@@ -133,14 +182,29 @@ class catanGame():
     # Function to roll dice
 
     def rollDice(self):
-        dice_1 = np.random.randint(1, 7)
-        dice_2 = np.random.randint(1, 7)
-        diceRoll = dice_1 + dice_2
-        print("Dice Roll = ", diceRoll, "{", dice_1, dice_2, "}")
+        self.last_broadcast_event = None  # Reset broadcast event
+        diceRoll = self.dice.roll(self.currentPlayer, self.last_player_to_roll_7)
+        print(f"DEBUG: Rolled {diceRoll}")
+        if diceRoll == 7:
+            self.last_player_to_roll_7 = self.currentPlayer
+            print("DEBUG: Rolled a 7! Robber logic initiated.")
+        # print("Dice Roll = ", diceRoll)
 
         self.boardView.displayDiceRoll(diceRoll)
 
         return diceRoll
+
+    def log_discard(self, player, resource_list):
+        """Broadcast discard event to system and console"""
+        self.last_broadcast_event = {'type': 'DISCARD',
+                                     'player': player.name, 'resources': resource_list}
+        # print(f"BROADCAST: Player {player.name} discarded {resource_list}")
+
+    def log_yop(self, player, resource_list):
+        """Broadcast Year of Plenty event to system and console"""
+        self.last_broadcast_event = {'type': 'YOP',
+                                     'player': player.name, 'resources': resource_list}
+        # print(f"BROADCAST: Player {player.name} used YOP to get {resource_list}")
 
     # Function to update resources for all players
     def update_playerResources(self, diceRoll, currentPlayer):
@@ -154,54 +218,50 @@ class catanGame():
                 # Check each settlement the player has
                 for settlementCoord in player_i.buildGraph['SETTLEMENTS']:
                     # check each adjacent hex to a settlement
-                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacentHexList:
+                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacent_hex_indices:
                         # This player gets a resource if hex is adjacent and no robber
                         if (adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].has_robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                             player_i.resources[resourceGenerated] += 1
-                            print("{} collects 1 {} from Settlement".format(
-                                player_i.name, resourceGenerated))
+                            # print("{} collects 1 {} from Settlement".format(
+                            #     player_i.name, resourceGenerated))
 
                 # Check each City the player has
                 for cityCoord in player_i.buildGraph['CITIES']:
                     # check each adjacent hex to a settlement
-                    for adjacentHex in self.board.boardGraph[cityCoord].adjacentHexList:
+                    for adjacentHex in self.board.boardGraph[cityCoord].adjacent_hex_indices:
                         # This player gets a resource if hex is adjacent and no robber
                         if (adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].has_robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                             player_i.resources[resourceGenerated] += 2
-                            print("{} collects 2 {} from City".format(
-                                player_i.name, resourceGenerated))
+                            # print("{} collects 2 {} from City".format(
+                            #     player_i.name, resourceGenerated))
 
-                print("Player:{}, Resources:{}, Points: {}".format(
-                    player_i.name, player_i.resources, player_i.victoryPoints))
+                # print("Player:{}, Resources:{}, Points: {}".format(
+                #     player_i.name, player_i.resources, player_i.victoryPoints))
                 # print('Dev Cards:{}'.format(player_i.devCards))
                 # print("RoadsLeft:{}, SettlementsLeft:{}, CitiesLeft:{}".format(player_i.roadsLeft, player_i.settlementsLeft, player_i.citiesLeft))
-                print('MaxRoadLength:{}, LongestRoad:{}\n'.format(
-                    player_i.maxRoadLength, player_i.longestRoadFlag))
+                # print('MaxRoadLength:{}, LongestRoad:{}\n'.format(
+                #     player_i.maxRoadLength, player_i.longestRoadFlag))
 
         # Logic for a 7 roll
         else:
             # Implement discarding cards
             # Check for each player
             for player_i in list(self.playerQueue.queue):
-                if (currentPlayer.isAI):
-                    print("AI discarding resources...")
-                    # TO-DO
-                else:
-                    # Player must discard resources
-                    player_i.discardResources()
+                # Player must discard resources
+                player_i.discardResources(self)
 
             # Logic for robber
             if (currentPlayer.isAI):
-                # Player must discard resources
-                player_i.discardResources()
-
-            # Logic for robber
-            self.robber(currentPlayer)
-            self.boardView.displayGameScreen()  # Update back to original gamescreen
+                # print("AI using heuristic robber...")
+                currentPlayer.heuristic_move_robber(self.board)
+            else:
+                self.robber(currentPlayer)
+                self.boardView.displayGameScreen()  # Update back to original gamescreen
 
     # function to check if a player has the longest road - after building latest road
+
     def check_longest_road(self, player_i):
         if (player_i.maxRoadLength >= 5):  # Only eligible if road length is at least 5
             longestRoad = True
@@ -223,8 +283,8 @@ class catanGame():
                 player_i.longestRoadFlag = True
                 player_i.victoryPoints += 2
 
-                print("Player {} takes Longest Road {}".format(
-                    player_i.name, prevPlayer))
+                # print("Player {} takes Longest Road {}".format(
+                #     player_i.name, prevPlayer))
 
     # function to check if a player has the largest army - after playing latest knight
     def check_largest_army(self, player_i):
@@ -248,22 +308,24 @@ class catanGame():
                 player_i.largestArmyFlag = True
                 player_i.victoryPoints += 2
 
-                print("Player {} takes Largest Army {}".format(
-                    player_i.name, prevPlayer))
+                # print("Player {} takes Largest Army {}".format(
+                #     player_i.name, prevPlayer))
 
     # Function that runs the main game loop with all players and pieces
 
     def playCatan(self):
         # self.board.displayBoard() #Display updated board
+        clock = pygame.time.Clock()
 
         while (self.gameOver == False):
 
             # Loop for each player's turn -> iterate through the player queue
             for currPlayer in self.playerQueue.queue:
+                self.currentPlayer = currPlayer
 
-                print(
-                    "---------------------------------------------------------------------------")
-                print("Current Player:", currPlayer.name)
+                # print(
+                #     "---------------------------------------------------------------------------")
+                # print("Current Player:", currPlayer.name)
 
                 turnOver = False  # boolean to keep track of turn
                 diceRolled = False  # Boolean for dice roll status
@@ -271,43 +333,73 @@ class catanGame():
                 # Update Player's dev card stack with dev cards drawn in previous turn and reset devCardPlayedThisTurn
                 currPlayer.updateDevCards()
                 currPlayer.devCardPlayedThisTurn = False
-
+                self.boardView.displayGameScreen()
                 while (turnOver == False):
+                    clock.tick(60)
 
-                    # Game loop for human players
-                    for e in pygame.event.get():  # Get player actions/in-game events
-                        # print(e)
-                        if e.type == pygame.QUIT:
-                            sys.exit(0)
+                    # TO-DO: Add logic for AI Player to move
+                    # TO-DO: Add option of AI Player playing a dev card prior to dice roll
+                    if (currPlayer.isAI):
+                        # Roll Dice
+                        diceNum = self.rollDice()
+                        diceRolled = True
+                        self.update_playerResources(diceNum, currPlayer)
 
-                        # Check mouse click in rollDice
-                        if (e.type == pygame.MOUSEBUTTONDOWN):
-                            # Check if player rolled the dice
-                            if (self.boardView.rollDice_button.collidepoint(e.pos)):
-                                if (diceRolled == False):  # Only roll dice once
-                                    diceNum = self.rollDice()
-                                    diceRolled = True
+                        # AI Player makes all its moves
+                        currPlayer.move(self.board)
+                        # Check if AI player gets longest road/largest army and update Victory points
+                        self.check_longest_road(currPlayer)
+                        self.check_largest_army(currPlayer)
+                        print("Player:{}, Resources:{}, Points: {}".format(
+                            currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
 
-                                    self.boardView.displayDiceRoll(diceNum)
-                                    # Code to update player resources with diceNum
-                                    self.update_playerResources(
-                                        diceNum, currPlayer)
+                        self.boardView.displayGameScreen()  # Update back to original gamescreen
+                        turnOver = True
 
-                            # Check if player wants to build road
-                            if (self.boardView.buildRoad_button.collidepoint(e.pos)):
-                                # Code to check if road is legal and build
-                                if (diceRolled == True):  # Can only build after rolling dice
-                                    self.build(currPlayer, 'ROAD')
-                                    self.boardView.displayGameScreen()  # Update back to original gamescreen
+                    else:  # Game loop for human players
+                        for e in pygame.event.get():  # Get player actions/in-game events
+                            # print(e)
+                            if e.type == pygame.QUIT:
+                                sys.exit(0)
 
-                                    # Check if player gets longest road and update Victory points
-                                    self.check_longest_road(currPlayer)
-                                    # Show updated points and resources
-                                    print("Player:{}, Resources:{}, Points: {}".format(
-                                        currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
+                            # Check mouse click in rollDice
+                            if (e.type == pygame.MOUSEBUTTONDOWN):
+                                print(f"DEBUG: Mouse Click at {e.pos}")
+                                # Check if player rolled the dice
+                                if (self.boardView.rollDice_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Roll Dice Button")
+                                    if (diceRolled == False):  # Only roll dice once
+                                        diceNum = self.rollDice()
+                                        diceRolled = True
+
+                                        self.boardView.displayDiceRoll(diceNum)
+                                        # Code to update player resources with diceNum
+                                        self.update_playerResources(
+                                            diceNum, currPlayer)
+                                        self.boardView.displayGameScreen()
+                                    else:
+                                        print("DEBUG: Dice already rolled this turn")
+
+                                # Check if player wants to build road
+                                if (self.boardView.buildRoad_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Build Road Button")
+                                    # Code to check if road is legal and build
+                                    if (diceRolled == True):  # Can only build after rolling dice
+                                        self.build(currPlayer, 'ROAD')
+
+                                        # Check if player gets longest road and update Victory points
+                                        self.check_longest_road(currPlayer)
+
+                                        self.boardView.displayGameScreen()  # Update back to original gamescreen
+                                        # Show updated points and resources
+                                        print("Player:{}, Resources:{}, Points: {}".format(
+                                            currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
+                                    else:
+                                        print("DEBUG: Must roll dice before building")
 
                                 # Check if player wants to build settlement
                                 if (self.boardView.buildSettlement_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Build Settlement Button")
                                     # Can only build settlement after rolling dice
                                     if (diceRolled == True):
                                         self.build(currPlayer, 'SETTLE')
@@ -318,6 +410,7 @@ class catanGame():
 
                                 # Check if player wants to build city
                                 if (self.boardView.buildCity_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Build City Button")
                                     if (diceRolled == True):  # Can only build city after rolling dice
                                         self.build(currPlayer, 'CITY')
                                         self.boardView.displayGameScreen()  # Update back to original gamescreen
@@ -327,8 +420,10 @@ class catanGame():
 
                                 # Check if player wants to draw a development card
                                 if (self.boardView.devCard_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Dev Card Button")
                                     if (diceRolled == True):  # Can only draw devCard after rolling dice
                                         currPlayer.draw_devCard(self.board)
+                                        self.boardView.displayGameScreen()
                                         # Show updated points and resources
                                         print("Player:{}, Resources:{}, Points: {}".format(
                                             currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
@@ -337,12 +432,15 @@ class catanGame():
 
                                 # Check if player wants to play a development card - can play devCard whenever after rolling dice
                                 if (self.boardView.playDevCard_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Play Dev Card Button")
                                     currPlayer.play_devCard(self)
-                                    self.boardView.displayGameScreen()  # Update back to original gamescreen
 
                                     # Check for Largest Army and longest road
                                     self.check_largest_army(currPlayer)
                                     self.check_longest_road(currPlayer)
+
+                                    self.boardView.displayGameScreen()  # Update back to original gamescreen
+
                                     # Show updated points and resources
                                     print("Player:{}, Resources:{}, Points: {}".format(
                                         currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
@@ -351,26 +449,21 @@ class catanGame():
 
                                 # Check if player wants to trade with the bank
                                 if (self.boardView.tradeBank_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked Trade Bank Button")
                                     currPlayer.initiate_trade(self, 'BANK')
-                                    # Show updated points and resources
-                                    print("Player:{}, Resources:{}, Points: {}".format(
-                                        currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
-
-                                # Check if player wants to trade with another player
-                                if (self.boardView.tradePlayers_button.collidepoint(e.pos)):
-                                    currPlayer.initiate_trade(self, 'PLAYER')
+                                    self.boardView.displayGameScreen()
                                     # Show updated points and resources
                                     print("Player:{}, Resources:{}, Points: {}".format(
                                         currPlayer.name, currPlayer.resources, currPlayer.victoryPoints))
 
                                 # Check if player wants to end turn
                                 if (self.boardView.endTurn_button.collidepoint(e.pos)):
+                                    print("DEBUG: Clicked End Turn Button")
                                     if (diceRolled == True):  # Can only end turn after rolling dice
                                         print("Ending Turn!")
                                         turnOver = True  # Update flag to nextplayer turn
                                     else:
-                                        print(
-                                            "Cannot end turn: You must roll the dice first!")
+                                        print("DEBUG: Must roll dice before ending turn")
 
                     # Update the display
                     # self.displayGameScreen(None, None)
@@ -395,5 +488,6 @@ class catanGame():
 
 
 # Initialize new game and run
-newGame = catanGame()
-newGame.playCatan()
+if __name__ == "__main__":
+    newGame = catanGame()
+    newGame.playCatan()

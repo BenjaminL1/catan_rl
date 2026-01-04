@@ -3,8 +3,8 @@
 
 from string import *
 import numpy as np
-from catan.game_engine.hex_grid import *
-from catan.game_engine.player import *
+from catan.engine.geometry import *
+from catan.engine.player import *
 # import networkx as nx
 # import matplotlib.pyplot as plt
 import pygame

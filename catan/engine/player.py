@@ -1,7 +1,7 @@
 # Settlers of Catan
 # Player class implementation
 
-from catan.game_engine.board import *
+from catan.engine.board import *
 import numpy as np
 
 # Class definition for a player
