@@ -170,7 +170,7 @@ class player():
         # Get all resources player 2 has in a list and use random list index to steal
         p2_resources = []
         for resourceName, resourceAmount in player_2.resources.items():
-            p2_resources += [resourceName]*resourceAmount
+            p2_resources += [resourceName] * resourceAmount
 
         if len(p2_resources) == 0:
             return
@@ -290,7 +290,7 @@ class player():
             # Get alldev cards available
             devCardsToDraw = []
             for cardName, cardAmount in board.devCardStack.items():
-                devCardsToDraw += [cardName]*cardAmount
+                devCardsToDraw += [cardName] * cardAmount
 
             # IF there are no devCards left
             if (devCardsToDraw == []):
@@ -567,9 +567,9 @@ class player():
 
         # Logic to calculate number of cards to discard and allow player to select
         if totalResourceCount > maxCards:
-            numCardsToDiscard = int(totalResourceCount/2)
-            print("\nPlayer {} has {} cards and MUST choose {} cards to discard...".format(
-                self.name, totalResourceCount, numCardsToDiscard))
+            numCardsToDiscard = int(totalResourceCount / 2)
+            # print("\nPlayer {} has {} cards and MUST choose {} cards to discard...".format(
+            #     self.name, totalResourceCount, numCardsToDiscard))
 
             # Use GUI to discard cards
             discarded_resources = game.boardView.get_resource_selection(
@@ -577,6 +577,6 @@ class player():
             game.log_discard(self, discarded_resources)
 
         else:
-            print("\nPlayer {} has {} cards and does not need to discard any cards!".format(
-                self.name, totalResourceCount))
+            # print("\nPlayer {} has {} cards and does not need to discard any cards!".format(
+            #     self.name, totalResourceCount))
             return

@@ -1,19 +1,28 @@
-import torch
-from sb3_contrib.common.wrappers import ActionMasker
-from sb3_contrib import MaskablePPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from stable_baselines3.common.callbacks import CheckpointCallback
-from stable_baselines3.common.monitor import Monitor
-import numpy as np
-import gymnasium as gym
-import glob
-from catan.rl.env import CatanEnv
 from stable_baselines3.common.env_checker import check_env
+import glob
+import gymnasium as gym
+import numpy as np
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.wrappers import ActionMasker
+import torch
 import sys
 import os
+from pathlib import Path
 
-# Ensure we can import from the catan directory
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# FIX: Disable strict probability checks to prevent Simplex errors on small FP deviations
+torch.distributions.Distribution.set_default_validate_args(False)
+
+# Get the absolute path of the 'CATAN_RL' root directory
+# Path(__file__) is scripts/train.py -> .parent is scripts/ -> .parent is CATAN_RL/
+root_dir = Path(__file__).resolve().parent.parent
+sys.path.append(str(root_dir))
+
+# Now this should work
+from catan.rl.env import CatanEnv
+from catan.rl.debug_wrapper import CatanCrashDebugWrapper
 
 
 def mask_fn(env: gym.Env) -> np.ndarray:
@@ -22,6 +31,7 @@ def mask_fn(env: gym.Env) -> np.ndarray:
 
 def make_env():
     env = CatanEnv(render_mode=None)
+    env = CatanCrashDebugWrapper(env)
     env = Monitor(env)  # For logging
     env = ActionMasker(env, mask_fn)  # For action masking
     return env
@@ -29,7 +39,7 @@ def make_env():
 
 def main():
     # Define paths - NEW DIRECTORY FOR LARGER MODEL
-    models_dir = "models/PPO_Large_v4"
+    models_dir = "models"
     log_dir = "logs"
 
     if not os.path.exists(models_dir):
@@ -69,12 +79,12 @@ def main():
         print(f"Loading latest model: {latest_model}")
 
         try:
-            # Load the model
-            model = MaskablePPO.load(latest_model, env=env, tensorboard_log=log_dir)
+            # Load the model - Force CPU to avoid MPS/Simplex errors
+            model = MaskablePPO.load(latest_model, env=env, tensorboard_log=log_dir, device='cpu')
             print(f"Resuming training from {latest_model}...")
 
             # FORCE the Learning Rate (Both Schedule and Optimizer)
-            new_lr = 5e-5  # 0.00005
+            new_lr = 5e-6  # Decayed to 0.000005 for Hall of Fame Self-Play Fine-Tuning
 
             # A. Update the internal scheduler function
             model.lr_schedule = lambda _: new_lr
@@ -85,6 +95,18 @@ def main():
             # C. Update the active optimizer
             for param_group in model.policy.optimizer.param_groups:
                 param_group["lr"] = new_lr
+
+            # Adjust Entropy Coefficient for Self-Play Exploration
+            model.ent_coef = 0.015
+
+            # Update Batch Size and N_Steps for Stability
+            model.n_steps = 4096
+            model.batch_size = 256
+            model.rollout_buffer.buffer_size = 4096
+            model.rollout_buffer.n_steps = 4096
+
+            # Reset buffer to handle new size
+            model.rollout_buffer.reset()
 
             # Ensure Safety Settings
             model.clip_range = lambda _: 0.1
@@ -100,13 +122,13 @@ def main():
             model = MaskablePPO(
                 "MlpPolicy",
                 env,
-                verbose=1,
+                verbose=0,
                 tensorboard_log=log_dir,
-                learning_rate=3e-4,       # Fast learning rate
+                learning_rate=1e-5,       # Slower learning rate for self-play
                 n_steps=2048,
                 batch_size=64,
                 gamma=0.995,              # Focus on long-term rewards
-                ent_coef=0.01,            # 1% Randomness for exploration
+                ent_coef=0.015,           # 1.5% Randomness for exploration
                 clip_range=0.2,
                 max_grad_norm=0.5,
                 policy_kwargs=policy_kwargs  # Apply larger network
@@ -120,13 +142,13 @@ def main():
         model = MaskablePPO(
             "MlpPolicy",
             env,
-            verbose=1,
+            verbose=0,
             tensorboard_log=log_dir,
-            learning_rate=3e-4,       # Fast learning rate
+            learning_rate=1e-5,       # Slower learning rate for self-play
             n_steps=2048,
             batch_size=64,
             gamma=0.995,              # Focus on long-term rewards
-            ent_coef=0.01,            # 1% Randomness for exploration
+            ent_coef=0.015,           # 1.5% Randomness for exploration
             clip_range=0.2,
             max_grad_norm=0.5,
             policy_kwargs=policy_kwargs  # Apply larger network
@@ -135,7 +157,8 @@ def main():
 
     print("Starting training...")
     try:
-        model.learn(total_timesteps=1000000, callback=checkpoint_callback,
+        # Extended to 3M steps to allow full curriculum saturation
+        model.learn(total_timesteps=3000000, callback=checkpoint_callback,
                     reset_num_timesteps=reset_timesteps)
         model.save(f"{models_dir}/catan_ppo_final")
         print("Training complete. Model saved.")

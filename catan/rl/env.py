@@ -6,6 +6,8 @@ import numpy as np
 from gymnasium import spaces
 import sys
 import os
+import glob
+from sb3_contrib import MaskablePPO
 import queue
 
 # Add current directory to path so we can import catan modules
@@ -38,13 +40,13 @@ class RandomAIPlayer(player):
         possibleVertices = board.get_setup_settlements(self)
         if possibleVertices:
             vertexToBuild = list(possibleVertices.keys())[np.random.randint(len(possibleVertices))]
-            self.build_settlement(vertexToBuild, board)
+            self.build_settlement(vertexToBuild, board, is_free=True)
 
         # Build random road
         possibleRoads = board.get_setup_roads(self)
         if possibleRoads:
             roadToBuild = list(possibleRoads.keys())[np.random.randint(len(possibleRoads))]
-            self.build_road(roadToBuild[0], roadToBuild[1], board)
+            self.build_road(roadToBuild[0], roadToBuild[1], board, is_free=True)
 
     def heuristic_move_robber(self, board):
         # Randomly move robber
@@ -153,7 +155,9 @@ class CatanEnv(gym.Env):
         self.robber_placement_pending = False
         self.road_building_roads_left = 0
         self.played_dev_card_this_turn = False
-        self.max_steps = 500
+        self.max_steps = 350
+        self._spatial_cache = None
+        self.total_episodes = 0
 
     def _init_edge_list(self):
         # We need a temporary board to calculate edges
@@ -177,6 +181,8 @@ class CatanEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
+        self.total_episodes += 1
+
         self.game = catanGame(render_mode=self.render_mode)
         self.robber_placement_pending = False
         self.road_building_roads_left = 0
@@ -191,11 +197,59 @@ class CatanEnv(gym.Env):
         # Monkeypatch discard
         self.agent_player.discardResources = self._agent_discard_resources
 
-        # self.opponent_player = heuristicAIPlayer("Opponent", 'darkslateblue')
-        self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')  # <--- NEW DUMMY BOT
-        # self.opponent_player.updateAI() # Not needed for random bot
-        # Monkeypatch opponent discard
-        # self.opponent_player.discardResources = self._agent_discard_resources
+        # Self-Play / Curriculum Logic
+        self.is_ghost_opponent = False
+        self.ghost_model = None
+
+        self.is_ghost_opponent = False
+        self.ghost_model = None
+
+        # Override logic via options
+        force_opponent = options.get('opponent_type') if options else None
+
+        if force_opponent == 'heuristic':
+            self.opponent_player = heuristicAIPlayer("Opponent", 'darkslateblue')
+            self.opponent_player.updateAI()
+        elif force_opponent == 'random':
+            self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
+        else:
+            # 1. Hall of Fame Self-Play Logic
+            models = glob.glob("models/*.zip")
+            should_play_ghost = False
+
+            if force_opponent == 'self-play':
+                should_play_ghost = True
+            elif models and np.random.random() < 0.9:  # 90% Probability for Self-Play
+                should_play_ghost = True
+
+            if should_play_ghost and models:
+                try:
+                    # Randomly select ANY saved model (Hall of Fame) to avoid recency bias
+                    chosen_model = np.random.choice(models)
+                    # Load on CPU to avoid MPS errors
+                    self.ghost_model = MaskablePPO.load(chosen_model, device='cpu')
+                    self.is_ghost_opponent = True
+                    # Use Heuristic Player for Setup Phase (PPO only takes over during main game)
+                    self.opponent_player = heuristicAIPlayer("Ghost", 'darkslateblue')
+                    self.opponent_player.updateAI()
+                    # print(f"Loaded Ghost Opponent: {chosen_model}")
+                except Exception as e:
+                    print(f"Failed to load ghost model {chosen_model}: {e}")
+                    self.is_ghost_opponent = False
+
+        # 2. Fallback to Curriculum (if not forced or ghost)
+        if not self.is_ghost_opponent and not hasattr(self, 'opponent_player'):
+            # RESUME CONFIG: Start at 50% probability, ramp to 100% over next 5000 episodes
+            # This prevents resetting to "easy mode" on script restart
+            base_prob = 0.5
+            ramp_up = min(0.5, self.total_episodes / 5000.0)
+            heuristic_prob = base_prob + ramp_up
+
+            if np.random.random() < heuristic_prob:
+                self.opponent_player = heuristicAIPlayer("Opponent", 'darkslateblue')
+                self.opponent_player.updateAI()
+            else:
+                self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
 
         self.game.playerQueue.put(self.agent_player)
         self.game.playerQueue.put(self.opponent_player)
@@ -282,6 +336,10 @@ class CatanEnv(gym.Env):
             # Stalling should be worse than losing (-0.5) to force action.
             reward -= 1.0
 
+        if reward < -0.9 and not terminated and not truncated:
+            print(
+                f"Warning: Low reward ({reward}) without termination. Potential infinite loop?", flush=True)
+
         player = self.agent_player
         mask = self.get_action_mask()
 
@@ -303,6 +361,7 @@ class CatanEnv(gym.Env):
                 # Build FREE road
                 player.build_road(v1_pixel, v2_pixel, self.game.board, is_free=True)
                 self.road_building_roads_left -= 1
+                self._spatial_cache = None  # Invalidate cache
 
                 self.game.check_longest_road(player)
                 if player.victoryPoints >= self.game.maxPoints:
@@ -323,12 +382,8 @@ class CatanEnv(gym.Env):
                 # Also need to rob a player if possible
                 players_to_rob = self.game.board.get_players_to_rob(hex_idx)
                 player_robbed = None
-                if players_to_rob:
-                    # Heuristic: Rob opponent if possible
-                    if self.opponent_player in players_to_rob:
-                        player_robbed = self.opponent_player
-                    else:
-                        player_robbed = list(players_to_rob.keys())[0]
+                if players_to_rob and self.opponent_player in players_to_rob:
+                    player_robbed = self.opponent_player
 
                 player.move_robber(hex_idx, self.game.board, player_robbed)
                 self.robber_placement_pending = False
@@ -369,6 +424,7 @@ class CatanEnv(gym.Env):
             v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
 
             player.build_road(v1_pixel, v2_pixel, self.game.board)
+            self._spatial_cache = None  # Invalidate cache
             reward += 0.02  # Bootcamp Reward
             self.game.check_longest_road(player)
             if player.victoryPoints >= self.game.maxPoints:
@@ -452,6 +508,7 @@ class CatanEnv(gym.Env):
             player.devCards['ROADBUILDER'] -= 1
             self.played_dev_card_this_turn = True
             self.road_building_roads_left = 2
+            self._spatial_cache = None  # Invalidate cache
             reward += 0.01
 
         elif 226 <= action <= 245:  # Bank Trading
@@ -469,14 +526,155 @@ class CatanEnv(gym.Env):
 
         return self._get_obs(), reward, terminated, truncated, info
 
+    def _execute_ghost_action(self, player, action):
+        """
+        Executes an action for a Ghost (Self-Play) opponent.
+        This mirrors the physics of step() but for the opponent player.
+        Returns: terminated (bool) - if the game ended via this action.
+        """
+        terminated = False
+
+        # 1. Priority: Road Building Card Phase
+        if self.road_building_roads_left > 0:
+            if 108 <= action <= 179:
+                edge_idx = action - 108
+                v1_idx, v2_idx = self.edge_list[edge_idx]
+                v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
+                v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
+                player.build_road(v1_pixel, v2_pixel, self.game.board, is_free=True)
+                self.road_building_roads_left -= 1
+                self.game.check_longest_road(player)
+            return player.victoryPoints >= self.game.maxPoints
+
+        # 2. Priority: Robber Placement
+        if self.robber_placement_pending:
+            if 181 <= action <= 199:
+                hex_idx = action - 181
+                # Rob agent if possible
+                players_to_rob = self.game.board.get_players_to_rob(hex_idx)
+                player_robbed = None
+                if players_to_rob and self.agent_player in players_to_rob:
+                    player_robbed = self.agent_player  # Rob the AGENT
+                player.move_robber(hex_idx, self.game.board, player_robbed)
+                self.robber_placement_pending = False
+            return False
+
+        # 3. Normal Actions
+        if 0 <= action <= 53:  # Build Settlement
+            vertex_idx = action
+            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
+            player.build_settlement(pixel, self.game.board)
+
+        elif 54 <= action <= 107:  # Build City
+            vertex_idx = action - 54
+            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
+            player.build_city(pixel, self.game.board)
+
+        elif 108 <= action <= 179:  # Build Road
+            edge_idx = action - 108
+            v1_idx, v2_idx = self.edge_list[edge_idx]
+            v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
+            v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
+            player.build_road(v1_pixel, v2_pixel, self.game.board)
+            self.game.check_longest_road(player)
+
+        elif action == 180:  # End Turn
+            # Soft Exit for Road Building Phase
+            if self.road_building_roads_left > 0:
+                self.road_building_roads_left = 0
+            else:
+                self.played_dev_card_this_turn = False
+            # Return "True" only if we want to signal turn end to loop?
+            # No, this function returns "Game Over" state. Turn end is handled by loop break.
+            return False
+
+        elif action == 200:  # Buy Dev Card
+            player.draw_devCard(self.game.board)
+
+        elif action == 201:  # Play Knight
+            player.devCards['KNIGHT'] -= 1
+            self.played_dev_card_this_turn = True
+            self.robber_placement_pending = True
+            player.knightsPlayed += 1
+            self.game.check_largest_army(player)
+
+        elif 202 <= action <= 216:  # Play Year of Plenty
+            player.devCards['YEAROFPLENTY'] -= 1
+            self.played_dev_card_this_turn = True
+            r1, r2 = YOP_COMBINATIONS[action - 202]
+            player.resources[r1] += 1
+            player.resources[r2] += 1
+
+        elif 217 <= action <= 221:  # Play Monopoly
+            player.devCards['MONOPOLY'] -= 1
+            self.played_dev_card_this_turn = True
+            target_res = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD'][action - 217]
+            # Steal from Agent
+            stolen_count = self.agent_player.resources[target_res]
+            self.agent_player.resources[target_res] = 0
+            player.resources[target_res] += stolen_count
+
+        elif action == 222:  # Play Road Building
+            player.devCards['ROADBUILDER'] -= 1
+            self.played_dev_card_this_turn = True
+            self.road_building_roads_left = 2
+
+        elif 226 <= action <= 245:  # Bank Trading
+            give, get = TRADE_ACTIONS[action - 226]
+            player.trade_with_bank(give, get)
+
+        return player.victoryPoints >= self.game.maxPoints
+
     def _run_opponent_turn(self):
         opponent = self.opponent_player
         self.game.currentPlayer = opponent
 
         dice = self.game.rollDice()
-        self.game.update_playerResources(dice, opponent)
+        if dice == 7:
+            self.robber_placement_pending = True
+            for p in [self.agent_player, self.opponent_player]:
+                p.discardResources(self.game)
+        else:
+            self.game.update_playerResources(dice, opponent)
 
-        opponent.move(self.game.board)
+        if self.is_ghost_opponent:
+            # Ghost/Self-Play Logic
+            steps = 0
+            while steps < 50:  # Avoid infinite loops
+                # 1. Swap players to trick _get_obs and get_action_mask
+                real_agent = self.agent_player
+                self.agent_player = self.opponent_player
+                self.opponent_player = real_agent
+
+                # 2. Get input data
+                try:
+                    obs = self._get_obs()
+                    mask = self.get_action_mask(player=self.agent_player)
+                finally:
+                    # 3. Swap back immediately
+                    self.opponent_player = self.agent_player
+                    self.agent_player = real_agent
+
+                # 4. Predict
+                action, _ = self.ghost_model.predict(obs, action_masks=mask)
+
+                if isinstance(action, np.ndarray):
+                    action = int(action.item())
+                elif isinstance(action, (np.integer, np.int64, np.int32)):
+                    action = int(action)
+
+                if action == 180:  # End Turn
+                    break
+
+                # 5. Execute Action
+                game_over = self._execute_ghost_action(self.opponent_player, action)
+                if game_over:
+                    self.game.gameOver = True
+                    break
+                steps += 1
+        else:
+            # Heuristic/Random Logic
+            opponent.move(self.game.board)
 
         self.game.check_longest_road(opponent)
         self.game.check_largest_army(opponent)
@@ -484,10 +682,11 @@ class CatanEnv(gym.Env):
         if opponent.victoryPoints >= self.game.maxPoints:
             self.game.gameOver = True
 
-    def get_action_mask(self):
+    def get_action_mask(self, player=None):
         # 1. Initialize as boolean False
         mask = np.zeros(246, dtype=bool)
-        player = self.agent_player
+        if player is None:
+            player = self.agent_player
 
         # Priority 1: Road Building Card Phase
         if self.road_building_roads_left > 0:
@@ -504,99 +703,102 @@ class CatanEnv(gym.Env):
                     except ValueError:
                         pass
 
-            # Soft Exit: If no roads can be built, allow skipping (Action 180)
+            # Road Building Failsafe: Allow skipping if blocked
             if not np.any(mask):
                 mask[180] = True
 
-            return mask
-
         # Priority 2: Robber Placement
-        if self.robber_placement_pending:
+        elif self.robber_placement_pending:
             mask[181:200] = True
-            return mask
 
-        # Normal Phase
-        mask[180] = True  # End Turn always valid
+        # Priority 3: Normal Phase
+        else:
+            mask[180] = True  # End Turn always valid
 
-        resources = player.resources
+            resources = player.resources
 
-        # Settlements (0-53)
-        if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
-            resources['SHEEP'] >= 1 and resources['WHEAT'] >= 1 and
-                player.settlementsLeft > 0):
-            potential_settlements = self.game.board.get_potential_settlements(player)
-            for v_pixel in potential_settlements.keys():
-                v_idx = self.game.board.boardGraph[v_pixel].vertex_index
-                mask[v_idx] = True
+            # Settlements (0-53)
+            if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
+                resources['SHEEP'] >= 1 and resources['WHEAT'] >= 1 and
+                    player.settlementsLeft > 0):
+                potential_settlements = self.game.board.get_potential_settlements(player)
+                for v_pixel in potential_settlements.keys():
+                    v_idx = self.game.board.boardGraph[v_pixel].vertex_index
+                    mask[v_idx] = True
 
-        # Cities (54-107)
-        if (resources['ORE'] >= 3 and resources['WHEAT'] >= 2 and
-                player.citiesLeft > 0):
-            potential_cities = self.game.board.get_potential_cities(player)
-            for v_pixel in potential_cities.keys():
-                v_idx = self.game.board.boardGraph[v_pixel].vertex_index
-                mask[54 + v_idx] = True
+            # Cities (54-107)
+            if (resources['ORE'] >= 3 and resources['WHEAT'] >= 2 and
+                    player.citiesLeft > 0):
+                potential_cities = self.game.board.get_potential_cities(player)
+                for v_pixel in potential_cities.keys():
+                    v_idx = self.game.board.boardGraph[v_pixel].vertex_index
+                    mask[54 + v_idx] = True
 
-        # Roads (108-179)
-        if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
-                player.roadsLeft > 0):
-            potential_roads = self.game.board.get_potential_roads(player)
-            for (v1_pixel, v2_pixel) in potential_roads.keys():
-                v1_idx = self.game.board.boardGraph[v1_pixel].vertex_index
-                v2_idx = self.game.board.boardGraph[v2_pixel].vertex_index
-                edge = tuple(sorted((v1_idx, v2_idx)))
-                try:
-                    edge_idx = self.edge_list.index(edge)
-                    mask[108 + edge_idx] = True
-                except ValueError:
-                    pass
+            # Roads (108-179)
+            if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
+                    player.roadsLeft > 0):
+                potential_roads = self.game.board.get_potential_roads(player)
+                for (v1_pixel, v2_pixel) in potential_roads.keys():
+                    v1_idx = self.game.board.boardGraph[v1_pixel].vertex_index
+                    v2_idx = self.game.board.boardGraph[v2_pixel].vertex_index
+                    edge = tuple(sorted((v1_idx, v2_idx)))
+                    try:
+                        edge_idx = self.edge_list.index(edge)
+                        mask[108 + edge_idx] = True
+                    except ValueError:
+                        pass
 
-        # Dev Cards
-        def can_play_dev(type):
-            if self.played_dev_card_this_turn:
-                return False
-            # player.devCards only contains cards from previous turns (playable)
-            return player.devCards[type] > 0
+            # Dev Cards
+            def can_play_dev(type):
+                if self.played_dev_card_this_turn:
+                    return False
+                # player.devCards only contains cards from previous turns (playable)
+                return player.devCards[type] > 0
 
-        # Buy Dev Card (200)
-        deck_size = sum(self.game.board.devCardStack.values())
-        if (resources['ORE'] >= 1 and resources['WHEAT'] >= 1 and resources['SHEEP'] >= 1 and deck_size > 0):
-            mask[200] = True
+            # Buy Dev Card (200)
+            deck_size = sum(self.game.board.devCardStack.values())
+            if (resources['ORE'] >= 1 and resources['WHEAT'] >= 1 and resources['SHEEP'] >= 1 and deck_size > 0):
+                mask[200] = True
 
-        # Play Knight (201)
-        if can_play_dev('KNIGHT'):
-            mask[201] = True
+            # Play Knight (201)
+            if can_play_dev('KNIGHT'):
+                mask[201] = True
 
-        # Play Year of Plenty (202-216)
-        if can_play_dev('YEAROFPLENTY'):
-            mask[202:217] = True
+            # Play Year of Plenty (202-216)
+            if can_play_dev('YEAROFPLENTY'):
+                mask[202:217] = True
 
-        # Play Monopoly (217-221)
-        if can_play_dev('MONOPOLY'):
-            mask[217:222] = True
+            # Play Monopoly (217-221)
+            if can_play_dev('MONOPOLY'):
+                mask[217:222] = True
 
-        # Play Road Building (222)
-        if can_play_dev('ROADBUILDER'):
-            potential_roads = self.game.board.get_potential_roads(player)
-            if len(potential_roads) >= 2 and player.roadsLeft >= 2:
-                mask[222] = True
+            # Play Road Building (222)
+            if can_play_dev('ROADBUILDER'):
+                potential_roads = self.game.board.get_potential_roads(player)
+                if len(potential_roads) >= 2 and player.roadsLeft >= 2:
+                    mask[222] = True
 
-        # Bank Trading (226-245)
-        # Not allowed during Road Building or Robber Placement (already handled by priority checks)
-        for i, (give, get) in enumerate(TRADE_ACTIONS):
-            cost = 4
-            if '3:1 PORT' in player.portList:
-                cost = 3
-            if f'2:1 {give}' in player.portList:
-                cost = 2
+            # Bank Trading (226-245)
+            # Not allowed during Road Building or Robber Placement (already handled by priority checks)
+            for i, (give, get) in enumerate(TRADE_ACTIONS):
+                cost = 4
+                if '3:1 PORT' in player.portList:
+                    cost = 3
+                if f'2:1 {give}' in player.portList:
+                    cost = 2
 
-            if resources[give] >= cost:
-                mask[226 + i] = True
+                if resources[give] >= cost:
+                    mask[226 + i] = True
 
         # NUCLEAR FAILSAFE
         if not np.any(mask):
-            # Force 'End Turn' to be valid no matter what.
+            # Force 'End Turn' to be valid no matter what to prevent crash
             mask[180] = True
+
+        # Absolute Assertion
+        assert np.any(
+            mask), f'Action mask is all zeros! State: Robber={self.robber_placement_pending}, RoadBuild={self.road_building_roads_left}'
+
         return mask
 
     def _toggle_road_on_board(self, v1, v2, player, on=True):
@@ -750,19 +952,26 @@ class CatanEnv(gym.Env):
         # Flatten state
         obs = []
 
+        # Helper to safely handle None/Inf values
+        def safe_float(val, default=0.0):
+            if val is None or not np.isfinite(val):
+                return default
+            return float(val)
+
         # Resources (Normalize by dividing by 20.0 to keep roughly in 0-1 range)
         for p in [self.agent_player, self.opponent_player]:
-            obs.extend([p.resources[r] / 20.0 for r in ['BRICK', 'ORE', 'WHEAT', 'WOOD', 'SHEEP']])
+            obs.extend([safe_float(p.resources[r]) /
+                       20.0 for r in ['BRICK', 'ORE', 'WHEAT', 'WOOD', 'SHEEP']])
 
         # VPs (Normalize by dividing by 10.0)
-        obs.append(self.agent_player.victoryPoints / 10.0)
-        obs.append(self.opponent_player.victoryPoints / 10.0)
+        obs.append(safe_float(self.agent_player.victoryPoints) / 10.0)
+        obs.append(safe_float(self.opponent_player.victoryPoints) / 10.0)
 
         # Hexes
         resource_map = {'DESERT': 0, 'ORE': 1, 'BRICK': 2, 'WHEAT': 3, 'WOOD': 4, 'SHEEP': 5}
         for i in range(19):
             hex_tile = self.game.board.hexTileDict[i]
-            res_one_hot = [0]*6
+            res_one_hot = [0] * 6
             res_one_hot[resource_map[hex_tile.resource_type]] = 1
             obs.extend(res_one_hot)
 
@@ -789,10 +998,10 @@ class CatanEnv(gym.Env):
             pixel = self.game.board.vertex_index_to_pixel_dict[i]
             vertex = self.game.board.boardGraph[pixel]
 
-            owner_one_hot = [0]*3
-            type_one_hot = [0]*3
-            port_one_hot = [0]*6
-            valid_spot_one_hot = [0]*2  # [IsSettlementSpot, IsCitySpot]
+            owner_one_hot = [0] * 3
+            type_one_hot = [0] * 3
+            port_one_hot = [0] * 6
+            valid_spot_one_hot = [0] * 2  # [IsSettlementSpot, IsCitySpot]
 
             if vertex.building_type == 'Settlement':
                 type_one_hot[1] = 1
@@ -834,7 +1043,7 @@ class CatanEnv(gym.Env):
             v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
             v1 = self.game.board.boardGraph[v1_pixel]
 
-            owner_one_hot = [0]*3
+            owner_one_hot = [0] * 3
             owner_one_hot[0] = 1
             valid_road_spot = [0]
 
@@ -874,7 +1083,7 @@ class CatanEnv(gym.Env):
         obs.append(self.opponent_player.maxRoadLength / 15.0)
 
         # Bonus VPs
-        lr_one_hot = [0]*3
+        lr_one_hot = [0] * 3
         if self.agent_player.longestRoadFlag:
             lr_one_hot[1] = 1
         elif self.opponent_player.longestRoadFlag:
@@ -883,7 +1092,7 @@ class CatanEnv(gym.Env):
             lr_one_hot[0] = 1
         obs.extend(lr_one_hot)
 
-        la_one_hot = [0]*3
+        la_one_hot = [0] * 3
         if self.agent_player.largestArmyFlag:
             la_one_hot[1] = 1
         elif self.opponent_player.largestArmyFlag:
@@ -897,28 +1106,29 @@ class CatanEnv(gym.Env):
         dots_map = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
         income = {'BRICK': 0, 'ORE': 0, 'SHEEP': 0, 'WHEAT': 0, 'WOOD': 0}
 
-        for i in range(19):
-            hex_tile = self.game.board.hexTileDict[i]
-            res_type = hex_tile.resource_type
-            num = hex_tile.number_token
+        # Optimized Income Calculation using adjacency graph
+        for i in range(54):
+            pixel = self.game.board.vertex_index_to_pixel_dict[i]
+            vertex = self.game.board.boardGraph[pixel]
 
-            if res_type != 'DESERT' and num is not None:
-                # Get vertices
-                corners = hex_tile.get_corners(self.game.board.flat)
-                for corner in corners:
-                    # Find vertex object
-                    # This is slow, but we need to match pixel coords
-                    # Optimization: Use pre-calculated vertex-hex map if available
-                    # For now, iterate boardGraph
-                    for v_pixel, v_obj in self.game.board.boardGraph.items():
-                        if self.game.board.vertexDistance(corner, v_pixel) == 0:
-                            if v_obj.owner == self.agent_player:
-                                multiplier = 2 if v_obj.building_type == 'City' else 1
-                                income[res_type] += dots_map[num] * multiplier
-                            break
+            if vertex.owner == self.agent_player:
+                multiplier = 2 if vertex.building_type == 'City' else 1
+
+                # Use refactored logic: vertex.adjacent_hex_indices
+                for hex_idx in vertex.adjacent_hex_indices:
+                    hex_tile = self.game.board.hexTileDict[hex_idx]
+                    res_type = hex_tile.resource_type
+                    num = hex_tile.number_token
+
+                    if res_type != 'DESERT' and num is not None:
+                        dots = dots_map.get(num, 0)
+                        # Adjustment: Check for Robber? Usually "Expected Income" ignores robber for long-term planning,
+                        # but if we want current income, we should check.
+                        # Standard RL feature usually implies "Production Capability", so ignoring robber is fine/better.
+                        income[res_type] += dots * multiplier
 
         for r in ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']:
-            obs.append(income[r] / 36.0)
+            obs.append(safe_float(income[r]) / 36.0)
 
         # 2. Trade Rates
         rates = {'BRICK': 4.0, 'ORE': 4.0, 'SHEEP': 4.0, 'WHEAT': 4.0, 'WOOD': 4.0}
@@ -1005,8 +1215,12 @@ class CatanEnv(gym.Env):
             obs.append(ex_rates[r] / 4.0)
 
         # F. Spatial Reasoning (3 Normalized Floats)
-        pot_1, pot_2 = self._get_2_step_road_potential()
-        connect_dist = self._get_min_connect_distance()
+        if self._spatial_cache is None:
+            pot_1, pot_2 = self._get_2_step_road_potential()
+            connect_dist = self._get_min_connect_distance()
+            self._spatial_cache = (pot_1, pot_2, connect_dist)
+
+        pot_1, pot_2, connect_dist = self._spatial_cache
 
         obs.append(pot_1 / 15.0)
         obs.append(pot_2 / 15.0)

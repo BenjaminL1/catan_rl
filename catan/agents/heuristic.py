@@ -44,7 +44,7 @@ class heuristicAIPlayer(player):
                 vertexNumValue += diceRoll_expectation[numValue]
 
             # basic heuristic for resource diversity
-            vertexNumValue += len(resourcesAtVertex)*2
+            vertexNumValue += len(resourcesAtVertex) * 2
             for r in resourcesAtVertex:
                 if (r != 'DESERT' and r not in self.setupResources):
                     vertexNumValue += 2.5  # Every new resource gets a bonus
@@ -60,13 +60,13 @@ class heuristicAIPlayer(player):
             if (resourceType not in self.setupResources and resourceType != 'DESERT'):
                 self.setupResources.append(resourceType)
 
-        self.build_settlement(vertexToBuild, board)
+        self.build_settlement(vertexToBuild, board, is_free=True)
 
         # Build random road
         possibleRoads = board.get_setup_roads(self)
         randomEdge = np.random.randint(0, len(possibleRoads.keys()))
         self.build_road(list(possibleRoads.keys())[randomEdge][0], list(
-            possibleRoads.keys())[randomEdge][1], board)
+            possibleRoads.keys())[randomEdge][1], board, is_free=True)
 
     def move(self, board):
         # print("AI Player {} playing...".format(self.name))
@@ -223,7 +223,7 @@ class heuristicAIPlayer(player):
         totalResourceCount = sum(self.resources.values())
 
         if totalResourceCount > maxCards:
-            numCardsToDiscard = int(totalResourceCount/2)
+            numCardsToDiscard = int(totalResourceCount / 2)
             # print("\nAI Player {} has {} cards and discards {} cards...".format(
             #     self.name, totalResourceCount, numCardsToDiscard))
 

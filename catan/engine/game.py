@@ -173,7 +173,7 @@ class catanGame():
 
     def robber(self, player):
         potentialRobberDict = self.board.get_robber_spots()
-        print("DEBUG: Move Robber! Click on a hex to move the robber.")
+        # print("DEBUG: Move Robber! Click on a hex to move the robber.")
 
         hex_i, playerRobbed = self.boardView.moveRobber_display(
             player, potentialRobberDict)
@@ -184,10 +184,10 @@ class catanGame():
     def rollDice(self):
         self.last_broadcast_event = None  # Reset broadcast event
         diceRoll = self.dice.roll(self.currentPlayer, self.last_player_to_roll_7)
-        print(f"DEBUG: Rolled {diceRoll}")
+        # print(f"DEBUG: Rolled {diceRoll}")
         if diceRoll == 7:
             self.last_player_to_roll_7 = self.currentPlayer
-            print("DEBUG: Rolled a 7! Robber logic initiated.")
+            # print("DEBUG: Rolled a 7! Robber logic initiated.")
         # print("Dice Roll = ", diceRoll)
 
         self.boardView.displayDiceRoll(diceRoll)
