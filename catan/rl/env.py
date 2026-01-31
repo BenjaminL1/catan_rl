@@ -9,6 +9,7 @@ import os
 import glob
 from sb3_contrib import MaskablePPO
 import queue
+from catan.rl.league import LeagueManager
 
 # Add current directory to path so we can import catan modules
 # sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -178,6 +179,14 @@ class CatanEnv(gym.Env):
         self.edge_list = sorted(list(edges))
         # assert len(self.edge_list) == 72 # Verify standard Catan edges
 
+        self.league = LeagueManager()
+        self.hof_models = []
+        self._scan_model_pool()
+
+    def _scan_model_pool(self):
+        """Scans the models directory for available opponents."""
+        self.league.scan_models()
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
@@ -212,65 +221,93 @@ class CatanEnv(gym.Env):
             self.opponent_player.updateAI()
         elif force_opponent == 'random':
             self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
-        else:
-            # 1. Hall of Fame Self-Play Logic
-            models = glob.glob("models/*.zip")
-            should_play_ghost = False
-
-            if force_opponent == 'self-play':
-                should_play_ghost = True
-            elif models and np.random.random() < 0.9:  # 90% Probability for Self-Play
-                should_play_ghost = True
-
-            if should_play_ghost and models:
-                try:
-                    # Randomly select ANY saved model (Hall of Fame) to avoid recency bias
-                    chosen_model = np.random.choice(models)
-                    # Load on CPU to avoid MPS errors
-                    self.ghost_model = MaskablePPO.load(chosen_model, device='cpu')
-                    self.is_ghost_opponent = True
-                    # Use Heuristic Player for Setup Phase (PPO only takes over during main game)
-                    self.opponent_player = heuristicAIPlayer("Ghost", 'darkslateblue')
-                    self.opponent_player.updateAI()
-                    # print(f"Loaded Ghost Opponent: {chosen_model}")
-                except Exception as e:
-                    print(f"Failed to load ghost model {chosen_model}: {e}")
-                    self.is_ghost_opponent = False
-
-        # 2. Fallback to Curriculum (if not forced or ghost)
-        if not self.is_ghost_opponent and not hasattr(self, 'opponent_player'):
-            # RESUME CONFIG: Start at 50% probability, ramp to 100% over next 5000 episodes
-            # This prevents resetting to "easy mode" on script restart
-            base_prob = 0.5
-            ramp_up = min(0.5, self.total_episodes / 5000.0)
-            heuristic_prob = base_prob + ramp_up
-
-            if np.random.random() < heuristic_prob:
-                self.opponent_player = heuristicAIPlayer("Opponent", 'darkslateblue')
+        elif str(force_opponent).endswith('.zip'):
+            # Explicit model load
+            try:
+                self.ghost_model = MaskablePPO.load(force_opponent, device='cpu')
+                self.is_ghost_opponent = True
+                self.opponent_player = heuristicAIPlayer("Ghost", 'darkslateblue')
                 self.opponent_player.updateAI()
-            else:
+            except:
                 self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
+        else:
+            # Phase 4: L-FSP Sampling via LeagueManager
+            chosen_model_path = self.league.get_opponent()
 
-        self.game.playerQueue.put(self.agent_player)
-        self.game.playerQueue.put(self.opponent_player)
+            if chosen_model_path and os.path.exists(chosen_model_path):
+                try:
+                    self.ghost_model = MaskablePPO.load(chosen_model_path, device='cpu')
+                    self.is_ghost_opponent = True
+                    # Extract name for display
+                    opp_name = os.path.basename(chosen_model_path).replace('.zip', '')
+                    self.opponent_player = heuristicAIPlayer(f"Ghost-{opp_name}", 'darkslateblue')
+                    self.opponent_player.updateAI()
+                    self.current_opponent_name = os.path.basename(chosen_model_path)
+                except Exception as e:
+                    print(f"Failed to load {chosen_model_path}: {e}")
+                    self.is_ghost_opponent = False
+                    self.opponent_player = heuristicAIPlayer("Opponent-Default", 'darkslateblue')
+                    self.opponent_player.updateAI()
+                    self.current_opponent_name = "Heuristic"
+            else:
+                # Fallback to Heuristic if league is empty or fails
+                self.is_ghost_opponent = False
+                self.opponent_player = heuristicAIPlayer("Opponent-Default", 'darkslateblue')
+                self.opponent_player.updateAI()
+                self.current_opponent_name = "Heuristic"
+
+        # Seat Swap Logic (50% Chance)
+        # Agent is P1 by default
+        p1 = self.agent_player
+        p2 = self.opponent_player
+
+        if np.random.random() < 0.5:
+            # Swap!
+            p1, p2 = p2, p1
+            # Adjust player color/names if strictly needed, but internal logic uses object references.
+            # We explicitly set turn order in the queue
+
+        self.game.playerQueue.put(p1)
+        self.game.playerQueue.put(p2)
+
+        # Set current player to whoever is first in queue
+        self.game.currentPlayer = self.game.playerQueue.queue[0]
+        self.prev_vps = 0
 
         # Initial Setup
         self._perform_initial_setup()
 
         # Start the game loop logic
         self.game.gameOver = False
-        self.game.currentPlayer = self.agent_player
+        self.game.currentPlayer = self.game.playerQueue.queue[0]
         self.prev_vps = 0
 
-        # Roll dice for the first turn
-        dice = self.game.rollDice()
-        if dice == 7:
-            self.robber_placement_pending = True
-            # Discard resources if needed
-            for p in [self.agent_player, self.opponent_player]:
-                p.discardResources(self.game)
+        # Check if it's Opponent's turn (e.g. they won the coin toss / seat swap)
+        if self.game.currentPlayer == self.opponent_player:
+            # Run Opponent Turn
+            self._run_opponent_turn()
+
+            # Now it should be Agent's turn (unless game over)
+            if not self.game.gameOver:
+                self.game.currentPlayer = self.agent_player
+                # Prepare Agent Turn
+                self.agent_player.updateDevCards()
+                dice = self.game.rollDice()
+                if dice == 7:
+                    self.robber_placement_pending = True
+                    for p in [self.agent_player, self.opponent_player]:
+                        p.discardResources(self.game)
+                else:
+                    self.game.update_playerResources(dice, self.agent_player)
         else:
-            self.game.update_playerResources(dice, self.game.currentPlayer)
+            # Agent is First
+            dice = self.game.rollDice()
+            if dice == 7:
+                self.robber_placement_pending = True
+                for p in [self.agent_player, self.opponent_player]:
+                    p.discardResources(self.game)
+            else:
+                self.game.update_playerResources(dice, self.game.currentPlayer)
 
         return self._get_obs(), {}
 
@@ -523,6 +560,12 @@ class CatanEnv(gym.Env):
         if vp_diff > 0:
             reward += 0.2 * vp_diff  # Bootcamp Reward
         self.prev_vps = current_vp
+
+        if terminated and hasattr(self, 'current_opponent_name'):
+            info['league_update'] = {
+                'opponent': self.current_opponent_name,
+                'win': info.get('is_success', False)
+            }
 
         return self._get_obs(), reward, terminated, truncated, info
 

@@ -2,6 +2,7 @@
 # Game view class implementation with pygame
 
 import pygame
+import sys
 from catan.engine.geometry import *
 
 pygame.init()
@@ -68,11 +69,11 @@ class catanGameView():
                 # print("Displaying {} port with coordinates x ={} and y={}".format(vertexInfo.port, vCoord.x, vCoord.y))
 
                 if (vCoord.x < 430 and vCoord.y > 130):
-                    self.screen.blit(portText, (vCoord.x-50, vCoord.y))
+                    self.screen.blit(portText, (vCoord.x - 50, vCoord.y))
                 elif (vCoord.x > 430 and vCoord.y < 130):
-                    self.screen.blit(portText, (vCoord.x, vCoord.y-15))
+                    self.screen.blit(portText, (vCoord.x, vCoord.y - 15))
                 elif (vCoord.x < 430 and vCoord.y < 130):
-                    self.screen.blit(portText, (vCoord.x-50, vCoord.y-15))
+                    self.screen.blit(portText, (vCoord.x - 50, vCoord.y - 15))
                 else:
                     self.screen.blit(portText, (vCoord.x, vCoord.y))
 
@@ -97,7 +98,7 @@ class catanGameView():
 
     def draw_settlement(self, vertexToDraw, color):
         newSettlement = pygame.Rect(
-            vertexToDraw.x-10, vertexToDraw.y-10, 25, 25)
+            vertexToDraw.x - 10, vertexToDraw.y - 10, 25, 25)
         pygame.draw.rect(self.screen, pygame.Color(color), newSettlement)
 
     # Function to draw a potential settlement on the board - thin
@@ -200,7 +201,7 @@ class catanGameView():
                 robberCoords = hexTile.pixelCenter
 
         self.screen.blit(robberText, (int(robberCoords.x) -
-                         20, int(robberCoords.y)-35))
+                         20, int(robberCoords.y) - 35))
 
     def displayPlayerStats(self):
         if not hasattr(self.game, 'currentPlayer') or self.game.currentPlayer is None:

@@ -3,7 +3,7 @@ import glob
 import gymnasium as gym
 import numpy as np
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, BaseCallback, CallbackList
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
@@ -37,13 +37,80 @@ def make_env():
     return env
 
 
+class HallOfFameUpdateCallback(BaseCallback):
+    def __init__(self, save_freq, verbose=0):
+        super().__init__(verbose)
+        self.save_freq = save_freq
+
+    def _on_step(self):
+        if self.n_calls % self.save_freq == 0:
+            try:
+                # Trigger scan in env (DummyVecEnv wrapper)
+                self.training_env.env_method("_scan_model_pool")
+                if self.verbose > 0:
+                    print("Hall of Fame Pool Updated.")
+            except Exception as e:
+                print(f"HoF Update Failed: {e}")
+        return True
+
+
+class LeagueUpdateCallback(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+
+    def _on_step(self):
+        dones = self.locals.get("dones", [])
+        infos = self.locals.get("infos", [])
+
+        if np.any(dones):
+            try:
+                # Get access to the league object from the environment
+                leagues = self.training_env.get_attr("league")
+                if not leagues:
+                    return True
+
+                # Use the first one (assuming DummyVecEnv)
+                league = leagues[0]
+
+                for i, done in enumerate(dones):
+                    if done and i < len(infos):
+                        info = infos[i]
+                        if 'league_update' in info:
+                            update = info['league_update']
+                            # Update stats
+                            league.update_match_result(update['opponent'], update['win'])
+                            league.save_data()
+
+                            # if self.verbose > 0:
+                            #     res = "WIN" if update['win'] else "LOSS"
+                            #     print(f"League Match: Agent vs {update['opponent']} -> {res}")
+
+                # Log Average League Difficulty
+                try:
+                    avg_difficulty = league.get_avg_difficulty()
+                    self.logger.record("league/avg_difficulty", avg_difficulty)
+                except Exception as e:
+                    pass
+
+            except Exception as e:
+                # pass silently or print
+                if self.verbose > 0:
+                    print(f"League match update error: {e}")
+
+        return True
+
+
 def main():
     # Define paths - NEW DIRECTORY FOR LARGER MODEL
     models_dir = "models"
+    hof_dir = "models/hof"
     log_dir = "logs"
 
     if not os.path.exists(models_dir):
         os.makedirs(models_dir)
+
+    if not os.path.exists(hof_dir):
+        os.makedirs(hof_dir)
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
@@ -64,19 +131,35 @@ def main():
     print("Environment check skipped (ActionMasker wrapper).")
 
     # Callback for saving checkpoints
+    SAVE_FREQ = 1000000
+
     checkpoint_callback = CheckpointCallback(
-        save_freq=50000,
-        save_path=models_dir,
+        save_freq=SAVE_FREQ,
+        save_path=hof_dir,  # Save to HoF
         name_prefix="catan_ppo"
     )
 
-    # Check for existing models
-    existing_models = glob.glob(f"{models_dir}/*.zip")
+    hof_callback = HallOfFameUpdateCallback(save_freq=SAVE_FREQ, verbose=1)
+    league_callback = LeagueUpdateCallback(verbose=1)
 
-    if existing_models:
-        # Find the latest model based on modification time
-        latest_model = max(existing_models, key=os.path.getmtime)
-        print(f"Loading latest model: {latest_model}")
+    callback_list = CallbackList([checkpoint_callback, hof_callback, league_callback])
+
+    # Priority Loading: 1. catan_ppo_final.zip  2. Latest Checkpoint
+    final_path = os.path.join(models_dir, "catan_ppo_final.zip")
+    latest_model = None
+
+    if os.path.exists(final_path):
+        latest_model = final_path
+        print(f"Loading primary model: {latest_model}")
+    else:
+        root_models = glob.glob(f"{models_dir}/*.zip")
+        hof_models = glob.glob(f"{hof_dir}/*.zip")
+        candidates = root_models + hof_models
+        if candidates:
+            latest_model = max(candidates, key=os.path.getmtime)
+            print(f"Primary model missing. Loading latest checkpoint: {latest_model}")
+
+    if latest_model:
 
         try:
             # Load the model - Force CPU to avoid MPS/Simplex errors
@@ -97,7 +180,8 @@ def main():
                 param_group["lr"] = new_lr
 
             # Adjust Entropy Coefficient for Self-Play Exploration
-            model.ent_coef = 0.015
+            # REDUCED from 0.015 to 0.005 to encourage more "serious" play and recover win rate
+            model.ent_coef = 0.005
 
             # Update Batch Size and N_Steps for Stability
             model.n_steps = 4096
@@ -158,7 +242,7 @@ def main():
     print("Starting training...")
     try:
         # Extended to 3M steps to allow full curriculum saturation
-        model.learn(total_timesteps=3000000, callback=checkpoint_callback,
+        model.learn(total_timesteps=3000000, callback=callback_list,
                     reset_num_timesteps=reset_timesteps)
         model.save(f"{models_dir}/catan_ppo_final")
         print("Training complete. Model saved.")

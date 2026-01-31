@@ -15,8 +15,8 @@ class heuristicAIPlayer(player):
         self.isAI = True
         self.setupResources = []  # List to keep track of setup resources
         # Initialize resources with just correct number needed for set up
-        self.resources = {'ORE': 0, 'BRICK': 4, 'WHEAT': 2, 'WOOD': 4,
-                          'SHEEP': 2}  # Dictionary that keeps track of resource amounts
+        self.resources = {'ORE': 0, 'BRICK': 0, 'WHEAT': 0, 'WOOD': 0,
+                          'SHEEP': 0}  # Dictionary that keeps track of resource amounts
         # print("Added new AI Player:", self.name)
 
     # Function to build an initial settlement - just choose random spot for now

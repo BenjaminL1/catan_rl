@@ -1,0 +1,310 @@
+{
+    "models": {
+        "catan_ppo_10716866_steps.zip": {
+            "path": "models/hof/catan_ppo_10716866_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_9716866_steps.zip": {
+            "path": "models/hof/catan_ppo_9716866_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_8716866_steps.zip": {
+            "path": "models/hof/catan_ppo_8716866_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_11719234_steps.zip": {
+            "path": "models/hof/catan_ppo_11719234_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_12719234_steps.zip": {
+            "path": "models/hof/catan_ppo_12719234_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_13719234_steps.zip": {
+            "path": "models/hof/catan_ppo_13719234_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_14721602_steps.zip": {
+            "path": "models/hof/catan_ppo_14721602_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_15721602_steps.zip": {
+            "path": "models/hof/catan_ppo_15721602_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_16721602_steps.zip": {
+            "path": "models/hof/catan_ppo_16721602_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_17723970_steps.zip": {
+            "path": "models/hof/catan_ppo_17723970_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_18723970_steps.zip": {
+            "path": "models/hof/catan_ppo_18723970_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_19723970_steps.zip": {
+            "path": "models/hof/catan_ppo_19723970_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_20726338_steps.zip": {
+            "path": "models/hof/catan_ppo_20726338_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_21726338_steps.zip": {
+            "path": "models/hof/catan_ppo_21726338_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_22726338_steps.zip": {
+            "path": "models/hof/catan_ppo_22726338_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_22828706_steps.zip": {
+            "path": "models/hof/catan_ppo_22828706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_22928706_steps.zip": {
+            "path": "models/hof/catan_ppo_22928706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23028706_steps.zip": {
+            "path": "models/hof/catan_ppo_23028706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23128706_steps.zip": {
+            "path": "models/hof/catan_ppo_23128706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23228706_steps.zip": {
+            "path": "models/hof/catan_ppo_23228706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23328706_steps.zip": {
+            "path": "models/hof/catan_ppo_23328706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23428706_steps.zip": {
+            "path": "models/hof/catan_ppo_23428706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23528706_steps.zip": {
+            "path": "models/hof/catan_ppo_23528706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23628706_steps.zip": {
+            "path": "models/hof/catan_ppo_23628706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23728706_steps.zip": {
+            "path": "models/hof/catan_ppo_23728706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23828706_steps.zip": {
+            "path": "models/hof/catan_ppo_23828706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_23928706_steps.zip": {
+            "path": "models/hof/catan_ppo_23928706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24028706_steps.zip": {
+            "path": "models/hof/catan_ppo_24028706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24128706_steps.zip": {
+            "path": "models/hof/catan_ppo_24128706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24228706_steps.zip": {
+            "path": "models/hof/catan_ppo_24228706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24328706_steps.zip": {
+            "path": "models/hof/catan_ppo_24328706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24428706_steps.zip": {
+            "path": "models/hof/catan_ppo_24428706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24528706_steps.zip": {
+            "path": "models/hof/catan_ppo_24528706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24628706_steps.zip": {
+            "path": "models/hof/catan_ppo_24628706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24728706_steps.zip": {
+            "path": "models/hof/catan_ppo_24728706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24828706_steps.zip": {
+            "path": "models/hof/catan_ppo_24828706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_24928706_steps.zip": {
+            "path": "models/hof/catan_ppo_24928706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25028706_steps.zip": {
+            "path": "models/hof/catan_ppo_25028706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25128706_steps.zip": {
+            "path": "models/hof/catan_ppo_25128706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25228706_steps.zip": {
+            "path": "models/hof/catan_ppo_25228706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25328706_steps.zip": {
+            "path": "models/hof/catan_ppo_25328706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25428706_steps.zip": {
+            "path": "models/hof/catan_ppo_25428706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25528706_steps.zip": {
+            "path": "models/hof/catan_ppo_25528706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25628706_steps.zip": {
+            "path": "models/hof/catan_ppo_25628706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_25728706_steps.zip": {
+            "path": "models/hof/catan_ppo_25728706_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_26731074_steps.zip": {
+            "path": "models/hof/catan_ppo_26731074_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_27731074_steps.zip": {
+            "path": "models/hof/catan_ppo_27731074_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        },
+        "catan_ppo_28731074_steps.zip": {
+            "path": "models/hof/catan_ppo_28731074_steps.zip",
+            "category": "hof",
+            "elo": 1200
+        }
+    },
+    "matrix": {},
+    "active_exploiters": [
+        "catan_ppo_23828706_steps.zip",
+        "catan_ppo_24728706_steps.zip",
+        "catan_ppo_25728706_steps.zip",
+        "catan_ppo_11719234_steps.zip",
+        "catan_ppo_23128706_steps.zip",
+        "catan_ppo_22726338_steps.zip",
+        "catan_ppo_24828706_steps.zip",
+        "catan_ppo_23728706_steps.zip",
+        "catan_ppo_24928706_steps.zip",
+        "catan_ppo_26731074_steps.zip",
+        "catan_ppo_25528706_steps.zip",
+        "catan_ppo_25328706_steps.zip",
+        "catan_ppo_15721602_steps.zip"
+    ],
+    "current_agent_stats": {
+        "catan_ppo_9716866_steps.zip": 0.8222771923894632,
+        "catan_ppo_8716866_steps.zip": 0.37748061897053753,
+        "catan_ppo_10716866_steps.zip": 0.6134489631081019,
+        "catan_ppo_11719234_steps.zip": 0.17845803886939937,
+        "catan_ppo_12719234_steps.zip": 0.5174725153445913,
+        "catan_ppo_13719234_steps.zip": 0.6433942443832616,
+        "catan_ppo_14721602_steps.zip": 0.3870557310577237,
+        "catan_ppo_15721602_steps.zip": 0.24210183979756766,
+        "catan_ppo_16721602_steps.zip": 0.5029056453504843,
+        "catan_ppo_17723970_steps.zip": 0.4005610425126561,
+        "catan_ppo_18723970_steps.zip": 0.44528663066819535,
+        "catan_ppo_19723970_steps.zip": 0.48716630079188,
+        "catan_ppo_20726338_steps.zip": 0.4685024851480213,
+        "catan_ppo_21726338_steps.zip": 0.32122572634235486,
+        "catan_ppo_22726338_steps.zip": 0.21598735354280374,
+        "catan_ppo_22828706_steps.zip": 0.3874799519529411,
+        "catan_ppo_22928706_steps.zip": 0.5486453626225267,
+        "catan_ppo_23028706_steps.zip": 0.39239579761085397,
+        "catan_ppo_23128706_steps.zip": 0.13774846363890506,
+        "catan_ppo_23228706_steps.zip": 0.4929541047559232,
+        "catan_ppo_23328706_steps.zip": 0.46402718249925706,
+        "catan_ppo_23428706_steps.zip": 0.4303987046917179,
+        "catan_ppo_23528706_steps.zip": 0.42508665312354993,
+        "catan_ppo_23628706_steps.zip": 0.3690966132881912,
+        "catan_ppo_23728706_steps.zip": 0.18368850947246418,
+        "catan_ppo_23828706_steps.zip": 0.03915630974669453,
+        "catan_ppo_23928706_steps.zip": 0.32512779909676826,
+        "catan_ppo_24028706_steps.zip": 0.5212307619543856,
+        "catan_ppo_24128706_steps.zip": 0.3785008185908247,
+        "catan_ppo_24228706_steps.zip": 0.6062796711633125,
+        "catan_ppo_24328706_steps.zip": 0.4633798925234351,
+        "catan_ppo_24428706_steps.zip": 0.3314229236422168,
+        "catan_ppo_24528706_steps.zip": 0.4977273026958491,
+        "catan_ppo_24628706_steps.zip": 0.5524472555885312,
+        "catan_ppo_24728706_steps.zip": 0.09803019165080479,
+        "catan_ppo_24828706_steps.zip": 0.19443926125941913,
+        "catan_ppo_24928706_steps.zip": 0.22648617109104918,
+        "catan_ppo_25028706_steps.zip": 0.44272540995913856,
+        "catan_ppo_25128706_steps.zip": 0.581014184013015,
+        "catan_ppo_25228706_steps.zip": 0.4892002220284896,
+        "catan_ppo_25328706_steps.zip": 0.3980717670527303,
+        "catan_ppo_25428706_steps.zip": 0.5091978278124338,
+        "catan_ppo_25528706_steps.zip": 0.18473827971915077,
+        "catan_ppo_25628706_steps.zip": 0.4100984327863584,
+        "catan_ppo_25728706_steps.zip": 0.023258400170125332,
+        "catan_ppo_26731074_steps.zip": 0.27877471421882655,
+        "catan_ppo_27731074_steps.zip": 0.41756190872918303,
+        "catan_ppo_28731074_steps.zip": 0.3615302008333927
+    }
+}
