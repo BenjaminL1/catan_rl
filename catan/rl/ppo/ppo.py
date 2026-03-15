@@ -159,10 +159,13 @@ class CatanPPO:
             device=self.device,
         )
 
-        # Evaluation (random/heuristic for benchmarking; env supports both)
+        # Evaluation opponent: starts as configured, auto-upgrades to heuristic
+        # once the model crosses eval_upgrade_threshold win rate vs the current opponent.
+        self._eval_opponent = config.get("opponent_type", "random")
+        self._eval_upgrade_threshold = config.get("eval_upgrade_threshold", 0.95)
         self.eval_manager = EvaluationManager(
             n_games=config.get("eval_games", 40),
-            opponent_type=config.get("opponent_type", "random"),
+            opponent_type=self._eval_opponent,
             max_turns=config.get("max_turns", 500),
         )
 
@@ -511,12 +514,30 @@ class CatanPPO:
                     self.policy.train()
 
                     wr_now = eval_stats['win_rate']
-                    print(f"  [EVAL] Win rate: {wr_now:.2f}, "
+                    print(f"  [EVAL vs {self._eval_opponent}] Win rate: {wr_now:.2f}, "
                           f"Avg VP: {eval_stats['avg_vp']:.1f}, "
                           f"Avg Length: {eval_stats['avg_game_length']:.0f}")
 
                     for key, val in eval_stats.items():
                         self.writer.add_scalar(f'eval/{key}', val, self.global_step)
+                    self.writer.add_scalar('eval/opponent_is_heuristic',
+                                           1.0 if self._eval_opponent == "heuristic" else 0.0,
+                                           self.global_step)
+
+                    # Upgrade eval opponent from random → heuristic once threshold is crossed
+                    if (self._eval_opponent == "random"
+                            and wr_now >= self._eval_upgrade_threshold):
+                        self._eval_opponent = "heuristic"
+                        self.eval_manager = EvaluationManager(
+                            n_games=self.config.get("eval_games", 40),
+                            opponent_type="heuristic",
+                            max_turns=self.config.get("max_turns", 500),
+                        )
+                        # Reset win-rate history — old random-opponent values are not comparable
+                        self._eval_win_rate_history = []
+                        print(f"  [EVAL] Upgraded eval opponent to HEURISTIC "
+                              f"(WR {wr_now:.2f} >= {self._eval_upgrade_threshold:.2f})")
+                        self.writer.add_scalar('eval/opponent_upgraded', 1.0, self.global_step)
 
                     # Stagnation detection: warn if win rate hasn't improved
                     self._eval_win_rate_history.append(wr_now)
@@ -568,6 +589,7 @@ class CatanPPO:
             'value_normalizer': self.value_normalizer.state_dict(),
             'config': self.config,
             'eval_win_rate_history': self._eval_win_rate_history,
+            'eval_opponent': self._eval_opponent,
         }, path)
         print(f"  Saved checkpoint: {path}")
 
@@ -591,6 +613,14 @@ class CatanPPO:
             trainer.value_normalizer.load_state_dict(checkpoint['value_normalizer'])
         if 'eval_win_rate_history' in checkpoint:
             trainer._eval_win_rate_history = checkpoint['eval_win_rate_history']
+        if 'eval_opponent' in checkpoint:
+            trainer._eval_opponent = checkpoint['eval_opponent']
+            trainer.eval_manager = EvaluationManager(
+                n_games=config.get("eval_games", 40),
+                opponent_type=trainer._eval_opponent,
+                max_turns=config.get("max_turns", 500),
+            )
 
-        print(f"Loaded checkpoint from {path} (step {trainer.global_step:,})")
+        print(f"Loaded checkpoint from {path} (step {trainer.global_step:,}, "
+              f"eval opponent: {trainer._eval_opponent})")
         return trainer

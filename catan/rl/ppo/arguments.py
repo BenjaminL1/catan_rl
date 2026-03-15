@@ -32,9 +32,10 @@ TRAIN_CONFIG: Dict[str, Any] = {
     "recompute_returns": True,
     "normalize_values": True,
     "total_timesteps": 200_000_000,  # extended from 100M; LR decays from 1e-4 over remaining steps
-    "checkpoint_freq": 50_000,
+    "checkpoint_freq": 500_000,
     "eval_games": 40,
-    "opponent_type": "heuristic",  # was "random"; eval now vs heuristic bot
+    "opponent_type": "random",         # start vs random; auto-upgrades to heuristic
+    "eval_upgrade_threshold": 0.95,    # switch eval opponent to heuristic at this WR
     "max_turns": 500,
     "win_rate_target": None,  # no early stopping (Charlesworth style)
     # League (Charlesworth-style): add policy every N updates
