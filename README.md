@@ -1,97 +1,92 @@
-Catan RL: Mastering 1v1 Settlers of Catan with PPO
-This project implements a high-performance Reinforcement Learning (RL) agent trained to play one-vs-one Settlers of Catan. Built upon a refactored version of the classic Catan-AI engine, this environment leverages Maskable Proximal Policy Optimization (PPO) to handle the complex, multi-phase action space of the game.
+# Catan RL: Mastering 1v1 Settlers of Catan with PPO
 
-📜 Credits & Citations
-The core game logic and hex-grid geometry in this project are adapted and refactored from the Catan-AI repository by Karan Vombatkere.
+This project implements a high-performance Reinforcement Learning (RL) agent trained to play one-vs-one Settlers of Catan. Built upon a refactored version of the classic Catan-AI engine, this environment uses a custom PPO implementation with multi-head autoregressive action selection to handle the complex, multi-phase action space of the game.
 
-Original Source: > Vombatkere, K. (2018). Catan-AI: A Python Implementation of Settlers of Catan with Heuristic Agents [Computer software]. GitHub. https://github.com/kvombatkere/Catan-AI
+## Credits & Citations
 
-Major Modifications
-Geometry Consolidation: Refactored hexTile and hexLib into a unified geometry.py module for improved performance.
+The core game logic and hex-grid geometry are adapted from the Catan-AI repository by Karan Vombatkere.
 
-Gymnasium Integration: Developed CatanEnv, a custom Gymnasium-compliant environment.
+> Vombatkere, K. (2018). Catan-AI: A Python Implementation of Settlers of Catan with Heuristic Agents. GitHub. https://github.com/kvombatkere/Catan-AI
 
-Action Masking: Implemented strict action masking to handle invalid moves in a 246-dimension discrete action space.
+The RL architecture is inspired by Henry Charlesworth's Settlers of Catan RL project:
 
-Stacked Dice & Karma: Added StackedDice logic to ensure a standard distribution of rolls while introducing a "Karma" system to penalize consecutive 7s.
+> Charlesworth, H. (2023). settlers_of_catan_RL. GitHub. https://github.com/henrycharlesworth/settlers_of_catan_RL
 
-🤖 Reinforcement Learning Architecture
-Action Space (246 Discrete Actions)
-The agent navigates a comprehensive action space representing all possible Catan moves:
+## RL Architecture
 
-0–53: Build Settlement
+### Action Space (Multi-Head Composite)
 
-54–107: Build City
+The agent uses 6 autoregressive action heads:
 
-108–179: Build Road
+| Head | Output Size | Purpose |
+|------|------------|---------|
+| ACTION_TYPE | 12 | Which action to take |
+| CORNER | 54 | Settlement / city vertex |
+| EDGE | 72 | Road edge |
+| TILE | 19 | Robber placement hex |
+| RESOURCE_1 | 5 | Primary resource (YoP / Monopoly / Trade) |
+| RESOURCE_2 | 5 | Secondary resource (YoP 2nd / Trade receive) |
 
-180: End Turn
+### Observation Space (1,258 Features)
 
-181–199: Move Robber
+The agent receives a detailed belief state including:
+- **Hex features**: resource types, number tokens, robber location (19 tiles × 8 features)
+- **Vertex features**: ownership, building types, port access (54 vertices × 14 features)
+- **Edge features**: road occupancy (72 edges × 4 features)
+- **Scalar features**: resources, dev cards, VP counts, trade rates, game phase (62 features)
 
-200: Buy Development Card
+### Training (Charlesworth-Style)
 
-201–222: Play Development Cards (Knight, Year of Plenty, Monopoly, Road Building)
+Single self-play phase from start—no curriculum. Trains against random initially;
+league of past policies is populated every 4 updates for future policy-opponent
+support. Entropy annealing, linear LR decay, M1-optimized (CPU, in-process multi-env).
 
-226–245: Bank Trading (Give X, Get Y)
+## Project Structure
 
-Observation Space (1,258 Features)
-The agent receives a detailed "Belief State" of the board, including:
+```
+catan/
+  engine/         Game logic (board, player, geometry, dice)
+  agents/         Heuristic and Random AI opponents
+  rl/
+    env.py        Gymnasium environment wrapper
+    distributions.py   Masked categorical distribution
+    debug_wrapper.py   Diagnostic wrapper for env debugging
+    league.py     Ghost opponent pool management
+    models/
+      observation_module.py   Transformer-based entity encoders
+      action_heads_module.py  Multi-head autoregressive action selection
+      policy.py               Top-level CatanPolicy (obs + heads + value)
+      build_agent_model.py    Factory function and constants
+      utils.py                Weight init, value normalizer
+    ppo/
+      ppo.py           Custom PPO training loop
+      rollout_buffer.py Composite action rollout storage
+      arguments.py     Hyperparameter configs per phase
+      utils.py         GAE, explained variance, scheduling
+scripts/
+  train.py         Main training entry point
+  evaluate.py      Evaluation with statistics
+  play_vs_model.py Interactive play against trained agent
+  test_integration.py  Environment integration tests
+```
 
-Global Board State: Hex resource types, number tokens, and robber location.
+## Getting Started
 
-Spatial Connectivity: Vertex ownership, building types, and edge road occupancy.
+### Prerequisites
 
-Expert Features: Expected income dots per resource, trade rates based on port ownership, and tactical lookaheads for road potential.
+```bash
+pip install gymnasium torch numpy pygame tqdm tensorboard
+```
 
-Public Information: Opponent hand size and "Karma" status.
+### Training
 
-📈 Training Curriculum
-Training follows a three-stage curriculum to transition the agent from basic mechanics to high-level strategy:
+```bash
+python scripts/train.py --verbose
+python scripts/train.py --resume checkpoints/train/final_model.pt --verbose
+```
 
-Phase 1: The Bootcamp (0–200k steps)
+### Monitoring
 
-Trained against RandomAIPlayer.
-
-Focus: Learning basic building rules and winning simple games.
-
-Phase 2: Strategy Transition (200k–500k steps)
-
-Gradual introduction of the heuristicAIPlayer.
-
-Difficulty ramps linearly from 0% to 100% strategic play.
-
-Phase 3: Self-Play (500k+ steps)
-
-Agent competes against "Ghost" versions of its previous checkpoints.
-
-Ensures robustness against evolving human-like tactics.
-
-🛠 Project Structure
-catan/engine/: Core game logic including board.py, player.py, and geometry.py.
-
-catan/agents/: Heuristic and Random AI implementations.
-
-scripts/train.py: Main training loop using Stable Baselines3 MaskablePPO.
-
-env.py: The Gymnasium RL wrapper.
-
-debug_wrapper.py: Specialized diagnostic tool for trapping environment logic errors.
-
-🚀 Getting Started
-Prerequisites
-Bash
-
-pip install gymnasium stable-baselines3 sb3-contrib pygame numpy
-Training the Agent
-To start the training process:
-
-Bash
-
-python scripts/train.py
-Visualizing Results
-You can monitor the agent's progress, including success rates and episode lengths, via Tensorboard:
-
-Bash
-
-tensorboard --logdir ./logs/
+```bash
+tensorboard --logdir runs/train/
+```

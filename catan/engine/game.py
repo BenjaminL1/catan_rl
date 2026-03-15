@@ -7,6 +7,7 @@ from catan.engine.player import *
 from catan.agents.heuristic import *
 from catan.engine.dice import StackedDice
 from catan.engine.tracker import ResourceTracker
+from catan.engine.broadcast import GameBroadcast
 import queue
 import numpy as np
 import sys
@@ -22,7 +23,10 @@ class catanGame():
         self.board = catanBoard()
         self.dice = StackedDice()
         self.last_player_to_roll_7 = None
-        self.last_broadcast_event = None  # Track broadcast events (Discard, YOP, etc.)
+        # Centralised broadcaster for all game events (resource changes, dice, etc.)
+        self.broadcast = GameBroadcast()
+        # Backwards-compat: mirror last event on the game object
+        self.last_broadcast_event = None
         self.resource_tracker = None  # Will be initialized after players are set up
 
         # Game State variables
@@ -59,6 +63,7 @@ class catanGame():
         playerColors = ['black', 'darkslateblue', 'magenta4', 'orange1']
         for i in range(self.numPlayers):
             newPlayer = player(f"Player {i+1}", playerColors[i])
+            newPlayer.game = self
             self.playerQueue.put(newPlayer)
 
     # Function to initialize players + build initial settlements for players
@@ -70,10 +75,12 @@ class catanGame():
             # playerNameInput = input("Enter Player {} name: ".format(i+1))
             playerNameInput = f'Player {i+1}'
             newPlayer = player(playerNameInput, playerColors[i])
+            newPlayer.game = self
             self.playerQueue.put(newPlayer)
 
         test_AI_player = heuristicAIPlayer(
             'Random-Greedy-AI', playerColors[self.numPlayers - 1])  # Add the AI Player last
+        test_AI_player.game = self
         test_AI_player.updateAI()
         self.playerQueue.put(test_AI_player)
 
@@ -182,7 +189,9 @@ class catanGame():
     # Function to roll dice
 
     def rollDice(self):
-        self.last_broadcast_event = None  # Reset broadcast event
+        # Reset last broadcast event each roll; broadcaster keeps full history.
+        self.broadcast.clear_last()
+        self.last_broadcast_event = None
         diceRoll = self.dice.roll(self.currentPlayer, self.last_player_to_roll_7)
         # print(f"DEBUG: Rolled {diceRoll}")
         if diceRoll == 7:
@@ -190,20 +199,47 @@ class catanGame():
             # print("DEBUG: Rolled a 7! Robber logic initiated.")
         # print("Dice Roll = ", diceRoll)
 
+        # Broadcast dice roll event
+        dice_event = self.broadcast.dice_roll(self.currentPlayer.name, diceRoll)
+        self.last_broadcast_event = dice_event
+
         self.boardView.displayDiceRoll(diceRoll)
 
         return diceRoll
 
     def log_discard(self, player, resource_list):
-        """Broadcast discard event to system and console"""
-        self.last_broadcast_event = {'type': 'DISCARD',
-                                     'player': player.name, 'resources': resource_list}
+        """Broadcast discard event via GameBroadcast (and mirror on game).
+
+        Also emits a RESOURCE_CHANGE event with negative deltas for each
+        discarded resource, so downstream code (e.g. RL env) can track
+        hand changes numerically.
+        """
+        event = self.broadcast.discard(player.name, resource_list)
+        self.last_broadcast_event = event
+
+        # Aggregate negative deltas per resource
+        delta = {}
+        for res in resource_list:
+            delta[res] = delta.get(res, 0) - 1
+        if delta:
+            self.broadcast.resource_change(player.name, delta=delta, source="DISCARD")
         # print(f"BROADCAST: Player {player.name} discarded {resource_list}")
 
     def log_yop(self, player, resource_list):
-        """Broadcast Year of Plenty event to system and console"""
-        self.last_broadcast_event = {'type': 'YOP',
-                                     'player': player.name, 'resources': resource_list}
+        """Broadcast Year of Plenty event via GameBroadcast (and mirror on game).
+
+        Also emits a RESOURCE_CHANGE event with positive deltas for each
+        resource the player gained from the bank.
+        """
+        event = self.broadcast.year_of_plenty(player.name, resource_list)
+        self.last_broadcast_event = event
+
+        # Aggregate positive deltas per resource
+        delta = {}
+        for res in resource_list:
+            delta[res] = delta.get(res, 0) + 1
+        if delta:
+            self.broadcast.resource_change(player.name, delta=delta, source="YOP")
         # print(f"BROADCAST: Player {player.name} used YOP to get {resource_list}")
 
     # Function to update resources for all players
@@ -215,6 +251,7 @@ class catanGame():
 
             # Check for each player
             for player_i in list(self.playerQueue.queue):
+                per_player_delta = {}
                 # Check each settlement the player has
                 for settlementCoord in player_i.buildGraph['SETTLEMENTS']:
                     # check each adjacent hex to a settlement
@@ -223,6 +260,7 @@ class catanGame():
                         if (adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].has_robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                             player_i.resources[resourceGenerated] += 1
+                            per_player_delta[resourceGenerated] = per_player_delta.get(resourceGenerated, 0) + 1
                             # print("{} collects 1 {} from Settlement".format(
                             #     player_i.name, resourceGenerated))
 
@@ -234,15 +272,15 @@ class catanGame():
                         if (adjacentHex in hexResourcesRolled and self.board.hexTileDict[adjacentHex].has_robber == False):
                             resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                             player_i.resources[resourceGenerated] += 2
+                            per_player_delta[resourceGenerated] = per_player_delta.get(resourceGenerated, 0) + 2
                             # print("{} collects 2 {} from City".format(
                             #     player_i.name, resourceGenerated))
 
-                # print("Player:{}, Resources:{}, Points: {}".format(
-                #     player_i.name, player_i.resources, player_i.victoryPoints))
-                # print('Dev Cards:{}'.format(player_i.devCards))
-                # print("RoadsLeft:{}, SettlementsLeft:{}, CitiesLeft:{}".format(player_i.roadsLeft, player_i.settlementsLeft, player_i.citiesLeft))
-                # print('MaxRoadLength:{}, LongestRoad:{}\n'.format(
-                #     player_i.maxRoadLength, player_i.longestRoadFlag))
+                # Emit a RESOURCE_CHANGE broadcast for this player, if any deltas
+                if per_player_delta:
+                    self.broadcast.resource_change(
+                        player_i.name, delta=per_player_delta, source="DICE"
+                    )
 
         # Logic for a 7 roll
         else:
@@ -254,8 +292,12 @@ class catanGame():
 
             # Logic for robber
             if (currentPlayer.isAI):
-                # print("AI using heuristic robber...")
-                currentPlayer.heuristic_move_robber(self.board)
+                if hasattr(currentPlayer, 'heuristic_move_robber'):
+                    # print("AI using heuristic robber...")
+                    currentPlayer.heuristic_move_robber(self.board)
+                else:
+                    # Assuming PPO/Model Agent will handle robber movement in its move() function
+                    pass
             else:
                 self.robber(currentPlayer)
                 self.boardView.displayGameScreen()  # Update back to original gamescreen

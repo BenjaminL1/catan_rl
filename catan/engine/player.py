@@ -16,6 +16,8 @@ class player():
         self.color = playerColor
         self.victoryPoints = 0
         self.isAI = False
+        # Optional back-reference to owning game; set by catanGame / env.
+        self.game = None
 
         self.settlementsLeft = 5
         self.roadsLeft = 15
@@ -25,6 +27,9 @@ class player():
                           'WHEAT': 0, 'WOOD': 0, 'SHEEP': 0}
 
         self.knightsPlayed = 0
+        self.monopolyPlayed = 0
+        self.yopPlayed = 0
+        self.roadBuilderPlayed = 0
         self.largestArmyFlag = False
 
         self.maxRoadLength = 0
@@ -61,6 +66,13 @@ class player():
                     # Update player resources
                     self.resources['BRICK'] -= 1
                     self.resources['WOOD'] -= 1
+                    # Emit resource change event if game/broadcast is available
+                    if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                        self.game.broadcast.resource_change(
+                            self.name,
+                            delta={'BRICK': -1, 'WOOD': -1},
+                            source="BUILD_ROAD",
+                        )
 
                 # update the overall boardGraph
                 board.updateBoardGraph_road(v1, v2, self)
@@ -100,6 +112,12 @@ class player():
                     self.resources['WOOD'] -= 1
                     self.resources['SHEEP'] -= 1
                     self.resources['WHEAT'] -= 1
+                    if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                        self.game.broadcast.resource_change(
+                            self.name,
+                            delta={'BRICK': -1, 'WOOD': -1, 'SHEEP': -1, 'WHEAT': -1},
+                            source="BUILD_SETTLEMENT",
+                        )
 
                 self.victoryPoints += 1
                 # update the overall boardGraph
@@ -136,6 +154,12 @@ class player():
                 # Update player resources
                 self.resources['ORE'] -= 3
                 self.resources['WHEAT'] -= 2
+                if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                    self.game.broadcast.resource_change(
+                        self.name,
+                        delta={'ORE': -3, 'WHEAT': -2},
+                        source="BUILD_CITY",
+                    )
                 self.victoryPoints += 1
 
                 # update the overall boardGraph
@@ -184,6 +208,19 @@ class player():
         # Update resources of both players
         player_2.resources[resourceStolen] -= 1
         self.resources[resourceStolen] += 1
+
+        # Broadcast resource changes for robber and victim if possible
+        if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+            self.game.broadcast.resource_change(
+                player_2.name,
+                delta={resourceStolen: -1},
+                source="STEAL",
+            )
+            self.game.broadcast.resource_change(
+                self.name,
+                delta={resourceStolen: +1},
+                source="STEAL",
+            )
         # print("Stole 1 {} from Player {}".format(
         #     resourceStolen, player_2.name))
 
@@ -193,87 +230,55 @@ class player():
     # Use both player buildgraph and board graph to compute recursively
 
     def get_road_length(self, board):
+        if not self.buildGraph['ROADS']:
+            return 0
         roadLengths = []  # List to store road lengths from each starting edge
         for road in self.buildGraph['ROADS']:  # check for every starting edge
-            # List to keep track of all lengths of roads resulting from this root road
             self.road_i_lengths = []
-            roadCount = 0
-            roadArr = []
-            vertexList = []
-            # print("Start road:", road)
-            self.check_path_length(
-                road, roadArr, roadCount, vertexList, board.boardGraph)
-
+            # Use sets for O(1) membership checks instead of O(n) list scans
+            self.check_path_length(road, set(), 0, set(), board.boardGraph)
             road_inverted = (road[1], road[0])
-            roadCount = 0
-            roadArr = []
-            vertexList = []
-            self.check_path_length(
-                road_inverted, roadArr, roadCount, vertexList, board.boardGraph)
-
-            # Update roadLength with max starting from this road
+            self.check_path_length(road_inverted, set(), 0, set(), board.boardGraph)
             roadLengths.append(max(self.road_i_lengths))
-            # print(self.road_i_lengths)
 
-        # print("Road Lengths:", roadLengths, max(roadLengths))
         return max(roadLengths)
 
-    # Function to checl the path length from a current edge to all possible other vertices not yet visited by t
-    def check_path_length(self, edge, edgeList, roadLength, vertexList, boardGraph):
-        # Append current edge to list and increment road count
-        edgeList.append(edge)  # Append the road
+    def check_path_length(self, edge, edgeSet, roadLength, vertexSet, boardGraph):
+        edgeSet.add(edge)
         roadLength += 1
-        vertexList.append(edge[0])  # Append the first vertex
+        vertexSet.add(edge[0])
 
-        # Get new neighboring forward edges from this edge - not visited by the search yet
         road_neighbors_list = self.get_neighboring_roads(
-            edge, boardGraph, edgeList, vertexList)
+            edge, boardGraph, edgeSet, vertexSet)
 
-        # print(neighboringRoads)
-        # if no neighboring roads exist append the roadLength upto this edge
-        if (road_neighbors_list == []):
-            # print("No new neighbors found")
+        if not road_neighbors_list:
             self.road_i_lengths.append(roadLength)
             return
 
-        else:
-            # check paths from left and right neighbors separately
-            for neighbor_road in road_neighbors_list:
-                # print("checking neighboring edge:", neighbor_road)
-                self.check_path_length(
-                    neighbor_road, edgeList, roadLength, vertexList, boardGraph)
-
-    # Helper function to get neighboring edges from this road that haven't already been explored
-    # We want forward neighbors only
+        for neighbor_road in road_neighbors_list:
+            self.check_path_length(
+                neighbor_road, edgeSet, roadLength, vertexSet, boardGraph)
 
     def get_neighboring_roads(self, road_i, boardGraph, visitedRoads, visitedVertices):
-        # print("Getting neighboring roads for current road:", road_i)
         newNeighbors = []
-        # Use v1 and v2 to get the vertices to expand from
         v1 = road_i[0]
         v2 = road_i[1]
+        v2_owner = boardGraph[v2].owner
+        if v2_owner is not self and v2_owner is not None:
+            return newNeighbors
         for edge in self.buildGraph['ROADS']:
-            if (edge[1] in visitedVertices):
-                # flip the edge if the orientation is reversed
+            if edge[1] in visitedVertices:
                 edge = (edge[1], edge[0])
 
-            if (edge not in visitedRoads):  # If it is a new distinct edge
-                # Add condition for vertex to be not colonised by anyone else
-                if (boardGraph[v2].owner in [self, None]):
-                    # If v2 has neighbors, defined starting or finishing at v2
-                    if (edge[0] == v2 and edge[0] not in visitedVertices):
-                        # print("Appending NEW neighbor:", edge)
-                        newNeighbors.append(edge)
-
-                    if (edge[0] == v1 and edge[0] not in visitedVertices):
-                        newNeighbors.append(edge)
-
-                    # If v1 has neighbors, defined starting or finishing at v2
-                    if (edge[1] == v2 and edge[1] not in visitedVertices):
-                        newNeighbors.append((edge[1], edge[0]))
-
-                    if (edge[1] == v1 and edge[1] not in visitedVertices):
-                        newNeighbors.append((edge[1], edge[0]))
+            if edge not in visitedRoads:
+                if edge[0] == v2 and edge[0] not in visitedVertices:
+                    newNeighbors.append(edge)
+                if edge[0] == v1 and edge[0] not in visitedVertices:
+                    newNeighbors.append(edge)
+                if edge[1] == v2 and edge[1] not in visitedVertices:
+                    newNeighbors.append((edge[1], edge[0]))
+                if edge[1] == v1 and edge[1] not in visitedVertices:
+                    newNeighbors.append((edge[1], edge[0]))
 
         return newNeighbors
 
@@ -307,6 +312,12 @@ class player():
             self.resources['ORE'] -= 1
             self.resources['WHEAT'] -= 1
             self.resources['SHEEP'] -= 1
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.resource_change(
+                    self.name,
+                    delta={'ORE': -1, 'WHEAT': -1, 'SHEEP': -1},
+                    source="BUY_DEV_CARD",
+                )
 
             # If card is a victory point apply immediately, else add to new card list
             if (cardDrawn == 'VP'):
@@ -371,6 +382,7 @@ class player():
             self.knightsPlayed += 1
 
         if (devCardPlayed == 'ROADBUILDER'):
+            self.roadBuilderPlayed += 1
             game.build(self, 'ROAD', is_free=True)
             game.boardView.displayGameScreen()
             game.build(self, 'ROAD', is_free=True)
@@ -380,6 +392,7 @@ class player():
         resource_list = ['BRICK', 'WOOD', 'WHEAT', 'SHEEP', 'ORE']
 
         if (devCardPlayed == 'YEAROFPLENTY'):
+            self.yopPlayed += 1
             # print("Resources available:", resource_list)
             if self.isAI:
                 # AI Logic for YOP - Pick 2 random resources
@@ -402,6 +415,7 @@ class player():
                 game.log_yop(self, result)
 
         if (devCardPlayed == 'MONOPOLY'):
+            self.monopolyPlayed += 1
             # print("Resources to Monopolize:", resource_list)
             if self.isAI:
                 # AI Logic for Monopoly - Pick random resource
@@ -422,8 +436,24 @@ class player():
             for player in list(game.playerQueue.queue):
                 if (player != self):
                     numLost = player.resources[resourceToMonopolize]
+                    if numLost <= 0:
+                        continue
                     player.resources[resourceToMonopolize] = 0
                     self.resources[resourceToMonopolize] += numLost
+                    # Broadcast per-player resource changes if broadcaster exists
+                    if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                        # Victim loses numLost of that resource
+                        self.game.broadcast.resource_change(
+                            player.name,
+                            delta={resourceToMonopolize: -numLost},
+                            source="MONOPOLY",
+                        )
+                        # Monopoly player gains numLost
+                        self.game.broadcast.resource_change(
+                            self.name,
+                            delta={resourceToMonopolize: +numLost},
+                            source="MONOPOLY",
+                        )
 
         return
 
@@ -441,6 +471,12 @@ class player():
         if (r1_port in self.portList and self.resources[r1] >= 2):
             self.resources[r1] -= 2
             self.resources[r2] += 1
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.resource_change(
+                    self.name,
+                    delta={r1: -2, r2: +1},
+                    source="TRADE_BANK",
+                )
             # print("Traded 2 {} for 1 {} using {} Port".format(r1, r2, r1))
             return
 
@@ -448,6 +484,12 @@ class player():
         elif ('3:1 PORT' in self.portList and self.resources[r1] >= 3):
             self.resources[r1] -= 3
             self.resources[r2] += 1
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.resource_change(
+                    self.name,
+                    delta={r1: -3, r2: +1},
+                    source="TRADE_BANK",
+                )
             # print("Traded 3 {} for 1 {} using 3:1 Port".format(r1, r2))
             return
 
@@ -455,6 +497,12 @@ class player():
         elif (self.resources[r1] >= 4):
             self.resources[r1] -= 4
             self.resources[r2] += 1
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.resource_change(
+                    self.name,
+                    delta={r1: -4, r2: +1},
+                    source="TRADE_BANK",
+                )
             # print("Traded 4 {} for 1 {}".format(r1, r2))
             return
 
@@ -465,93 +513,22 @@ class player():
     # Function to initate a trade - with bank or other players
 
     def initiate_trade(self, game, trade_type):
-        '''Wrapper function to initiate a trade with bank or other players
-        trade_type: flag to determine the trade
+        '''Wrapper function to initiate a trade with the bank.
+
+        Player-to-player trading has been removed for the 1v1 RL setting.
         '''
-        # List to show the resource names and trade menu options
-        resource_list = ['BRICK', 'WOOD', 'WHEAT', 'SHEEP', 'ORE']
-
-        if trade_type == 'BANK':
-            # print("\nBank Trading Menu - Resource Names:",
-            #       resource_list)  # display resource names
-
-            # Use GUI to select trade
-            trade_result = game.boardView.get_resource_selection(self, 'BANK')
-            if trade_result:
-                resourceToTrade, resourceToReceive = trade_result
-                # Try and trade with Bank
-                self.trade_with_bank(resourceToTrade, resourceToReceive)
-
+        if trade_type != 'BANK':
+            # Player-to-player trades and other modes are disabled.
             return
 
-        elif trade_type == 'PLAYER':
-            # Select player to trade with - generate list of other players
-            playerNames = [p.name for p in list(game.playerQueue.queue)]
+        # Use GUI to select bank trade in human games
+        trade_result = game.boardView.get_resource_selection(self, 'BANK')
+        if trade_result:
+            resourceToTrade, resourceToReceive = trade_result
+            # Try and trade with Bank
+            self.trade_with_bank(resourceToTrade, resourceToReceive)
 
-            # print("\nInter-Player Trading Menu - Player Names:", playerNames)
-            # print("Resource List:", resource_list)
-
-            # Disallow trading with self
-            playerToTrade_name = ''
-            while (playerToTrade_name not in playerNames) or (playerToTrade_name == self.name):
-                playerToTrade_name = input(
-                    "Enter name of another player to trade with:")
-
-            # Over write and store the target player object
-            playerToTrade = None
-            for player in list(game.playerQueue.queue):
-                if player.name == playerToTrade_name:
-                    playerToTrade = player
-
-            # Select resource to trade - must have at least one of that resource to trade
-            resourceToTrade = ""
-            while (resourceToTrade not in self.resources.keys()):
-                resourceToTrade = input("Enter resource name to trade with player {}:".format(
-                    playerToTrade_name)).upper()
-                # Reset if invalid resource is chosen
-                if resourceToTrade in self.resources.keys() and self.resources[resourceToTrade] == 0:
-                    resourceToTrade = ""
-                    # print("Players can only trade resources they already have")
-
-            # Specify quantity to trade
-            resource_traded_amount = 0
-            while (resource_traded_amount > self.resources[resourceToTrade]) or (resource_traded_amount < 1):
-                resource_traded_amount = int(input("Enter quantity of {} to trade with player {}:".format(
-                    resourceToTrade, playerToTrade_name)))
-
-            # Player to select resource to receive - disallow receiving same resource as traded
-            resourceToReceive = ""
-            while (resourceToReceive not in self.resources.keys()) or (resourceToReceive == resourceToTrade):
-                resourceToReceive = input(
-                    "Enter resource name to receive from player {}:".format(playerToTrade_name)).upper()
-                # Reset if invalid resource is chosen
-                if resourceToReceive in self.resources.keys() and playerToTrade.resources[resourceToReceive] == 0:
-                    resourceToReceive = -""
-                    # print("Player {} doesn't have any {} to trade".format(
-                    #     playerToTrade_name, resourceToReceive))
-
-            # Specify quantity to receive
-            resource_received_amount = 0
-            while (resource_received_amount > playerToTrade.resources[resourceToReceive]) or (resource_received_amount < 1):
-                resource_received_amount = int(input("Enter quantity of {} to receive from player {}:".format(
-                    resourceToReceive, playerToTrade_name)))
-
-            # Execute trade - player gives resource traded and gains resource received
-            self.resources[resourceToReceive] += resource_received_amount
-            self.resources[resourceToTrade] -= resource_traded_amount
-
-            # Other player gains resource traded and gives resource received
-            playerToTrade.resources[resourceToReceive] -= resource_received_amount
-            playerToTrade.resources[resourceToTrade] += resource_traded_amount
-
-            # print("Player {} successfully traded {} {} for {} {} with player {}".format(self.name, resource_traded_amount, resourceToTrade,
-            #                                                                             resource_received_amount, resourceToReceive, playerToTrade_name))
-
-            return
-
-        else:
-            # print("Illegal trade_type flag")
-            return
+        return
 
     # Function to discard cards
 

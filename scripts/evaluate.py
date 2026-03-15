@@ -1,82 +1,48 @@
-import gymnasium as gym
-import numpy as np
-import torch
-from sb3_contrib import MaskablePPO
-from sb3_contrib.common.wrappers import ActionMasker
+"""
+Evaluate a trained Catan RL agent.
+
+Usage:
+    python scripts/evaluate.py checkpoints/train/final_model.pt --n-games 100
+    python scripts/evaluate.py checkpoints/train/final_model.pt --opponent heuristic
+"""
+import argparse
 import sys
-
-# DISABLE STRICT DISTRIBUTION VALIDATION
-# This prevents "Simplex" errors when masking produces probabilities that don't sum to exactly 1.0000000...
-torch.distributions.Distribution.set_default_validate_args(False)
-
 import os
-from pathlib import Path
-from tqdm import tqdm
 
-# Add project root to path
-root_dir = Path(__file__).resolve().parent.parent
-sys.path.append(str(root_dir))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from catan.rl.env import CatanEnv
-from catan.rl.debug_wrapper import CatanCrashDebugWrapper
+import torch
+from catan.rl.ppo.ppo import CatanPPO
+from catan.rl.ppo.evaluation_manager import EvaluationManager
 
 
-def mask_fn(env: gym.Env) -> np.ndarray:
-    return env.get_wrapper_attr("get_action_mask")()
+def main():
+    parser = argparse.ArgumentParser(description="Evaluate Catan RL agent")
+    parser.add_argument("checkpoint", type=str, help="Path to .pt checkpoint")
+    parser.add_argument("--n-games", type=int, default=100,
+                        help="Number of evaluation games")
+    parser.add_argument("--opponent", type=str, default="random",
+                        choices=["random", "heuristic"],
+                        help="Opponent type")
+    args = parser.parse_args()
 
+    # Load trainer (just for the policy)
+    trainer = CatanPPO.load(args.checkpoint)
+    trainer.policy.eval()
 
-def make_env():
-    env = CatanEnv(render_mode=None)
-    env = CatanCrashDebugWrapper(env)
-    env = ActionMasker(env, mask_fn)
-    return env
+    evaluator = EvaluationManager(
+        n_games=args.n_games,
+        opponent_type=args.opponent,
+    )
 
+    print(f"Evaluating against {args.opponent} over {args.n_games} games...")
+    stats = evaluator.evaluate(trainer.policy, trainer.device)
 
-def evaluate():
-    model_path = "models/catan_ppo_final.zip"
-    print(f"Loading model from {model_path}...")
-
-    env = make_env()
-    model = MaskablePPO.load(model_path, env=env, device='cpu')
-
-    n_episodes = 100
-    wins = 0
-    total_rewards = []
-
-    print(f"Starting evaluation over {n_episodes} episodes against Heuristic AI...")
-
-    for i in tqdm(range(n_episodes)):
-        # FORCE Heuristic Opponent
-        obs, _ = env.reset(options={'opponent_type': 'heuristic'})
-        done = False
-        episode_reward = 0
-
-        while not done:
-            action_masks = env.get_wrapper_attr("get_action_mask")()
-            action, _ = model.predict(obs, action_masks=action_masks)
-
-            # Cast to int to avoid numpy issues in env
-            if isinstance(action, np.ndarray):
-                action = int(action.item())
-
-            obs, reward, terminated, truncated, info = env.step(action)
-            episode_reward += reward
-            done = terminated or truncated
-
-            if done:
-                total_rewards.append(episode_reward)
-                if info.get('is_success', False):
-                    wins += 1
-
-    print("\n" + "=" * 30)
-    print("EVALUATION RESULTS")
-    print("=" * 30)
-    print(f"Opponent: Heuristic AI (Hard)")
-    print(f"Episodes: {n_episodes}")
-    print(f"Win Rate: {wins/n_episodes*100:.2f}%")
-    print(f"Avg Reward: {np.mean(total_rewards):.2f}")
-    print("=" * 30)
+    print(f"\nResults:")
+    print(f"  Win Rate:        {stats['win_rate']:.1%}")
+    print(f"  Average VP:      {stats['avg_vp']:.1f}")
+    print(f"  Average Length:  {stats['avg_game_length']:.0f} steps")
 
 
 if __name__ == "__main__":
-    evaluate()
+    main()

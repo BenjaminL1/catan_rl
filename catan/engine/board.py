@@ -265,19 +265,22 @@ class catanBoard:
     # Return these roads as a dictionary where key=vertex coordinates and values is the rect
     def get_potential_roads(self, player):
         colonisableRoads = {}
+        seen_edges = set()  # O(1) dedup instead of O(n) dict-key scans
         # Check potential roads from each road the player already has
         for existingRoad in player.buildGraph['ROADS']:
             for vertex_i in existingRoad:  # Iterate over both vertices of this road
+                # Vertex must not be colonised by another player
+                v_owner = self.boardGraph[vertex_i].owner
+                if v_owner is not None and v_owner is not player:
+                    continue
                 # Check neighbors from this vertex
                 for indx, v_i in enumerate(self.boardGraph[vertex_i].neighbors):
-                    # Edge currently does not have a road and vertex isn't colonised by another player
-                    # edge_state is [Player, is_road]
-                    if ((self.boardGraph[vertex_i].edge_state[indx][1] == False) and (self.boardGraph[vertex_i].owner in [None, player])):
-                        # If the edge isn't already there in both its regular + opposite orientation
-                        if ((v_i, vertex_i) not in colonisableRoads.keys() and (vertex_i, v_i) not in colonisableRoads.keys()):
-                            # Use boolean to keep track of potential roads
+                    # Edge currently does not have a road
+                    if not self.boardGraph[vertex_i].edge_state[indx][1]:
+                        edge_key = frozenset((v_i, vertex_i))
+                        if edge_key not in seen_edges:
+                            seen_edges.add(edge_key)
                             colonisableRoads[(vertex_i, v_i)] = True
-                            # print(vertex_i, v_i)
 
         return colonisableRoads
 

@@ -1,1278 +1,1159 @@
-from catan.agents.heuristic import heuristicAIPlayer
+"""
+CatanEnv — Gymnasium environment for 1v1 Catan RL training.
+
+Observation: dict with keys:
+  tile_representations  (19, 79)
+  current_player_main   (166,)
+  next_player_main      (173,)
+  current_player_hidden_dev  (MAX_DEV_SEQ,) int, 0-padded
+  current_player_played_dev  (MAX_DEV_SEQ,) int, 0-padded
+  next_player_played_dev     (MAX_DEV_SEQ,) int, 0-padded
+
+Action: 6-element int array [type, corner, edge, tile, resource1, resource2]
+  type:       0=BuildSettlement,1=BuildCity,2=BuildRoad,3=EndTurn,
+              4=MoveRobber,5=BuyDevCard,6=PlayKnight,7=PlayYoP,
+              8=PlayMonopoly,9=PlayRoadBuilder,10=BankTrade,11=Discard,
+              12=RollDice
+  corner:     0-53 vertex index
+  edge:       0-71 edge index
+  tile:       0-18 hex index
+  resource1:  0-4  (WOOD,BRICK,WHEAT,ORE,SHEEP)
+  resource2:  0-4  same
+
+Action masks returned by get_action_masks() — dict:
+  type (13), corner_settlement (54), corner_city (54), edge (72), tile (19),
+  resource1_trade (5), resource1_discard (5), resource1_default (5),
+  resource2_default (5)
+"""
+
+import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
+
 from catan.engine.player import player
 from catan.engine.game import catanGame
-import gymnasium as gym
-import numpy as np
-from gymnasium import spaces
-import sys
-import os
-import glob
-from sb3_contrib import MaskablePPO
-import queue
-from catan.rl.league import LeagueManager
+from catan.agents.heuristic import heuristicAIPlayer
+from catan.agents.random_ai import RandomAIPlayer
+from catan.rl.hand_tracker import BroadcastHandTracker, RESOURCES_CW
 
-# Add current directory to path so we can import catan modules
-# sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+RESOURCES = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']
 
 YOP_COMBINATIONS = [
     ('BRICK', 'BRICK'), ('BRICK', 'ORE'), ('BRICK', 'SHEEP'), ('BRICK', 'WHEAT'), ('BRICK', 'WOOD'),
     ('ORE', 'ORE'), ('ORE', 'SHEEP'), ('ORE', 'WHEAT'), ('ORE', 'WOOD'),
     ('SHEEP', 'SHEEP'), ('SHEEP', 'WHEAT'), ('SHEEP', 'WOOD'),
     ('WHEAT', 'WHEAT'), ('WHEAT', 'WOOD'),
-    ('WOOD', 'WOOD')
-]  # Indices 202 to 216
+    ('WOOD', 'WOOD'),
+]
 
-RESOURCES = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']
 TRADE_ACTIONS = []
-for give in RESOURCES:
-    for get in RESOURCES:
-        if give != get:
-            TRADE_ACTIONS.append((give, get))
-# Indices 226-245 (20 actions)
+for _give in RESOURCES:
+    for _get in RESOURCES:
+        if _give != _get:
+            TRADE_ACTIONS.append((_give, _get))
+
+# Resource order used in all observations (Charlesworth order)
+# RESOURCES_CW = ['WOOD', 'BRICK', 'WHEAT', 'ORE', 'SHEEP']  (imported from hand_tracker)
+
+# Dev card IDs for embedding: 0=padding, 1=KNIGHT, 2=VP, 3=ROADBUILDER, 4=YEAROFPLENTY, 5=MONOPOLY
+DEV_CARD_ORDER = ['KNIGHT', 'VP', 'ROADBUILDER', 'YEAROFPLENTY', 'MONOPOLY']
+DEV_CARD_ID = {c: i + 1 for i, c in enumerate(DEV_CARD_ORDER)}
+
+# Observation feature dims
+MAX_DEV_SEQ = 15
+N_TILES = 19
+TILE_DIM = 79
+CURR_PLAYER_DIM = 166
+NEXT_PLAYER_DIM = 173
+
+# Number-token dot counts (out of 36 ways to roll)
+DOTS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1, None: 0}
 
 
-class RandomAIPlayer(player):
-    def __init__(self, name, color):
-        super().__init__(name, color)
-        self.isAI = True
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
-    def initial_setup(self, board):
-        # Build random settlement
-        possibleVertices = board.get_setup_settlements(self)
-        if possibleVertices:
-            vertexToBuild = list(possibleVertices.keys())[np.random.randint(len(possibleVertices))]
-            self.build_settlement(vertexToBuild, board, is_free=True)
+def bucket8(v: float, max_v: float) -> np.ndarray:
+    """8-threshold binary encoding: bit i=1 if v >= (i+1)*max_v/8."""
+    arr = np.zeros(8, dtype=np.float32)
+    if max_v <= 0:
+        return arr
+    for i in range(8):
+        if v >= (i + 1) * max_v / 8.0:
+            arr[i] = 1.0
+    return arr
 
-        # Build random road
-        possibleRoads = board.get_setup_roads(self)
-        if possibleRoads:
-            roadToBuild = list(possibleRoads.keys())[np.random.randint(len(possibleRoads))]
-            self.build_road(roadToBuild[0], roadToBuild[1], board, is_free=True)
 
-    def heuristic_move_robber(self, board):
-        # Randomly move robber
-        potential_spots = board.get_robber_spots()
-        if not potential_spots:
-            return
+def _compute_income(p, board) -> list:
+    """Expected resource income per roll per resource (RESOURCES_CW order)."""
+    income = {r: 0.0 for r in RESOURCES_CW}
+    for v_pixel in p.buildGraph['SETTLEMENTS']:
+        for adj_hex in board.boardGraph[v_pixel].adjacent_hex_indices:
+            tile = board.hexTileDict[adj_hex]
+            if tile.resource_type != 'DESERT':
+                income[tile.resource_type] += DOTS.get(tile.number_token, 0) / 36.0
+    for v_pixel in p.buildGraph['CITIES']:
+        for adj_hex in board.boardGraph[v_pixel].adjacent_hex_indices:
+            tile = board.hexTileDict[adj_hex]
+            if tile.resource_type != 'DESERT':
+                income[tile.resource_type] += 2 * DOTS.get(tile.number_token, 0) / 36.0
+    return [income[r] for r in RESOURCES_CW]
 
-        hex_idx = list(potential_spots.keys())[np.random.randint(len(potential_spots))]
 
-        # Randomly choose player to rob
-        players_to_rob = board.get_players_to_rob(hex_idx)
-        player_robbed = None
-        if players_to_rob:
-            # Filter out self if present (though usually you can't rob yourself, but good to be safe)
-            opponents = [p for p in players_to_rob.keys() if p != self]
-            if opponents:
-                player_robbed = opponents[np.random.randint(len(opponents))]
-
-        self.move_robber(hex_idx, board, player_robbed)
-
-    def move(self, board):
-        # 1. Randomly try to build/buy Dev Card (30% chance)
-        if np.random.random() < 0.3:
-            self.draw_devCard(board)
-        # 2. Randomly try to build City
-        if self.resources['ORE'] >= 3 and self.resources['WHEAT'] >= 2:
-            potential_cities = board.get_potential_cities(self)
-            if potential_cities:
-                v_pixel = list(potential_cities.keys())[np.random.randint(len(potential_cities))]
-                self.build_city(v_pixel, board)
-        # 3. Randomly try to build Settlement
-        if self.resources['BRICK'] >= 1 and self.resources['WOOD'] >= 1 and \
-           self.resources['SHEEP'] >= 1 and self.resources['WHEAT'] >= 1:
-            potential_settlements = board.get_potential_settlements(self)
-            if potential_settlements:
-                v_pixel = list(potential_settlements.keys())[
-                    np.random.randint(len(potential_settlements))]
-                self.build_settlement(v_pixel, board)
-        # 4. Randomly try to build Road
-        if self.resources['BRICK'] >= 1 and self.resources['WOOD'] >= 1:
-            potential_roads = board.get_potential_roads(self)
-            if potential_roads:
-                r_coords = list(potential_roads.keys())[np.random.randint(len(potential_roads))]
-                self.build_road(r_coords[0], r_coords[1], board)
-
-    def discardResources(self, game):
-        # Random discard logic
-        total = sum(self.resources.values())
-        if total > 7:
-            num_discard = total // 2
-            for _ in range(num_discard):
-                available = [r for r, c in self.resources.items() if c > 0]
-                if available:
-                    res = available[np.random.randint(len(available))]
-                    self.resources[res] -= 1
-
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
 
 class CatanEnv(gym.Env):
-    metadata = {"render_modes": ["human", None], "render_fps": 4}
+    metadata = {"render_modes": ["human", "rgb_array"]}
 
-    def __init__(self, render_mode=None):
+    def __init__(self, render_mode=None, opponent_type="random", max_turns=500):
+        super().__init__()
         self.render_mode = render_mode
+        self.opponent_type = opponent_type
+        self.max_turns = max_turns
+
+        # Spaces
+        self.action_space = spaces.MultiDiscrete([13, 54, 72, 19, 5, 5])
+        self.observation_space = spaces.Dict({
+            'tile_representations':       spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
+            'current_player_main':        spaces.Box(-1.0, 2.0, (CURR_PLAYER_DIM,), dtype=np.float32),
+            'next_player_main':           spaces.Box(-1.0, 2.0, (NEXT_PLAYER_DIM,), dtype=np.float32),
+            'current_player_hidden_dev':  spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            'current_player_played_dev':  spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            'next_player_played_dev':     spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+        })
+
+        # Runtime state — populated in reset()
         self.game = None
+        self.agent_player = None
+        self.opponent_player = None
+        self._opponent_policy = None
+        self._hand_tracker = None
 
-        # Define Action Space
-        # 0-53: Build Settlement
-        # 54-107: Build City
-        # 108-179: Build Road
-        # 180: End Turn
-        # 181-199: Move Robber to Hex 0-18
-        # 200: Buy Dev Card
-        # 201: Play Knight
-        # 202-216: Play Year of Plenty
-        # 217-221: Play Monopoly
-        # 222: Play Road Building
-        # 223-225: Unused
-        # 226-245: Bank Trade (Give X, Get Y)
-        self.action_space = spaces.Discrete(246)
+        # Edge/vertex index maps — rebuilt each reset
+        self._edge_to_idx = {}       # tuple(sorted v1_px, v2_px) → int
+        self._idx_to_edge = {}       # int → (v1_px, v2_px)
+        self._vertex_to_idx = {}     # pixel_coord → int
+        self._idx_to_vertex = {}     # int → pixel_coord
 
-        # Define Observation Space
-        # Resources: 2 players * 5 = 10
-        # VPs: 2 players = 2
-        # Hexes: 19 * (6 one-hot resource + 1 number + 1 robber) = 19 * 8 = 152
-        # Vertices: 54 * (3 one-hot owner + 3 one-hot type + 6 one-hot port + 2 binary valid spots) = 54 * 14 = 756
-        # Edges: 72 * (3 one-hot owner + 1 binary valid spot) = 72 * 4 = 288
-        # Dev Cards: 7 (5 Agent + 2 Opponent)
-        # Bonus VPs: 6 (3 Longest Road + 3 Largest Army)
-        # Expert Features:
-        #   Expected Income: 5 floats (Brick, Ore, Sheep, Wheat, Wood)
-        #   Trade Rates: 5 floats (Brick, Ore, Sheep, Wheat, Wood)
-        #   Opponent Hand Size: 1 float
-        #   Karma: 1 float
-        #   New Context Features: 19 floats
-        #   Tactical Lookahead: 2 floats
-        #   Distance to Connect: 1 float
-        #   Race Stats: 4 floats (Agent Knights, Opp Knights, Agent Road, Opp Road)
-        #   Grand Total: 1258
-
-        self.observation_space = spaces.Box(
-            low=0, high=1, shape=(1258,), dtype=np.float32
-        )
-
-        self.edge_list = []  # To store canonical edge indices
-        self._init_edge_list()
-
+        # State machine flags
+        self.initial_placement_phase = False
+        self._setup_pending = None       # (player, 'settlement'|'road')
+        self._setup_step = 0             # 0-3
+        self.roll_pending = False
+        self.discard_pending = False
+        self._cards_to_discard = 0
         self.robber_placement_pending = False
         self.road_building_roads_left = 0
-        self.played_dev_card_this_turn = False
-        self.max_steps = 350
-        self._spatial_cache = None
-        self.total_episodes = 0
+        self._opp_pending_robber = False # opponent needs to place robber after agent discards
 
-    def _init_edge_list(self):
-        # We need a temporary board to calculate edges
-        temp_game = catanGame(render_mode=None)
-        board = temp_game.board
+        self.last_dice_roll = 0
+        self._turn_count = 0
+        self._game_over = False
 
-        edges = set()
-        for v_idx in range(54):
-            pixel = board.vertex_index_to_pixel_dict[v_idx]
-            vertex = board.boardGraph[pixel]
-            for neighbor_pixel in vertex.neighbors:
-                neighbor_vertex = board.boardGraph[neighbor_pixel]
-                n_idx = neighbor_vertex.vertex_index
-
-                edge = tuple(sorted((v_idx, n_idx)))
-                edges.add(edge)
-
-        self.edge_list = sorted(list(edges))
-        # assert len(self.edge_list) == 72 # Verify standard Catan edges
-
-        self.league = LeagueManager()
-        self.hof_models = []
-        self._scan_model_pool()
-
-    def _scan_model_pool(self):
-        """Scans the models directory for available opponents."""
-        self.league.scan_models()
+    # ------------------------------------------------------------------
+    # Reset
+    # ------------------------------------------------------------------
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        if seed is not None:
+            np.random.seed(seed)
 
-        self.total_episodes += 1
+        options = options or {}
+        opp_type = options.get("opponent_type", self.opponent_type)
+        opp_policy = options.get("opponent_policy", None)
+        human_first = options.get("human_first", False)
+        self._opponent_policy = opp_policy
 
-        self.game = catanGame(render_mode=self.render_mode)
+        # Create game (no render for RL)
+        self.game = catanGame(render_mode=None)
+        board = self.game.board
+
+        # Create players
+        self.agent_player = player("Agent", "black")
+        self.agent_player.game = self.game
+        self.agent_player.isAI = False
+
+        if opp_type == "heuristic":
+            self.opponent_player = heuristicAIPlayer("Opponent", "darkslateblue")
+            self.opponent_player.updateAI()
+        else:
+            # random or policy — use RandomAI for game-loop compatibility
+            self.opponent_player = RandomAIPlayer("Opponent", "darkslateblue")
+        self.opponent_player.game = self.game
+        self.opponent_player.isAI = True
+
+        if opp_type == "policy" and opp_policy is not None:
+            self._opp_type_runtime = "policy"
+        else:
+            self._opp_type_runtime = opp_type
+
+        # Build player queue: agent first (P1), opponent second (P2)
+        import queue
+        self.game.playerQueue = queue.Queue(2)
+        if human_first:
+            self.game.playerQueue.put(self.agent_player)
+            self.game.playerQueue.put(self.opponent_player)
+        else:
+            self.game.playerQueue.put(self.agent_player)
+            self.game.playerQueue.put(self.opponent_player)
+
+        # Build vertex/edge index maps
+        self._build_index_maps(board)
+
+        # Hand tracker
+        self._hand_tracker = BroadcastHandTracker(["Agent", "Opponent"])
+        self._hand_tracker.subscribe(self.game.broadcast)
+
+        # State machine reset
+        self.initial_placement_phase = True
+        self._setup_step = 0
+        self.roll_pending = False
+        self.discard_pending = False
+        self._cards_to_discard = 0
         self.robber_placement_pending = False
         self.road_building_roads_left = 0
-        self.played_dev_card_this_turn = False
-        self.current_step = 0
+        self._opp_pending_robber = False
+        self.last_dice_roll = 0
+        self._turn_count = 0
+        self._game_over = False
 
-        # Setup players
-        with self.game.playerQueue.mutex:
-            self.game.playerQueue.queue.clear()
+        # Agent places first settlement (setup step 0)
+        self._setup_pending = (self.agent_player, 'settlement')
 
-        self.agent_player = player("Agent", 'black')
-        # Monkeypatch discard
-        self.agent_player.discardResources = self._agent_discard_resources
+        obs = self._get_obs()
+        info = {}
+        return obs, info
 
-        # Self-Play / Curriculum Logic
-        self.is_ghost_opponent = False
-        self.ghost_model = None
-
-        self.is_ghost_opponent = False
-        self.ghost_model = None
-
-        # Override logic via options
-        force_opponent = options.get('opponent_type') if options else None
-
-        if force_opponent == 'heuristic':
-            self.opponent_player = heuristicAIPlayer("Opponent", 'darkslateblue')
-            self.opponent_player.updateAI()
-        elif force_opponent == 'random':
-            self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
-        elif str(force_opponent).endswith('.zip'):
-            # Explicit model load
-            try:
-                self.ghost_model = MaskablePPO.load(force_opponent, device='cpu')
-                self.is_ghost_opponent = True
-                self.opponent_player = heuristicAIPlayer("Ghost", 'darkslateblue')
-                self.opponent_player.updateAI()
-            except:
-                self.opponent_player = RandomAIPlayer("Opponent", 'darkslateblue')
-        else:
-            # Phase 4: L-FSP Sampling via LeagueManager
-            chosen_model_path = self.league.get_opponent()
-
-            if chosen_model_path and os.path.exists(chosen_model_path):
-                try:
-                    self.ghost_model = MaskablePPO.load(chosen_model_path, device='cpu')
-                    self.is_ghost_opponent = True
-                    # Extract name for display
-                    opp_name = os.path.basename(chosen_model_path).replace('.zip', '')
-                    self.opponent_player = heuristicAIPlayer(f"Ghost-{opp_name}", 'darkslateblue')
-                    self.opponent_player.updateAI()
-                    self.current_opponent_name = os.path.basename(chosen_model_path)
-                except Exception as e:
-                    print(f"Failed to load {chosen_model_path}: {e}")
-                    self.is_ghost_opponent = False
-                    self.opponent_player = heuristicAIPlayer("Opponent-Default", 'darkslateblue')
-                    self.opponent_player.updateAI()
-                    self.current_opponent_name = "Heuristic"
-            else:
-                # Fallback to Heuristic if league is empty or fails
-                self.is_ghost_opponent = False
-                self.opponent_player = heuristicAIPlayer("Opponent-Default", 'darkslateblue')
-                self.opponent_player.updateAI()
-                self.current_opponent_name = "Heuristic"
-
-        # Seat Swap Logic (50% Chance)
-        # Agent is P1 by default
-        p1 = self.agent_player
-        p2 = self.opponent_player
-
-        if np.random.random() < 0.5:
-            # Swap!
-            p1, p2 = p2, p1
-            # Adjust player color/names if strictly needed, but internal logic uses object references.
-            # We explicitly set turn order in the queue
-
-        self.game.playerQueue.put(p1)
-        self.game.playerQueue.put(p2)
-
-        # Set current player to whoever is first in queue
-        self.game.currentPlayer = self.game.playerQueue.queue[0]
-        self.prev_vps = 0
-
-        # Initial Setup
-        self._perform_initial_setup()
-
-        # Start the game loop logic
-        self.game.gameOver = False
-        self.game.currentPlayer = self.game.playerQueue.queue[0]
-        self.prev_vps = 0
-
-        # Check if it's Opponent's turn (e.g. they won the coin toss / seat swap)
-        if self.game.currentPlayer == self.opponent_player:
-            # Run Opponent Turn
-            self._run_opponent_turn()
-
-            # Now it should be Agent's turn (unless game over)
-            if not self.game.gameOver:
-                self.game.currentPlayer = self.agent_player
-                # Prepare Agent Turn
-                self.agent_player.updateDevCards()
-                dice = self.game.rollDice()
-                if dice == 7:
-                    self.robber_placement_pending = True
-                    for p in [self.agent_player, self.opponent_player]:
-                        p.discardResources(self.game)
-                else:
-                    self.game.update_playerResources(dice, self.agent_player)
-        else:
-            # Agent is First
-            dice = self.game.rollDice()
-            if dice == 7:
-                self.robber_placement_pending = True
-                for p in [self.agent_player, self.opponent_player]:
-                    p.discardResources(self.game)
-            else:
-                self.game.update_playerResources(dice, self.game.currentPlayer)
-
-        return self._get_obs(), {}
-
-    def _agent_discard_resources(self, game):
-        # Balanced Hand Heuristic
-        total = sum(self.agent_player.resources.values())
-        if total > 9:
-            num_to_discard = total // 2
-            # Priority for discarding (Most discardable -> Least discardable)
-            # Keep Rare (Ore/Wheat) > Common (Sheep)
-            discard_priority = ['SHEEP', 'WOOD', 'BRICK', 'WHEAT', 'ORE']
-
-            for _ in range(num_to_discard):
-                # Find resource(s) with max count
-                max_count = max(self.agent_player.resources.values())
-                candidates = [r for r, c in self.agent_player.resources.items() if c == max_count]
-
-                # Tie-break: Discard the one that appears earliest in discard_priority
-                # We sort candidates based on their index in discard_priority and pick the first one
-                resource_to_discard = sorted(candidates, key=lambda x: discard_priority.index(x))[0]
-
-                self.agent_player.resources[resource_to_discard] -= 1
-
-    def _perform_initial_setup(self):
-        # Agent Setup (Random)
-        for _ in range(2):
-            possibleVertices = self.game.board.get_setup_settlements(self.agent_player)
-            if possibleVertices:
-                v = list(possibleVertices.keys())[np.random.randint(len(possibleVertices))]
-                self.agent_player.build_settlement(v, self.game.board)
-
-                possibleRoads = self.game.board.get_setup_roads(self.agent_player)
-                if possibleRoads:
-                    r = list(possibleRoads.keys())[np.random.randint(len(possibleRoads))]
-                    self.agent_player.build_road(r[0], r[1], self.game.board)
-
-        # Opponent Setup (Heuristic)
-        for _ in range(2):
-            self.opponent_player.initial_setup(self.game.board)
-        # Give initial resources based on second settlement
-        for p in [self.agent_player, self.opponent_player]:
-            # Get last settlement
-            if p.buildGraph['SETTLEMENTS']:
-                last_settle_coord = p.buildGraph['SETTLEMENTS'][-1]
-                vertex = self.game.board.boardGraph[last_settle_coord]
-                for hex_idx in vertex.adjacent_hex_indices:
-                    hex_tile = self.game.board.hexTileDict[hex_idx]
-                    res = hex_tile.resource_type
-                    if res != 'DESERT':
-                        p.resources[res] += 1
+    # ------------------------------------------------------------------
+    # Step
+    # ------------------------------------------------------------------
 
     def step(self, action):
-        self.current_step += 1
-        reward = 0
+        action_type = int(action[0])
+        corner_idx   = int(action[1])
+        edge_idx     = int(action[2])
+        tile_idx     = int(action[3])
+        res1_idx     = int(action[4])
+        res2_idx     = int(action[5])
+
+        board = self.game.board
+        agent = self.agent_player
+        opponent = self.opponent_player
+
+        reward = 0.0
         terminated = False
         truncated = False
         info = {}
 
-        if self.current_step >= self.max_steps:
-            truncated = True
-            # CRITICAL CHANGE: Penalize running out of time!
-            # If we don't punish this, the agent just stalls forever to be safe.
-            # Stalling should be worse than losing (-0.5) to force action.
-            reward -= 1.0
+        # ---- Setup phase ----
+        if self.initial_placement_phase:
+            if self._setup_step == 0:  # agent settle 1
+                v_pixel = self._idx_to_vertex[corner_idx]
+                agent.build_settlement(v_pixel, board, is_free=True)
+                self._setup_step = 1
+                self._setup_pending = (agent, 'road')
+            elif self._setup_step == 1:  # agent road 1
+                v1, v2 = self._idx_to_edge[edge_idx]
+                agent.build_road(v1, v2, board, is_free=True)
+                self._setup_step = 2
+                # Opponent does full setup (settle1+road1+settle2+road2)
+                self._run_opponent_setup()
+                # Grant initial resources to opponent (for their 2nd settlement)
+                self._grant_setup_resources(opponent)
+                self._setup_pending = (agent, 'settlement')
+            elif self._setup_step == 2:  # agent settle 2
+                v_pixel = self._idx_to_vertex[corner_idx]
+                agent.build_settlement(v_pixel, board, is_free=True)
+                self._setup_step = 3
+                self._setup_pending = (agent, 'road')
+            elif self._setup_step == 3:  # agent road 2
+                v1, v2 = self._idx_to_edge[edge_idx]
+                agent.build_road(v1, v2, board, is_free=True)
+                # Grant initial resources to agent (for their 2nd settlement)
+                self._grant_setup_resources(agent)
+                self._hand_tracker.seed_from_player(agent)
+                self._hand_tracker.seed_from_player(opponent)
+                self.initial_placement_phase = False
+                self._setup_pending = None
+                self._setup_step = 4
+                self.game.gameSetup = False
+                self.roll_pending = True
+                self._turn_count = 0
 
-        if reward < -0.9 and not terminated and not truncated:
-            print(
-                f"Warning: Low reward ({reward}) without termination. Potential infinite loop?", flush=True)
+            obs = self._get_obs()
+            return obs, reward, terminated, truncated, info
 
-        player = self.agent_player
-        mask = self.get_action_mask()
-
-        if mask[action] == 0:
-            reward = -0.001
-            # Invalid move, turn continues? Or end turn?
-            # Usually in RL, invalid move ends episode or just penalizes.
-            # Here we just penalize and return same state.
-            return self._get_obs(), reward, terminated, truncated, info
-
-        # 1. Priority: Road Building Card Phase
-        if self.road_building_roads_left > 0:
-            if 108 <= action <= 179:
-                edge_idx = action - 108
-                v1_idx, v2_idx = self.edge_list[edge_idx]
-                v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
-                v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
-
-                # Build FREE road
-                player.build_road(v1_pixel, v2_pixel, self.game.board, is_free=True)
-                self.road_building_roads_left -= 1
-                self._spatial_cache = None  # Invalidate cache
-
-                self.game.check_longest_road(player)
-                if player.victoryPoints >= self.game.maxPoints:
-                    reward += 2.0
-                    terminated = True
-                    info['is_success'] = True
-
-                return self._get_obs(), reward, terminated, truncated, info
-            else:
-                # Should be impossible due to mask
-                return self._get_obs(), -0.001, terminated, truncated, info
-
-        # 2. Priority: Robber Placement
-        if self.robber_placement_pending:
-            if 181 <= action <= 199:
-                hex_idx = action - 181
-                # Move robber
-                # Also need to rob a player if possible
-                players_to_rob = self.game.board.get_players_to_rob(hex_idx)
-                player_robbed = None
-                if players_to_rob and self.opponent_player in players_to_rob:
-                    player_robbed = self.opponent_player
-
-                player.move_robber(hex_idx, self.game.board, player_robbed)
-                self.robber_placement_pending = False
-                reward += 0.001  # Small reward for completing action
-                return self._get_obs(), reward, terminated, truncated, info
-            else:
-                # Should be caught by mask, but just in case
-                reward = -0.001
-                return self._get_obs(), reward, terminated, truncated, info
-
-        # 3. Normal Actions
-        if 0 <= action <= 53:  # Build Settlement
-            vertex_idx = action
-            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
-
-            player.build_settlement(pixel, self.game.board)
-            reward += 0.1  # Bootcamp Reward
-            if player.victoryPoints >= self.game.maxPoints:
-                reward += 1.0  # Bootcamp Reward
-                terminated = True
-                info['is_success'] = True
-
-        elif 54 <= action <= 107:  # Build City
-            vertex_idx = action - 54
-            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
-
-            player.build_city(pixel, self.game.board)
-            reward += 0.15  # Bootcamp Reward
-            if player.victoryPoints >= self.game.maxPoints:
-                reward += 1.0  # Bootcamp Reward
-                terminated = True
-                info['is_success'] = True
-
-        elif 108 <= action <= 179:  # Build Road
-            edge_idx = action - 108
-            v1_idx, v2_idx = self.edge_list[edge_idx]
-            v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
-            v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
-
-            player.build_road(v1_pixel, v2_pixel, self.game.board)
-            self._spatial_cache = None  # Invalidate cache
-            reward += 0.02  # Bootcamp Reward
-            self.game.check_longest_road(player)
-            if player.victoryPoints >= self.game.maxPoints:
-                reward += 1.0  # Bootcamp Reward
-                terminated = True
-                info['is_success'] = True
-
-        elif action == 180:  # End Turn
-            # Soft Exit for Road Building Phase
-            if self.road_building_roads_left > 0:
-                self.road_building_roads_left = 0
-                return self._get_obs(), reward, terminated, truncated, info
-
-            self.played_dev_card_this_turn = False  # Reset for next turn
-            # End Agent Turn
-            # Run Opponent Turn
-            self._run_opponent_turn()
-
-            # Start Agent Turn
-            if not self.game.gameOver:
-                self.game.currentPlayer = self.agent_player
-                self.agent_player.updateDevCards()
-                dice = self.game.rollDice()
-
-                if dice == 7:
-                    self.robber_placement_pending = True
-                    # Discard resources if needed
-                    for p in [self.agent_player, self.opponent_player]:
-                        p.discardResources(self.game)
+        # ---- Discard phase ----
+        if self.discard_pending:
+            res_name = RESOURCES_CW[res1_idx]
+            if agent.resources.get(res_name, 0) > 0:
+                agent.resources[res_name] -= 1
+                self.game.log_discard(agent, [res_name])
+                self._cards_to_discard -= 1
+            if self._cards_to_discard <= 0:
+                self.discard_pending = False
+                if self._opp_pending_robber:
+                    # Opponent was mid-turn waiting for us to discard
+                    self._opp_pending_robber = False
+                    opponent.heuristic_move_robber(board)
+                    # Continue opponent's main turn
+                    self._run_opponent_main_turn()
+                    terminated, truncated = self._check_terminal()
+                    if not terminated and not truncated:
+                        self.roll_pending = True
+                        self._turn_count += 1
                 else:
-                    self.game.update_playerResources(dice, self.agent_player)
+                    self.robber_placement_pending = True
 
-                # Check if opponent won
-                if self.opponent_player.victoryPoints >= self.game.maxPoints:
-                    terminated = True
-                    reward -= 1.0  # Bootcamp Reward
-                    info['is_success'] = False
+            obs = self._get_obs()
+            if terminated or truncated:
+                info = self._make_terminal_info(terminated)
+            return obs, reward, terminated, truncated, info
+
+        # ---- Robber placement phase ----
+        if self.robber_placement_pending:
+            hex_pixel_list = list(board.hexTileDict[tile_idx].get_corners(board.flat))
+            players_to_rob = board.get_players_to_rob(tile_idx)
+            player_robbed = None
+            for p in players_to_rob:
+                if p is not agent:
+                    player_robbed = p
+                    break
+            agent.move_robber(tile_idx, board, player_robbed)
+            self.game.check_largest_army(agent)
+            self.robber_placement_pending = False
+
+            obs = self._get_obs()
+            return obs, reward, terminated, truncated, info
+
+        # ---- Roll pending ----
+        if self.roll_pending:
+            if action_type != 12:
+                obs = self._get_obs()
+                return obs, 0.0, False, False, {}
+            agent.updateDevCards()
+            agent.devCardPlayedThisTurn = False
+            self.game.currentPlayer = agent
+            dice = self.game.rollDice()
+            self.last_dice_roll = dice
+            if dice == 7:
+                if sum(opponent.resources.values()) > 9:
+                    opponent.discardResources(self.game)
+                if sum(agent.resources.values()) > 9:
+                    self._cards_to_discard = sum(agent.resources.values()) // 2
+                    self.discard_pending = True
+                    self.roll_pending = False
+                    obs = self._get_obs()
+                    return obs, 0.0, False, False, {}
+                else:
+                    self.robber_placement_pending = True
             else:
-                terminated = True
-                if self.opponent_player.victoryPoints >= self.game.maxPoints:
-                    reward -= 1.0  # Bootcamp Reward
-                    info['is_success'] = False
+                self.game.update_playerResources(dice, agent)
+            self.roll_pending = False
+            obs = self._get_obs()
+            return obs, 0.0, False, False, {}
 
-        elif action == 200:  # Buy Dev Card
-            player.draw_devCard(self.game.board)
-            reward += 0.01
+        # ---- Road building phase ----
+        if self.road_building_roads_left > 0:
+            if action_type == 2:
+                v1, v2 = self._idx_to_edge[edge_idx]
+                agent.build_road(v1, v2, board, is_free=True)
+                self.game.check_longest_road(agent)
+                self.road_building_roads_left -= 1
+            obs = self._get_obs()
+            return obs, 0.0, False, False, {}
 
-        elif action == 201:  # Play Knight
-            player.devCards['KNIGHT'] -= 1
-            self.played_dev_card_this_turn = True
-            self.robber_placement_pending = True
-            player.knightsPlayed += 1
-            self.game.check_largest_army(player)
-            reward += 0.01
-            if player.victoryPoints >= self.game.maxPoints:
-                reward += 1.0  # Bootcamp Reward
-                terminated = True
-                info['is_success'] = True
+        # ---- Main turn actions ----
+        if action_type == 0:  # BuildSettlement
+            v_pixel = self._idx_to_vertex[corner_idx]
+            agent.build_settlement(v_pixel, board)
+            self.game.check_longest_road(agent)
 
-        elif 202 <= action <= 216:  # Play Year of Plenty
-            player.devCards['YEAROFPLENTY'] -= 1
-            self.played_dev_card_this_turn = True
-            r1, r2 = YOP_COMBINATIONS[action - 202]
-            player.resources[r1] += 1
-            player.resources[r2] += 1
-            self.game.log_yop(player, [r1, r2])
-            reward += 0.01
+        elif action_type == 1:  # BuildCity
+            v_pixel = self._idx_to_vertex[corner_idx]
+            agent.build_city(v_pixel, board)
 
-        elif 217 <= action <= 221:  # Play Monopoly
-            player.devCards['MONOPOLY'] -= 1
-            self.played_dev_card_this_turn = True
-            target_res = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD'][action - 217]
+        elif action_type == 2:  # BuildRoad
+            v1, v2 = self._idx_to_edge[edge_idx]
+            agent.build_road(v1, v2, board)
+            self.game.check_longest_road(agent)
 
-            # Steal from opponent
-            stolen_count = self.opponent_player.resources[target_res]
-            self.opponent_player.resources[target_res] = 0
-            player.resources[target_res] += stolen_count
-            reward += 0.01
+        elif action_type == 3:  # EndTurn
+            self.game.check_longest_road(agent)
+            self.game.check_largest_army(agent)
+            terminated, truncated = self._check_terminal()
+            if terminated or truncated:
+                info = self._make_terminal_info(terminated)
+                obs = self._get_obs()
+                return obs, self._compute_terminal_reward(), terminated, truncated, info
+            # Run opponent turn
+            self._run_opponent_turn()
+            terminated, truncated = self._check_terminal()
+            if not terminated and not truncated:
+                self.roll_pending = True
+                self._turn_count += 1
+            if terminated or truncated:
+                info = self._make_terminal_info(terminated)
 
-        elif action == 222:  # Play Road Building
-            player.devCards['ROADBUILDER'] -= 1
-            self.played_dev_card_this_turn = True
-            self.road_building_roads_left = 2
-            self._spatial_cache = None  # Invalidate cache
-            reward += 0.01
+        elif action_type == 4:  # MoveRobber
+            players_to_rob = board.get_players_to_rob(tile_idx)
+            player_robbed = None
+            for p in players_to_rob:
+                if p is not agent:
+                    player_robbed = p
+                    break
+            agent.move_robber(tile_idx, board, player_robbed)
+            self.game.check_largest_army(agent)
+            self.robber_placement_pending = False
 
-        elif 226 <= action <= 245:  # Bank Trading
-            give, get = TRADE_ACTIONS[action - 226]
-            player.trade_with_bank(give, get)
-            reward += 0.0  # Neutral reward for trading
+        elif action_type == 5:  # BuyDevCard
+            agent.draw_devCard(board)
 
-        # Add VP reward
-        current_vp = player.victoryPoints
+        elif action_type == 6:  # PlayKnight
+            if agent.devCards.get('KNIGHT', 0) > 0 and not agent.devCardPlayedThisTurn:
+                agent.devCards['KNIGHT'] -= 1
+                agent.knightsPlayed += 1
+                agent.devCardPlayedThisTurn = True
+                self.robber_placement_pending = True
+                self.game.check_largest_army(agent)
 
-        vp_diff = current_vp - self.prev_vps
-        if vp_diff > 0:
-            reward += 0.2 * vp_diff  # Bootcamp Reward
-        self.prev_vps = current_vp
+        elif action_type == 7:  # PlayYoP
+            if agent.devCards.get('YEAROFPLENTY', 0) > 0 and not agent.devCardPlayedThisTurn:
+                agent.devCards['YEAROFPLENTY'] -= 1
+                agent.yopPlayed += 1
+                agent.devCardPlayedThisTurn = True
+                r1 = RESOURCES_CW[res1_idx]
+                r2 = RESOURCES_CW[res2_idx]
+                agent.resources[r1] += 1
+                agent.resources[r2] += 1
+                self.game.log_yop(agent, [r1, r2])
 
-        if terminated and hasattr(self, 'current_opponent_name'):
-            info['league_update'] = {
-                'opponent': self.current_opponent_name,
-                'win': info.get('is_success', False)
+        elif action_type == 8:  # PlayMonopoly
+            if agent.devCards.get('MONOPOLY', 0) > 0 and not agent.devCardPlayedThisTurn:
+                agent.devCards['MONOPOLY'] -= 1
+                agent.monopolyPlayed += 1
+                agent.devCardPlayedThisTurn = True
+                r = RESOURCES_CW[res1_idx]
+                for p in list(self.game.playerQueue.queue):
+                    if p is not agent:
+                        stolen = p.resources.get(r, 0)
+                        if stolen > 0:
+                            p.resources[r] = 0
+                            agent.resources[r] += stolen
+                            self.game.broadcast.resource_change(p.name, {r: -stolen}, "MONOPOLY")
+                            self.game.broadcast.resource_change(agent.name, {r: +stolen}, "MONOPOLY")
+
+        elif action_type == 9:  # PlayRoadBuilder
+            if agent.devCards.get('ROADBUILDER', 0) > 0 and not agent.devCardPlayedThisTurn:
+                agent.devCards['ROADBUILDER'] -= 1
+                agent.roadBuilderPlayed += 1
+                agent.devCardPlayedThisTurn = True
+                self.road_building_roads_left = 2
+
+        elif action_type == 10:  # BankTrade
+            r1 = RESOURCES_CW[res1_idx]
+            r2 = RESOURCES_CW[res2_idx]
+            agent.trade_with_bank(r1, r2)
+
+        elif action_type == 11:  # Discard (fallback, should be handled above)
+            res_name = RESOURCES_CW[res1_idx]
+            if agent.resources.get(res_name, 0) > 0:
+                agent.resources[res_name] -= 1
+                self.game.log_discard(agent, [res_name])
+
+        elif action_type == 12:  # RollDice (shouldn't happen in main turn)
+            pass
+
+        obs = self._get_obs()
+        if terminated or truncated:
+            reward = self._compute_terminal_reward()
+            info = self._make_terminal_info(terminated)
+        return obs, reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    # Action masks
+    # ------------------------------------------------------------------
+
+    def get_action_masks(self) -> dict:
+        return self._compute_masks(self.agent_player)
+
+    def _compute_masks(self, acting_player) -> dict:
+        board = self.game.board
+        p = acting_player
+        is_agent = (p is self.agent_player)
+        is_opp = not is_agent
+
+        type_mask   = np.zeros(13, dtype=bool)
+        corner_set  = np.zeros(54, dtype=bool)
+        corner_city = np.zeros(54, dtype=bool)
+        edge_mask   = np.zeros(72, dtype=bool)
+        tile_mask   = np.zeros(19, dtype=bool)
+        res1_trade  = np.zeros(5, dtype=bool)
+        res1_disc   = np.zeros(5, dtype=bool)
+        res1_def    = np.zeros(5, dtype=bool)
+        res2_def    = np.zeros(5, dtype=bool)
+
+        # Setup phase
+        if self.initial_placement_phase:
+            step = self._setup_step
+            if step == 0 or step == 2:  # settle
+                type_mask[0] = True
+                for v_px, _ in board.get_setup_settlements(p).items():
+                    idx = self._vertex_to_idx.get(v_px)
+                    if idx is not None:
+                        corner_set[idx] = True
+            elif step == 1 or step == 3:  # road
+                type_mask[2] = True
+                for (v1, v2) in board.get_setup_roads(p).keys():
+                    key = (min(v1, v2, key=str), max(v1, v2, key=str))
+                    idx = self._edge_to_idx.get(self._edge_key(v1, v2))
+                    if idx is not None:
+                        edge_mask[idx] = True
+            return {
+                'type': type_mask, 'corner_settlement': corner_set, 'corner_city': corner_city,
+                'edge': edge_mask, 'tile': tile_mask,
+                'resource1_trade': res1_trade, 'resource1_discard': res1_disc,
+                'resource1_default': res1_def, 'resource2_default': res2_def,
             }
 
-        return self._get_obs(), reward, terminated, truncated, info
-
-    def _execute_ghost_action(self, player, action):
-        """
-        Executes an action for a Ghost (Self-Play) opponent.
-        This mirrors the physics of step() but for the opponent player.
-        Returns: terminated (bool) - if the game ended via this action.
-        """
-        terminated = False
-
-        # 1. Priority: Road Building Card Phase
-        if self.road_building_roads_left > 0:
-            if 108 <= action <= 179:
-                edge_idx = action - 108
-                v1_idx, v2_idx = self.edge_list[edge_idx]
-                v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
-                v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
-                player.build_road(v1_pixel, v2_pixel, self.game.board, is_free=True)
-                self.road_building_roads_left -= 1
-                self.game.check_longest_road(player)
-            return player.victoryPoints >= self.game.maxPoints
-
-        # 2. Priority: Robber Placement
-        if self.robber_placement_pending:
-            if 181 <= action <= 199:
-                hex_idx = action - 181
-                # Rob agent if possible
-                players_to_rob = self.game.board.get_players_to_rob(hex_idx)
-                player_robbed = None
-                if players_to_rob and self.agent_player in players_to_rob:
-                    player_robbed = self.agent_player  # Rob the AGENT
-                player.move_robber(hex_idx, self.game.board, player_robbed)
-                self.robber_placement_pending = False
-            return False
-
-        # 3. Normal Actions
-        if 0 <= action <= 53:  # Build Settlement
-            vertex_idx = action
-            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
-            player.build_settlement(pixel, self.game.board)
-
-        elif 54 <= action <= 107:  # Build City
-            vertex_idx = action - 54
-            pixel = self.game.board.vertex_index_to_pixel_dict[vertex_idx]
-            player.build_city(pixel, self.game.board)
-
-        elif 108 <= action <= 179:  # Build Road
-            edge_idx = action - 108
-            v1_idx, v2_idx = self.edge_list[edge_idx]
-            v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
-            v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
-            player.build_road(v1_pixel, v2_pixel, self.game.board)
-            self.game.check_longest_road(player)
-
-        elif action == 180:  # End Turn
-            # Soft Exit for Road Building Phase
-            if self.road_building_roads_left > 0:
-                self.road_building_roads_left = 0
-            else:
-                self.played_dev_card_this_turn = False
-            # Return "True" only if we want to signal turn end to loop?
-            # No, this function returns "Game Over" state. Turn end is handled by loop break.
-            return False
-
-        elif action == 200:  # Buy Dev Card
-            player.draw_devCard(self.game.board)
-
-        elif action == 201:  # Play Knight
-            player.devCards['KNIGHT'] -= 1
-            self.played_dev_card_this_turn = True
-            self.robber_placement_pending = True
-            player.knightsPlayed += 1
-            self.game.check_largest_army(player)
-
-        elif 202 <= action <= 216:  # Play Year of Plenty
-            player.devCards['YEAROFPLENTY'] -= 1
-            self.played_dev_card_this_turn = True
-            r1, r2 = YOP_COMBINATIONS[action - 202]
-            player.resources[r1] += 1
-            player.resources[r2] += 1
-
-        elif 217 <= action <= 221:  # Play Monopoly
-            player.devCards['MONOPOLY'] -= 1
-            self.played_dev_card_this_turn = True
-            target_res = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD'][action - 217]
-            # Steal from Agent
-            stolen_count = self.agent_player.resources[target_res]
-            self.agent_player.resources[target_res] = 0
-            player.resources[target_res] += stolen_count
-
-        elif action == 222:  # Play Road Building
-            player.devCards['ROADBUILDER'] -= 1
-            self.played_dev_card_this_turn = True
-            self.road_building_roads_left = 2
-
-        elif 226 <= action <= 245:  # Bank Trading
-            give, get = TRADE_ACTIONS[action - 226]
-            player.trade_with_bank(give, get)
-
-        return player.victoryPoints >= self.game.maxPoints
-
-    def _run_opponent_turn(self):
-        opponent = self.opponent_player
-        self.game.currentPlayer = opponent
-
-        dice = self.game.rollDice()
-        if dice == 7:
-            self.robber_placement_pending = True
-            for p in [self.agent_player, self.opponent_player]:
-                p.discardResources(self.game)
-        else:
-            self.game.update_playerResources(dice, opponent)
-
-        if self.is_ghost_opponent:
-            # Ghost/Self-Play Logic
-            steps = 0
-            while steps < 50:  # Avoid infinite loops
-                # 1. Swap players to trick _get_obs and get_action_mask
-                real_agent = self.agent_player
-                self.agent_player = self.opponent_player
-                self.opponent_player = real_agent
-
-                # 2. Get input data
-                try:
-                    obs = self._get_obs()
-                    mask = self.get_action_mask(player=self.agent_player)
-                finally:
-                    # 3. Swap back immediately
-                    self.opponent_player = self.agent_player
-                    self.agent_player = real_agent
-
-                # 4. Predict
-                action, _ = self.ghost_model.predict(obs, action_masks=mask)
-
-                if isinstance(action, np.ndarray):
-                    action = int(action.item())
-                elif isinstance(action, (np.integer, np.int64, np.int32)):
-                    action = int(action)
-
-                if action == 180:  # End Turn
-                    break
-
-                # 5. Execute Action
-                game_over = self._execute_ghost_action(self.opponent_player, action)
-                if game_over:
-                    self.game.gameOver = True
-                    break
-                steps += 1
-        else:
-            # Heuristic/Random Logic
-            opponent.move(self.game.board)
-
-        self.game.check_longest_road(opponent)
-        self.game.check_largest_army(opponent)
-
-        if opponent.victoryPoints >= self.game.maxPoints:
-            self.game.gameOver = True
-
-    def get_action_mask(self, player=None):
-        # 1. Initialize as boolean False
-        mask = np.zeros(246, dtype=bool)
-        if player is None:
-            player = self.agent_player
-
-        # Priority 1: Road Building Card Phase
-        if self.road_building_roads_left > 0:
-            # Only allow road building
-            if player.roadsLeft > 0:
-                potential_roads = self.game.board.get_potential_roads(player)
-                for (v1_pixel, v2_pixel) in potential_roads.keys():
-                    v1_idx = self.game.board.boardGraph[v1_pixel].vertex_index
-                    v2_idx = self.game.board.boardGraph[v2_pixel].vertex_index
-                    edge = tuple(sorted((v1_idx, v2_idx)))
-                    try:
-                        edge_idx = self.edge_list.index(edge)
-                        mask[108 + edge_idx] = True
-                    except ValueError:
-                        pass
-
-            # Road Building Failsafe: Allow skipping if blocked
-            if not np.any(mask):
-                mask[180] = True
-
-        # Priority 2: Robber Placement
-        elif self.robber_placement_pending:
-            mask[181:200] = True
-
-        # Priority 3: Normal Phase
-        else:
-            mask[180] = True  # End Turn always valid
-
-            resources = player.resources
-
-            # Settlements (0-53)
-            if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
-                resources['SHEEP'] >= 1 and resources['WHEAT'] >= 1 and
-                    player.settlementsLeft > 0):
-                potential_settlements = self.game.board.get_potential_settlements(player)
-                for v_pixel in potential_settlements.keys():
-                    v_idx = self.game.board.boardGraph[v_pixel].vertex_index
-                    mask[v_idx] = True
-
-            # Cities (54-107)
-            if (resources['ORE'] >= 3 and resources['WHEAT'] >= 2 and
-                    player.citiesLeft > 0):
-                potential_cities = self.game.board.get_potential_cities(player)
-                for v_pixel in potential_cities.keys():
-                    v_idx = self.game.board.boardGraph[v_pixel].vertex_index
-                    mask[54 + v_idx] = True
-
-            # Roads (108-179)
-            if (resources['BRICK'] >= 1 and resources['WOOD'] >= 1 and
-                    player.roadsLeft > 0):
-                potential_roads = self.game.board.get_potential_roads(player)
-                for (v1_pixel, v2_pixel) in potential_roads.keys():
-                    v1_idx = self.game.board.boardGraph[v1_pixel].vertex_index
-                    v2_idx = self.game.board.boardGraph[v2_pixel].vertex_index
-                    edge = tuple(sorted((v1_idx, v2_idx)))
-                    try:
-                        edge_idx = self.edge_list.index(edge)
-                        mask[108 + edge_idx] = True
-                    except ValueError:
-                        pass
-
-            # Dev Cards
-            def can_play_dev(type):
-                if self.played_dev_card_this_turn:
-                    return False
-                # player.devCards only contains cards from previous turns (playable)
-                return player.devCards[type] > 0
-
-            # Buy Dev Card (200)
-            deck_size = sum(self.game.board.devCardStack.values())
-            if (resources['ORE'] >= 1 and resources['WHEAT'] >= 1 and resources['SHEEP'] >= 1 and deck_size > 0):
-                mask[200] = True
-
-            # Play Knight (201)
-            if can_play_dev('KNIGHT'):
-                mask[201] = True
-
-            # Play Year of Plenty (202-216)
-            if can_play_dev('YEAROFPLENTY'):
-                mask[202:217] = True
-
-            # Play Monopoly (217-221)
-            if can_play_dev('MONOPOLY'):
-                mask[217:222] = True
-
-            # Play Road Building (222)
-            if can_play_dev('ROADBUILDER'):
-                potential_roads = self.game.board.get_potential_roads(player)
-                if len(potential_roads) >= 2 and player.roadsLeft >= 2:
-                    mask[222] = True
-
-            # Bank Trading (226-245)
-            # Not allowed during Road Building or Robber Placement (already handled by priority checks)
-            for i, (give, get) in enumerate(TRADE_ACTIONS):
-                cost = 4
-                if '3:1 PORT' in player.portList:
-                    cost = 3
-                if f'2:1 {give}' in player.portList:
-                    cost = 2
-
-                if resources[give] >= cost:
-                    mask[226 + i] = True
-
-        # NUCLEAR FAILSAFE
-        if not np.any(mask):
-            # Force 'End Turn' to be valid no matter what to prevent crash
-            mask[180] = True
-
-        # Absolute Assertion
-        assert np.any(
-            mask), f'Action mask is all zeros! State: Robber={self.robber_placement_pending}, RoadBuild={self.road_building_roads_left}'
-
-        return mask
-
-    def _toggle_road_on_board(self, v1, v2, player, on=True):
-        # Helper to toggle road state without full engine overhead
-        # v1, v2 are pixel coordinates
-
-        # Update v1
-        for indx, v in enumerate(self.game.board.boardGraph[v1].neighbors):
-            if v == v2:
-                self.game.board.boardGraph[v1].edge_state[indx][0] = player if on else None
-                self.game.board.boardGraph[v1].edge_state[indx][1] = on
-
-        # Update v2
-        for indx, v in enumerate(self.game.board.boardGraph[v2].neighbors):
-            if v == v1:
-                self.game.board.boardGraph[v2].edge_state[indx][0] = player if on else None
-                self.game.board.boardGraph[v2].edge_state[indx][1] = on
-
-    def _get_2_step_road_potential(self):
-        player = self.agent_player
-        board = self.game.board
-
-        # Base max length
-        base_len = player.get_road_length(board)
-        best_1 = base_len
-        best_2 = base_len
-
-        # Get potential roads (Step 1)
-        potential_roads_1 = board.get_potential_roads(player)
-
-        for (v1, v2) in potential_roads_1.keys():
-            # Apply R1
-            self._toggle_road_on_board(v1, v2, player, on=True)
-            player.buildGraph['ROADS'].append((v1, v2))
-
-            # Measure R1
-            len_1 = player.get_road_length(board)
-            if len_1 > best_1:
-                best_1 = len_1
-
-            # Step 2
-            potential_roads_2 = board.get_potential_roads(player)
-            for (u1, u2) in potential_roads_2.keys():
-                # Apply R2
-                self._toggle_road_on_board(u1, u2, player, on=True)
-                player.buildGraph['ROADS'].append((u1, u2))
-
-                # Measure R2
-                len_2 = player.get_road_length(board)
-                if len_2 > best_2:
-                    best_2 = len_2
-
-                # Revert R2
-                player.buildGraph['ROADS'].pop()
-                self._toggle_road_on_board(u1, u2, player, on=False)
-
-            # Revert R1
-            player.buildGraph['ROADS'].pop()
-            self._toggle_road_on_board(v1, v2, player, on=False)
-
-        return float(best_1), float(best_2)
-
-    def _get_min_connect_distance(self):
-        player = self.agent_player
-        board = self.game.board
-
-        # 1. Identify Components
-        # Build adjacency list for player's roads
-        adj = {}
-        all_vertices = set()
-        for (v1, v2) in player.buildGraph['ROADS']:
-            if v1 not in adj:
-                adj[v1] = []
-            if v2 not in adj:
-                adj[v2] = []
-            adj[v1].append(v2)
-            adj[v2].append(v1)
-            all_vertices.add(v1)
-            all_vertices.add(v2)
-
-        if not all_vertices:
-            return 15.0  # No roads
-
-        # Find connected components
-        visited = set()
-        components = []
-        for v in all_vertices:
-            if v not in visited:
-                component = set()
-                q = [v]
-                visited.add(v)
-                while q:
-                    curr = q.pop(0)
-                    component.add(curr)
-                    if curr in adj:
-                        for neighbor in adj[curr]:
-                            if neighbor not in visited:
-                                visited.add(neighbor)
-                                q.append(neighbor)
-                components.append(component)
-
-        if len(components) <= 1:
-            return 0.0  # Already connected or empty
-
-        # Sort components by size (largest first)
-        components.sort(key=len, reverse=True)
-        largest_comp = components[0]
-        other_nodes = set()
-        for c in components[1:]:
-            other_nodes.update(c)
-
-        # BFS from largest component
-        queue = []
-        visited_bfs = set()
-
-        for v in largest_comp:
-            queue.append((v, 0))
-            visited_bfs.add(v)
-
-        while queue:
-            curr, dist = queue.pop(0)
-
-            if dist >= 15:
-                continue
-
-            # Check if we can build FROM curr
-            curr_obj = board.boardGraph[curr]
-            if curr_obj.owner is not None and curr_obj.owner != player:
-                continue
-
-            for i, neighbor in enumerate(curr_obj.neighbors):
-                # Check edge availability
-                p, is_road = curr_obj.edge_state[i]
-                if is_road:
-                    # If it's my road, it's already in a component.
-                    # If it's opponent road, blocked.
-                    continue
-                else:
-                    # Empty edge, can build here
-                    # Check if neighbor is target
-                    if neighbor in other_nodes:
-                        return float(dist + 1)
-
-                    if neighbor not in visited_bfs:
-                        visited_bfs.add(neighbor)
-                        queue.append((neighbor, dist + 1))
-
-        return 15.0  # No path found
-
-    def _get_obs(self):
-        # Flatten state
-        obs = []
-
-        # Helper to safely handle None/Inf values
-        def safe_float(val, default=0.0):
-            if val is None or not np.isfinite(val):
-                return default
-            return float(val)
-
-        # Resources (Normalize by dividing by 20.0 to keep roughly in 0-1 range)
-        for p in [self.agent_player, self.opponent_player]:
-            obs.extend([safe_float(p.resources[r]) /
-                       20.0 for r in ['BRICK', 'ORE', 'WHEAT', 'WOOD', 'SHEEP']])
-
-        # VPs (Normalize by dividing by 10.0)
-        obs.append(safe_float(self.agent_player.victoryPoints) / 10.0)
-        obs.append(safe_float(self.opponent_player.victoryPoints) / 10.0)
-
-        # Hexes
-        resource_map = {'DESERT': 0, 'ORE': 1, 'BRICK': 2, 'WHEAT': 3, 'WOOD': 4, 'SHEEP': 5}
-        for i in range(19):
-            hex_tile = self.game.board.hexTileDict[i]
-            res_one_hot = [0] * 6
-            res_one_hot[resource_map[hex_tile.resource_type]] = 1
-            obs.extend(res_one_hot)
-
-            num = hex_tile.number_token if hex_tile.number_token is not None else 0
-            obs.append(num / 12.0)  # Normalize
-
-            obs.append(1.0 if hex_tile.has_robber else 0.0)
-
-        # Vertices
-        port_map = {
-            '2:1 BRICK': 0,
-            '2:1 ORE': 1,
-            '2:1 WHEAT': 2,
-            '2:1 WOOD': 3,
-            '2:1 SHEEP': 4,
-            '3:1 PORT': 5
+        # Discard phase
+        if self.discard_pending and is_agent:
+            type_mask[11] = True
+            for i, r in enumerate(RESOURCES_CW):
+                if p.resources.get(r, 0) > 0:
+                    res1_disc[i] = True
+            if not res1_disc.any():
+                res1_disc[:] = True  # fallback
+            return {
+                'type': type_mask, 'corner_settlement': corner_set, 'corner_city': corner_city,
+                'edge': edge_mask, 'tile': tile_mask,
+                'resource1_trade': res1_trade, 'resource1_discard': res1_disc,
+                'resource1_default': res1_def, 'resource2_default': res2_def,
+            }
+
+        # Robber placement
+        if self.robber_placement_pending and is_agent:
+            type_mask[4] = True
+            for hex_idx in board.get_robber_spots():
+                tile_mask[hex_idx] = True
+            if not tile_mask.any():
+                tile_mask[:] = True
+            return {
+                'type': type_mask, 'corner_settlement': corner_set, 'corner_city': corner_city,
+                'edge': edge_mask, 'tile': tile_mask,
+                'resource1_trade': res1_trade, 'resource1_discard': res1_disc,
+                'resource1_default': res1_def, 'resource2_default': res2_def,
+            }
+
+        # Roll pending
+        if self.roll_pending and is_agent:
+            type_mask[12] = True
+            return {
+                'type': type_mask, 'corner_settlement': corner_set, 'corner_city': corner_city,
+                'edge': edge_mask, 'tile': tile_mask,
+                'resource1_trade': res1_trade, 'resource1_discard': res1_disc,
+                'resource1_default': res1_def, 'resource2_default': res2_def,
+            }
+
+        # Road building
+        if self.road_building_roads_left > 0 and is_agent:
+            type_mask[2] = True
+            for (v1, v2) in board.get_potential_roads(p).keys():
+                idx = self._edge_to_idx.get(self._edge_key(v1, v2))
+                if idx is not None:
+                    edge_mask[idx] = True
+            if not edge_mask.any():
+                # No roads to build, skip
+                type_mask[2] = False
+                type_mask[3] = True  # force end
+            return {
+                'type': type_mask, 'corner_settlement': corner_set, 'corner_city': corner_city,
+                'edge': edge_mask, 'tile': tile_mask,
+                'resource1_trade': res1_trade, 'resource1_discard': res1_disc,
+                'resource1_default': res1_def, 'resource2_default': res2_def,
+            }
+
+        # --- Normal main-turn actions ---
+        res = p.resources
+
+        # EndTurn always valid
+        type_mask[3] = True
+
+        # BuildSettlement
+        pot_settle = board.get_potential_settlements(p)
+        can_settle = (res.get('BRICK', 0) >= 1 and res.get('WOOD', 0) >= 1 and
+                      res.get('SHEEP', 0) >= 1 and res.get('WHEAT', 0) >= 1 and
+                      p.settlementsLeft > 0 and pot_settle)
+        if can_settle:
+            type_mask[0] = True
+            for v_px in pot_settle:
+                idx = self._vertex_to_idx.get(v_px)
+                if idx is not None:
+                    corner_set[idx] = True
+
+        # BuildCity
+        pot_city = board.get_potential_cities(p)
+        can_city = (res.get('ORE', 0) >= 3 and res.get('WHEAT', 0) >= 2 and
+                    p.citiesLeft > 0 and pot_city)
+        if can_city:
+            type_mask[1] = True
+            for v_px in pot_city:
+                idx = self._vertex_to_idx.get(v_px)
+                if idx is not None:
+                    corner_city[idx] = True
+
+        # BuildRoad
+        pot_roads = board.get_potential_roads(p)
+        can_road = (res.get('BRICK', 0) >= 1 and res.get('WOOD', 0) >= 1 and
+                    p.roadsLeft > 0 and pot_roads)
+        if can_road:
+            type_mask[2] = True
+            for (v1, v2) in pot_roads.keys():
+                idx = self._edge_to_idx.get(self._edge_key(v1, v2))
+                if idx is not None:
+                    edge_mask[idx] = True
+
+        # BuyDevCard
+        deck_total = sum(self.game.board.devCardStack.values())
+        if (res.get('ORE', 0) >= 1 and res.get('WHEAT', 0) >= 1 and
+                res.get('SHEEP', 0) >= 1 and deck_total > 0):
+            type_mask[5] = True
+
+        # PlayKnight
+        if (p.devCards.get('KNIGHT', 0) > 0 and not p.devCardPlayedThisTurn):
+            type_mask[6] = True
+
+        # PlayYoP
+        if (p.devCards.get('YEAROFPLENTY', 0) > 0 and not p.devCardPlayedThisTurn):
+            type_mask[7] = True
+            res1_def[:] = True
+            res2_def[:] = True
+
+        # PlayMonopoly
+        if (p.devCards.get('MONOPOLY', 0) > 0 and not p.devCardPlayedThisTurn):
+            type_mask[8] = True
+            res1_def[:] = True
+
+        # PlayRoadBuilder
+        if (p.devCards.get('ROADBUILDER', 0) > 0 and not p.devCardPlayedThisTurn):
+            type_mask[9] = True
+
+        # BankTrade
+        for i, r in enumerate(RESOURCES_CW):
+            r_port = "2:1 " + r
+            if r_port in p.portList and res.get(r, 0) >= 2:
+                res1_trade[i] = True
+            elif '3:1 PORT' in p.portList and res.get(r, 0) >= 3:
+                res1_trade[i] = True
+            elif res.get(r, 0) >= 4:
+                res1_trade[i] = True
+        if res1_trade.any():
+            type_mask[10] = True
+            for i, r in enumerate(RESOURCES_CW):
+                res2_def[i] = True  # any resource can be received
+
+        # Fallback: always allow EndTurn
+        if not type_mask.any():
+            type_mask[3] = True
+
+        return {
+            'type': type_mask,
+            'corner_settlement': corner_set,
+            'corner_city': corner_city,
+            'edge': edge_mask,
+            'tile': tile_mask,
+            'resource1_trade': res1_trade,
+            'resource1_discard': res1_disc,
+            'resource1_default': res1_def,
+            'resource2_default': res2_def,
         }
 
-        # Pre-calculate valid spots (ignoring resources)
-        potential_settlements = self.game.board.get_potential_settlements(self.agent_player)
-        potential_cities = self.game.board.get_potential_cities(self.agent_player)
+    # ------------------------------------------------------------------
+    # Observations
+    # ------------------------------------------------------------------
 
-        for i in range(54):
-            pixel = self.game.board.vertex_index_to_pixel_dict[i]
-            vertex = self.game.board.boardGraph[pixel]
+    def _get_obs(self) -> dict:
+        return self._get_obs_for_player(self.agent_player)
 
-            owner_one_hot = [0] * 3
-            type_one_hot = [0] * 3
-            port_one_hot = [0] * 6
-            valid_spot_one_hot = [0] * 2  # [IsSettlementSpot, IsCitySpot]
+    def _get_obs_for_player(self, acting_player) -> dict:
+        other_player = (self.opponent_player if acting_player is self.agent_player
+                        else self.agent_player)
+        board = self.game.board
 
-            if vertex.building_type == 'Settlement':
-                type_one_hot[1] = 1
-                if vertex.owner == self.agent_player:
-                    owner_one_hot[1] = 1
+        tile_feats = self._build_tile_features(acting_player)
+        curr_main  = self._build_current_player_main(acting_player)
+        next_main  = self._build_next_player_main(other_player, acting_player)
+        hid_dev, played_dev = self._build_dev_sequences(acting_player, hidden=True)
+        _, opp_played_dev   = self._build_dev_sequences(other_player, hidden=False)
+
+        return {
+            'tile_representations':      tile_feats,
+            'current_player_main':       curr_main,
+            'next_player_main':          next_main,
+            'current_player_hidden_dev': hid_dev,
+            'current_player_played_dev': played_dev,
+            'next_player_played_dev':    opp_played_dev,
+        }
+
+    def _build_tile_features(self, acting_player) -> np.ndarray:
+        """Build (19, 79) tile feature array."""
+        board = self.game.board
+        agent = acting_player
+        opponent = (self.opponent_player if agent is self.agent_player else self.agent_player)
+
+        RES_NAMES = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD', 'DESERT']
+        NUM_MAP = {None: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 6, 9: 7, 10: 8, 11: 9, 12: 10}
+
+        tiles = np.zeros((N_TILES, TILE_DIM), dtype=np.float32)
+
+        for hex_idx in range(N_TILES):
+            tile = board.hexTileDict[hex_idx]
+            f = []
+
+            # Resource one-hot (6)
+            for r in RES_NAMES:
+                f.append(1.0 if tile.resource_type == r else 0.0)
+
+            # Number token one-hot (11)
+            num_oh = [0.0] * 11
+            num_oh[NUM_MAP.get(tile.number_token, 0)] = 1.0
+            f.extend(num_oh)
+
+            # has_robber (1)
+            f.append(1.0 if tile.has_robber else 0.0)
+
+            # dots_normalized (1)
+            f.append(DOTS.get(tile.number_token, 0) / 5.0)
+
+            # 6+11+1+1 = 19 so far
+
+            # Per-vertex features: 6 vertices × 6 = 36
+            corners = tile.get_corners(board.flat)
+            for corner_px in corners:
+                v_obj = board.boardGraph.get(corner_px)
+                if v_obj is None:
+                    f.extend([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
+                    continue
+                owner = v_obj.owner
+                if owner is None:
+                    f.extend([1.0, 0.0, 0.0])
+                elif owner is agent:
+                    f.extend([0.0, 1.0, 0.0])
                 else:
-                    owner_one_hot[2] = 1
-            elif vertex.building_type == 'City':
-                type_one_hot[2] = 1
-                if vertex.owner == self.agent_player:
-                    owner_one_hot[1] = 1
+                    f.extend([0.0, 0.0, 1.0])
+                btype = v_obj.building_type
+                if btype is None:
+                    f.extend([1.0, 0.0, 0.0])
+                elif btype == 'Settlement':
+                    f.extend([0.0, 1.0, 0.0])
                 else:
-                    owner_one_hot[2] = 1
+                    f.extend([0.0, 0.0, 1.0])
+
+            # 19 + 36 = 55 so far
+
+            # Per-edge features: 6 edges × 4 = 24
+            for i in range(6):
+                c1 = corners[i]
+                c2 = corners[(i + 1) % 6]
+                v1_obj = board.boardGraph.get(c1)
+                has_road = False
+                road_owner = None
+                if v1_obj is not None:
+                    for j, nb in enumerate(v1_obj.neighbors):
+                        if nb == c2:
+                            has_road = v1_obj.edge_state[j][1]
+                            road_owner = v1_obj.edge_state[j][0]
+                            break
+                if road_owner is None or not has_road:
+                    f.extend([1.0, 0.0, 0.0])
+                elif road_owner is agent:
+                    f.extend([0.0, 1.0, 0.0])
+                else:
+                    f.extend([0.0, 0.0, 1.0])
+                f.append(1.0 if has_road else 0.0)
+
+            # 55 + 24 = 79
+            tiles[hex_idx] = np.array(f[:TILE_DIM], dtype=np.float32)
+
+        return tiles
+
+    def _build_current_player_main(self, p) -> np.ndarray:
+        """Build 166-dim feature vector for the acting player."""
+        board = self.game.board
+        f = []
+
+        # Resources (5 × 8 = 40) in RESOURCES_CW order
+        for r in RESOURCES_CW:
+            f.extend(bucket8(p.resources.get(r, 0), 8))
+
+        # VP (8)
+        f.extend(bucket8(p.victoryPoints, 15))
+
+        # Income (5 floats)
+        income = _compute_income(p, board)
+        f.extend(income)
+
+        # Trade rates per resource (5 floats: best ratio as fraction of 1)
+        for r in RESOURCES_CW:
+            r_port = "2:1 " + r
+            if r_port in p.portList:
+                f.append(0.5)
+            elif '3:1 PORT' in p.portList:
+                f.append(1.0 / 3.0)
             else:
-                type_one_hot[0] = 1
-                owner_one_hot[0] = 1
+                f.append(0.25)
 
-            # Port
-            if vertex.port:
-                if vertex.port in port_map:
-                    port_one_hot[port_map[vertex.port]] = 1
+        # Ports (6 bools: 3:1, 2:1 WOOD, 2:1 BRICK, 2:1 WHEAT, 2:1 ORE, 2:1 SHEEP)
+        port_names = ['3:1 PORT', '2:1 WOOD', '2:1 BRICK', '2:1 WHEAT', '2:1 ORE', '2:1 SHEEP']
+        for pn in port_names:
+            f.append(1.0 if pn in p.portList else 0.0)
 
-            # Valid Spots
-            if pixel in potential_settlements:
-                valid_spot_one_hot[0] = 1
-            if pixel in potential_cities:
-                valid_spot_one_hot[1] = 1
+        # LR + LA (2 bools)
+        f.append(1.0 if p.longestRoadFlag else 0.0)
+        f.append(1.0 if p.largestArmyFlag else 0.0)
 
-            obs.extend(owner_one_hot)
-            obs.extend(type_one_hot)
-            obs.extend(port_one_hot)
-            obs.extend(valid_spot_one_hot)
+        # Road length (8)
+        f.extend(bucket8(p.maxRoadLength, 15))
 
-        # Edges
-        potential_roads = self.game.board.get_potential_roads(self.agent_player)
+        # Knights played (8)
+        f.extend(bucket8(p.knightsPlayed, 8))
 
-        for v1_idx, v2_idx in self.edge_list:
-            v1_pixel = self.game.board.vertex_index_to_pixel_dict[v1_idx]
-            v2_pixel = self.game.board.vertex_index_to_pixel_dict[v2_idx]
-            v1 = self.game.board.boardGraph[v1_pixel]
+        # Settlements left (8)
+        f.extend(bucket8(p.settlementsLeft, 5))
 
-            owner_one_hot = [0] * 3
-            owner_one_hot[0] = 1
-            valid_road_spot = [0]
+        # Cities left (8)
+        f.extend(bucket8(p.citiesLeft, 4))
 
-            for i, neighbor_pixel in enumerate(v1.neighbors):
-                if neighbor_pixel == v2_pixel:
-                    p = v1.edge_state[i][0]
-                    is_road = v1.edge_state[i][1]
-                    if is_road:
-                        owner_one_hot[0] = 0
-                        if p == self.agent_player:
-                            owner_one_hot[1] = 1
-                        else:
-                            owner_one_hot[2] = 1
-                    break
+        # Roads left (1 normalized)
+        f.append(p.roadsLeft / 15.0)
 
-            # Check if this edge is a valid road spot
-            # potential_roads keys are (v1, v2) or (v2, v1)
-            if (v1_pixel, v2_pixel) in potential_roads or (v2_pixel, v1_pixel) in potential_roads:
-                valid_road_spot[0] = 1
+        # Dev cards (5 × 8 = 40) in DEV_CARD_ORDER
+        for c in DEV_CARD_ORDER:
+            f.extend(bucket8(p.devCards.get(c, 0), 8))
 
-            obs.extend(owner_one_hot)
-            obs.extend(valid_road_spot)
+        # Phase flags (5)
+        f.append(1.0 if self.initial_placement_phase else 0.0)
+        f.append(1.0 if self.roll_pending else 0.0)
+        f.append(1.0 if (not self.initial_placement_phase and not self.roll_pending
+                         and not self.discard_pending and not self.robber_placement_pending
+                         and self.road_building_roads_left == 0) else 0.0)
+        f.append(1.0 if self.robber_placement_pending else 0.0)
+        f.append(1.0 if self.discard_pending else 0.0)
 
-        # Dev Cards
-        dev_card_order = ['KNIGHT', 'VP', 'ROADBUILDER', 'YEAROFPLENTY', 'MONOPOLY']
-        for card in dev_card_order:
-            obs.append(self.agent_player.devCards[card] / 5.0)
+        # Deck remaining (8)
+        deck_total = sum(board.devCardStack.values())
+        f.extend(bucket8(deck_total, 25))
 
-        opp_hidden_total = sum(self.opponent_player.devCards.values())
-        obs.append(opp_hidden_total / 10.0)
-        # Removed Opponent Knights from here (moved to Race Stats)
+        # Dice roll one-hot 2-12 (11)
+        dice_oh = [0.0] * 11
+        if 2 <= self.last_dice_roll <= 12:
+            dice_oh[self.last_dice_roll - 2] = 1.0
+        f.extend(dice_oh)
 
-        # Race Stats (4 Normalized Floats)
-        obs.append(self.agent_player.knightsPlayed / 5.0)
-        obs.append(self.opponent_player.knightsPlayed / 5.0)
-        obs.append(self.agent_player.maxRoadLength / 15.0)
-        obs.append(self.opponent_player.maxRoadLength / 15.0)
+        # Karma (2 bools: agent last rolled 7, opponent last rolled 7)
+        last7 = self.game.last_player_to_roll_7
+        f.append(1.0 if last7 is p else 0.0)
+        f.append(1.0 if (last7 is not None and last7 is not p) else 0.0)
 
-        # Bonus VPs
-        lr_one_hot = [0] * 3
-        if self.agent_player.longestRoadFlag:
-            lr_one_hot[1] = 1
-        elif self.opponent_player.longestRoadFlag:
-            lr_one_hot[2] = 1
+        # devCardPlayedThisTurn (1)
+        f.append(1.0 if p.devCardPlayedThisTurn else 0.0)
+
+        arr = np.array(f, dtype=np.float32)
+        assert len(arr) == CURR_PLAYER_DIM, f"curr_player_main dim={len(arr)} expected {CURR_PLAYER_DIM}"
+        return arr
+
+    def _build_next_player_main(self, p, acting_player) -> np.ndarray:
+        """Build 173-dim feature vector for the non-acting player.
+        Same as current_player_main (166) + num_hidden_dev_oh (6) + total_res_norm (1).
+        Uses BroadcastHandTracker for exact resource tracking.
+        """
+        # Temporarily override p.resources with tracker data for encoding
+        tracked = self._hand_tracker.get_hand(p.name)
+        original_res = dict(p.resources)
+        p.resources = dict(tracked)
+
+        base = self._build_current_player_main(p)
+
+        p.resources = original_res
+
+        # Hidden dev card count: cards in p.newDevCards + playable non-VP devCards
+        hidden_count = len(p.newDevCards) + sum(
+            p.devCards.get(c, 0) for c in DEV_CARD_ORDER if c != 'VP')
+        hidden_oh = np.zeros(6, dtype=np.float32)
+        hidden_oh[min(hidden_count, 5)] = 1.0
+
+        # Total resource count normalized
+        total_res = sum(tracked.values())
+        total_res_norm = np.array([total_res / 20.0], dtype=np.float32)
+
+        arr = np.concatenate([base, hidden_oh, total_res_norm])
+        assert len(arr) == NEXT_PLAYER_DIM, f"next_player_main dim={len(arr)} expected {NEXT_PLAYER_DIM}"
+        return arr
+
+    def _build_dev_sequences(self, p, hidden: bool):
+        """Build (MAX_DEV_SEQ,) int arrays for hidden and played dev cards."""
+        # Hidden cards = new cards + playable cards
+        hidden_seq = []
+        for c in p.newDevCards:
+            cid = DEV_CARD_ID.get(c, 0)
+            if cid:
+                hidden_seq.append(cid)
+        for c in DEV_CARD_ORDER:
+            hidden_seq.extend([DEV_CARD_ID[c]] * p.devCards.get(c, 0))
+
+        # Played cards reconstructed from counts
+        played_seq = []
+        played_seq.extend([DEV_CARD_ID['KNIGHT']] * p.knightsPlayed)
+        played_seq.extend([DEV_CARD_ID['YEAROFPLENTY']] * p.yopPlayed)
+        played_seq.extend([DEV_CARD_ID['MONOPOLY']] * p.monopolyPlayed)
+        played_seq.extend([DEV_CARD_ID['ROADBUILDER']] * p.roadBuilderPlayed)
+
+        def pad(seq):
+            arr = np.zeros(MAX_DEV_SEQ, dtype=np.int32)
+            for i, v in enumerate(seq[:MAX_DEV_SEQ]):
+                arr[i] = v
+            return arr
+
+        return pad(hidden_seq), pad(played_seq)
+
+    # ------------------------------------------------------------------
+    # Index maps
+    # ------------------------------------------------------------------
+
+    def _build_index_maps(self, board):
+        """Build vertex and edge index maps from board state."""
+        # Vertex map: vertex_index → pixel already in board
+        self._vertex_to_idx = {}
+        self._idx_to_vertex = {}
+        for idx, px in board.vertex_index_to_pixel_dict.items():
+            self._vertex_to_idx[px] = idx
+            self._idx_to_vertex[idx] = px
+
+        # Edge map: collect all unique edges
+        seen = set()
+        edges = []
+        for v_px, v_obj in board.boardGraph.items():
+            for nb_px in v_obj.neighbors:
+                key = self._edge_key(v_px, nb_px)
+                if key not in seen:
+                    seen.add(key)
+                    edges.append((v_px, nb_px))
+
+        self._edge_to_idx = {}
+        self._idx_to_edge = {}
+        for i, (v1, v2) in enumerate(edges):
+            key = self._edge_key(v1, v2)
+            self._edge_to_idx[key] = i
+            self._idx_to_edge[i] = (v1, v2)
+
+    @staticmethod
+    def _edge_key(v1, v2):
+        """Canonical edge key: sorted tuple of string reps."""
+        s1, s2 = str(v1), str(v2)
+        return (s1, s2) if s1 < s2 else (s2, s1)
+
+    # ------------------------------------------------------------------
+    # Game helpers
+    # ------------------------------------------------------------------
+
+    def _run_opponent_setup(self):
+        """Run opponent's full setup: settle1+road1+settle2+road2."""
+        opp = self.opponent_player
+        board = self.game.board
+        # Forward: settle1 + road1
+        opp.initial_setup(board)
+        # Reverse: settle2 + road2
+        opp.initial_setup(board)
+
+    def _grant_setup_resources(self, p):
+        """Grant resources from the player's most recently placed settlement."""
+        if not p.buildGraph['SETTLEMENTS']:
+            return
+        last_settle = p.buildGraph['SETTLEMENTS'][-1]
+        for adj_hex in self.game.board.boardGraph[last_settle].adjacent_hex_indices:
+            res_type = self.game.board.hexTileDict[adj_hex].resource_type
+            if res_type != 'DESERT':
+                p.resources[res_type] += 1
+                self.game.broadcast.resource_change(p.name, {res_type: 1}, "SETUP")
+
+    def _run_opponent_turn(self):
+        """Execute the opponent's full turn (roll → actions → end)."""
+        opp = self.opponent_player
+        agent = self.agent_player
+        board = self.game.board
+
+        self.game.currentPlayer = opp
+        opp.updateDevCards()
+        opp.devCardPlayedThisTurn = False
+
+        # Roll
+        dice = self.game.rollDice()
+        if dice != 7:
+            self.game.update_playerResources(dice, opp)
         else:
-            lr_one_hot[0] = 1
-        obs.extend(lr_one_hot)
+            # Opponent discards if needed
+            if sum(opp.resources.values()) > 9:
+                opp.discardResources(self.game)
+            # Agent discards if needed — interrupt and return
+            if sum(agent.resources.values()) > 9:
+                self._cards_to_discard = sum(agent.resources.values()) // 2
+                self.discard_pending = True
+                self._opp_pending_robber = True
+                return  # agent must discard; robber + move deferred
+            # Move robber
+            opp.heuristic_move_robber(board)
 
-        la_one_hot = [0] * 3
-        if self.agent_player.largestArmyFlag:
-            la_one_hot[1] = 1
-        elif self.opponent_player.largestArmyFlag:
-            la_one_hot[2] = 1
+        # Check for win before opponent moves
+        if opp.victoryPoints >= self.game.maxPoints:
+            return
+
+        # Opponent makes moves
+        self._run_opponent_main_turn()
+
+    def _run_opponent_main_turn(self):
+        """Execute the opponent's build/trade/dev phase."""
+        opp = self.opponent_player
+        board = self.game.board
+
+        if self._opp_type_runtime == "policy" and self._opponent_policy is not None:
+            self._run_policy_opponent_turn()
         else:
-            la_one_hot[0] = 1
-        obs.extend(la_one_hot)
+            opp.move(board)
 
-        # Expert Features
-        # 1. Expected Income
-        dots_map = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
-        income = {'BRICK': 0, 'ORE': 0, 'SHEEP': 0, 'WHEAT': 0, 'WOOD': 0}
+        self.game.check_longest_road(opp)
+        self.game.check_largest_army(opp)
 
-        # Optimized Income Calculation using adjacency graph
-        for i in range(54):
-            pixel = self.game.board.vertex_index_to_pixel_dict[i]
-            vertex = self.game.board.boardGraph[pixel]
+    def _run_policy_opponent_turn(self):
+        """Run policy opponent through their full turn until EndTurn."""
+        import torch
+        opp = self.opponent_player
+        policy = self._opponent_policy
+        device = next(policy.parameters()).device
 
-            if vertex.owner == self.agent_player:
-                multiplier = 2 if vertex.building_type == 'City' else 1
+        for _ in range(200):  # safety limit
+            obs = self._get_obs_for_player(opp)
+            masks = self._compute_masks(opp)
 
-                # Use refactored logic: vertex.adjacent_hex_indices
-                for hex_idx in vertex.adjacent_hex_indices:
-                    hex_tile = self.game.board.hexTileDict[hex_idx]
-                    res_type = hex_tile.resource_type
-                    num = hex_tile.number_token
+            # Convert to tensors
+            obs_t = {k: torch.tensor(v, dtype=torch.float32 if v.dtype == np.float32
+                                     else torch.int32).unsqueeze(0).to(device)
+                     for k, v in obs.items()}
+            masks_t = {k: torch.tensor(v, dtype=torch.bool).unsqueeze(0).to(device)
+                       for k, v in masks.items()}
 
-                    if res_type != 'DESERT' and num is not None:
-                        dots = dots_map.get(num, 0)
-                        # Adjustment: Check for Robber? Usually "Expected Income" ignores robber for long-term planning,
-                        # but if we want current income, we should check.
-                        # Standard RL feature usually implies "Production Capability", so ignoring robber is fine/better.
-                        income[res_type] += dots * multiplier
+            with torch.no_grad():
+                actions, _, _ = policy.act(obs_t, masks_t, deterministic=True)
+            action = actions[0].cpu().numpy()
 
-        for r in ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']:
-            obs.append(safe_float(income[r]) / 36.0)
+            if int(action[0]) == 3:  # EndTurn
+                break
 
-        # 2. Trade Rates
-        rates = {'BRICK': 4.0, 'ORE': 4.0, 'SHEEP': 4.0, 'WHEAT': 4.0, 'WOOD': 4.0}
-        ports = self.agent_player.portList
+            # Execute action for opponent
+            self._execute_action_for_player(opp, action)
 
-        if '3:1 PORT' in ports:
-            for r in rates:
-                rates[r] = 3.0
+    def _execute_action_for_player(self, p, action):
+        """Execute one action for any player (used in policy opponent mode)."""
+        action_type = int(action[0])
+        board = self.game.board
 
-        for r in rates:
-            if f'2:1 {r}' in ports:
-                rates[r] = 2.0
+        if action_type == 0:
+            v_pixel = self._idx_to_vertex.get(int(action[1]))
+            if v_pixel and board.get_potential_settlements(p).get(v_pixel):
+                p.build_settlement(v_pixel, board)
+        elif action_type == 1:
+            v_pixel = self._idx_to_vertex.get(int(action[1]))
+            if v_pixel and board.get_potential_cities(p).get(v_pixel):
+                p.build_city(v_pixel, board)
+        elif action_type == 2:
+            v1, v2 = self._idx_to_edge.get(int(action[2]), (None, None))
+            if v1 is not None:
+                p.build_road(v1, v2, board)
+        elif action_type == 5:
+            p.draw_devCard(board)
+        elif action_type == 6:
+            if p.devCards.get('KNIGHT', 0) > 0 and not p.devCardPlayedThisTurn:
+                p.devCards['KNIGHT'] -= 1
+                p.knightsPlayed += 1
+                p.devCardPlayedThisTurn = True
+                p.heuristic_move_robber(board)
+                self.game.check_largest_army(p)
+        elif action_type == 7:
+            if p.devCards.get('YEAROFPLENTY', 0) > 0 and not p.devCardPlayedThisTurn:
+                p.devCards['YEAROFPLENTY'] -= 1
+                p.yopPlayed += 1
+                p.devCardPlayedThisTurn = True
+                r1 = RESOURCES_CW[int(action[4])]
+                r2 = RESOURCES_CW[int(action[5])]
+                p.resources[r1] += 1
+                p.resources[r2] += 1
+                self.game.log_yop(p, [r1, r2])
+        elif action_type == 8:
+            if p.devCards.get('MONOPOLY', 0) > 0 and not p.devCardPlayedThisTurn:
+                p.devCards['MONOPOLY'] -= 1
+                p.monopolyPlayed += 1
+                p.devCardPlayedThisTurn = True
+                r = RESOURCES_CW[int(action[4])]
+                for other in list(self.game.playerQueue.queue):
+                    if other is not p:
+                        stolen = other.resources.get(r, 0)
+                        if stolen > 0:
+                            other.resources[r] = 0
+                            p.resources[r] += stolen
+        elif action_type == 10:
+            r1 = RESOURCES_CW[int(action[4])]
+            r2 = RESOURCES_CW[int(action[5])]
+            p.trade_with_bank(r1, r2)
 
-        for r in ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']:
-            obs.append(rates[r] / 4.0)
+    # ------------------------------------------------------------------
+    # Terminal conditions
+    # ------------------------------------------------------------------
 
-        # 3. Opponent Hand Size
-        opp_hand_size = sum(self.opponent_player.resources.values())
-        obs.append(opp_hand_size / 20.0)
+    def _check_terminal(self):
+        agent_won = self.agent_player.victoryPoints >= self.game.maxPoints
+        opp_won   = self.opponent_player.victoryPoints >= self.game.maxPoints
+        if agent_won or opp_won:
+            self._game_over = True
+            return True, False
+        if self._turn_count >= self.max_turns:
+            return False, True
+        return False, False
 
-        # 4. Karma
-        karma_val = 0.5
-        if self.game.last_player_to_roll_7 is not None:
-            if self.game.last_player_to_roll_7 == self.agent_player:
-                karma_val = 1.0
-            elif self.game.last_player_to_roll_7 == self.opponent_player:
-                karma_val = 0.0
-        obs.append(karma_val)
+    def _compute_terminal_reward(self) -> float:
+        agent_vp = self.agent_player.victoryPoints
+        opp_vp   = self.opponent_player.victoryPoints
+        if agent_vp >= self.game.maxPoints:
+            return 1.0 + (agent_vp - opp_vp) / self.game.maxPoints
+        elif opp_vp >= self.game.maxPoints:
+            return -1.0 - (opp_vp - agent_vp) / self.game.maxPoints
+        return (agent_vp - opp_vp) / self.game.maxPoints
 
-        # 5. New Context Features (19 floats)
+    def _make_terminal_info(self, terminated: bool) -> dict:
+        agent_vp = self.agent_player.victoryPoints
+        opp_vp   = self.opponent_player.victoryPoints
+        is_success = terminated and agent_vp >= self.game.maxPoints
+        return {
+            'is_success': is_success,
+            'terminal_stats': {
+                'agent_vp': agent_vp,
+                'opponent_vp': opp_vp,
+                'game_length': self._turn_count,
+            }
+        }
 
-        # A. Affordability (5 Binary Floats)
-        # Road: 1 Brick, 1 Wood
-        can_buy_road = 1.0 if (
-            self.agent_player.resources['BRICK'] >= 1 and self.agent_player.resources['WOOD'] >= 1) else 0.0
-        # Settlement: 1 Brick, 1 Wood, 1 Sheep, 1 Wheat
-        can_buy_settle = 1.0 if (self.agent_player.resources['BRICK'] >= 1 and self.agent_player.resources['WOOD']
-                                 >= 1 and self.agent_player.resources['SHEEP'] >= 1 and self.agent_player.resources['WHEAT'] >= 1) else 0.0
-        # City: 3 Ore, 2 Wheat
-        can_buy_city = 1.0 if (
-            self.agent_player.resources['ORE'] >= 3 and self.agent_player.resources['WHEAT'] >= 2) else 0.0
-        # DevCard: 1 Ore, 1 Sheep, 1 Wheat
-        can_buy_dev = 1.0 if (self.agent_player.resources['ORE'] >= 1 and self.agent_player.resources['SHEEP']
-                              >= 1 and self.agent_player.resources['WHEAT'] >= 1) else 0.0
-        # Road Building Card Active
-        rb_active = 1.0 if self.road_building_roads_left > 0 else 0.0
+    # ------------------------------------------------------------------
+    # Render (stub)
+    # ------------------------------------------------------------------
 
-        obs.extend([can_buy_road, can_buy_settle, can_buy_city, can_buy_dev, rb_active])
+    def render(self):
+        pass
 
-        # B. Piece Scarcity (3 Normalized Floats)
-        obs.append(self.agent_player.roadsLeft / 15.0)
-        obs.append(self.agent_player.settlementsLeft / 5.0)
-        obs.append(self.agent_player.citiesLeft / 4.0)
-
-        # C. Deck Health (1 Normalized Float)
-        obs.append(sum(self.game.board.devCardStack.values()) / 25.0)
-
-        # D. Game Phase (5 One-Hot Floats)
-        # [Main, Robber, RoadBuilding, Discard, GameOver]
-        phase_one_hot = [0.0] * 5
-        if self.game.gameOver:
-            phase_one_hot[4] = 1.0
-        elif self.road_building_roads_left > 0:
-            phase_one_hot[2] = 1.0
-        elif self.robber_placement_pending:
-            phase_one_hot[1] = 1.0
-        # Discard phase is instantaneous in this env, so we skip index 3 (keep 0)
-        else:
-            phase_one_hot[0] = 1.0  # Main Turn
-
-        obs.extend(phase_one_hot)
-
-        # E. Exchange Rates (5 Normalized Floats)
-        # Recalculate to ensure it's at the end as requested
-        ex_rates = {'BRICK': 4.0, 'ORE': 4.0, 'SHEEP': 4.0, 'WHEAT': 4.0, 'WOOD': 4.0}
-        if '3:1 PORT' in self.agent_player.portList:
-            for r in ex_rates:
-                ex_rates[r] = 3.0
-        for r in ex_rates:
-            if f'2:1 {r}' in self.agent_player.portList:
-                ex_rates[r] = 2.0
-
-        for r in ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD']:
-            obs.append(ex_rates[r] / 4.0)
-
-        # F. Spatial Reasoning (3 Normalized Floats)
-        if self._spatial_cache is None:
-            pot_1, pot_2 = self._get_2_step_road_potential()
-            connect_dist = self._get_min_connect_distance()
-            self._spatial_cache = (pot_1, pot_2, connect_dist)
-
-        pot_1, pot_2, connect_dist = self._spatial_cache
-
-        obs.append(pot_1 / 15.0)
-        obs.append(pot_2 / 15.0)
-        obs.append(connect_dist / 15.0)
-
-        obs_array = np.array(obs, dtype=np.float32)
-        # Sanity check for NaNs or Infs
-        if not np.isfinite(obs_array).all():
-            # print("Warning: NaN or Inf in observation. Replacing with 0.")
-            obs_array = np.nan_to_num(obs_array, nan=0.0, posinf=1.0, neginf=-1.0)
-
-        return obs_array
+    def close(self):
+        pass

@@ -196,12 +196,14 @@ class catanGameView():
         # Robber text
         robberText = self.font_Robber.render("R", False, (0, 0, 0))
         # Get the coordinates for the robber
+        robberCoords = None
         for hexTile in self.board.hexTileDict.values():
             if (hexTile.has_robber):
                 robberCoords = hexTile.pixelCenter
-
-        self.screen.blit(robberText, (int(robberCoords.x) -
-                         20, int(robberCoords.y) - 35))
+                break
+        if robberCoords is not None:
+            self.screen.blit(robberText, (int(robberCoords.x) -
+                             20, int(robberCoords.y) - 35))
 
     def displayPlayerStats(self):
         if not hasattr(self.game, 'currentPlayer') or self.game.currentPlayer is None:
@@ -301,33 +303,33 @@ class catanGameView():
 
     def displayBroadcastMessage(self):
         """Display the last broadcast event on the screen"""
-        if self.game.last_broadcast_event:
-            event_type = self.game.last_broadcast_event['type']
-            player_name = self.game.last_broadcast_event['player']
-            resources = self.game.last_broadcast_event['resources']
+        if not self.game.last_broadcast_event:
+            return
+        event = self.game.last_broadcast_event
+        event_type = event.get('type', '')
+        player_name = event.get('player', '')
 
-            msg_text = ""
-            text_color = (0, 0, 0)
+        msg_text = ""
+        text_color = (0, 0, 0)
 
-            if event_type == 'DISCARD':
-                msg_text = f"DISCARD: {player_name} lost {resources}"
-                text_color = (255, 0, 0)  # Red
-            elif event_type == 'YOP':
-                msg_text = f"YOP: {player_name} gained {resources}"
-                text_color = (0, 100, 0)  # Dark Green
+        if event_type == 'DICE_ROLL':
+            value = event.get('value', 0)
+            msg_text = f"Dice: {player_name} rolled {value}"
+        elif event_type == 'DISCARD':
+            resources = event.get('resources', [])
+            msg_text = f"DISCARD: {player_name} lost {resources}"
+            text_color = (255, 0, 0)  # Red
+        elif event_type == 'YOP':
+            resources = event.get('resources', [])
+            msg_text = f"YOP: {player_name} gained {resources}"
+            text_color = (0, 100, 0)  # Dark Green
 
-            # Render text
+        if msg_text:
             text_surface = self.font_broadcast.render(msg_text, True, text_color)
-
-            # Position at the top center or somewhere visible
-            # Assuming board width is around 800-1000 based on other coords
             text_rect = text_surface.get_rect(center=(self.board.width // 2, 60))
-
-            # Draw background for readability
             bg_rect = text_rect.inflate(20, 10)
             pygame.draw.rect(self.screen, (255, 255, 255), bg_rect)
             pygame.draw.rect(self.screen, (0, 0, 0), bg_rect, 2)
-
             self.screen.blit(text_surface, text_rect)
 
     def buildRoad_display(self, currentPlayer, roadsPossibleDict):
@@ -345,7 +347,8 @@ class catanGameView():
 
         pygame.display.update()
 
-        mouseClicked = False  # Get player actions until a mouse is clicked
+        mouseClicked = False
+        clock = pygame.time.Clock()
         while (mouseClicked == False):
             if (self.game.gameSetup):  # during gameSetup phase only exit if road is built
                 for e in pygame.event.get():
@@ -368,6 +371,7 @@ class catanGameView():
 
                         mouseClicked = True
                         return None
+            clock.tick(30)
 
     def buildSettlement_display(self, currentPlayer, verticesPossibleDict):
         '''Function to control build-settlement action with display
@@ -383,8 +387,8 @@ class catanGameView():
 
         pygame.display.update()
 
-        mouseClicked = False  # Get player actions until a mouse is clicked
-
+        mouseClicked = False
+        clock = pygame.time.Clock()
         while (mouseClicked == False):
             if (self.game.gameSetup):  # during gameSetup phase only exit if settlement is built
                 for e in pygame.event.get():
@@ -393,19 +397,17 @@ class catanGameView():
                     if (e.type == pygame.MOUSEBUTTONDOWN):
                         for vertex, vertexRect in verticesPossibleDict.items():
                             if (vertexRect.collidepoint(e.pos)):
-                                # currentPlayer.build_settlement(vertex, self.board)
                                 mouseClicked = True
                                 return vertex
             else:
                 for e in pygame.event.get():
-                    if (e.type == pygame.MOUSEBUTTONDOWN):  # Exit this loop on mouseclick
+                    if (e.type == pygame.MOUSEBUTTONDOWN):
                         for vertex, vertexRect in verticesPossibleDict.items():
                             if (vertexRect.collidepoint(e.pos)):
-                                # currentPlayer.build_settlement(vertex, self.board)
                                 return vertex
-
                         mouseClicked = True
                         return None
+            clock.tick(30)
 
     def buildCity_display(self, currentPlayer, verticesPossibleDict):
         '''Function to control build-city action with display
@@ -421,19 +423,17 @@ class catanGameView():
 
         pygame.display.update()
 
-        # Get player actions until a mouse is clicked - whether a city is built or not
         mouseClicked = False
-
+        clock = pygame.time.Clock()
         while (mouseClicked == False):
             for e in pygame.event.get():
-                if (e.type == pygame.MOUSEBUTTONDOWN):  # Exit this loop on mouseclick
+                if (e.type == pygame.MOUSEBUTTONDOWN):
                     for vertex, vertexRect in verticesPossibleDict.items():
                         if (vertexRect.collidepoint(e.pos)):
-                            # currentPlayer.build_city(vertex, self.board)
                             return vertex
-
                     mouseClicked = True
                     return None
+            clock.tick(30)
 
     # Function to control the move-robber action with display
 
@@ -446,25 +446,20 @@ class catanGameView():
 
         pygame.display.update()
 
-        # Get player actions until a mouse is clicked - whether a road is built or not
         mouseClicked = False
-
+        clock = pygame.time.Clock()
         while (mouseClicked == False):
             for e in pygame.event.get():
-                if (e.type == pygame.MOUSEBUTTONDOWN):  # Exit this loop on mouseclick
+                if (e.type == pygame.MOUSEBUTTONDOWN):
                     for hexIndex, robberCircleRect in possibleRobberDict.items():
                         if (robberCircleRect.collidepoint(e.pos)):
-                            # Add code to choose which player to rob depending on hex clicked on
                             possiblePlayerDict = self.board.get_players_to_rob(
                                 hexIndex)
-
                             playerToRob = self.choosePlayerToRob_display(
                                 possiblePlayerDict)
-
-                            # Move robber to that hex and rob
-                            # currentPlayer.move_robber(hexIndex, self.board, playerToRob) #Player moved robber to this hex
-                            mouseClicked = True  # Only exit out once a correct robber spot is chosen
+                            mouseClicked = True
                             return hexIndex, playerToRob
+            clock.tick(30)
 
     # Function to control the choice of player to rob with display
     # Returns the choice of player to rob
@@ -477,18 +472,18 @@ class catanGameView():
 
         pygame.display.update()
 
-        # If dictionary is empty return None
         if (possiblePlayerDict == {}):
             return None
 
-        # Get player actions until a mouse is clicked - whether a road is built or not
         mouseClicked = False
+        clock = pygame.time.Clock()
         while (mouseClicked == False):
             for e in pygame.event.get():
-                if (e.type == pygame.MOUSEBUTTONDOWN):  # Exit this loop on mouseclick
+                if (e.type == pygame.MOUSEBUTTONDOWN):
                     for playerToRob, playerCircleRect in possiblePlayerDict.items():
                         if (playerCircleRect.collidepoint(e.pos)):
                             return playerToRob
+            clock.tick(30)
 
     def get_resource_selection(self, player, mode, num_to_select=1):
         """
@@ -523,6 +518,7 @@ class catanGameView():
         result = None
 
         running = True
+        clock = pygame.time.Clock()
         while running:
             # Draw Menu Background
             pygame.draw.rect(self.screen, (200, 200, 200),
@@ -641,6 +637,7 @@ class catanGameView():
                                 else:
                                     receive_res = None  # Deselect receive
 
+            clock.tick(30)  # Limit redraw rate to prevent flickering
         self.displayGameScreen()
         return result
 
