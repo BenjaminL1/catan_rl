@@ -74,9 +74,12 @@ class CompositeRolloutBuffer:
         for key, size in mask_shapes.items():
             self.masks[key] = np.zeros((n_steps, size), dtype=bool)
 
+        self._tensors_ready = False
+
     def reset(self) -> None:
         self.pos = 0
         self.full = False
+        self._tensors_ready = False
 
     def _store_dev_seq(self, dest_arr: np.ndarray, dest_len: np.ndarray, idx: int, seq: Any) -> None:
         if isinstance(seq, (list, tuple)):
@@ -137,6 +140,27 @@ class CompositeRolloutBuffer:
                 last_values, self.n_envs, gamma, gae_lambda
             )
 
+    def finalize(self, device: str = "cpu") -> None:
+        """Pre-convert numpy arrays to tensors once before the update loop.
+
+        from_numpy is zero-copy on CPU (shares memory). Do not write to
+        numpy arrays after finalize() and before the next reset().
+        """
+        n = self.n_steps if self.full else self.pos
+        self._t_tile_reps   = torch.from_numpy(self.tile_representations[:n]).to(device)
+        self._t_curr_main   = torch.from_numpy(self.current_player_main[:n]).to(device)
+        self._t_next_main   = torch.from_numpy(self.next_player_main[:n]).to(device)
+        self._t_actions     = torch.from_numpy(self.actions[:n]).to(device)
+        self._t_values      = torch.from_numpy(self.values[:n]).to(device)
+        self._t_log_probs   = torch.from_numpy(self.log_probs[:n]).to(device)
+        self._t_advantages  = torch.from_numpy(self.advantages[:n]).to(device)
+        self._t_returns     = torch.from_numpy(self.returns[:n]).to(device)
+        self._t_curr_hidden = torch.from_numpy(self.curr_hidden_dev[:n]).to(device)
+        self._t_curr_played = torch.from_numpy(self.curr_played_dev[:n]).to(device)
+        self._t_next_played = torch.from_numpy(self.next_played_dev[:n]).to(device)
+        self._t_masks = {k: torch.from_numpy(self.masks[k][:n]).to(device) for k in self.masks}
+        self._tensors_ready = True
+
     def get_batches(self, batch_size: int) -> Generator[Dict[str, torch.Tensor], None, None]:
         """Yield shuffled minibatches as dicts of tensors on self.device.
 
@@ -154,45 +178,23 @@ class CompositeRolloutBuffer:
 
         for start in range(0, n, batch_size):
             batch_idx = indices[start:start + batch_size]
-
-            batch_masks = {}
-            for key in self.masks:
-                batch_masks[key] = torch.tensor(
-                    self.masks[key][batch_idx], dtype=torch.bool, device=self.device
-                )
+            idx_t = torch.from_numpy(batch_idx)
 
             obs_batch = {
-                "tile_representations": torch.tensor(
-                    self.tile_representations[batch_idx], dtype=torch.float32, device=self.device
-                ),
-                "current_player_main": torch.tensor(
-                    self.current_player_main[batch_idx], dtype=torch.float32, device=self.device
-                ),
-                "next_player_main": torch.tensor(
-                    self.next_player_main[batch_idx], dtype=torch.float32, device=self.device
-                ),
-                "current_player_hidden_dev": torch.tensor(
-                    self.curr_hidden_dev[batch_idx], dtype=torch.int64, device=self.device
-                ),
-                "current_player_played_dev": torch.tensor(
-                    self.curr_played_dev[batch_idx], dtype=torch.int64, device=self.device
-                ),
-                "next_player_played_dev": torch.tensor(
-                    self.next_played_dev[batch_idx], dtype=torch.int64, device=self.device
-                ),
+                "tile_representations":      self._t_tile_reps[idx_t],
+                "current_player_main":       self._t_curr_main[idx_t],
+                "next_player_main":          self._t_next_main[idx_t],
+                "current_player_hidden_dev": self._t_curr_hidden[idx_t],
+                "current_player_played_dev": self._t_curr_played[idx_t],
+                "next_player_played_dev":    self._t_next_played[idx_t],
             }
 
             yield {
-                'obs': obs_batch,
-                'actions': torch.tensor(self.actions[batch_idx],
-                                        dtype=torch.int64, device=self.device),
-                'old_values': torch.tensor(self.values[batch_idx],
-                                           dtype=torch.float32, device=self.device),
-                'old_log_prob': torch.tensor(self.log_probs[batch_idx],
-                                             dtype=torch.float32, device=self.device),
-                'advantages': torch.tensor(self.advantages[batch_idx],
-                                           dtype=torch.float32, device=self.device),
-                'returns': torch.tensor(self.returns[batch_idx],
-                                        dtype=torch.float32, device=self.device),
-                'masks': batch_masks,
+                'obs':          obs_batch,
+                'actions':      self._t_actions[idx_t],
+                'old_values':   self._t_values[idx_t],
+                'old_log_prob': self._t_log_probs[idx_t],
+                'advantages':   self._t_advantages[idx_t],
+                'returns':      self._t_returns[idx_t],
+                'masks':        {k: self._t_masks[k][idx_t] for k in self._t_masks},
             }

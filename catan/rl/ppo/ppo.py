@@ -73,8 +73,8 @@ class CatanPPO:
         # torch.compile: fuses kernels, reduces overhead. Opt-in since dev-card
         # lists trigger dynamic-shape recompiles. Enable after confirming stable.
         if config.get("torch_compile", False):
-            self.policy = torch.compile(self.policy)
-            print("torch.compile() enabled for policy.")
+            self.policy = torch.compile(self.policy, mode="reduce-overhead")
+            print("torch.compile() enabled for policy (mode=reduce-overhead).")
 
         # Optimizer: AdamW with weight decay for regularization
         self.optimizer = torch.optim.AdamW(
@@ -143,7 +143,7 @@ class CatanPPO:
         )
 
         # Add initial policy so league always has at least one (required for policy opponents)
-        self.league.add(copy.deepcopy(self.policy.state_dict()))
+        self.league.add(copy.deepcopy(self._raw_policy_state_dict()))
 
         # Build policy factory for league/GameManager (creates policy instances for inference)
         def build_policy_fn(device: str = "cpu"):
@@ -183,6 +183,18 @@ class CatanPPO:
         self.episode_lengths = []
         self.episode_wins = []
 
+    def _raw_policy_state_dict(self) -> dict:
+        """Return policy state dict without torch.compile's _orig_mod. prefix.
+
+        torch.compile wraps the policy in OptimizedModule, which prefixes all
+        keys with '_orig_mod.'. League policies and checkpoints are always stored
+        in bare format so they can be loaded into uncompiled CatanPolicy instances.
+        """
+        sd = self.policy.state_dict()
+        if next(iter(sd)).startswith('_orig_mod.'):
+            sd = {k[len('_orig_mod.'):]: v for k, v in sd.items()}
+        return sd
+
     def _obs_to_tensor_dict(self, obs: Dict) -> Dict[str, torch.Tensor]:
         """Convert a single env obs dict (numpy/ints) to a batched tensor dict (B=1)."""
         return self._batch_obs_to_tensor_dict([obs])
@@ -190,57 +202,82 @@ class CatanPPO:
     def _batch_obs_to_tensor_dict(self, obs_list: List[Dict]) -> Dict[str, torch.Tensor]:
         """Convert a list of B env obs dicts to a single batched tensor dict.
 
-        Fixed-shape arrays are stacked → (B, ...) tensors.
-        Variable-length dev-card sequences become a list of B tensors;
-        player_modules.py already handles this via pad_sequence.
+        Uses np.stack + from_numpy for a single memcopy per array (no intermediate
+        per-element tensors). Dev cards are (B, 16) int64; player_modules.py tensor
+        branch handles this directly without pad_sequence.
         """
         device = self.device
-
-        def _dev_tensor(obs: Dict, key: str) -> torch.Tensor:
-            seq = obs.get(key, None)
-            if seq is None:
-                arr = np.zeros(1, dtype=np.int64)
-            else:
-                arr = np.asarray(seq, dtype=np.int64)
-                if arr.size == 0:
-                    arr = np.zeros(1, dtype=np.int64)
-            return torch.tensor(arr, dtype=torch.long, device=device)
-
+        tile = np.stack([o["tile_representations"] for o in obs_list])  # (B,19,79)
+        curr = np.stack([o["current_player_main"] for o in obs_list])  # (B,166)
+        nxt = np.stack([o["next_player_main"] for o in obs_list])  # (B,173)
+        hid = np.stack([o["current_player_hidden_dev"] for o in obs_list])  # (B,16) int32
+        cpd = np.stack([o["current_player_played_dev"] for o in obs_list])  # (B,16) int32
+        npd = np.stack([o["next_player_played_dev"] for o in obs_list])  # (B,16) int32
         return {
-            "tile_representations": torch.stack([
-                torch.tensor(obs["tile_representations"], dtype=torch.float32, device=device)
-                for obs in obs_list
-            ]),  # (B, 19, 79)
-            "current_player_main": torch.stack([
-                torch.tensor(obs["current_player_main"], dtype=torch.float32, device=device)
-                for obs in obs_list
-            ]),  # (B, 166)
-            "next_player_main": torch.stack([
-                torch.tensor(obs["next_player_main"], dtype=torch.float32, device=device)
-                for obs in obs_list
-            ]),  # (B, 173)
-            "current_player_hidden_dev": [_dev_tensor(obs, "current_player_hidden_dev") for obs in obs_list],
-            "current_player_played_dev": [_dev_tensor(obs, "current_player_played_dev") for obs in obs_list],
-            "next_player_played_dev": [_dev_tensor(obs, "next_player_played_dev") for obs in obs_list],
+            "tile_representations": torch.from_numpy(tile).to(device),
+            "current_player_main": torch.from_numpy(curr).to(device),
+            "next_player_main": torch.from_numpy(nxt).to(device),
+            "current_player_hidden_dev": torch.from_numpy(hid).to(device).long(),
+            "current_player_played_dev": torch.from_numpy(cpd).to(device).long(),
+            "next_player_played_dev": torch.from_numpy(npd).to(device).long(),
         }
 
     def _batch_masks_to_tensor(self, masks_list: List[Dict]) -> Dict[str, torch.Tensor]:
         """Stack a list of B per-env mask dicts into batched bool tensors."""
-        keys = masks_list[0].keys()
+        device = self.device
         return {
-            k: torch.stack([
-                torch.tensor(m[k], dtype=torch.bool, device=self.device)
-                for m in masks_list
-            ])  # (B, mask_dim)
-            for k in keys
+            k: torch.from_numpy(np.stack([m[k] for m in masks_list])).to(device)
+            for k in masks_list[0]
         }
+
+    def _run_batched_opponent_turns(self, pending: List[int],
+                                    partial_rewards: List[float]) -> Dict[int, tuple]:
+        """Run batched opponent NN inference until all pending envs finish their turn.
+
+        Args:
+            pending: list of env indices with _opp_turn_in_progress == True
+            partial_rewards: reward accumulated before opponent acts, aligned with pending
+
+        Returns:
+            dict mapping env_idx → (final_obs, total_reward, done, info)
+        """
+        gm = self.game_manager
+        opp_policy = gm.rollout_opp_policy
+        results = {}
+        # Use dict so slot alignment survives as pending shrinks each loop
+        accum = {env_i: partial_rewards[slot] for slot, env_i in enumerate(pending)}
+
+        while pending:
+            # Batch opponent obs/masks across all still-pending envs
+            opp_pairs = [gm.get_opponent_obs_masks(i) for i in pending]
+            opp_obs_t = self._batch_obs_to_tensor_dict([p[0] for p in opp_pairs])
+            opp_mask_t = self._batch_masks_to_tensor([p[1] for p in opp_pairs])
+
+            with torch.inference_mode():
+                opp_actions, _, _ = opp_policy.act(opp_obs_t, opp_mask_t,
+                                                   deterministic=True)
+            opp_actions_np = opp_actions.cpu().numpy()  # (len(pending), 6)
+
+            still_pending = []
+            for slot, env_i in enumerate(pending):
+                turn_done, obs, rew_delta, done, info = gm.apply_opponent_action(
+                    env_i, opp_actions_np[slot]
+                )
+                if turn_done:
+                    results[env_i] = (obs, accum[env_i] + rew_delta, done, info)
+                else:
+                    still_pending.append(env_i)
+            pending = still_pending
+
+        return results
 
     def collect_rollouts(self) -> Dict[str, float]:
         """Play n_steps of games and store transitions in the buffer.
 
-        Batched inference: all n_envs observations are stacked into a single
-        forward pass (batch=n_envs) each iteration, cutting inference calls
-        from n_steps × batch=1 down to (n_steps/n_envs) × batch=n_envs.
+        Main agent inference is batched (batch=n_envs). Opponent NN inference
+        is also batched via _run_batched_opponent_turns — all envs whose
+        opponent turn was triggered in the same outer loop share one forward
+        pass through the shared rollout opponent policy.
 
         Returns:
             Dict with rollout statistics (mean reward, mean length, etc.).
@@ -263,38 +300,68 @@ class CatanPPO:
             obs_t = self._batch_obs_to_tensor_dict(obs_batch)
             masks_t = self._batch_masks_to_tensor(masks_list)
 
-            with torch.no_grad():
+            with torch.inference_mode():
                 actions, values, log_probs = self.policy.act(obs_t, masks_t)
 
             actions_np = actions.cpu().numpy()          # (batch_n, 6)
-            values_np = values.squeeze(-1).cpu().numpy()  # (batch_n,)
+            values_squeezed = values.squeeze(-1)
+            if self.normalize_values:
+                values_np = self.value_normalizer.denormalize(values_squeezed).cpu().numpy()
+            else:
+                values_np = values_squeezed.cpu().numpy()  # (batch_n,)
             log_probs_np = log_probs.cpu().numpy()       # (batch_n,)
+
+            # Phase 1: step all main agents; collect envs that need opponent NN turns
+            pending_opp = []   # env indices whose opponent turn is deferred
+            pending_prewd = []   # partial reward accumulated before opponent acts
+            immediate = []   # env indices with complete transitions
 
             for i in range(batch_n):
                 new_obs, reward, done, info = self.game_manager.step_one(i, actions_np[i])
-                observations[i] = new_obs
+                if info.get('opp_turn_pending'):
+                    pending_opp.append(i)
+                    pending_prewd.append(reward)
+                else:
+                    observations[i] = new_obs
+                    immediate.append((i, new_obs, reward, done, info))
 
-                self.buffer.add(obs_batch[i], actions_np[i], reward, done,
-                                float(values_np[i]), float(log_probs_np[i]), masks_list[i])
+            # Phase 2: batch opponent inference for deferred turns
+            if pending_opp and self.game_manager.rollout_opp_policy is not None:
+                opp_results = self._run_batched_opponent_turns(
+                    pending_opp, pending_prewd
+                )
+                for env_i, (fin_obs, fin_rew, fin_done, fin_info) in opp_results.items():
+                    observations[env_i] = fin_obs
+                    immediate.append((env_i, fin_obs, fin_rew, fin_done, fin_info))
 
-                ep_rewards[i] += reward
-                ep_lengths[i] += 1
+            # Phase 3: store all completed transitions to buffer
+            for (env_i, new_obs, reward, done, info) in immediate:
+                self.buffer.add(obs_batch[env_i], actions_np[env_i], reward, done,
+                                float(values_np[env_i]), float(log_probs_np[env_i]),
+                                masks_list[env_i])
+                ep_rewards[env_i] += reward
+                ep_lengths[env_i] += 1
                 self.global_step += 1
                 steps_collected += 1
 
                 if done:
-                    self.episode_rewards.append(ep_rewards[i])
-                    self.episode_lengths.append(ep_lengths[i])
+                    self.episode_rewards.append(ep_rewards[env_i])
+                    self.episode_lengths.append(ep_lengths[env_i])
                     self.episode_wins.append(1.0 if info.get('is_success') else 0.0)
-                    ep_rewards[i] = 0.0
-                    ep_lengths[i] = 0
+                    ep_rewards[env_i] = 0.0
+                    ep_lengths[env_i] = 0
 
         # Bootstrapped last values — one batched forward pass for all envs
-        with torch.no_grad():
+        with torch.inference_mode():
             obs_t = self._batch_obs_to_tensor_dict(observations)
-            last_values = self.policy.get_value(obs_t).squeeze(-1).cpu().numpy()  # (n_envs,)
+            raw_last = self.policy.get_value(obs_t).squeeze(-1)
+            if self.normalize_values:
+                last_values = self.value_normalizer.denormalize(raw_last).cpu().numpy()
+            else:
+                last_values = raw_last.cpu().numpy()  # (n_envs,)
 
         self.buffer.compute_returns_and_advantages(last_values, self.gamma, self.gae_lambda)
+        self.buffer.finalize(self.device)
 
         if self.normalize_values:
             self.value_normalizer.update(
@@ -352,7 +419,7 @@ class CatanPPO:
                 ratio = torch.exp(new_log_prob - old_log_prob)
                 pg_loss_1 = -advantages * ratio
                 pg_loss_2 = -advantages * torch.clamp(ratio, 1.0 - self.clip_range,
-                                                       1.0 + self.clip_range)
+                                                      1.0 + self.clip_range)
                 pg_loss = torch.max(pg_loss_1, pg_loss_2).mean()
 
                 # ── Value loss ────────────────────────────────────────
@@ -458,7 +525,8 @@ class CatanPPO:
               f"({self.n_envs} envs, {self.n_steps} steps/update)...")
         start_time = time.time()
         last_eval_step = 0
-        eval_interval = self.checkpoint_freq
+        last_checkpoint_step = 0
+        eval_interval = self.config.get("eval_freq", self.checkpoint_freq)
         # Update count for annealing (resume-safe: derived from global_step)
         update_num = self.global_step // self.n_steps
 
@@ -475,7 +543,7 @@ class CatanPPO:
                 update_num += 1
 
                 # ── League: add policy every N updates (Charlesworth-style) ─
-                self.league.maybe_add(update_num, self.policy.state_dict())
+                self.league.maybe_add(update_num, self._raw_policy_state_dict())
 
                 # ── Logging ───────────────────────────────────────────────
                 elapsed = time.time() - start_time
@@ -551,9 +619,6 @@ class CatanPPO:
                                   f"improvement). Check EV and entropy in TensorBoard.")
                             self.writer.add_scalar('train/stagnation_flag', 1.0, self.global_step)
 
-                    # Save checkpoint
-                    self.save(os.path.join(self.checkpoint_dir,
-                                           f"checkpoint_{self.global_step:08d}.pt"))
                     last_eval_step = self.global_step
 
                     # Early stopping check
@@ -562,6 +627,12 @@ class CatanPPO:
                         print(f"  Win rate target {target} reached! Saving final model.")
                         self.save(os.path.join(self.checkpoint_dir, "best_model.pt"))
                         break
+
+                # ── Periodic checkpoint ───────────────────────────────────
+                if self.global_step - last_checkpoint_step >= self.checkpoint_freq:
+                    self.save(os.path.join(self.checkpoint_dir,
+                                           f"checkpoint_{self.global_step:08d}.pt"))
+                    last_checkpoint_step = self.global_step
         except KeyboardInterrupt:
             # Graceful interrupt: always save a checkpoint you can resume from.
             interrupt_path = os.path.join(
@@ -583,7 +654,7 @@ class CatanPPO:
     def save(self, path: str) -> None:
         """Save everything needed to resume training."""
         torch.save({
-            'policy_state_dict': self.policy.state_dict(),
+            'policy_state_dict': self._raw_policy_state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'global_step': self.global_step,
             'value_normalizer': self.value_normalizer.state_dict(),
@@ -602,7 +673,11 @@ class CatanPPO:
             config.update(config_override)
 
         trainer = cls(config)
-        trainer.policy.load_state_dict(checkpoint['policy_state_dict'])
+        # torch.compile wraps policy in OptimizedModule (_orig_mod prefix in state_dict keys).
+        # Load into the underlying model to handle checkpoints saved before compile was enabled.
+        policy_target = trainer.policy._orig_mod if hasattr(
+            trainer.policy, '_orig_mod') else trainer.policy
+        policy_target.load_state_dict(checkpoint['policy_state_dict'])
         trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         # Force LR from config — overrides the stale LR stored in optimizer state.
         # This is needed when resuming with a deliberately reset learning rate.

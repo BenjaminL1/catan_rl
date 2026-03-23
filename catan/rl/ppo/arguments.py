@@ -16,14 +16,14 @@ TRAIN_CONFIG: Dict[str, Any] = {
     "entropy_coef": 0.01,
     "entropy_coef_start": 0.04,
     "entropy_coef_final": 0.005,
-    "entropy_coef_anneal_start": 50,
-    "entropy_coef_anneal_end": 200,
+    "entropy_coef_anneal_start": 500,   # ~8.2M steps; keep exploration until league matures
+    "entropy_coef_anneal_end": 3000,    # ~49M steps
     "clip_range": 0.2,
     "target_kl": 0.025,          # was 0.015; raised to allow ~6-8 epochs instead of 3
-    "n_steps": 2048,
+    "n_steps": 4096,             # longer rollout for long-horizon credit assignment
     "n_envs": 8,
-    "batch_size": 256,
-    "n_epochs": 15,               # raised from 10; KL guard prevents over-updating
+    "batch_size": 512,
+    "n_epochs": 6,                # reduced from 15; PPO update was 67% of wall time
     "gamma": 0.995,
     "gae_lambda": 0.95,
     "max_grad_norm": 0.5,
@@ -41,8 +41,8 @@ TRAIN_CONFIG: Dict[str, Any] = {
     # League (Charlesworth-style): add policy every N updates
     "league_maxlen": 100,
     "add_policy_every": 4,
-    "league_random_weight": 0.0,   # random opponent fraction
-    "heuristic_opponent_weight": 0.1,  # 10% of games vs heuristic for diverse signal
+    "league_random_weight": 0.05,   # 5% chaos injection; avoids early self-play echo chamber
+    "heuristic_opponent_weight": 0.25,  # 25% heuristic as stable anchor until WR >90%
     # Entropy floor: if policy entropy drops below this, coef is temporarily raised
     # to prevent premature convergence to a deterministic policy.
     "entropy_floor": 0.003,
@@ -50,9 +50,11 @@ TRAIN_CONFIG: Dict[str, Any] = {
     # Stagnation detection: warn if win rate doesn't improve over this many evals.
     "stagnation_window": 20,       # was 10; longer window avoids false positives at high WR
     "stagnation_threshold": 0.01,  # was 0.03; smaller delta acceptable at 95%+ win rate
-    # torch.compile: opt-in. Fuses kernels but may trigger recompiles on variable
-    # dev-card list lengths. Test with a short run before enabling long training.
+    # torch.compile: disabled — reduce-overhead mode uses CUDA graphs (GPU-only);
+    # on CPU it adds per-call overhead that outweighs any kernel fusion gains.
     "torch_compile": False,
+    "eval_freq": 100_000,       # evaluate every 100k steps
+    # checkpoint_freq controls save interval (500k); eval_freq controls eval interval (100k)
 }
 
 # Shared across all phases — defines the neural network shape.

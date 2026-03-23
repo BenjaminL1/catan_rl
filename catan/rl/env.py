@@ -121,12 +121,12 @@ class CatanEnv(gym.Env):
         # Spaces
         self.action_space = spaces.MultiDiscrete([13, 54, 72, 19, 5, 5])
         self.observation_space = spaces.Dict({
-            'tile_representations':       spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
-            'current_player_main':        spaces.Box(-1.0, 2.0, (CURR_PLAYER_DIM,), dtype=np.float32),
-            'next_player_main':           spaces.Box(-1.0, 2.0, (NEXT_PLAYER_DIM,), dtype=np.float32),
-            'current_player_hidden_dev':  spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
-            'current_player_played_dev':  spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
-            'next_player_played_dev':     spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            'tile_representations': spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
+            'current_player_main': spaces.Box(-1.0, 2.0, (CURR_PLAYER_DIM,), dtype=np.float32),
+            'next_player_main': spaces.Box(-1.0, 2.0, (NEXT_PLAYER_DIM,), dtype=np.float32),
+            'current_player_hidden_dev': spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            'current_player_played_dev': spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            'next_player_played_dev': spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
         })
 
         # Runtime state — populated in reset()
@@ -142,6 +142,10 @@ class CatanEnv(gym.Env):
         self._vertex_to_idx = {}     # pixel_coord → int
         self._idx_to_vertex = {}     # int → pixel_coord
 
+        # Obs caches — rebuilt each reset (board layout is fixed, tile resources vary per game)
+        self._tile_corners: list = None          # list[list[Point]], shape (19, 6)
+        self._tile_static: np.ndarray = None     # (19, 19) float32 — resource/number/dots dims
+
         # State machine flags
         self.initial_placement_phase = False
         self._setup_pending = None       # (player, 'settlement'|'road')
@@ -151,7 +155,12 @@ class CatanEnv(gym.Env):
         self._cards_to_discard = 0
         self.robber_placement_pending = False
         self.road_building_roads_left = 0
-        self._opp_pending_robber = False # opponent needs to place robber after agent discards
+        self._opp_pending_robber = False  # opponent needs to place robber after agent discards
+
+        # Deferred opponent NN: set by _run_policy_opponent_turn(); cleared by apply_opponent_action()
+        self._opp_turn_in_progress = False
+        self._opp_steps_this_turn = 0
+        self._pending_opp_vp_before = 0
 
         self.last_dice_roll = 0
         self._turn_count = 0
@@ -190,7 +199,7 @@ class CatanEnv(gym.Env):
         self.opponent_player.game = self.game
         self.opponent_player.isAI = True
 
-        if opp_type == "policy" and opp_policy is not None:
+        if opp_type == "policy":
             self._opp_type_runtime = "policy"
         else:
             self._opp_type_runtime = opp_type
@@ -207,6 +216,24 @@ class CatanEnv(gym.Env):
 
         # Build vertex/edge index maps
         self._build_index_maps(board)
+
+        # Cache tile corners (pure geometry — constant for this board layout)
+        self._tile_corners = [
+            board.hexTileDict[i].get_corners(board.flat)
+            for i in range(N_TILES)
+        ]
+
+        # Cache static per-tile dims: resource one-hot (0-5), number one-hot (6-16), dots (18)
+        # dim 17 (has_robber) is dynamic and intentionally left 0 here; filled per-step below
+        _RES_NAMES = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD', 'DESERT']
+        _NUM_MAP = {None: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 6, 9: 7, 10: 8, 11: 9, 12: 10}
+        self._tile_static = np.zeros((N_TILES, 19), dtype=np.float32)
+        for _i in range(N_TILES):
+            _tile = board.hexTileDict[_i]
+            for _j, _r in enumerate(_RES_NAMES):
+                self._tile_static[_i, _j] = 1.0 if _tile.resource_type == _r else 0.0
+            self._tile_static[_i, 6 + _NUM_MAP.get(_tile.number_token, 0)] = 1.0
+            self._tile_static[_i, 18] = DOTS.get(_tile.number_token, 0) / 5.0
 
         # Hand tracker
         self._hand_tracker = BroadcastHandTracker(["Agent", "Opponent"])
@@ -238,11 +265,11 @@ class CatanEnv(gym.Env):
 
     def step(self, action):
         action_type = int(action[0])
-        corner_idx   = int(action[1])
-        edge_idx     = int(action[2])
-        tile_idx     = int(action[3])
-        res1_idx     = int(action[4])
-        res2_idx     = int(action[5])
+        corner_idx = int(action[1])
+        edge_idx = int(action[2])
+        tile_idx = int(action[3])
+        res1_idx = int(action[4])
+        res2_idx = int(action[5])
 
         board = self.game.board
         agent = self.agent_player
@@ -252,6 +279,8 @@ class CatanEnv(gym.Env):
         terminated = False
         truncated = False
         info = {}
+        # VP shaping: capture VP at step start for delta-based reward signal
+        agent_vp_before = agent.victoryPoints
 
         # ---- Setup phase ----
         if self.initial_placement_phase:
@@ -289,6 +318,7 @@ class CatanEnv(gym.Env):
                 self._turn_count = 0
 
             obs = self._get_obs()
+            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
             return obs, reward, terminated, truncated, info
 
         # ---- Discard phase ----
@@ -332,6 +362,7 @@ class CatanEnv(gym.Env):
             self.robber_placement_pending = False
 
             obs = self._get_obs()
+            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
             return obs, reward, terminated, truncated, info
 
         # ---- Roll pending ----
@@ -368,8 +399,12 @@ class CatanEnv(gym.Env):
                 agent.build_road(v1, v2, board, is_free=True)
                 self.game.check_longest_road(agent)
                 self.road_building_roads_left -= 1
-            obs = self._get_obs()
-            return obs, 0.0, False, False, {}
+                reward += 0.05 * (agent.victoryPoints - agent_vp_before)
+                obs = self._get_obs()
+                return obs, reward, False, False, {}
+            else:
+                # No valid roads — mask forced EndTurn; exit phase and fall through
+                self.road_building_roads_left = 0
 
         # ---- Main turn actions ----
         if action_type == 0:  # BuildSettlement
@@ -394,8 +429,16 @@ class CatanEnv(gym.Env):
                 info = self._make_terminal_info(terminated)
                 obs = self._get_obs()
                 return obs, self._compute_terminal_reward(), terminated, truncated, info
-            # Run opponent turn
+            # Run opponent turn; shape reward by opponent VP gain this turn
+            opp_vp_before = opponent.victoryPoints
             self._run_opponent_turn()
+            if self._opp_turn_in_progress:
+                # Policy opponent's NN phase is deferred: GameManager will batch it.
+                # Store vp snapshot for reward shaping once the turn completes.
+                self._pending_opp_vp_before = opp_vp_before
+                obs = self._get_obs()
+                return obs, reward, False, False, {'opp_turn_pending': True}
+            reward -= 0.025 * (opponent.victoryPoints - opp_vp_before)
             terminated, truncated = self._check_terminal()
             if not terminated and not truncated:
                 self.roll_pending = True
@@ -449,7 +492,8 @@ class CatanEnv(gym.Env):
                             p.resources[r] = 0
                             agent.resources[r] += stolen
                             self.game.broadcast.resource_change(p.name, {r: -stolen}, "MONOPOLY")
-                            self.game.broadcast.resource_change(agent.name, {r: +stolen}, "MONOPOLY")
+                            self.game.broadcast.resource_change(
+                                agent.name, {r: +stolen}, "MONOPOLY")
 
         elif action_type == 9:  # PlayRoadBuilder
             if agent.devCards.get('ROADBUILDER', 0) > 0 and not agent.devCardPlayedThisTurn:
@@ -476,6 +520,8 @@ class CatanEnv(gym.Env):
         if terminated or truncated:
             reward = self._compute_terminal_reward()
             info = self._make_terminal_info(terminated)
+        else:
+            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
         return obs, reward, terminated, truncated, info
 
     # ------------------------------------------------------------------
@@ -491,15 +537,15 @@ class CatanEnv(gym.Env):
         is_agent = (p is self.agent_player)
         is_opp = not is_agent
 
-        type_mask   = np.zeros(13, dtype=bool)
-        corner_set  = np.zeros(54, dtype=bool)
+        type_mask = np.zeros(13, dtype=bool)
+        corner_set = np.zeros(54, dtype=bool)
         corner_city = np.zeros(54, dtype=bool)
-        edge_mask   = np.zeros(72, dtype=bool)
-        tile_mask   = np.zeros(19, dtype=bool)
-        res1_trade  = np.zeros(5, dtype=bool)
-        res1_disc   = np.zeros(5, dtype=bool)
-        res1_def    = np.zeros(5, dtype=bool)
-        res2_def    = np.zeros(5, dtype=bool)
+        edge_mask = np.zeros(72, dtype=bool)
+        tile_mask = np.zeros(19, dtype=bool)
+        res1_trade = np.zeros(5, dtype=bool)
+        res1_disc = np.zeros(5, dtype=bool)
+        res1_def = np.zeros(5, dtype=bool)
+        res2_def = np.zeros(5, dtype=bool)
 
         # Setup phase
         if self.initial_placement_phase:
@@ -689,77 +735,56 @@ class CatanEnv(gym.Env):
         board = self.game.board
 
         tile_feats = self._build_tile_features(acting_player)
-        curr_main  = self._build_current_player_main(acting_player)
-        next_main  = self._build_next_player_main(other_player, acting_player)
+        curr_main = self._build_current_player_main(acting_player)
+        next_main = self._build_next_player_main(other_player, acting_player)
         hid_dev, played_dev = self._build_dev_sequences(acting_player, hidden=True)
-        _, opp_played_dev   = self._build_dev_sequences(other_player, hidden=False)
+        _, opp_played_dev = self._build_dev_sequences(other_player, hidden=False)
 
         return {
-            'tile_representations':      tile_feats,
-            'current_player_main':       curr_main,
-            'next_player_main':          next_main,
+            'tile_representations': tile_feats,
+            'current_player_main': curr_main,
+            'next_player_main': next_main,
             'current_player_hidden_dev': hid_dev,
             'current_player_played_dev': played_dev,
-            'next_player_played_dev':    opp_played_dev,
+            'next_player_played_dev': opp_played_dev,
         }
 
     def _build_tile_features(self, acting_player) -> np.ndarray:
         """Build (19, 79) tile feature array."""
         board = self.game.board
         agent = acting_player
-        opponent = (self.opponent_player if agent is self.agent_player else self.agent_player)
-
-        RES_NAMES = ['BRICK', 'ORE', 'SHEEP', 'WHEAT', 'WOOD', 'DESERT']
-        NUM_MAP = {None: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 6, 9: 7, 10: 8, 11: 9, 12: 10}
 
         tiles = np.zeros((N_TILES, TILE_DIM), dtype=np.float32)
 
+        # Copy static dims 0-16 (resource + number one-hots) and dim 18 (dots) from cache
+        tiles[:, :19] = self._tile_static
+
         for hex_idx in range(N_TILES):
             tile = board.hexTileDict[hex_idx]
-            f = []
 
-            # Resource one-hot (6)
-            for r in RES_NAMES:
-                f.append(1.0 if tile.resource_type == r else 0.0)
+            # dim 17: has_robber (dynamic)
+            tiles[hex_idx, 17] = 1.0 if tile.has_robber else 0.0
 
-            # Number token one-hot (11)
-            num_oh = [0.0] * 11
-            num_oh[NUM_MAP.get(tile.number_token, 0)] = 1.0
-            f.extend(num_oh)
-
-            # has_robber (1)
-            f.append(1.0 if tile.has_robber else 0.0)
-
-            # dots_normalized (1)
-            f.append(DOTS.get(tile.number_token, 0) / 5.0)
-
-            # 6+11+1+1 = 19 so far
-
-            # Per-vertex features: 6 vertices × 6 = 36
-            corners = tile.get_corners(board.flat)
+            # Per-vertex features: 6 vertices × 6 = 36  (dims 19-54)
+            corners = self._tile_corners[hex_idx]
+            v_start = 19
             for corner_px in corners:
                 v_obj = board.boardGraph.get(corner_px)
                 if v_obj is None:
-                    f.extend([1.0, 0.0, 0.0, 1.0, 0.0, 0.0])
-                    continue
-                owner = v_obj.owner
-                if owner is None:
-                    f.extend([1.0, 0.0, 0.0])
-                elif owner is agent:
-                    f.extend([0.0, 1.0, 0.0])
+                    tiles[hex_idx, v_start:v_start + 6] = (1., 0., 0., 1., 0., 0.)
                 else:
-                    f.extend([0.0, 0.0, 1.0])
-                btype = v_obj.building_type
-                if btype is None:
-                    f.extend([1.0, 0.0, 0.0])
-                elif btype == 'Settlement':
-                    f.extend([0.0, 1.0, 0.0])
-                else:
-                    f.extend([0.0, 0.0, 1.0])
+                    owner = v_obj.owner
+                    tiles[hex_idx, v_start]     = 1. if owner is None else 0.
+                    tiles[hex_idx, v_start + 1] = 1. if owner is agent else 0.
+                    tiles[hex_idx, v_start + 2] = 1. if (owner is not None and owner is not agent) else 0.
+                    btype = v_obj.building_type
+                    tiles[hex_idx, v_start + 3] = 1. if btype is None else 0.
+                    tiles[hex_idx, v_start + 4] = 1. if btype == 'Settlement' else 0.
+                    tiles[hex_idx, v_start + 5] = 1. if (btype is not None and btype != 'Settlement') else 0.
+                v_start += 6
 
-            # 19 + 36 = 55 so far
-
-            # Per-edge features: 6 edges × 4 = 24
+            # Per-edge features: 6 edges × 4 = 24  (dims 55-78)
+            e_start = 55
             for i in range(6):
                 c1 = corners[i]
                 c2 = corners[(i + 1) % 6]
@@ -772,16 +797,11 @@ class CatanEnv(gym.Env):
                             has_road = v1_obj.edge_state[j][1]
                             road_owner = v1_obj.edge_state[j][0]
                             break
-                if road_owner is None or not has_road:
-                    f.extend([1.0, 0.0, 0.0])
-                elif road_owner is agent:
-                    f.extend([0.0, 1.0, 0.0])
-                else:
-                    f.extend([0.0, 0.0, 1.0])
-                f.append(1.0 if has_road else 0.0)
-
-            # 55 + 24 = 79
-            tiles[hex_idx] = np.array(f[:TILE_DIM], dtype=np.float32)
+                tiles[hex_idx, e_start]     = 1. if (not has_road or road_owner is None) else 0.
+                tiles[hex_idx, e_start + 1] = 1. if (has_road and road_owner is agent) else 0.
+                tiles[hex_idx, e_start + 2] = 1. if (has_road and road_owner is not None and road_owner is not agent) else 0.
+                tiles[hex_idx, e_start + 3] = 1. if has_road else 0.
+                e_start += 4
 
         return tiles
 
@@ -867,7 +887,8 @@ class CatanEnv(gym.Env):
         f.append(1.0 if p.devCardPlayedThisTurn else 0.0)
 
         arr = np.array(f, dtype=np.float32)
-        assert len(arr) == CURR_PLAYER_DIM, f"curr_player_main dim={len(arr)} expected {CURR_PLAYER_DIM}"
+        assert len(
+            arr) == CURR_PLAYER_DIM, f"curr_player_main dim={len(arr)} expected {CURR_PLAYER_DIM}"
         return arr
 
     def _build_next_player_main(self, p, acting_player) -> np.ndarray:
@@ -895,7 +916,8 @@ class CatanEnv(gym.Env):
         total_res_norm = np.array([total_res / 20.0], dtype=np.float32)
 
         arr = np.concatenate([base, hidden_oh, total_res_norm])
-        assert len(arr) == NEXT_PLAYER_DIM, f"next_player_main dim={len(arr)} expected {NEXT_PLAYER_DIM}"
+        assert len(
+            arr) == NEXT_PLAYER_DIM, f"next_player_main dim={len(arr)} expected {NEXT_PLAYER_DIM}"
         return arr
 
     def _build_dev_sequences(self, p, hidden: bool):
@@ -1023,8 +1045,10 @@ class CatanEnv(gym.Env):
         opp = self.opponent_player
         board = self.game.board
 
-        if self._opp_type_runtime == "policy" and self._opponent_policy is not None:
+        if self._opp_type_runtime == "policy":
             self._run_policy_opponent_turn()
+            if self._opp_turn_in_progress:
+                return  # post-turn checks deferred to apply_opponent_action()
         else:
             opp.move(board)
 
@@ -1032,32 +1056,9 @@ class CatanEnv(gym.Env):
         self.game.check_largest_army(opp)
 
     def _run_policy_opponent_turn(self):
-        """Run policy opponent through their full turn until EndTurn."""
-        import torch
-        opp = self.opponent_player
-        policy = self._opponent_policy
-        device = next(policy.parameters()).device
-
-        for _ in range(200):  # safety limit
-            obs = self._get_obs_for_player(opp)
-            masks = self._compute_masks(opp)
-
-            # Convert to tensors
-            obs_t = {k: torch.tensor(v, dtype=torch.float32 if v.dtype == np.float32
-                                     else torch.int32).unsqueeze(0).to(device)
-                     for k, v in obs.items()}
-            masks_t = {k: torch.tensor(v, dtype=torch.bool).unsqueeze(0).to(device)
-                       for k, v in masks.items()}
-
-            with torch.no_grad():
-                actions, _, _ = policy.act(obs_t, masks_t, deterministic=True)
-            action = actions[0].cpu().numpy()
-
-            if int(action[0]) == 3:  # EndTurn
-                break
-
-            # Execute action for opponent
-            self._execute_action_for_player(opp, action)
+        """Signal that opponent NN turn is deferred; GameManager will batch inference."""
+        self._opp_turn_in_progress = True
+        self._opp_steps_this_turn = 0
 
     def _execute_action_for_player(self, p, action):
         """Execute one action for any player (used in policy opponent mode)."""
@@ -1118,7 +1119,7 @@ class CatanEnv(gym.Env):
 
     def _check_terminal(self):
         agent_won = self.agent_player.victoryPoints >= self.game.maxPoints
-        opp_won   = self.opponent_player.victoryPoints >= self.game.maxPoints
+        opp_won = self.opponent_player.victoryPoints >= self.game.maxPoints
         if agent_won or opp_won:
             self._game_over = True
             return True, False
@@ -1128,7 +1129,7 @@ class CatanEnv(gym.Env):
 
     def _compute_terminal_reward(self) -> float:
         agent_vp = self.agent_player.victoryPoints
-        opp_vp   = self.opponent_player.victoryPoints
+        opp_vp = self.opponent_player.victoryPoints
         if agent_vp >= self.game.maxPoints:
             return 1.0 + (agent_vp - opp_vp) / self.game.maxPoints
         elif opp_vp >= self.game.maxPoints:
@@ -1137,7 +1138,7 @@ class CatanEnv(gym.Env):
 
     def _make_terminal_info(self, terminated: bool) -> dict:
         agent_vp = self.agent_player.victoryPoints
-        opp_vp   = self.opponent_player.victoryPoints
+        opp_vp = self.opponent_player.victoryPoints
         is_success = terminated and agent_vp >= self.game.maxPoints
         return {
             'is_success': is_success,
@@ -1147,6 +1148,57 @@ class CatanEnv(gym.Env):
                 'game_length': self._turn_count,
             }
         }
+
+    # ------------------------------------------------------------------
+    # Deferred opponent NN interface (called by GameManager for batching)
+    # ------------------------------------------------------------------
+
+    def get_opponent_obs_masks(self):
+        """Return (obs, masks) for opponent. Only valid when _opp_turn_in_progress."""
+        opp = self.opponent_player
+        return self._get_obs_for_player(opp), self._compute_masks(opp)
+
+    def apply_opponent_action(self, action: np.ndarray):
+        """Apply one NN-decided action for the opponent.
+
+        Returns (turn_complete, obs, reward, terminated, truncated, info).
+        When turn_complete=False the other values are meaningless — caller
+        should query get_opponent_obs_masks() and call again next step.
+        When turn_complete=True the full transition is ready.
+        """
+        action_type = int(action[0])
+        self._opp_steps_this_turn += 1
+        turn_ends = (action_type == 3 or self._opp_steps_this_turn >= 200)
+
+        if not turn_ends:
+            self._execute_action_for_player(self.opponent_player, action)
+            return False, None, 0.0, False, False, {}
+
+        # Safety: execute the last action if it wasn't EndTurn
+        if action_type != 3:
+            self._execute_action_for_player(self.opponent_player, action)
+
+        # Post-turn bookkeeping (normally done by _run_opponent_main_turn)
+        opp = self.opponent_player
+        self.game.check_longest_road(opp)
+        self.game.check_largest_army(opp)
+        self._opp_turn_in_progress = False
+        self._opp_steps_this_turn = 0
+
+        reward = -0.025 * (opp.victoryPoints - self._pending_opp_vp_before)
+
+        terminated, truncated = self._check_terminal()
+        if not terminated and not truncated:
+            self.roll_pending = True
+            self._turn_count += 1
+        if terminated or truncated:
+            info = self._make_terminal_info(terminated)
+            reward = self._compute_terminal_reward()
+        else:
+            info = {}
+
+        obs = self._get_obs()
+        return True, obs, reward, terminated, truncated, info
 
     # ------------------------------------------------------------------
     # Render (stub)
