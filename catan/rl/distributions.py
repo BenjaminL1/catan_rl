@@ -22,7 +22,7 @@ class MaskedCategorical(Categorical):
         if mask.dtype != torch.bool:
             mask = mask.bool()
         self.mask = mask
-        # Replace invalid action logits with a very negative number.
+        # Replace invalid action logits with negative inf.
         # After softmax these become ~0 probability.
         masked_logits = logits.masked_fill(~mask, -1e8)
         super().__init__(logits=masked_logits)
@@ -44,6 +44,10 @@ class MaskedCategorical(Categorical):
     def mode(self) -> torch.Tensor:
         """Deterministic action = argmax of probabilities. Shape: (B,)."""
         return self.probs.argmax(dim=-1)
+
+    def num_valid_actions(self) -> torch.Tensor:
+        """Number of valid actions per sample in the batch. Shape: (B,)."""
+        return self.mask.sum(dim=-1)
 
 
 class CategoricalHead(nn.Module):
