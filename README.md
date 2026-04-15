@@ -151,3 +151,4 @@ python scripts/evaluate.py --model checkpoints/train/checkpoint_XXXXXXXX.pt
 - Checkpoints saved every 500k steps; eval vs heuristic every 100k steps
 - Bottleneck profiling (n_envs=4, n_steps=2048): NN inference ~53% of rollout time, obs-building ~33%
 - Obs-building optimized: cached per-tile static features and corner geometry at episode reset → ~1.8× speedup on `_build_tile_features`
+
