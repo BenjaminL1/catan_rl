@@ -77,6 +77,10 @@ class CatanPPO:
                 "tile_encoder_num_layers",
                 "proj_tile_dim",
                 "dropout",
+                # Phase 1.4 dev-card encoding selection
+                "use_devcard_mha",
+                "max_dev_seq",
+                "dev_card_vocab_excl_pad",
             )
             if k in config
         }
@@ -133,6 +137,23 @@ class CatanPPO:
 
         # KL early stopping: break out of update epochs if policy drifts too far
         self.target_kl = config.get("target_kl")
+
+        # Phase 1.1: PPO2-style value clipping. Reduces variance of value
+        # updates by symmetrically clipping how far the new value estimate
+        # can move from the buffer's stored old value within one minibatch.
+        # Loss = max(MSE_unclipped, MSE_clipped) — pessimistic w.r.t. the clip.
+        self.use_value_clipping = bool(config.get("use_value_clipping", True))
+        self.clip_range_vf = float(config.get("clip_range_vf", 0.2))
+
+        # Phase 1.2: per-rollout advantage normalization mode.
+        # 'rollout' = mean/std once over the whole buffer (low-variance grad).
+        # 'batch'   = mean/std per-minibatch (legacy default).
+        # 'none'    = pass advantages through raw.
+        self.advantage_norm = str(config.get("advantage_norm", "rollout"))
+        if self.advantage_norm not in ("rollout", "batch", "none"):
+            raise ValueError(
+                f"advantage_norm must be 'rollout'|'batch'|'none', got {self.advantage_norm!r}"
+            )
 
         # Entropy floor: prevent policy collapse by boosting entropy_coef if needed
         self.entropy_floor = config.get("entropy_floor", 0.003)
@@ -387,7 +408,9 @@ class CatanPPO:
             else:
                 last_values = raw_last.cpu().numpy()  # (n_envs,)
 
-        self.buffer.compute_returns_and_advantages(last_values, self.gamma, self.gae_lambda)
+        self.buffer.compute_returns_and_advantages(
+            last_values, self.gamma, self.gae_lambda, advantage_norm=self.advantage_norm
+        )
         self.buffer.finalize(self.device)
 
         if self.normalize_values:
@@ -447,12 +470,18 @@ class CatanPPO:
                 obs = batch["obs"]
                 actions = batch["actions"]
                 old_log_prob = batch["old_log_prob"]
+                old_values = batch["old_values"]
                 advantages = batch["advantages"]
                 returns = batch["returns"]
                 masks = batch["masks"]
 
-                # Normalize advantages (per-batch, not globally)
-                advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # Phase 1.2: advantage normalization. With 'rollout' mode the
+                # buffer has already normalized globally, so the per-batch
+                # standardization here is a no-op (and is skipped). 'batch'
+                # mode runs the legacy per-minibatch standardization.
+                if self.advantage_norm == "batch":
+                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                # 'rollout' and 'none' both bypass per-batch normalization.
 
                 # Forward pass: re-evaluate old actions under current policy.
                 # Per-head dict is requested so we can log collapse diagnostics
@@ -470,12 +499,31 @@ class CatanPPO:
                 )
                 pg_loss = torch.max(pg_loss_1, pg_loss_2).mean()
 
-                # ── Value loss ────────────────────────────────────────
+                # ── Value loss (Phase 1.1: optionally clipped) ────────
                 if self.normalize_values:
                     norm_returns = self.value_normalizer.normalize(returns)
+                    # The values stored in the buffer were denormalized for
+                    # GAE. Renormalize so the clip range applies on the same
+                    # scale as the network output.
+                    norm_old_values = self.value_normalizer.normalize(old_values)
                 else:
                     norm_returns = returns
-                value_loss = nn.functional.mse_loss(values, norm_returns)
+                    norm_old_values = old_values
+
+                if self.use_value_clipping:
+                    # PPO2: clip the new value within ±clip_range_vf of the old
+                    # value, then take the elementwise-max of the two squared
+                    # errors. This is pessimistic — same direction as the
+                    # policy clip — and keeps the value head from chasing
+                    # individual outliers.
+                    v_clipped = norm_old_values + (values - norm_old_values).clamp(
+                        -self.clip_range_vf, self.clip_range_vf
+                    )
+                    v_loss_unclipped = (values - norm_returns).pow(2)
+                    v_loss_clipped = (v_clipped - norm_returns).pow(2)
+                    value_loss = torch.max(v_loss_unclipped, v_loss_clipped).mean()
+                else:
+                    value_loss = nn.functional.mse_loss(values, norm_returns)
 
                 # ── Entropy bonus ─────────────────────────────────────
                 entropy_loss = -entropy
