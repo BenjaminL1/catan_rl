@@ -1,0 +1,83 @@
+# Base config for Catan PPO + League self-play training.
+# Mirror of src/catan_rl/algorithms/ppo/arguments.py defaults.
+# Phase-specific configs (phase0_*, phase1_*, ...) extend this via `_base: _base.yaml`.
+
+# ── Model architecture ────────────────────────────────────────────────────────
+model:
+  obs_output_dim: 512
+  tile_in_dim: 79
+  tile_model_dim: 128
+  curr_player_main_in_dim: 166
+  other_player_main_in_dim: 173
+  dev_card_embed_dim: 64
+  dev_card_model_dim: 64
+  tile_model_num_heads: 4
+  proj_dev_card_dim: 25
+  dev_card_model_num_heads: 4
+  tile_encoder_num_layers: 2
+  proj_tile_dim: 25
+  action_head_hidden_dim: 128
+  value_hidden_dims: [256, 128]
+  dropout: 0.0
+
+# ── Optimization ──────────────────────────────────────────────────────────────
+optim:
+  learning_rate: 1.0e-4
+  lr_final: 1.0e-5
+  use_linear_lr_decay: true
+  weight_decay: 1.0e-4
+  max_grad_norm: 0.5
+
+# ── PPO ───────────────────────────────────────────────────────────────────────
+ppo:
+  n_steps: 4096
+  n_envs: 8
+  batch_size: 512
+  n_epochs: 6
+  gamma: 0.995
+  gae_lambda: 0.95
+  clip_range: 0.2
+  target_kl: 0.025
+  value_coef: 0.5
+  normalize_values: true
+  recompute_returns: true
+
+# ── Entropy ───────────────────────────────────────────────────────────────────
+entropy:
+  entropy_coef: 0.01
+  entropy_coef_start: 0.04
+  entropy_coef_final: 0.005
+  entropy_coef_anneal_start: 500
+  entropy_coef_anneal_end: 3000
+  entropy_floor: 0.003
+  entropy_floor_coef: 0.01
+
+# ── League (self-play opponent pool) ──────────────────────────────────────────
+league:
+  league_maxlen: 100
+  add_policy_every: 4
+  league_random_weight: 0.05
+  heuristic_opponent_weight: 0.25
+
+# ── Evaluation ────────────────────────────────────────────────────────────────
+eval:
+  eval_freq: 100000
+  eval_games: 40
+  opponent_type: random
+  eval_upgrade_threshold: 0.95
+  max_turns: 500
+  win_rate_target: null
+
+# ── Stagnation detection ──────────────────────────────────────────────────────
+stagnation:
+  stagnation_window: 20
+  stagnation_threshold: 0.01
+
+# ── Training schedule ─────────────────────────────────────────────────────────
+schedule:
+  total_timesteps: 200_000_000
+  checkpoint_freq: 500_000
+
+# ── Misc ──────────────────────────────────────────────────────────────────────
+misc:
+  torch_compile: false

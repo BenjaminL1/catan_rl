@@ -9,49 +9,74 @@ Usage:
     python scripts/train.py --verbose
     python scripts/train.py --resume checkpoints/train/final_model.pt --verbose
 """
+
 import argparse
-import sys
 import os
+import sys
 import warnings
 
 # Suppress known harmless PyTorch transformer warning (norm_first + nested tensor)
 warnings.filterwarnings("ignore", message="enable_nested_tensor is True.*norm_first was True")
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Allow `python scripts/train.py` without `pip install -e .` by adding src/ to path.
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if os.path.isdir(_SRC) and _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
-from catan.rl.ppo.ppo import CatanPPO
-from catan.rl.ppo.arguments import get_config
+from catan_rl.algorithms.ppo.arguments import resolve_config
+from catan_rl.algorithms.ppo.trainer import CatanPPO
 
 
 def main():
     parser = argparse.ArgumentParser(description="Train Catan RL agent (Charlesworth-style)")
-    parser.add_argument("--phase", type=str, default="train",
-                        help=argparse.SUPPRESS)  # Ignored; kept for compatibility
-    parser.add_argument("--resume", type=str, default=None,
-                        help="Path to checkpoint .pt file to resume from")
-    parser.add_argument("--verbose", action="store_true",
-                        help="Print training progress to console")
-    parser.add_argument("--total-timesteps", type=int, default=None,
-                        help="Override total timesteps")
-    parser.add_argument("--log-dir", type=str, default=None,
-                        help="Override TensorBoard log directory")
-    parser.add_argument("--checkpoint-dir", type=str, default=None,
-                        help="Override checkpoint save directory")
-    parser.add_argument("--max-turns", type=int, default=None,
-                        help="Max (agent+opponent) turns per game; 0 = no limit")
-    parser.add_argument("--n-envs", type=int, default=None,
-                        help="Override number of parallel envs")
-    parser.add_argument("--checkpoint-freq", type=int, default=None,
-                        help="Override eval/checkpoint frequency in steps")
-    parser.add_argument("--eval-games", type=int, default=None,
-                        help="Override number of evaluation games per checkpoint")
-    parser.add_argument("--device", type=str, default=None,
-                        choices=["cpu", "cuda", "mps"],
-                        help="Override device")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a YAML config under configs/ (e.g. configs/phase0_baseline.yaml)",
+    )
+    parser.add_argument(
+        "--phase", type=str, default="train", help=argparse.SUPPRESS
+    )  # Ignored; kept for compatibility
+    parser.add_argument(
+        "--resume", type=str, default=None, help="Path to checkpoint .pt file to resume from"
+    )
+    parser.add_argument("--verbose", action="store_true", help="Print training progress to console")
+    parser.add_argument(
+        "--total-timesteps", type=int, default=None, help="Override total timesteps"
+    )
+    parser.add_argument(
+        "--log-dir", type=str, default=None, help="Override TensorBoard log directory"
+    )
+    parser.add_argument(
+        "--checkpoint-dir", type=str, default=None, help="Override checkpoint save directory"
+    )
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Max (agent+opponent) turns per game; 0 = no limit",
+    )
+    parser.add_argument("--n-envs", type=int, default=None, help="Override number of parallel envs")
+    parser.add_argument(
+        "--checkpoint-freq",
+        type=int,
+        default=None,
+        help="Override eval/checkpoint frequency in steps",
+    )
+    parser.add_argument(
+        "--eval-games",
+        type=int,
+        default=None,
+        help="Override number of evaluation games per checkpoint",
+    )
+    parser.add_argument(
+        "--device", type=str, default=None, choices=["cpu", "cuda", "mps"], help="Override device"
+    )
     args = parser.parse_args()
 
-    # Get config (single phase, Charlesworth-style)
-    config = get_config(args.phase)
+    # Resolve config: legacy hard-coded defaults, or YAML if --config given.
+    config = resolve_config(args.config)
 
     # CLI overrides
     if args.total_timesteps:
