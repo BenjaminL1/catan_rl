@@ -7,12 +7,15 @@ import numpy as np
 
 # import networkx as nx
 # import matplotlib.pyplot as plt
-import pygame
+try:
+    import pygame  # type: ignore[import-not-found]
+
+    pygame.init()
+except ImportError:
+    pygame = None  # type: ignore[assignment]
 
 from catan_rl.engine.geometry import *
 from catan_rl.engine.player import *
-
-pygame.init()
 
 # Define Resource namedtuple here as it was previously in hexTile.py
 Resource = collections.namedtuple("Resource", ["type", "num"])

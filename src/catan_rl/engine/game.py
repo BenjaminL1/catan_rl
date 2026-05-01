@@ -4,7 +4,10 @@
 import queue
 import sys
 
-import pygame
+try:
+    import pygame  # type: ignore[import-not-found]
+except ImportError:
+    pygame = None  # type: ignore[assignment]
 
 from catan_rl.agents.heuristic import *
 from catan_rl.engine.board import *
@@ -12,7 +15,6 @@ from catan_rl.engine.broadcast import GameBroadcast
 from catan_rl.engine.dice import StackedDice
 from catan_rl.engine.player import *
 from catan_rl.engine.tracker import ResourceTracker
-from catan_rl.gui.view import *
 
 # Catan gameplay class definition
 
@@ -42,6 +44,8 @@ class catanGame:
 
         # Initialize boardview object
         if render_mode == "human":
+            from catan_rl.gui.view import catanGameView
+
             self.boardView = catanGameView(self.board, self)
         else:
 
