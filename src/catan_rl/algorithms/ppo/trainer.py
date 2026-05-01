@@ -192,6 +192,12 @@ class CatanPPO:
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_wins = []
+        # Phase 0: per-head entropy collapse tracking (one counter per head).
+        # Imported lazily to avoid circular imports at module load.
+        from catan_rl.models.action_heads_module import MultiActionHeads as _MAH
+
+        self._head_collapse_counter: dict[str, int] = {n: 0 for n in _MAH.HEAD_NAMES}
+        self._collapsed_heads_last: str = ""
 
     def _raw_policy_state_dict(self) -> dict:
         """Return policy state dict without torch.compile's _orig_mod. prefix.
@@ -250,7 +256,7 @@ class CatanPPO:
             partial_rewards: reward accumulated before opponent acts, aligned with pending
 
         Returns:
-            dict mapping env_idx → (final_obs, total_reward, done, info)
+            dict mapping env_idx → (final_obs, total_reward, terminated, truncated, info)
         """
         gm = self.game_manager
         opp_policy = gm.rollout_opp_policy
@@ -270,11 +276,11 @@ class CatanPPO:
 
             still_pending = []
             for slot, env_i in enumerate(pending):
-                turn_done, obs, rew_delta, done, info = gm.apply_opponent_action(
+                turn_done, obs, rew_delta, terminated, truncated, info = gm.apply_opponent_action(
                     env_i, opp_actions_np[slot]
                 )
                 if turn_done:
-                    results[env_i] = (obs, accum[env_i] + rew_delta, done, info)
+                    results[env_i] = (obs, accum[env_i] + rew_delta, terminated, truncated, info)
                 else:
                     still_pending.append(env_i)
             pending = still_pending
@@ -327,28 +333,31 @@ class CatanPPO:
             immediate = []  # env indices with complete transitions
 
             for i in range(batch_n):
-                new_obs, reward, done, info = self.game_manager.step_one(i, actions_np[i])
+                new_obs, reward, terminated, truncated, info = self.game_manager.step_one(
+                    i, actions_np[i]
+                )
                 if info.get("opp_turn_pending"):
                     pending_opp.append(i)
                     pending_prewd.append(reward)
                 else:
                     observations[i] = new_obs
-                    immediate.append((i, new_obs, reward, done, info))
+                    immediate.append((i, new_obs, reward, terminated, truncated, info))
 
             # Phase 2: batch opponent inference for deferred turns
             if pending_opp and self.game_manager.rollout_opp_policy is not None:
                 opp_results = self._run_batched_opponent_turns(pending_opp, pending_prewd)
-                for env_i, (fin_obs, fin_rew, fin_done, fin_info) in opp_results.items():
+                for env_i, (fin_obs, fin_rew, fin_term, fin_trunc, fin_info) in opp_results.items():
                     observations[env_i] = fin_obs
-                    immediate.append((env_i, fin_obs, fin_rew, fin_done, fin_info))
+                    immediate.append((env_i, fin_obs, fin_rew, fin_term, fin_trunc, fin_info))
 
             # Phase 3: store all completed transitions to buffer
-            for env_i, new_obs, reward, done, info in immediate:
+            for env_i, _new_obs, reward, terminated, truncated, info in immediate:
                 self.buffer.add(
                     obs_batch[env_i],
                     actions_np[env_i],
                     reward,
-                    done,
+                    bool(terminated),
+                    bool(truncated),
                     float(values_np[env_i]),
                     float(log_probs_np[env_i]),
                     masks_list[env_i],
@@ -358,10 +367,14 @@ class CatanPPO:
                 self.global_step += 1
                 steps_collected += 1
 
+                done = terminated or truncated
                 if done:
                     self.episode_rewards.append(ep_rewards[env_i])
                     self.episode_lengths.append(ep_lengths[env_i])
-                    self.episode_wins.append(1.0 if info.get("is_success") else 0.0)
+                    # Truncations are not wins regardless of who had higher VP at cutoff;
+                    # only genuine terminations with `is_success` count.
+                    won = bool(terminated) and bool(info.get("is_success"))
+                    self.episode_wins.append(1.0 if won else 0.0)
                     ep_rewards[env_i] = 0.0
                     ep_lengths[env_i] = 0
 
@@ -396,10 +409,17 @@ class CatanPPO:
         old and new policy exceeds target_kl. This prevents over-updating
         stale data while allowing the full n_epochs when updates are safe.
 
+        Phase 0 also logs per-head entropy for collapse detection. The joint
+        ``entropy`` scalar is preserved (back-compat); new keys
+        ``entropy_head_<name>`` and ``entropy_head_<name>_cond`` give the
+        unconditional and relevance-weighted means respectively.
+
         Returns:
-            Dict with training loss statistics including approx_kl and
-            epochs_completed (useful for diagnosing under/over-updating).
+            Dict with training loss statistics including approx_kl,
+            epochs_completed, and per-head entropy diagnostics.
         """
+        from catan_rl.models.action_heads_module import MultiActionHeads
+
         self.policy.train()
 
         total_pg_loss = 0.0
@@ -410,7 +430,16 @@ class CatanPPO:
         n_updates = 0
         epochs_completed = 0
 
-        for epoch in range(self.n_epochs):
+        # Per-head entropy accumulators. We track the unconditional mean
+        # (sum / N) AND the conditional mean over relevant samples
+        # (sum_weighted / sum_weight). Drop in either signals collapse.
+        head_names = MultiActionHeads.HEAD_NAMES
+        head_ent_sum: dict[str, float] = {h: 0.0 for h in head_names}
+        head_weighted_ent_sum: dict[str, float] = {h: 0.0 for h in head_names}
+        head_weight_sum: dict[str, float] = {h: 0.0 for h in head_names}
+        head_sample_count: dict[str, int] = {h: 0 for h in head_names}
+
+        for _epoch in range(self.n_epochs):
             epoch_kl = 0.0
             epoch_batches = 0
 
@@ -425,8 +454,12 @@ class CatanPPO:
                 # Normalize advantages (per-batch, not globally)
                 advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-                # Forward pass: re-evaluate old actions under current policy
-                values, new_log_prob, entropy = self.policy.evaluate_actions(obs, masks, actions)
+                # Forward pass: re-evaluate old actions under current policy.
+                # Per-head dict is requested so we can log collapse diagnostics
+                # without a second forward pass.
+                values, new_log_prob, entropy, per_head = self.policy.evaluate_actions(
+                    obs, masks, actions, return_per_head=True
+                )
                 values = values.squeeze(-1)  # (B,)
 
                 # ── Policy loss (clipped surrogate objective) ─────────
@@ -459,6 +492,17 @@ class CatanPPO:
                     clip_fraction = ((ratio - 1.0).abs() > self.clip_range).float().mean().item()
                     batch_kl = (old_log_prob - new_log_prob).mean().item()
 
+                    # Per-head entropy bookkeeping (no extra forward).
+                    batch_size = entropy.detach().shape if entropy.detach().dim() else None
+                    for name, parts in per_head.items():
+                        ent_ps = parts["entropy_per_sample"].detach()
+                        weight = parts["weight"].detach()
+                        head_ent_sum[name] += float(ent_ps.sum().item())
+                        head_weighted_ent_sum[name] += float((ent_ps * weight).sum().item())
+                        head_weight_sum[name] += float(weight.sum().item())
+                        head_sample_count[name] += int(ent_ps.numel())
+                    del batch_size  # silence unused warning
+
                 total_pg_loss += pg_loss.item()
                 total_value_loss += value_loss.item()
                 total_entropy += entropy.item()
@@ -484,7 +528,7 @@ class CatanPPO:
         mean_entropy = total_entropy / n_updates
         self._last_entropy = mean_entropy  # used by entropy floor in _update_annealing
 
-        return {
+        result: dict[str, float] = {
             "policy_loss": total_pg_loss / n_updates,
             "value_loss": total_value_loss / n_updates,
             "entropy": mean_entropy,
@@ -493,6 +537,31 @@ class CatanPPO:
             "approx_kl": total_kl / n_updates,
             "epochs_completed": float(epochs_completed),
         }
+        # Per-head entropy diagnostics (Phase 0).
+        for name in head_names:
+            count = max(head_sample_count[name], 1)
+            uncond = head_ent_sum[name] / count
+            weight_sum = head_weight_sum[name]
+            cond = head_weighted_ent_sum[name] / weight_sum if weight_sum > 1e-9 else 0.0
+            result[f"entropy_head_{name}"] = uncond
+            result[f"entropy_head_{name}_cond"] = cond
+
+        # Collapse flag: any head whose unconditional entropy dropped below
+        # threshold for `entropy_collapse_consecutive_updates` consecutive updates.
+        threshold = float(self.config.get("entropy_collapse_threshold", 0.0005))
+        consecutive_required = int(self.config.get("entropy_collapse_consecutive_updates", 3))
+        collapsed_heads: list[str] = []
+        for name in head_names:
+            if result[f"entropy_head_{name}"] < threshold:
+                self._head_collapse_counter[name] += 1
+                if self._head_collapse_counter[name] >= consecutive_required:
+                    collapsed_heads.append(name)
+            else:
+                self._head_collapse_counter[name] = 0
+        result["entropy_collapse_flag"] = 1.0 if collapsed_heads else 0.0
+        if collapsed_heads:
+            self._collapsed_heads_last = ",".join(collapsed_heads)
+        return result
 
     def _update_annealing(self, update_num: int) -> None:
         """Apply entropy annealing and linear LR decay (Charlesworth-style)."""

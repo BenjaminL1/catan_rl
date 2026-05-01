@@ -1,13 +1,14 @@
-"""GAE tests including the truncation-bootstrap fix planned for Phase 0.
+"""GAE tests including the Phase 0 truncation-bootstrap fix.
 
-Currently the implementation collapses ``terminated`` and ``truncated`` into a
-single ``dones`` array, so truncations zero the bootstrap. Phase 0 of the
-roadmap fixes this.
+Phase 0 split the legacy single-``dones`` GAE into separate ``terminated`` and
+``truncated`` arrays. Truncation now bootstraps with ``V(s_T)`` rather than
+zeroing the value (which was the pre-Phase-0 bug); the GAE accumulator still
+resets at any episode boundary.
 
-This test file ships in two parts:
-  - tests for the *current* GAE behavior (unchanged-by-this-PR sanity checks)
-  - tests for the *desired post-Phase-0* behavior, marked `xfail` until the
-    fix lands so they document the contract without blocking CI.
+This file tests:
+  - Legacy single-dones signature (unchanged-by-Phase-0 paths).
+  - New terminated/truncated signature (Phase 0).
+  - Equivalence between the legacy positional path and the new keyword path.
 """
 
 from __future__ import annotations
@@ -77,35 +78,95 @@ def test_vectorized_matches_single_env() -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Post-Phase-0 contracts (xfail until the fix lands)
+# Phase 0: terminated/truncated split contracts
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@pytest.mark.xfail(reason="Phase 0 GAE truncation fix not yet implemented", strict=False)
 def test_gae_truncation_uses_bootstrap_value() -> None:
-    """Truncation should bootstrap with V(s_T), not zero the value."""
-    # Once Phase 0 lands, ``compute_gae`` will accept ``terminated`` and
-    # ``truncated`` separately. This test documents the desired contract.
+    """Truncation bootstraps with V(s_T); the GAE accumulator still resets."""
     rewards = np.array([1.0], dtype=np.float32)
     values = np.array([0.5], dtype=np.float32)
     terminated = np.array([0.0], dtype=np.float32)
     truncated = np.array([1.0], dtype=np.float32)
-    # Expected post-fix: A_0 = r_0 + γ * V_bootstrap - V_0  (no zeroing for truncation)
-    # Current buggy behavior: treats truncation as terminated → A_0 = r_0 - V_0.
-    # We assert the *desired* expected here; xfail until implementation.
-    from catan_rl.algorithms.common.gae import compute_gae as _gae
-
-    try:
-        adv, _ = _gae(
-            rewards,
-            values,
-            terminated,
-            truncated,  # type: ignore[arg-type]
-            last_value=2.0,
-            gamma=0.99,
-            gae_lambda=0.95,
-        )
-    except TypeError:
-        pytest.fail("Phase 0 fix has not yet introduced terminated/truncated split")
+    adv, _ = compute_gae(rewards, values, terminated, truncated, 2.0, 0.99, 0.95)
+    # delta = r + γ·V_bootstrap·non_terminal − V = 1 + 0.99·2·1 − 0.5 = 2.48
     expected = 1.0 + 0.99 * 2.0 - 0.5
     assert adv[0] == pytest.approx(expected)
+
+
+def test_gae_terminated_zeros_bootstrap_even_if_last_value_nonzero() -> None:
+    """When terminated=1, the bootstrap is forced to 0 regardless of last_value."""
+    adv, _ = compute_gae(
+        np.array([1.0]),
+        np.array([0.5]),
+        np.array([1.0]),  # terminated
+        np.array([0.0]),  # truncated
+        99.0,  # last_value should be ignored
+        0.99,
+        0.95,
+    )
+    assert adv[0] == pytest.approx(0.5)
+
+
+def test_gae_accumulator_resets_at_truncation_boundary() -> None:
+    """Across a truncation boundary, the GAE accumulator must NOT carry over.
+
+    Build a 3-step trajectory with truncation at t=1 (mid-trajectory).
+    The advantage at t=0 must equal the single-step delta — no contribution
+    from the post-truncation tail at t=2.
+    """
+    rewards = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    values = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    terminated = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+    truncated = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    adv, _ = compute_gae(rewards, values, terminated, truncated, 0.0, 1.0, 1.0)
+    # t=2: delta = 1 + 0 - 0 = 1; A_2 = 1
+    # t=1: truncated -> bootstrap with V(s_2)=0 (not last_value, since t<T-1).
+    #      delta = 1 + 1*0*1 - 0 = 1
+    #      accumulator_keep = (1-0)*(1-1) = 0  → A_1 = delta + 0 = 1
+    # t=0: delta = 1 + 1*0*1 - 0 = 1
+    #      accumulator_keep = (1-0)*(1-0) = 1  → A_0 = 1 + 1·1·1·A_1 = 1 + 1 = 2
+    assert adv[2] == pytest.approx(1.0)
+    assert adv[1] == pytest.approx(1.0)
+    assert adv[0] == pytest.approx(2.0)
+
+
+def test_gae_legacy_signature_still_works() -> None:
+    """Legacy ``compute_gae(rewards, values, dones, last_value, ...)`` still works.
+
+    Treats ``dones`` as terminated and ``truncated=zeros`` for back-compat.
+    Verifies the exact pre-Phase-0 numerical result for a single-step terminal.
+    """
+    adv, _ = compute_gae(np.array([1.0]), np.array([0.5]), np.array([1.0]), 0.0, 0.99, 0.95)
+    assert adv[0] == pytest.approx(0.5)
+
+
+def test_gae_kwarg_signature_works() -> None:
+    """Keyword-only call: terminated, truncated, last_value, gamma, gae_lambda."""
+    adv, _ = compute_gae(
+        np.array([1.0]),
+        np.array([0.5]),
+        terminated=np.array([0.0]),
+        truncated=np.array([1.0]),
+        last_value=2.0,
+        gamma=0.99,
+        gae_lambda=0.95,
+    )
+    expected = 1.0 + 0.99 * 2.0 - 0.5
+    assert adv[0] == pytest.approx(expected)
+
+
+def test_gae_vectorized_truncation_and_termination_split() -> None:
+    """Vectorized path mirrors single-env behavior on terminated vs truncated."""
+    rewards = np.array([1.0, 1.0], dtype=np.float32)
+    values = np.array([0.5, 0.5], dtype=np.float32)
+    terminated = np.array([1.0, 0.0], dtype=np.float32)
+    truncated = np.array([0.0, 1.0], dtype=np.float32)
+    last_values = np.array([3.0, 2.0], dtype=np.float32)  # only env-1 uses bootstrap
+    adv, _ = compute_gae_vectorized(
+        rewards, values, terminated, truncated, last_values, 2, 0.99, 0.95
+    )
+    # env 0: terminated → bootstrap zeroed → delta = 1 - 0.5 = 0.5
+    assert adv[0] == pytest.approx(0.5)
+    # env 1: truncated → bootstrap with last_values[1]=2.0 → delta = 1 + 0.99*2 - 0.5
+    assert adv[1] == pytest.approx(1.0 + 0.99 * 2.0 - 0.5)

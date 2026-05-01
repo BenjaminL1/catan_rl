@@ -65,6 +65,12 @@ TRAIN_CONFIG: dict[str, Any] = {
     "torch_compile": False,
     "eval_freq": 100_000,  # evaluate every 100k steps
     # checkpoint_freq controls save interval (500k); eval_freq controls eval interval (100k)
+    # ── Phase 0: eval harness + per-head entropy diagnostics ─────────────
+    "eval_harness_seeds": list(range(0, 200)),
+    "eval_harness_swap_first_player": True,
+    "frozen_champion_path": "checkpoints/train/checkpoint_07390040.pt",
+    "entropy_collapse_threshold": 0.0005,
+    "entropy_collapse_consecutive_updates": 3,
 }
 
 # Shared across all phases — defines the neural network shape.

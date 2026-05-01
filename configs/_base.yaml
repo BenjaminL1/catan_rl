@@ -81,3 +81,12 @@ schedule:
 # ── Misc ──────────────────────────────────────────────────────────────────────
 misc:
   torch_compile: false
+
+# ── Phase 0: eval harness + per-head entropy diagnostics ─────────────────────
+phase0:
+  eval_harness_swap_first_player: true
+  frozen_champion_path: checkpoints/train/checkpoint_07390040.pt
+  entropy_collapse_threshold: 0.0005
+  entropy_collapse_consecutive_updates: 3
+  # eval_harness_seeds intentionally omitted from YAML; loader uses the
+  # arguments.py default list(range(0, 200)). Override per-phase if needed.

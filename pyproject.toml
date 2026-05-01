@@ -71,10 +71,15 @@ ignore = ["E741", "RUF012"]
 # Restructure-scope modules: keep stricter, but ignore the few pre-existing
 # violations that only became visible because we drew the boundary here.
 "src/catan_rl/algorithms/common/rollout_buffer.py" = ["RUF013"]
+"src/catan_rl/algorithms/common/gae.py" = ["RUF002"]  # Greek/minus in math docstring
 "src/catan_rl/algorithms/ppo/trainer.py" = ["B007", "SIM102", "RUF001"]
 "src/catan_rl/eval/evaluation_manager.py" = ["E", "B023", "RUF059"]
+"src/catan_rl/eval/rules_invariants.py" = ["RUF005"]  # tuple concatenation is intentional
+"src/catan_rl/eval/champion_bench.py" = ["RUF046"]  # int(round(...)) is intentional
 "src/catan_rl/selfplay/game_manager.py" = ["B904", "B905"]
 "src/catan_rl/selfplay/league.py" = ["SIM108"]
+"scripts/eval_harness.py" = ["RUF046", "E402", "F841", "RUF059", "SIM102"]
+"scripts/migrate_checkpoint.py" = ["E501", "E402"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -100,7 +105,13 @@ module = [
   "catan_rl.setup_phase.*",
   "catan_rl.algorithms.common.rollout_buffer",
   "catan_rl.algorithms.ppo.trainer",
+  "catan_rl.algorithms.ppo.arguments",
   "catan_rl.selfplay.game_manager",
+  "catan_rl.selfplay.ratings",
+  "catan_rl.eval.rules_invariants",
+  "catan_rl.eval.evaluation_manager",
+  "catan_rl.eval.champion_bench",
+  "catan_rl.eval.exploitability",
 ]
 ignore_errors = true
 
