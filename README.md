@@ -83,32 +83,36 @@ Each head is a 2-layer MLP → MaskedCategorical. Joint log-prob is the sum of r
 ## Project Structure
 
 ```
-catan/
-  engine/               Game logic (board, player, geometry, StackedDice)
+src/catan_rl/
+  engine/               Pure game logic (board, player, dice, geometry, broadcast)
   agents/               Heuristic and random AI opponents
-  rl/
-    env.py              Gymnasium environment wrapper (obs, action masking)
-    distributions.py    MaskedCategorical distribution
-    debug_wrapper.py    Diagnostic wrapper for env debugging
-    models/
-      observation_module.py     Transformer TileEncoder + player encoders
-      action_heads_module.py    6-head autoregressive action selection
-      policy.py                 CatanPolicy (encoder + heads + value net)
-      build_agent_model.py      Factory and constants
-      utils.py                  Weight init, running value normalizer
-    ppo/
-      ppo.py            Custom PPO training loop (CatanPPO)
-      rollout_buffer.py Composite-action rollout buffer with tensor finalization
-      game_manager.py   Multi-env rollout with league opponent sampling
-      league.py         Past-policy pool for self-play
-      arguments.py      Hyperparameter configs (TRAIN_CONFIG, MODEL_CONFIG)
-      utils.py          GAE, explained variance, LR/entropy schedules
-scripts/
-  train.py              Main training entry point
-  evaluate.py           Evaluation vs heuristic / random opponents
-  play_vs_model.py      Interactive play against a trained checkpoint
-  test_integration.py   Environment integration tests
+  env/                  Gymnasium env, action masks, observation building, hand tracker
+  models/               Policy net: ObservationModule + 6 autoregressive heads + value net
+  algorithms/
+    ppo/                CatanPPO trainer + arguments
+    common/             GAE, rollout buffer (shared with future PPG/MCTS)
+  selfplay/             League (PFSP), GameManager (multi-env opponent sampling)
+  eval/                 EvaluationManager, rules-invariants (Phase 0)
+  setup_phase/          Decoupled setup-phase trainer (Monte Carlo rollouts)
+  gui/                  Optional pygame GUI
+  viz/                  Optional debug renderers
+
+scripts/                Thin CLI entry points (train.py, evaluate.py, play_vs_model.py, train_setup.py)
+configs/                Phase-specific YAML configs (`_base.yaml` + phase overrides)
+tests/{unit,integration} Pytest suite mirroring src/catan_rl
+docs/
+  architecture.md       One-pager on training loop
+  obs_schema.md         Canonical observation keys/dims/ranges
+  action_schema.md      Canonical 6-head action space and mask keys
+  1v1_rules.md          Colonist.io 1v1 rule table (single source of truth)
+  decisions/            ADRs (1v1 invariant, hand tracking, src-layout, etc.)
+  plans/
+    superhuman_roadmap.md      5-phase upgrade plan
+    file_layout_restructure.md Repo restructure plan (implemented)
+    archive/                   Historical plans (kept for context)
 ```
+
+See [`docs/architecture.md`](docs/architecture.md) for a one-pager on the training loop and [`docs/decisions/`](docs/decisions/) for ADRs.
 
 ---
 
@@ -117,14 +121,24 @@ scripts/
 ### Install
 
 ```bash
-pip install gymnasium torch numpy pygame tqdm tensorboard
+# Editable install with dev tools (pytest, ruff, mypy, pre-commit).
+pip install -e ".[dev]"
+
+# Optional: GUI (pygame) for play_vs_model.py.
+pip install -e ".[dev,gui]"
 ```
 
 ### Train
 
 ```bash
-# Fresh run
+# Fresh run with defaults
+make train
+
+# Or directly:
 python scripts/train.py --verbose
+
+# With a phase-specific YAML config
+python scripts/train.py --config configs/phase0_baseline.yaml --verbose
 
 # Resume from checkpoint
 python scripts/train.py --resume checkpoints/train/checkpoint_XXXXXXXX.pt --verbose
@@ -139,7 +153,18 @@ tensorboard --logdir runs/train/
 ### Evaluate
 
 ```bash
-python scripts/evaluate.py --model checkpoints/train/checkpoint_XXXXXXXX.pt
+make eval   # heuristic over 100 games against the champion checkpoint
+
+# Or directly:
+python scripts/evaluate.py checkpoints/train/checkpoint_07390040.pt --opponent heuristic --n-games 200
+```
+
+### Test
+
+```bash
+make test            # unit tests
+make lint            # ruff
+make typecheck       # mypy
 ```
 
 ---

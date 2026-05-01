@@ -1,0 +1,17 @@
+# Eval harness defaults (Phase 0).
+seeds:
+  start: 0
+  end: 200  # inclusive of [start, end), so 200 deterministic games
+  swap_first_player: true
+
+frozen_champion: checkpoints/train/checkpoint_07390040.pt
+
+exploitability:
+  adversary_total_steps: 5_000_000
+  eval_games: 200
+
+modes:
+  - rules-invariant
+  - champion-bench
+  - league-rating
+  - exploitability

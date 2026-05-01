@@ -1,0 +1,13 @@
+# Phase 0 fixed config — Phase 0 changes applied (GAE truncation fix,
+# per-head entropy logging, observation schema reconciliation).
+_base: _base.yaml
+
+schedule:
+  total_timesteps: 5_000_000
+
+# Phase 0 introduces these new keys (read by trainer once Phase 0 lands):
+phase0:
+  fix_gae_truncation: true
+  log_per_head_entropy: true
+  entropy_collapse_threshold: 0.0005
+  entropy_collapse_consecutive_updates: 3

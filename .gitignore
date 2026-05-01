@@ -9,6 +9,13 @@ dist/
 build/
 *.egg
 .eggs/
+.ruff_cache/
+.mypy_cache/
+
+# Tooling artifacts
+htmlcov/
+.coverage
+.coverage.*
 
 # Virtual environments
 venv/
@@ -32,6 +39,11 @@ models/hof/
 .vscode/
 *.swp
 *.swo
+
+# Claude Code — personal/local only
+.claude/settings.local.json
+.claude/.session-data/
+.claude/transcripts/
 
 # Jupyter
 .ipynb_checkpoints/

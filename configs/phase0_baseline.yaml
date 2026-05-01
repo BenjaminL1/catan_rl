@@ -1,0 +1,8 @@
+# Phase 0 baseline config — current code with the GAE truncation bug present.
+# Used for the Phase 0 ablation: train this alongside phase0_fixed.yaml,
+# then compare WR vs heuristic at 5M steps.
+_base: _base.yaml
+
+# Override fields here as needed.
+schedule:
+  total_timesteps: 5_000_000

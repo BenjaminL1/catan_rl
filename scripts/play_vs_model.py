@@ -7,18 +7,22 @@ Uses pygame for board display and mouse input.
 Usage:
     python scripts/play_vs_model.py checkpoints/train/checkpoint_00102400.pt
 """
+
 import argparse
-import sys
 import os
+import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+if os.path.isdir(_SRC) and _SRC not in sys.path:
+    sys.path.insert(0, _SRC)
 
+import numpy as np
 import pygame
 import torch
-import numpy as np
-from catan.rl.env import CatanEnv, RESOURCES
-from catan.rl.ppo.ppo import CatanPPO
-from catan.gui.view import catanGameView
+
+from catan_rl.algorithms.ppo.trainer import CatanPPO
+from catan_rl.env.catan_env import RESOURCES, CatanEnv
+from catan_rl.gui.view import catanGameView
 
 
 def _refresh_display(env, view):
@@ -52,7 +56,7 @@ def _get_automated_action(env, view):
     # Setup phase
     if env.initial_placement_phase and env._setup_pending:
         _, placement_type = env._setup_pending
-        if placement_type == 'settlement':
+        if placement_type == "settlement":
             possible = list(board.get_setup_settlements(agent).keys())
             if possible:
                 v_idx = vertex_to_index(possible[0])
@@ -75,7 +79,7 @@ def _get_automated_action(env, view):
 
     if env.discard_pending:
         for i in range(5):
-            if masks['resource1_discard'][i]:
+            if masks["resource1_discard"][i]:
                 action[0] = 11
                 action[4] = i
                 return action
@@ -98,10 +102,10 @@ def _get_automated_action(env, view):
         return None
 
     # Normal phase: prefer End Turn or Roll
-    if masks['type'][3]:
+    if masks["type"][3]:
         action[0] = 3
         return action
-    if masks['type'][12]:
+    if masks["type"][12]:
         action[0] = 12
         return action
     return None
@@ -132,9 +136,9 @@ def _run_smoke_test(env, view, clock, max_steps=80):
     pygame.quit()
 
 
-
 def _obs_to_tensor(obs, device):
     """Convert obs dict to tensor dict for policy."""
+
     def _dev_seq(key):
         seq = obs.get(key, None)
         if seq is None:
@@ -186,7 +190,7 @@ def get_human_action(env, view):
     # Setup phase
     if env.initial_placement_phase and env._setup_pending:
         _, placement_type = env._setup_pending
-        if placement_type == 'settlement':
+        if placement_type == "settlement":
             possible = board.get_setup_settlements(agent)
             if possible:
                 _refresh_display(env, view)
@@ -217,7 +221,9 @@ def get_human_action(env, view):
                 if e.type == pygame.QUIT:
                     sys.exit(0)
                 if e.type == pygame.MOUSEBUTTONDOWN:
-                    if hasattr(view, 'rollDice_button') and view.rollDice_button.collidepoint(e.pos):
+                    if hasattr(view, "rollDice_button") and view.rollDice_button.collidepoint(
+                        e.pos
+                    ):
                         action[0] = 12
                         return action
             clock.tick(30)
@@ -225,7 +231,7 @@ def get_human_action(env, view):
 
     # Discard phase (one resource per action)
     if env.discard_pending:
-        result = view.get_resource_selection(agent, 'DISCARD', 1)
+        result = view.get_resource_selection(agent, "DISCARD", 1)
         if result and len(result) > 0:
             res_name = result[0]
             # View modifies player.resources; revert so env.step can do it
@@ -270,41 +276,41 @@ def get_human_action(env, view):
                 continue
 
             # End Turn
-            if view.endTurn_button.collidepoint(e.pos) and masks['type'][3]:
+            if view.endTurn_button.collidepoint(e.pos) and masks["type"][3]:
                 action[0] = 3
                 return action
 
             # Roll
-            if view.rollDice_button.collidepoint(e.pos) and masks['type'][12]:
+            if view.rollDice_button.collidepoint(e.pos) and masks["type"][12]:
                 action[0] = 12
                 return action
 
             # Build Settlement
-            if view.buildSettlement_button.collidepoint(e.pos) and masks['type'][0]:
+            if view.buildSettlement_button.collidepoint(e.pos) and masks["type"][0]:
                 possible = board.get_potential_settlements(agent)
                 if possible:
                     vertex = view.buildSettlement_display(agent, possible.copy())
                     if vertex is not None:
                         v_idx = vertex_to_index(vertex)
-                        if v_idx is not None and masks['corner_settlement'][v_idx]:
+                        if v_idx is not None and masks["corner_settlement"][v_idx]:
                             action[0] = 0
                             action[1] = v_idx
                             return action
 
             # Build City
-            if view.buildCity_button.collidepoint(e.pos) and masks['type'][1]:
+            if view.buildCity_button.collidepoint(e.pos) and masks["type"][1]:
                 possible = board.get_potential_cities(agent)
                 if possible:
                     vertex = view.buildCity_display(agent, possible.copy())
                     if vertex is not None:
                         v_idx = vertex_to_index(vertex)
-                        if v_idx is not None and masks['corner_city'][v_idx]:
+                        if v_idx is not None and masks["corner_city"][v_idx]:
                             action[0] = 1
                             action[1] = v_idx
                             return action
 
             # Build Road
-            if view.buildRoad_button.collidepoint(e.pos) and masks['type'][2]:
+            if view.buildRoad_button.collidepoint(e.pos) and masks["type"][2]:
                 possible = board.get_potential_roads(agent)
                 if possible:
                     road = view.buildRoad_display(agent, possible.copy())
@@ -314,13 +320,13 @@ def get_human_action(env, view):
                         return action
 
             # Buy Dev Card
-            if view.devCard_button.collidepoint(e.pos) and masks['type'][5]:
+            if view.devCard_button.collidepoint(e.pos) and masks["type"][5]:
                 action[0] = 5
                 return action
 
             # Bank Trade
-            if view.tradeBank_button.collidepoint(e.pos) and masks['type'][10]:
-                result = view.get_resource_selection(agent, 'BANK', 1)
+            if view.tradeBank_button.collidepoint(e.pos) and masks["type"][10]:
+                result = view.get_resource_selection(agent, "BANK", 1)
                 if result and len(result) == 2:
                     give_idx = RESOURCES.index(result[0]) if result[0] in RESOURCES else 0
                     get_idx = RESOURCES.index(result[1]) if result[1] in RESOURCES else 0
@@ -331,11 +337,11 @@ def get_human_action(env, view):
 
             # Play Dev Card
             if view.playDevCard_button.collidepoint(e.pos):
-                if masks['type'][6]:  # Knight
+                if masks["type"][6]:  # Knight
                     action[0] = 6
                     return action
-                if masks['type'][7]:  # YoP
-                    result = view.get_resource_selection(agent, 'YOP', 2)
+                if masks["type"][7]:  # YoP
+                    result = view.get_resource_selection(agent, "YOP", 2)
                     if result and len(result) == 2:
                         # View adds resources on click; revert so env.step applies them
                         for r in result:
@@ -344,14 +350,14 @@ def get_human_action(env, view):
                         action[4] = RESOURCES.index(result[0]) if result[0] in RESOURCES else 0
                         action[5] = RESOURCES.index(result[1]) if result[1] in RESOURCES else 0
                         return action
-                if masks['type'][8]:  # Monopoly
-                    result = view.get_resource_selection(agent, 'MONOPOLY', 1)
+                if masks["type"][8]:  # Monopoly
+                    result = view.get_resource_selection(agent, "MONOPOLY", 1)
                     if result:
                         res_name = result if isinstance(result, str) else result[0]
                         action[0] = 8
                         action[4] = RESOURCES.index(res_name) if res_name in RESOURCES else 0
                         return action
-                if masks['type'][9]:  # Road Builder
+                if masks["type"][9]:  # Road Builder
                     action[0] = 9
                     return action
 
@@ -362,10 +368,12 @@ def get_human_action(env, view):
 def main():
     parser = argparse.ArgumentParser(description="Play vs trained model (GUI)")
     parser.add_argument("checkpoint", type=str, help="Path to .pt checkpoint")
-    parser.add_argument("--max-turns", type=int, default=500,
-                        help="Max turns per game; 0 = no limit")
-    parser.add_argument("--smoke-test", action="store_true",
-                        help="Run automated smoke test (no human input)")
+    parser.add_argument(
+        "--max-turns", type=int, default=500, help="Max turns per game; 0 = no limit"
+    )
+    parser.add_argument(
+        "--smoke-test", action="store_true", help="Run automated smoke test (no human input)"
+    )
     args = parser.parse_args()
 
     if not os.path.isfile(args.checkpoint):
@@ -380,11 +388,13 @@ def main():
     max_turns = None if args.max_turns == 0 else args.max_turns
     env = CatanEnv(render_mode=None, opponent_type="policy", max_turns=max_turns)
 
-    obs, info = env.reset(options={
-        "opponent_type": "policy",
-        "opponent_policy": policy,
-        "human_first": True,  # You (human) always go first
-    })
+    obs, info = env.reset(
+        options={
+            "opponent_type": "policy",
+            "opponent_policy": policy,
+            "human_first": True,  # You (human) always go first
+        }
+    )
 
     # Clarify roles: agent_player = You (human), opponent_player = Model (AI)
     env.agent_player.name = "You"
@@ -429,14 +439,15 @@ def main():
     except Exception as e:
         print(f"Error during game: {e}", file=sys.stderr)
         import traceback
+
         traceback.print_exc()
         pygame.quit()
         raise
 
     # Show result (agent=You/human, opponent=Model)
-    your_vp = info.get('terminal_stats', {}).get('agent_vp', '?')
-    model_vp = info.get('terminal_stats', {}).get('opponent_vp', '?')
-    outcome = "WIN" if info.get('is_success') else "LOSS"
+    your_vp = info.get("terminal_stats", {}).get("agent_vp", "?")
+    model_vp = info.get("terminal_stats", {}).get("opponent_vp", "?")
+    outcome = "WIN" if info.get("is_success") else "LOSS"
     print(f"\n{outcome}! You: {your_vp} VP | Model: {model_vp} VP")
     print("Close the window to exit.")
 
