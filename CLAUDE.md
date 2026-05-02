@@ -71,6 +71,14 @@ Dict with keys `tile_representations (19,79)`, `current_player_main (166,)`, `ne
 ## Active roadmap
 See `docs/plans/superhuman_roadmap.md` (Phase 0 = correctness/eval-harness, Phase 1 = sample efficiency, Phase 2 = architecture, Phase 3 = self-play diversity, Phase 4 = optional MCTS/GRU/belief).
 
+## Phase 2 (landed)
+- **2.1 Axial positional embedding**: `use_axial_pos_emb=True` adds a learned 2D embedding indexed by hex axial coords `(q, r)` in `TileEncoder`, concatenated to per-tile features before the transformer projection. Breaks the encoder's permutation-equivariance over tiles. `axial_pos_dim=24` (split half/half across q and r); init std=0.02 so it starts as a small perturbation.
+- **2.2 Modern transformer recipe**: `transformer_dropout` (None = inherit `dropout`) and `transformer_activation` (`'relu'` | `'gelu'`) override the encoder layer's recipe without disturbing other dropout sites. `phase2_full` uses `0.05 / gelu`. Pre-norm was already on by default.
+- **2.4 AdaLN/FiLM action heads**: `action_head_film=True` flips every context-using head (`corner`, `resource1`, `resource2`) from concat-MLP conditioning to FiLM modulation `(1+γ) ⊙ LN(x) + β` where `(γ, β)` are produced from the head's context. `γ`-init=0 so the modulation is identity at construction. `type/edge/tile` heads have no context and stay on the legacy path regardless of the flag.
+- **2.5 Decoupled value tower**: `value_head_mode='decoupled'` builds a second `ObservationModule` exclusively for the value head. Breaks gradient interference between policy and value losses. Adds ~+0.7M params (~1.54M → 2.22M with all Phase 2 flags on).
+
+Phase 2 YAML configs: `configs/phase2_full.yaml` plus 4 leave-one-outs (`phase2_no_{axial_pos, transformer_recipe, film, decoupled_value}.yaml`).
+
 ## Phase 1 (landed)
 - **1.1 Value clipping** (PPO2-style): `loss_v = max(MSE_unclipped, MSE_clipped)` with `clip_range_vf=0.2`. Config: `use_value_clipping` (default `True`).
 - **1.2 Per-rollout advantage normalization**: `advantage_norm: 'rollout' | 'batch' | 'none'`. Default `'rollout'` standardizes globally over the buffer; the trainer's per-batch step is a no-op in that mode.

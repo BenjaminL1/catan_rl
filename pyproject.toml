@@ -57,7 +57,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 ignore = ["E741", "RUF012"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["B011", "RUF003"]
+"tests/**" = ["B011", "RUF002", "RUF003"]
 "scripts/**" = ["E402", "F841", "RUF059", "SIM102"]
 # Legacy modules: not restructure-scope. Lint will be addressed alongside the
 # Phase 0+ refactors that touch each file. The blanket ignores below mute the

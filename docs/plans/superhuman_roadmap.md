@@ -437,6 +437,14 @@ If `phase1_full` fails (< 50% WR vs `phase0_fixed`), run leave-one-out 3M-step a
 
 ## 5. Phase 2 — Architecture Upgrades
 
+**Status (2026-05-02):** 2.1 + 2.2 + 2.4 + 2.5 (Option A) landed on
+`feat/phase-2-architecture`. 2.3 GNN, 2.5b belief head, and 2.5c
+opp-action auxiliary loss are deferred to follow-up PRs (see ADR
+[`0007-phase-2-architecture-upgrades.md`](../decisions/0007-phase-2-architecture-upgrades.md)
+for what shipped vs deferred). Configs: `configs/phase2_full.yaml` plus
+`phase2_no_{axial_pos, transformer_recipe, film, decoupled_value}.yaml`.
+Param count: ~1.54M → ~2.22M with all four flags on.
+
 **Why third.** With trainer correct (Phase 0) and sample-efficient on existing arch (Phase 1), any architecture gain is real and not eaten by training noise. Adds inductive biases the network lacks: 2D positional structure, explicit GNN over hex/vertex/edge incidence, decoupled value/policy, AdaLN-conditioned heads. Includes 1v1-specific cheap wins (belief head, opponent-action aux loss).
 
 ### 5.1 Sub-features

@@ -26,6 +26,19 @@ DEFAULT_MODEL_CONFIG = {
     "use_devcard_mha": True,
     "max_dev_seq": 16,
     "dev_card_vocab_excl_pad": 5,
+    # Phase 2.1 axial positional embedding for tiles.
+    "use_axial_pos_emb": False,
+    "axial_pos_dim": 24,
+    # Phase 2.2 transformer recipe (None = inherit `dropout`; activation
+    # defaults to legacy ReLU).
+    "transformer_dropout": None,
+    "transformer_activation": "relu",
+    # Phase 2.4 AdaLN action-head conditioning.
+    "action_head_film": False,
+    # Phase 2.5 value head architecture: 'shared' = legacy single encoder
+    # for both policy and value (Phase 0/1); 'decoupled' = separate
+    # observation encoder for the value tower.
+    "value_head_mode": "shared",
 }
 
 
@@ -61,6 +74,12 @@ def build_agent_model(device: str = "cpu", **overrides) -> CatanPolicy:
         use_devcard_mha=cfg["use_devcard_mha"],
         max_dev_seq=cfg["max_dev_seq"],
         dev_card_vocab_excl_pad=cfg["dev_card_vocab_excl_pad"],
+        use_axial_pos_emb=cfg["use_axial_pos_emb"],
+        axial_pos_dim=cfg["axial_pos_dim"],
+        transformer_dropout=cfg["transformer_dropout"],
+        transformer_activation=cfg["transformer_activation"],
+        action_head_film=cfg["action_head_film"],
+        value_head_mode=cfg["value_head_mode"],
     )
 
     # Count parameters for logging

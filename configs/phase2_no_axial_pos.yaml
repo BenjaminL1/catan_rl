@@ -1,0 +1,8 @@
+# Phase 2 leave-one-out: drops 2.1 axial positional embedding.
+#
+# Used to ablate whether explicit board-topology priors materially help, or
+# whether the transformer can recover the structure from tile features alone.
+_base: phase2_full.yaml
+
+model:
+  use_axial_pos_emb: false

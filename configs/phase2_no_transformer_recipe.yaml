@@ -1,0 +1,10 @@
+# Phase 2 leave-one-out: drops 2.2 modern transformer recipe.
+#
+# Reverts dropout to 0 and activation to ReLU (pre-norm stays — it was already
+# the default). Tests whether GELU + transformer-internal dropout buys real
+# stability or is just noise at our scale.
+_base: phase2_full.yaml
+
+model:
+  transformer_dropout: 0.0
+  transformer_activation: relu

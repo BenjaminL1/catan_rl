@@ -99,6 +99,17 @@ MODEL_CONFIG: dict[str, Any] = {
     "use_thermometer_encoding": True,
     # Phase 1.5 dihedral data augmentation probability per minibatch.
     "symmetry_aug_prob": 0.0,
+    # ── Phase 2 architecture flags (all default to legacy/off) ───────────
+    # 2.1 Axial positional embedding for tiles.
+    "use_axial_pos_emb": False,
+    "axial_pos_dim": 24,
+    # 2.2 Transformer recipe overrides (None = inherit ``dropout``).
+    "transformer_dropout": None,
+    "transformer_activation": "relu",
+    # 2.4 AdaLN-conditioned action heads (FiLM modulation per head).
+    "action_head_film": False,
+    # 2.5 Value tower mode: 'shared' (legacy) | 'decoupled' (separate encoder).
+    "value_head_mode": "shared",
 }
 
 
