@@ -90,7 +90,11 @@ def test_compute_returns_uses_split_signature() -> None:
     # Truncation at the last step: last_value should be used (not zeroed).
     buf.add(obs, action, 1.0, False, False, 0.5, 0.0, masks)
     buf.add(obs, action, 1.0, False, True, 0.5, 0.0, masks)
-    buf.compute_returns_and_advantages(last_value=2.0, gamma=0.99, gae_lambda=0.95)
+    # advantage_norm='none' isolates the GAE recurrence from Phase 1.2's
+    # global standardization; this test is a Phase 0 contract test.
+    buf.compute_returns_and_advantages(
+        last_value=2.0, gamma=0.99, gae_lambda=0.95, advantage_norm="none"
+    )
     # If truncation were treated as termination, A_1 = 1 - 0.5 = 0.5.
     # With Phase 0, A_1 = 1 + 0.99*2 - 0.5 = 2.48.
     assert abs(buf.advantages[1] - (1.0 + 0.99 * 2.0 - 0.5)) < 1e-5

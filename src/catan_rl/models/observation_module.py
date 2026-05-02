@@ -38,9 +38,13 @@ class ObservationModule(nn.Module):
         tile_encoder_num_layers: int = 2,
         proj_tile_dim: int = 25,
         dropout: float = 0.0,
+        use_devcard_mha: bool = True,
+        max_dev_seq: int = 16,
+        dev_card_vocab_excl_pad: int = 5,
     ) -> None:
         super().__init__()
         self.obs_output_dim = obs_output_dim
+        self.use_devcard_mha = bool(use_devcard_mha)
 
         # Per-tile encoder.
         self.tile_encoder = TileEncoder(
@@ -52,10 +56,21 @@ class ObservationModule(nn.Module):
             dropout=dropout,
         )
 
-        # Dev card embedding + attention (shared across players)
-        self.dev_card_embedding = nn.Embedding(6, dev_card_embed_dim)
-        self.hidden_card_mha = MultiHeadedAttention(dev_card_model_dim, dev_card_model_num_heads)
-        self.played_card_mha = MultiHeadedAttention(dev_card_model_dim, dev_card_model_num_heads)
+        # Phase 1.4: when count-encoding, the embedding+MHA pipeline is
+        # entirely unused. We construct it only in legacy mode so that the
+        # parameter count under the new flag genuinely drops by ~30k.
+        if self.use_devcard_mha:
+            self.dev_card_embedding = nn.Embedding(6, dev_card_embed_dim)
+            self.hidden_card_mha = MultiHeadedAttention(
+                dev_card_model_dim, dev_card_model_num_heads
+            )
+            self.played_card_mha = MultiHeadedAttention(
+                dev_card_model_dim, dev_card_model_num_heads
+            )
+        else:
+            self.dev_card_embedding = None
+            self.hidden_card_mha = None
+            self.played_card_mha = None
 
         # Player modules
         self.current_player_module = CurrentPlayerModule(
@@ -63,12 +78,18 @@ class ObservationModule(nn.Module):
             dev_card_embed_dim=dev_card_embed_dim,
             dev_card_model_dim=dev_card_model_dim,
             proj_dev_card_dim=proj_dev_card_dim,
+            use_count_encoding=not self.use_devcard_mha,
+            dev_card_vocab_excl_pad=dev_card_vocab_excl_pad,
+            max_dev_seq=max_dev_seq,
         )
         self.other_players_module = OtherPlayersModule(
             main_input_dim=other_player_main_in_dim,
             dev_card_embed_dim=dev_card_embed_dim,
             dev_card_model_dim=dev_card_model_dim,
             proj_dev_card_dim=proj_dev_card_dim,
+            use_count_encoding=not self.use_devcard_mha,
+            dev_card_vocab_excl_pad=dev_card_vocab_excl_pad,
+            max_dev_seq=max_dev_seq,
         )
 
         # Final fusion: tiles (19 * proj_tile_dim) + current(128) + next(128)

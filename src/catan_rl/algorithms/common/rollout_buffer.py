@@ -191,13 +191,25 @@ class CompositeRolloutBuffer:
         return np.maximum(self.terminated, self.truncated)
 
     def compute_returns_and_advantages(
-        self, last_value, gamma: float = 0.995, gae_lambda: float = 0.95
+        self,
+        last_value,
+        gamma: float = 0.995,
+        gae_lambda: float = 0.95,
+        *,
+        advantage_norm: str = "rollout",
     ) -> None:
         """Compute GAE advantages and discounted returns.
 
         Args:
             last_value: For n_envs=1, a float. For n_envs>1, np.ndarray of
                 shape (n_envs,) with bootstrap value per env.
+            gamma: Discount factor.
+            gae_lambda: GAE λ parameter.
+            advantage_norm: When 'rollout' (default), normalize advantages
+                globally over the buffer here so per-batch standardization in
+                the trainer becomes a cheap no-op. When 'batch' or 'none',
+                advantages are passed through raw and the trainer handles
+                whatever normalization it wants. See Phase 1.2 in the roadmap.
         """
         n = self.n_steps if self.full else self.pos
         if self.n_envs == 1:
@@ -227,6 +239,15 @@ class CompositeRolloutBuffer:
                 gamma,
                 gae_lambda,
             )
+
+        # Phase 1.2: optional global advantage normalization. Keeps per-batch
+        # standardization in the trainer a no-op for 'rollout' mode while
+        # preserving 'batch' / 'none' as drop-in alternatives for ablation.
+        if advantage_norm == "rollout" and n > 1:
+            adv = self.advantages[:n]
+            mean = float(adv.mean())
+            std = float(adv.std())
+            self.advantages[:n] = (adv - mean) / (std + 1e-8)
 
     def finalize(self, device: str = "cpu") -> None:
         """Pre-convert numpy arrays to tensors once before the update loop.

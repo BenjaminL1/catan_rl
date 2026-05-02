@@ -20,6 +20,12 @@ DEFAULT_MODEL_CONFIG = {
     "action_head_hidden_dim": 128,
     "value_hidden_dims": (256, 128),
     "dropout": 0.0,
+    # Phase 1.4: dev-card encoding mode. True = legacy MHA pipeline (matches
+    # checkpoint_07390040.pt). False = count-based MLP encoder (smaller, faster,
+    # permutation-invariant by construction). Default True to preserve compat.
+    "use_devcard_mha": True,
+    "max_dev_seq": 16,
+    "dev_card_vocab_excl_pad": 5,
 }
 
 
@@ -52,6 +58,9 @@ def build_agent_model(device: str = "cpu", **overrides) -> CatanPolicy:
         tile_encoder_num_layers=cfg["tile_encoder_num_layers"],
         proj_tile_dim=cfg["proj_tile_dim"],
         dropout=cfg["dropout"],
+        use_devcard_mha=cfg["use_devcard_mha"],
+        max_dev_seq=cfg["max_dev_seq"],
+        dev_card_vocab_excl_pad=cfg["dev_card_vocab_excl_pad"],
     )
 
     # Count parameters for logging
