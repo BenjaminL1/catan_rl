@@ -49,26 +49,61 @@ populated with the **live** policy snapshot — not a stale league entry.
   most recent entry is several updates stale, large enough for measurable
   policy drift on small-batch CPU runs.
 
-### 3.3 Duo exploiter cycle (DEFERRED)
+### 3.3 Duo exploiter cycle
 
-The roadmap's headline AlphaStar-style item — periodic exploiter training
-cycles that target the current main — is **scaffolded but not yet
-implemented**. Config keys (`exploiter_mode`, `exploiter_cycle_steps`,
-`exploiter_priority_multiplier`) are accepted so `phase3_full.yaml` parses
-cleanly; opting in produces a one-shot deferred-feature notice.
+**Status (2026-05-02):** landed as a follow-up PR after the rest of Phase 3
+merged. Config keys (`exploiter_mode`, `exploiter_cycle_steps`,
+`exploiter_n_updates`, `exploiter_priority_multiplier`, `exploiter_priority_games`)
+all wired through `arguments.MODEL_CONFIG`, the trainer, and YAML.
 
-- **Why deferred:** an interleaved exploiter trainer needs careful state
-  management — main vs exploiter switching, separate optimizers, separate
-  rollout buffers, league entries with priority multipliers, and TB
-  scalar isolation. Doing this correctly requires a sub-trainer abstraction
-  that's larger than the rest of Phase 3 combined. Following the Phase 2
-  precedent (where 2.3 GNN, 2.5b belief, 2.5c opp-action aux were
-  deferred), we ship the rest of Phase 3 first and address 3.3 separately.
-- **What's already in place** for the follow-up to use: PFSP-hard (which
-  is most of what an exploiter buys you for free), the `current_self`
-  opponent (which is a degenerate exploiter — main playing against itself),
-  the rating table that can isolate exploiter-vs-main matches, and the
-  opponent-id embedding's `main_exploiter` slot.
+The implementation reuses the existing `CatanPPO` machinery rather than
+spinning up a sub-trainer. Inside `_maybe_run_exploiter_cycle`:
+
+1. `snap = self._snapshot_for_exploiter()` deep-copies policy weights,
+   optimizer state, value-normalizer running stats, episode counters, and
+   the league + GameManager wiring.
+2. `self.policy.load_state_dict(snap['policy'])` — exploiter starts from
+   *current main weights* (not from scratch); fresh `AdamW` so Adam
+   moments are zeroed for the exploiter's gradient direction.
+3. `self.league = League.frozen_main_for_exploiter(snap['policy'])` —
+   single-policy league, no random/heuristic/current_self mass; the
+   exploiter's only opponent is the frozen main snapshot.
+4. `_train_exploiter_inner` runs `exploiter_n_updates` PPO updates with
+   TB scalars under `exploiter/<key>`. `self.global_step` is rolled back
+   after each rollout so main's step counter doesn't drift across cycles.
+5. `self._restore_from_snapshot(snap)` (in a `finally:` block — even on
+   error, main is restored).
+6. `self.league.add_with_boost(exploiter_state, multiplier=…, boost_games=…)`
+   injects the exploiter into the *restored* main league with an amplified
+   PFSP priority for its first `exploiter_priority_games` matches.
+
+Design choices and the alternatives we rejected:
+
+- **Why no sub-trainer instance:** would require duplicating buffer / writer
+  / GameManager / League — every piece of Phase-1-2-3 state. The
+  in-place snapshot/restore pattern is ~50 LOC vs ~500 for a separate
+  class, and round-trip coverage in `test_exploiter_snapshot.py` confirms
+  no state leak across the swap.
+- **Why fresh AdamW (instead of preserving main's optimizer):** the
+  exploiter's gradient direction is by design adversarial to main's;
+  inheriting main's Adam first moment would bias the early exploiter
+  updates toward main's recent direction, defeating the point. Welford
+  stats *are* preserved (they're just running estimates of value scale,
+  not directional).
+- **Why `_train_exploiter_inner` rolls back `self.global_step`:** main's
+  step counter governs eval / checkpoint frequency. If it advanced during
+  an exploiter cycle we'd evaluate the exploiter against the heuristic
+  (wrong opponent) and save exploiter weights to main's checkpoint dir.
+- **Why amplified PFSP priority instead of forced sampling:** AlphaStar's
+  recipe boosts but doesn't pin the exploiter — boosting preserves PFSP's
+  natural curriculum (the exploiter still drops out of the rotation once
+  main learns to beat it).
+- **Why disable `record_match_fn` and `current_policy_state_fn` during
+  the cycle:** TrueSkill ratings are commensurable only across the *main*
+  rating timeline; exploiter matches against frozen main shouldn't update
+  the same μ/σ. And `current_self` would mean "exploiter plays current
+  exploiter," which is a degenerate self-play mode incompatible with the
+  cycle's goal of beating frozen main.
 
 ### 3.4 TrueSkill league rating
 
@@ -154,10 +189,10 @@ play well even when opponent identity is not revealed.
 
 ## Follow-up work
 
-- **3.3 duo-exploiter trainer** — separate `CatanPPO` instance with a
-  fixed-main league, training for `exploiter_cycle_steps` against a
-  frozen snapshot, then injecting back into the main league with priority
-  ×1.5 for the first 64 games.
 - **Champion-bench integration of TrueSkill:** wire `use_trueskill=True`
   output into the eval-harness JSON so league ratings can be tracked across
   runs.
+- **Exploiter eval harness:** the cycle currently has no built-in
+  measurement of "did this exploiter actually beat frozen main." Add a
+  short H2H eval at end-of-cycle and log
+  `exploiter/cycle_<n>_win_rate_vs_main`.
