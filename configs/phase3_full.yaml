@@ -1,0 +1,55 @@
+# Phase 3 full bundle: all five landed self-play upgrades on top of Phase 2.
+#
+# 3.1 pfsp_mode='hard' (AlphaStar-style PFSP, biased toward losses)
+# 3.2 latest_policy_weight=0.10 (current-self anti-drift opponent)
+# 3.4 use_trueskill=True (TrueSkill / Glicko-2 league rating + σ-decay)
+# 3.5 prune_strategy='nash' (Nash-weighted checkpoint eviction)
+# 3.6 use_opponent_id_emb=True (opp-kind + opp-id embedding in obs encoder)
+#
+# 3.3 duo exploiter cycles are scaffolded (config keys parse) but the
+# interleaved exploiter training is deferred to a follow-up PR — see
+# ADR 0008 for what shipped vs what's coming.
+#
+# Inherits the Phase 2 architecture (axial pos-emb, GELU/dropout, AdaLN heads,
+# decoupled value tower) and Phase 1 sample efficiency (compact obs, count
+# dev cards, value clipping, advantage norm, D6 augmentation).
+_base: phase2_full.yaml
+
+league:
+  league_maxlen: 100
+  add_policy_every: 4
+  league_random_weight: 0.05
+  heuristic_opponent_weight: 0.20
+  # 3.1 PFSP-hard
+  pfsp_mode: hard
+  pfsp_p: 2.0
+  pfsp_window: 32
+  # 3.2 Latest-policy regularization
+  latest_policy_weight: 0.10
+  # 3.4 TrueSkill ratings
+  use_trueskill: true
+  trueskill_decay: 1.001
+  # 3.5 Nash pruning
+  prune_strategy: nash
+  prune_every: 20
+  nash_top_k: 16  # cap pruning round-robin cost on M1 Pro
+  nash_prune_round_games: 16
+
+model:
+  # 3.6 Opponent identity embedding
+  use_opponent_id_emb: true
+  opp_id_emb_dim: 16
+  n_opp_kinds: 6
+  league_maxlen: 100
+
+phase3:
+  # 3.6 mask-prob (env-side) — kept under the model section for symmetry.
+  opp_id_mask_prob: 0.40
+  # 3.3 duo exploiter (scaffolded; full training in follow-up PR).
+  # Quoted because unquoted ``off`` is YAML 1.1 boolean False.
+  exploiter_mode: "off"
+  exploiter_cycle_steps: 1_000_000
+  exploiter_priority_multiplier: 1.5
+
+schedule:
+  total_timesteps: 8_000_000

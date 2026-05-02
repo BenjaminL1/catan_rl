@@ -33,11 +33,26 @@ class GameManager:
         build_policy_fn: Callable | None = None,
         device: str = "cpu",
         use_thermometer_encoding: bool = True,
+        current_policy_state_fn: Callable[[], dict] | None = None,
+        record_match_fn: Callable[[int, int], None] | None = None,
+        use_opponent_id_emb: bool = False,
+        opp_id_mask_prob: float = 0.40,
+        league_maxlen: int = 100,
     ):
         self.n_envs = n_envs
         self.league = league
         self._build_policy_fn = build_policy_fn
         self.device = device
+        # Phase 3.2: callable that returns the live policy's state_dict on
+        # demand. Used when the league samples the special ``current_self``
+        # opponent so we always face an up-to-date copy of ourselves rather
+        # than a stale league snapshot. None = ``current_self`` is treated
+        # as a no-op fallback to a random opponent (defensive default).
+        self._current_policy_state_fn = current_policy_state_fn
+        # Phase 3.4: ``record_match_fn(policy_id, win)`` called every time a
+        # league match concludes. Trainer wires this to its TrueSkill table.
+        # None when ratings are disabled.
+        self._record_match_fn = record_match_fn
         # Stable policy ID of the current rollout opponent (-1 = random / no league)
         self._rollout_opp_policy_id: int = -1
 
@@ -51,6 +66,9 @@ class GameManager:
                 opponent_type=opp_type,
                 max_turns=max_turns,
                 use_thermometer_encoding=use_thermometer_encoding,
+                use_opponent_id_emb=use_opponent_id_emb,
+                opp_id_mask_prob=opp_id_mask_prob,
+                league_maxlen=league_maxlen,
             )
             for _ in range(n_envs)
         ]
@@ -63,6 +81,17 @@ class GameManager:
         else:
             self.rollout_opp_policy = None
 
+    def _report_match(self, policy_id: int, win: int) -> None:
+        """Report a finished match to the league + (optionally) the rating system.
+
+        Single hook so every termination path stays in sync — the league
+        tracks PFSP win rates, the rating system tracks Elo/TrueSkill.
+        """
+        if self.league is not None:
+            self.league.update_result(policy_id, win)
+        if self._record_match_fn is not None:
+            self._record_match_fn(policy_id, win)
+
     def _sample_and_prepare_opponent(self, env_idx: int = 0) -> dict:
         """Sample from league and load into the shared rollout opponent policy.
 
@@ -72,16 +101,36 @@ class GameManager:
         """
         if self.league is None or len(self.league) == 0:
             self._rollout_opp_policy_id = -1
-            return {"opponent_type": "random"}
+            return {"opponent_type": "random", "opponent_kind": "random"}
         opp_type, state_dict, policy_id = self.league.sample()
         self._rollout_opp_policy_id = policy_id
+        # Phase 3.6: bound the policy_id into the embedding's slot range.
+        # The league's monotonic ID is unbounded, but the embedding has a
+        # fixed ``league_maxlen`` lookup table — modulo-fold to stay in range.
+        maxlen = self.league.policies.maxlen if self.league.policies.maxlen else 100
+        opp_id_for_emb = policy_id % maxlen if policy_id >= 0 else -1
         if opp_type == "random":
-            return {"opponent_type": "random"}
+            return {"opponent_type": "random", "opponent_kind": "random"}
         if opp_type == "heuristic":
-            return {"opponent_type": "heuristic"}
+            return {"opponent_type": "heuristic", "opponent_kind": "heuristic"}
+        if opp_type == "current_self":
+            # Phase 3.2: opponent is the *live* policy snapshot. Skip the
+            # deepcopy because the trainer hands us its own state_dict — the
+            # next training step will overwrite it anyway.
+            if self._current_policy_state_fn is None:
+                # Defensive: caller forgot to wire it. Fall back to random.
+                self._rollout_opp_policy_id = -1
+                return {"opponent_type": "random", "opponent_kind": "random"}
+            self.rollout_opp_policy.load_state_dict(self._current_policy_state_fn())
+            self.rollout_opp_policy.eval()
+            return {"opponent_type": "policy", "opponent_kind": "self_latest"}
         self.rollout_opp_policy.load_state_dict(copy.deepcopy(state_dict))
         self.rollout_opp_policy.eval()
-        return {"opponent_type": "policy"}  # env uses deferred mode; no policy object needed
+        return {
+            "opponent_type": "policy",
+            "opponent_kind": "league",
+            "opponent_policy_id": opp_id_for_emb,
+        }
 
     def reset_all(self) -> tuple[list[dict], list[dict]]:
         """Reset all environments and return (observations, infos)."""
@@ -120,10 +169,9 @@ class GameManager:
         done = terminated or truncated
         if done:
             info["terminal_observation"] = obs
-            # Report result to league for PFSP win-rate tracking
-            if self.league is not None:
-                win = 1 if info.get("is_success") else 0
-                self.league.update_result(self._rollout_opp_policy_id, win)
+            # Report result to league for PFSP win-rate tracking + ratings.
+            win = 1 if info.get("is_success") else 0
+            self._report_match(self._rollout_opp_policy_id, win)
             options = self._sample_and_prepare_opponent() if self.league else {}
             obs, _ = env.reset(options=options)
         return obs, reward, terminated, truncated, info
@@ -147,9 +195,8 @@ class GameManager:
             if done:
                 info["terminal_observation"] = obs
                 terminal_info = info
-                if self.league is not None:
-                    win = 1 if info.get("is_success") else 0
-                    self.league.update_result(self._opponent_policy_ids[i], win)
+                win = 1 if info.get("is_success") else 0
+                self._report_match(self._opponent_policy_ids[i], win)
                 options = self._sample_and_prepare_opponent(i) if self.league else {}
                 obs, _ = env.reset(options=options)
                 observations.append(obs)
@@ -183,9 +230,8 @@ class GameManager:
         done = terminated or truncated
         if done:
             info["terminal_observation"] = obs
-            if self.league is not None:
-                win = 1 if info.get("is_success") else 0
-                self.league.update_result(self._rollout_opp_policy_id, win)
+            win = 1 if info.get("is_success") else 0
+            self._report_match(self._rollout_opp_policy_id, win)
             options = self._sample_and_prepare_opponent() if self.league else {}
             obs, _ = env.reset(options=options)
         return True, obs, reward, terminated, truncated, info

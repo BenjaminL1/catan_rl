@@ -1,0 +1,6 @@
+# Phase 3 leave-one-out: drops 3.2 latest-policy regularization. The
+# ``current_self`` opponent is never sampled.
+_base: phase3_full.yaml
+
+league:
+  latest_policy_weight: 0.0

@@ -56,6 +56,7 @@ class CompositeRolloutBuffer:
         n_envs: int = 1,
         curr_player_dim: int = CURR_PLAYER_DIM,
         next_player_dim: int = NEXT_PLAYER_DIM,
+        store_opponent_id: bool = False,
     ):
         """Allocate fixed-size NumPy storage for one rollout's transitions.
 
@@ -72,6 +73,10 @@ class CompositeRolloutBuffer:
         self.device = device
         self.curr_player_dim = int(curr_player_dim)
         self.next_player_dim = int(next_player_dim)
+        # Phase 3.6: opponent identity is stored per-step only when the
+        # encoder will read it; off by default to keep the buffer footprint
+        # unchanged for legacy lineages.
+        self.store_opponent_id = bool(store_opponent_id)
         self.pos = 0
         self.full = False
 
@@ -112,6 +117,14 @@ class CompositeRolloutBuffer:
         self.log_probs = np.zeros(n_steps, dtype=np.float32)
         self.advantages = np.zeros(n_steps, dtype=np.float32)
         self.returns = np.zeros(n_steps, dtype=np.float32)
+
+        # Phase 3.6: lazily allocated when the schema is opted in.
+        if self.store_opponent_id:
+            self.opponent_kind = np.zeros(n_steps, dtype=np.int64)
+            self.opponent_policy_id = np.zeros(n_steps, dtype=np.int64)
+        else:
+            self.opponent_kind = None
+            self.opponent_policy_id = None
 
         self.masks = {}
         for key, size in mask_shapes.items():
@@ -189,6 +202,9 @@ class CompositeRolloutBuffer:
         self.truncated[self.pos] = float(truncated)
         self.values[self.pos] = value
         self.log_probs[self.pos] = log_prob
+        if self.store_opponent_id:
+            self.opponent_kind[self.pos] = int(obs.get("opponent_kind", 0))
+            self.opponent_policy_id[self.pos] = int(obs.get("opponent_policy_id", 0))
         for key in self.masks:
             self.masks[key][self.pos] = masks[key]
 
@@ -282,6 +298,12 @@ class CompositeRolloutBuffer:
         self._t_curr_played = torch.from_numpy(self.curr_played_dev[:n]).to(device)
         self._t_next_played = torch.from_numpy(self.next_played_dev[:n]).to(device)
         self._t_masks = {k: torch.from_numpy(self.masks[k][:n]).to(device) for k in self.masks}
+        if self.store_opponent_id:
+            self._t_opp_kind = torch.from_numpy(self.opponent_kind[:n]).to(device)
+            self._t_opp_policy_id = torch.from_numpy(self.opponent_policy_id[:n]).to(device)
+        else:
+            self._t_opp_kind = None
+            self._t_opp_policy_id = None
         self._tensors_ready = True
 
     def get_batches(
@@ -324,6 +346,9 @@ class CompositeRolloutBuffer:
                 "current_player_played_dev": self._t_curr_played[idx_t],
                 "next_player_played_dev": self._t_next_played[idx_t],
             }
+            if self.store_opponent_id:
+                obs_batch["opponent_kind"] = self._t_opp_kind[idx_t]
+                obs_batch["opponent_policy_id"] = self._t_opp_policy_id[idx_t]
             actions = self._t_actions[idx_t]
             masks = {k: self._t_masks[k][idx_t] for k in self._t_masks}
 

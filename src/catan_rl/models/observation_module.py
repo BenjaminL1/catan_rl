@@ -46,10 +46,16 @@ class ObservationModule(nn.Module):
         axial_pos_dim: int = 24,
         transformer_dropout: float | None = None,
         transformer_activation: str = "relu",
+        # Phase 3.6 opponent identity embedding (off by default).
+        use_opponent_id_emb: bool = False,
+        opp_id_emb_dim: int = 16,
+        n_opp_kinds: int = 6,
+        league_maxlen: int = 100,
     ) -> None:
         super().__init__()
         self.obs_output_dim = obs_output_dim
         self.use_devcard_mha = bool(use_devcard_mha)
+        self.use_opponent_id_emb = bool(use_opponent_id_emb)
 
         # Phase 2.2: ``transformer_dropout`` overrides ``dropout`` for the
         # encoder layers when explicitly set, so we can opt in to
@@ -105,8 +111,23 @@ class ObservationModule(nn.Module):
             max_dev_seq=max_dev_seq,
         )
 
+        # Phase 3.6: opponent-id embedding pair. Two halves of opp_id_emb_dim
+        # are split between the kind embedding and the policy_id embedding;
+        # they're summed and concatenated to the fusion input.
+        # ``+1`` slot on the policy embedding holds the "unknown" sentinel.
+        self.opp_id_emb_dim = int(opp_id_emb_dim) if self.use_opponent_id_emb else 0
+        if self.use_opponent_id_emb:
+            if self.opp_id_emb_dim % 2 != 0:
+                raise ValueError(f"opp_id_emb_dim must be even, got {self.opp_id_emb_dim}")
+            half = self.opp_id_emb_dim // 2
+            self.opp_kind_emb = nn.Embedding(int(n_opp_kinds), half)
+            self.opp_policy_emb = nn.Embedding(int(league_maxlen) + 1, half)
+            nn.init.normal_(self.opp_kind_emb.weight, mean=0.0, std=0.02)
+            nn.init.normal_(self.opp_policy_emb.weight, mean=0.0, std=0.02)
+
         # Final fusion: tiles (19 * proj_tile_dim) + current(128) + next(128)
-        fusion_in_dim = 19 * proj_tile_dim + 2 * 128
+        # + opt opp_id_emb_dim.
+        fusion_in_dim = 19 * proj_tile_dim + 2 * 128 + self.opp_id_emb_dim
         self.final_layer = init_weights(nn.Linear(fusion_in_dim, obs_output_dim))
         self.relu = nn.ReLU()
         self.norm = nn.LayerNorm(obs_output_dim)
@@ -142,7 +163,12 @@ class ObservationModule(nn.Module):
             self.played_card_mha,
         )
 
-        final_input = torch.cat(
-            (tile_encodings, current_player_output, other_player_output), dim=-1
-        )
+        parts = [tile_encodings, current_player_output, other_player_output]
+        if self.use_opponent_id_emb:
+            kind_idx = obs_dict["opponent_kind"]
+            pid_idx = obs_dict["opponent_policy_id"]
+            kind_emb = self.opp_kind_emb(kind_idx.long())  # (B, half)
+            pid_emb = self.opp_policy_emb(pid_idx.long())  # (B, half)
+            parts.append(torch.cat([kind_emb, pid_emb], dim=-1))
+        final_input = torch.cat(parts, dim=-1)
         return self.relu(self.norm(self.final_layer(final_input)))

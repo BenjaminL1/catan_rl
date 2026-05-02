@@ -1,0 +1,10 @@
+# Phase 3 leave-one-out: drops 3.1 PFSP-hard, falls back to legacy
+# linear PFSP (peaks at 0.5 WR).
+#
+# Tests whether biasing toward hard opponents materially helps once the
+# rest of Phase 3 is in place, or whether the extra opponent-aware
+# information from 3.6 already covers most of the gain.
+_base: phase3_full.yaml
+
+league:
+  pfsp_mode: linear

@@ -1,0 +1,6 @@
+# Phase 3 leave-one-out: drops 3.5 Nash pruning. League returns to FIFO
+# eviction at capacity, the historical default.
+_base: phase3_full.yaml
+
+league:
+  prune_strategy: fifo

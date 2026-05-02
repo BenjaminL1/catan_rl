@@ -142,12 +142,26 @@ def _compute_income(p, board) -> list:
 class CatanEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
 
+    # Phase 3.6 opponent-kind enum, kept stable so the embedding layer
+    # indices don't drift across runs. Order is load-bearing (CatanPolicy
+    # checkpoints store the embedding weight matrix indexed by these).
+    OPP_KIND_UNKNOWN = 0
+    OPP_KIND_RANDOM = 1
+    OPP_KIND_HEURISTIC = 2
+    OPP_KIND_SELF_LATEST = 3
+    OPP_KIND_LEAGUE = 4
+    OPP_KIND_MAIN_EXPLOITER = 5
+    N_OPP_KINDS = 6
+
     def __init__(
         self,
         render_mode=None,
         opponent_type="random",
         max_turns=500,
         use_thermometer_encoding: bool = True,
+        use_opponent_id_emb: bool = False,
+        opp_id_mask_prob: float = 0.40,
+        league_maxlen: int = 100,
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -162,22 +176,36 @@ class CatanEnv(gym.Env):
         self._curr_player_dim = CURR_PLAYER_DIM if self.use_thermometer_encoding else 54
         self._next_player_dim = NEXT_PLAYER_DIM if self.use_thermometer_encoding else 61
 
+        # Phase 3.6: opponent identity embedding inputs. Off by default so
+        # legacy obs schema stays stable. When on, the env emits two extra
+        # int scalars (``opponent_kind``, ``opponent_policy_id``) and applies
+        # random masking with prob ``opp_id_mask_prob`` to the *kind* input
+        # so the model stays robust to the eval-time "unknown" distribution.
+        # ``league_maxlen`` bounds the policy-id embedding range (must match
+        # the trainer's league capacity to avoid index errors).
+        self.use_opponent_id_emb = bool(use_opponent_id_emb)
+        self.opp_id_mask_prob = float(opp_id_mask_prob)
+        self._league_maxlen = int(league_maxlen)
+        # Current opponent's (kind, policy_id) — set by reset() options.
+        self._opp_kind: int = self.OPP_KIND_UNKNOWN
+        self._opp_policy_id: int = 0
+
         # Spaces
         self.action_space = spaces.MultiDiscrete([13, 54, 72, 19, 5, 5])
-        self.observation_space = spaces.Dict(
-            {
-                "tile_representations": spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
-                "current_player_main": spaces.Box(
-                    -1.0, 2.0, (self._curr_player_dim,), dtype=np.float32
-                ),
-                "next_player_main": spaces.Box(
-                    -1.0, 2.0, (self._next_player_dim,), dtype=np.float32
-                ),
-                "current_player_hidden_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
-                "current_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
-                "next_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
-            }
-        )
+        obs_spaces: dict = {
+            "tile_representations": spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
+            "current_player_main": spaces.Box(
+                -1.0, 2.0, (self._curr_player_dim,), dtype=np.float32
+            ),
+            "next_player_main": spaces.Box(-1.0, 2.0, (self._next_player_dim,), dtype=np.float32),
+            "current_player_hidden_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            "current_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+            "next_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
+        }
+        if self.use_opponent_id_emb:
+            obs_spaces["opponent_kind"] = spaces.Discrete(self.N_OPP_KINDS)
+            obs_spaces["opponent_policy_id"] = spaces.Discrete(self._league_maxlen + 1)
+        self.observation_space = spaces.Dict(obs_spaces)
 
         # Runtime state — populated in reset()
         self.game = None
@@ -230,6 +258,27 @@ class CatanEnv(gym.Env):
         opp_policy = options.get("opponent_policy", None)
         human_first = options.get("human_first", False)
         self._opponent_policy = opp_policy
+
+        # Phase 3.6: capture opponent identity for the optional embedding.
+        # Caller (GameManager) passes ``opponent_kind`` and
+        # ``opponent_policy_id``; we map missing values to "unknown".
+        kind_str = options.get("opponent_kind")
+        if kind_str is None:
+            # Infer from opponent_type when explicit kind not provided.
+            kind_str = {
+                "random": "random",
+                "heuristic": "heuristic",
+                "policy": "league",
+                "current_self": "self_latest",
+                "main_exploiter": "main_exploiter",
+            }.get(opp_type, "unknown")
+        self._opp_kind = self._kind_to_int(kind_str)
+        opp_id_raw = options.get("opponent_policy_id", -1)
+        # Ranges: [-1, league_maxlen-1] from caller. We map -1 / out-of-range
+        # to a stable "unknown" slot at index ``league_maxlen``.
+        self._opp_policy_id = (
+            int(opp_id_raw) if 0 <= int(opp_id_raw) < self._league_maxlen else self._league_maxlen
+        )
 
         # Create game (no render for RL)
         self.game = catanGame(render_mode=None)
@@ -811,6 +860,28 @@ class CatanEnv(gym.Env):
     # Observations
     # ------------------------------------------------------------------
 
+    def _kind_to_int(self, kind: str) -> int:
+        """Phase 3.6: map a string opponent kind to its embedding index."""
+        return {
+            "unknown": self.OPP_KIND_UNKNOWN,
+            "random": self.OPP_KIND_RANDOM,
+            "heuristic": self.OPP_KIND_HEURISTIC,
+            "self_latest": self.OPP_KIND_SELF_LATEST,
+            "league": self.OPP_KIND_LEAGUE,
+            "main_exploiter": self.OPP_KIND_MAIN_EXPLOITER,
+        }.get(kind, self.OPP_KIND_UNKNOWN)
+
+    def _opponent_id_obs(self) -> tuple[int, int]:
+        """Phase 3.6: emit (kind, policy_id), with stochastic masking.
+
+        With probability ``opp_id_mask_prob``, both fields are set to the
+        UNKNOWN sentinel — keeps the policy robust to eval-time games where
+        we never reveal opponent identity (champion-bench, exploitability).
+        """
+        if self.np_random.random() < self.opp_id_mask_prob:
+            return self.OPP_KIND_UNKNOWN, self._league_maxlen
+        return self._opp_kind, self._opp_policy_id
+
     def _get_obs(self) -> dict:
         return self._get_obs_for_player(self.agent_player)
 
@@ -826,7 +897,7 @@ class CatanEnv(gym.Env):
         hid_dev, played_dev = self._build_dev_sequences(acting_player, hidden=True)
         _, opp_played_dev = self._build_dev_sequences(other_player, hidden=False)
 
-        return {
+        obs = {
             "tile_representations": tile_feats,
             "current_player_main": curr_main,
             "next_player_main": next_main,
@@ -834,6 +905,11 @@ class CatanEnv(gym.Env):
             "current_player_played_dev": played_dev,
             "next_player_played_dev": opp_played_dev,
         }
+        if self.use_opponent_id_emb:
+            kind, pid = self._opponent_id_obs()
+            obs["opponent_kind"] = np.int64(kind)
+            obs["opponent_policy_id"] = np.int64(pid)
+        return obs
 
     def _build_tile_features(self, acting_player) -> np.ndarray:
         """Build (19, 79) tile feature array."""

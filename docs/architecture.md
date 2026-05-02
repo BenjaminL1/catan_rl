@@ -118,6 +118,39 @@ leave-one-out configs live next to `phase2_full.yaml`:
 `phase2_no_axial_pos`, `phase2_no_transformer_recipe`, `phase2_no_film`,
 `phase2_no_decoupled_value`.
 
+## Phase 3 self-play diversity
+
+Five config-flagged additions on top of Phase 2; defaults preserve Phase 2
+behavior. Opt in via `configs/phase3_full.yaml` (or one of five leave-one-outs).
+
+| Sub-feature | Config key | Default | Effect |
+|---|---|---|---|
+| 3.1 PFSP-hard | `pfsp_mode`, `pfsp_p`, `pfsp_window` | `'linear'`, `2.0`, `32` | `'hard'` switches to AlphaStar `(1-w)^p` priorities biased toward losses; sliding 32-game window per opponent |
+| 3.2 Latest-policy reg. | `latest_policy_weight` | `0.0` | With this prob, league emits `('current_self', None, -2)`; trainer fills with a fresh in-place snapshot |
+| 3.3 Duo exploiter cycle | `exploiter_mode` | `'off'` | **Scaffolded only** — config keys parse but the interleaved exploiter trainer ships in a follow-up PR. `'duo'` emits a deferred-feature notice in train.log |
+| 3.4 TrueSkill ratings | `use_trueskill`, `trueskill_decay` | `False`, `1.001` | TrueSkill (or Glicko-2 fallback) per-policy ratings; σ inflated each PPO update so non-stationarity is visible |
+| 3.5 Nash pruning | `prune_strategy`, `prune_every`, `nash_top_k`, `nash_prune_round_games` | `'fifo'`, `20`, `32`, `50` | `'nash'` runs replicator dynamics on a top-K round-robin payoff matrix every `prune_every` adds; drops the lowest-Nash-mass entry |
+| 3.6 Opponent ID emb. | `use_opponent_id_emb`, `opp_id_emb_dim`, `opp_id_mask_prob` | `False`, `16`, `0.40` | Two embeddings (kind ∈ {unknown, random, heuristic, self_latest, league, main_exploiter}; policy_id ∈ {0..league_maxlen}) concatenated to the fusion input. With `opp_id_mask_prob` the kind is force-set to `unknown` to keep the policy robust at eval time |
+
+Phase 3 builds on the Phase 2 architecture (and inherits its compact-obs /
+fresh-training lineage). `phase3_full` policy is ~2.24M params (vs ~2.22M
+phase2_full) — the only delta is the small embedding pair on the obs encoder.
+
+Files modified:
+- `src/catan_rl/selfplay/league.py`: PFSP mode dispatch, sliding-window WR,
+  `current_self` emission, `prune_nash` math.
+- `src/catan_rl/selfplay/game_manager.py`: `current_policy_state_fn` hook,
+  `record_match_fn` hook, opponent-id options plumbed to env reset.
+- `src/catan_rl/selfplay/ratings.py`: unchanged (built in Phase 0; activated here).
+- `src/catan_rl/env/catan_env.py`: opponent-kind enum, `_opponent_id_obs`
+  with random masking, optional dict-obs keys.
+- `src/catan_rl/models/observation_module.py`: opponent-id embedding pair,
+  fusion-input width grows by `opp_id_emb_dim`.
+- `src/catan_rl/algorithms/common/rollout_buffer.py`: opt-in
+  `store_opponent_id` per-step storage.
+- `src/catan_rl/algorithms/ppo/trainer.py`: rating table + decay + scalar
+  logging, Nash-pruning round-robin, exploiter-cycle stub.
+
 ## Phase 0 diagnostics
 
 The trainer's TensorBoard scalars now include per-head entropy diagnostics

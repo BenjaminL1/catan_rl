@@ -1,0 +1,7 @@
+# Phase 3 leave-one-out: drops 3.6 opponent identity embedding. The env
+# stops emitting ``opponent_kind`` / ``opponent_policy_id`` and the model
+# falls back to the Phase 2 obs encoder.
+_base: phase3_full.yaml
+
+model:
+  use_opponent_id_emb: false

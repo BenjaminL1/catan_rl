@@ -39,6 +39,11 @@ DEFAULT_MODEL_CONFIG = {
     # for both policy and value (Phase 0/1); 'decoupled' = separate
     # observation encoder for the value tower.
     "value_head_mode": "shared",
+    # Phase 3.6 opponent identity embedding (off by default).
+    "use_opponent_id_emb": False,
+    "opp_id_emb_dim": 16,
+    "n_opp_kinds": 6,
+    "league_maxlen": 100,
 }
 
 
@@ -80,6 +85,10 @@ def build_agent_model(device: str = "cpu", **overrides) -> CatanPolicy:
         transformer_activation=cfg["transformer_activation"],
         action_head_film=cfg["action_head_film"],
         value_head_mode=cfg["value_head_mode"],
+        use_opponent_id_emb=cfg["use_opponent_id_emb"],
+        opp_id_emb_dim=cfg["opp_id_emb_dim"],
+        n_opp_kinds=cfg["n_opp_kinds"],
+        league_maxlen=cfg["league_maxlen"],
     )
 
     # Count parameters for logging
