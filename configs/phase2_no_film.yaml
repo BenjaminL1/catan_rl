@@ -1,0 +1,9 @@
+# Phase 2 leave-one-out: drops 2.4 AdaLN/FiLM action-head conditioning.
+#
+# Reverts every context-using head (corner / resource1 / resource2) to the
+# Phase 0/1 concat-MLP path. Tests whether FiLM modulation actually helps
+# the autoregressive head learn type-specific decision rules at our budget.
+_base: phase2_full.yaml
+
+model:
+  action_head_film: false

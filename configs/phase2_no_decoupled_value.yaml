@@ -1,0 +1,9 @@
+# Phase 2 leave-one-out: drops 2.5 decoupled value tower.
+#
+# Reverts to the legacy shared-encoder design where the policy and value
+# share one ObservationModule. Tests whether the param doubling pays off
+# in eval, or whether the shared trunk is fine at our scale.
+_base: phase2_full.yaml
+
+model:
+  value_head_mode: shared

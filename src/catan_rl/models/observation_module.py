@@ -41,10 +41,20 @@ class ObservationModule(nn.Module):
         use_devcard_mha: bool = True,
         max_dev_seq: int = 16,
         dev_card_vocab_excl_pad: int = 5,
+        # Phase 2 model upgrades (all opt-in to preserve back-compat).
+        use_axial_pos_emb: bool = False,
+        axial_pos_dim: int = 24,
+        transformer_dropout: float | None = None,
+        transformer_activation: str = "relu",
     ) -> None:
         super().__init__()
         self.obs_output_dim = obs_output_dim
         self.use_devcard_mha = bool(use_devcard_mha)
+
+        # Phase 2.2: ``transformer_dropout`` overrides ``dropout`` for the
+        # encoder layers when explicitly set, so we can opt in to
+        # transformer-internal dropout without disturbing other sites.
+        encoder_dropout = transformer_dropout if transformer_dropout is not None else dropout
 
         # Per-tile encoder.
         self.tile_encoder = TileEncoder(
@@ -53,7 +63,10 @@ class ObservationModule(nn.Module):
             tile_model_num_heads=tile_model_num_heads,
             tile_encoder_num_layers=tile_encoder_num_layers,
             proj_tile_dim=proj_tile_dim,
-            dropout=dropout,
+            dropout=encoder_dropout,
+            activation=transformer_activation,
+            use_axial_pos_emb=use_axial_pos_emb,
+            axial_pos_dim=axial_pos_dim,
         )
 
         # Phase 1.4: when count-encoding, the embedding+MHA pipeline is

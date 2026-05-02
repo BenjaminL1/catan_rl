@@ -81,6 +81,16 @@ class CatanPPO:
                 "use_devcard_mha",
                 "max_dev_seq",
                 "dev_card_vocab_excl_pad",
+                # Phase 2.1 axial positional embedding
+                "use_axial_pos_emb",
+                "axial_pos_dim",
+                # Phase 2.2 transformer recipe
+                "transformer_dropout",
+                "transformer_activation",
+                # Phase 2.4 AdaLN action heads
+                "action_head_film",
+                # Phase 2.5 value tower mode
+                "value_head_mode",
             )
             if k in config
         }

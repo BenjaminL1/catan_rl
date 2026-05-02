@@ -96,6 +96,28 @@ Phase 1 lineage is **not** state-dict-compatible with `checkpoint_07390040.pt`
 runs from scratch; the frozen champion stays on the legacy 166/173 lineage
 for benchmark purposes.
 
+## Phase 2 architecture upgrades
+
+Four config-flagged additions on top of Phase 1. Defaults preserve Phase 1
+behavior; opt in via `configs/phase2_full.yaml` (or the four leave-one-outs).
+
+| Sub-feature | Config key | Default | Effect |
+|---|---|---|---|
+| 2.1 Axial pos. embedding | `use_axial_pos_emb`, `axial_pos_dim` | `False`, `24` | Learned 2D embedding indexed by hex axial coords `(q, r)`; concatenated to per-tile features before the transformer projection. Breaks the encoder's permutation-equivariance over tiles |
+| 2.2 Modern transformer recipe | `transformer_dropout`, `transformer_activation` | `None`, `"relu"` | Pre-norm was already on; adds optional dropout (0.05 in `phase2_full`) and GELU FFN activation |
+| 2.4 AdaLN action heads | `action_head_film` | `False` | Replaces concat-MLP conditioning on context-using heads (corner / resource1 / resource2) with FiLM modulation: `(1+γ) ⊙ LN(x) + β` where `(γ, β)` are per-sample, generated from the head's context. γ-init=0 → identity at construction |
+| 2.5 Decoupled value tower | `value_head_mode` | `"shared"` | `"decoupled"` builds a second `ObservationModule` exclusively for the value head, breaking gradient interference between policy loss and value loss. ~+0.7M params |
+
+Phase 2 lineage stays on the Phase 1 obs schema (compact 54/61). The full
+phase2_full policy is ~2.22M params (vs ~1.54M for phase1_full); the bulk of
+the increase is the second observation encoder for the value head.
+
+`build_agent_model.DEFAULT_MODEL_CONFIG`, `arguments.MODEL_CONFIG`, and the
+trainer's `model_kwargs` whitelist all carry the four new keys. The four
+leave-one-out configs live next to `phase2_full.yaml`:
+`phase2_no_axial_pos`, `phase2_no_transformer_recipe`, `phase2_no_film`,
+`phase2_no_decoupled_value`.
+
 ## Phase 0 diagnostics
 
 The trainer's TensorBoard scalars now include per-head entropy diagnostics

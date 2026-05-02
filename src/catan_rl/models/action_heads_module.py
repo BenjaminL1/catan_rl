@@ -39,19 +39,60 @@ N_RESOURCES = 5
 class ActionHead(nn.Module):
     """One action head: 2-layer MLP → CategoricalHead.
 
-    If the head has upstream context (e.g. action type), the context vector
-    is concatenated with the main observation output before the MLP.
+    Two conditioning paths controlled by ``film=False`` (legacy, default) and
+    ``film=True`` (Phase 2.4 AdaLN/FiLM):
+
+      - Legacy: ``main_input`` and ``context`` are concatenated before the MLP.
+        Caller passes ``input_dim = main_width + context_width`` and the head
+        runs a single MLP over the concatenation.
+      - FiLM: ``main_input`` alone goes through the MLP. After each LayerNorm,
+        a per-sample ``(γ, β)`` produced by a small MLP from the context
+        modulates the activation: ``(1 + γ) ⊙ LN(x) + β``. Caller passes
+        ``input_dim = main_width`` (context is consumed by ``film_gen``, not
+        concatenated).
+
+    In both modes ``input_dim`` is the width of ``main_input`` as it arrives
+    at this module — legacy callers pre-concat upstream, FiLM callers don't.
+    AdaLN gives the head richer conditioning than concat at the same
+    parameter count; γ is initialized to zero so ``1+γ = 1`` at construction
+    (the modulation starts as identity, LLaMA-style).
     """
 
-    def __init__(self, input_dim: int, output_dim: int, hidden_dim: int = 128):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        hidden_dim: int = 128,
+        *,
+        context_dim: int = 0,
+        film: bool = False,
+    ):
         super().__init__()
-        self.net = nn.Sequential(
-            init_weights(nn.Linear(input_dim, hidden_dim)),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
-            init_weights(nn.Linear(hidden_dim, hidden_dim)),
-            nn.ReLU(),
-        )
+        self.film = bool(film) and context_dim > 0
+
+        if self.film:
+            # Two-layer MLP with explicit LayerNorm/activations so we can
+            # inject FiLM modulation between LN and the activation.
+            self.fc1 = init_weights(nn.Linear(input_dim, hidden_dim))
+            self.ln1 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+            self.act1 = nn.ReLU()
+            self.fc2 = init_weights(nn.Linear(hidden_dim, hidden_dim))
+            self.ln2 = nn.LayerNorm(hidden_dim, elementwise_affine=False)
+            self.act2 = nn.ReLU()
+            # FiLM generator: context → (γ_1, β_1, γ_2, β_2). Initialized so
+            # γ ≈ 1, β ≈ 0 at the start (modulation is identity).
+            self.film_gen = nn.Linear(context_dim, 4 * hidden_dim)
+            nn.init.zeros_(self.film_gen.weight)
+            nn.init.zeros_(self.film_gen.bias)
+            self._hidden_dim = hidden_dim
+        else:
+            self.net = nn.Sequential(
+                init_weights(nn.Linear(input_dim, hidden_dim)),
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                init_weights(nn.Linear(hidden_dim, hidden_dim)),
+                nn.ReLU(),
+            )
         self.head = CategoricalHead(hidden_dim, output_dim, gain=0.01)
 
     def forward(
@@ -59,18 +100,37 @@ class ActionHead(nn.Module):
     ) -> MaskedCategorical:
         """
         Args:
-            main_input: (B, obs_output_dim) from observation module.
-            context:    (B, context_dim) or None. Concatenated before MLP.
-            mask:       (B, output_dim) bool mask.
+            main_input: ``(B, main_dim)`` from observation module.
+            context:    ``(B, context_dim)`` or None.
+            mask:       ``(B, output_dim)`` bool mask.
 
         Returns:
-            MaskedCategorical distribution over this head's choices.
+            ``MaskedCategorical`` distribution over this head's choices.
         """
-        if context is not None:
-            x = torch.cat([main_input, context], dim=-1)
+        if self.film:
+            if context is None:
+                # Caller intends "no context" — emit zeros so γ=1, β=0
+                # (we add 1.0 to γ below).
+                ctx = torch.zeros(
+                    main_input.shape[0], self.film_gen.in_features, device=main_input.device
+                )
+            else:
+                ctx = context
+            params = self.film_gen(ctx)  # (B, 4 * hidden_dim)
+            g1, b1, g2, b2 = params.chunk(4, dim=-1)
+            x = self.fc1(main_input)
+            # γ initialized to 0 → effective γ = 1 at init (identity).
+            x = (1.0 + g1) * self.ln1(x) + b1
+            x = self.act1(x)
+            x = self.fc2(x)
+            x = (1.0 + g2) * self.ln2(x) + b2
+            features = self.act2(x)
         else:
-            x = main_input
-        features = self.net(x)
+            if context is not None:
+                x = torch.cat([main_input, context], dim=-1)
+            else:
+                x = main_input
+            features = self.net(x)
         return self.head(features, mask)
 
 
@@ -84,26 +144,51 @@ class MultiActionHeads(nn.Module):
     - We can batch-process all actions in a single forward pass during PPO updates
     """
 
-    def __init__(self, obs_output_dim: int = 512, hidden_dim: int = 128):
+    def __init__(self, obs_output_dim: int = 512, hidden_dim: int = 128, *, film: bool = False):
         super().__init__()
+        self.film = bool(film)
 
-        # Head 0: which action type? Always evaluated.
+        # Head 0: which action type? Always evaluated, no context.
         self.type_head = ActionHead(obs_output_dim, N_ACTION_TYPES, hidden_dim)
 
         # Head 1: which vertex? Context = 2-dim one-hot (is_settlement, is_city)
-        self.corner_head = ActionHead(obs_output_dim + 2, N_CORNERS, hidden_dim)
+        # FiLM path: main only is ``obs_output_dim``, context is added separately
+        # via the FiLM generator. Legacy path: concatenate, so input_dim grows.
+        if self.film:
+            self.corner_head = ActionHead(
+                obs_output_dim, N_CORNERS, hidden_dim, context_dim=2, film=True
+            )
+        else:
+            self.corner_head = ActionHead(obs_output_dim + 2, N_CORNERS, hidden_dim)
 
-        # Head 2: which edge? No context needed.
+        # Head 2: which edge? No context needed (FiLM has nothing to modulate
+        # with, so it always uses the legacy path).
         self.edge_head = ActionHead(obs_output_dim, N_EDGES, hidden_dim)
 
-        # Head 3: which tile? No context needed.
+        # Head 3: which tile? No context needed (same as edge head).
         self.tile_head = ActionHead(obs_output_dim, N_TILES, hidden_dim)
 
         # Head 4: which resource (primary)? Context = 4-dim (YoP, Monopoly, Trade, Discard)
-        self.resource1_head = ActionHead(obs_output_dim + 4, N_RESOURCES, hidden_dim)
+        if self.film:
+            self.resource1_head = ActionHead(
+                obs_output_dim, N_RESOURCES, hidden_dim, context_dim=4, film=True
+            )
+        else:
+            self.resource1_head = ActionHead(obs_output_dim + 4, N_RESOURCES, hidden_dim)
 
         # Head 5: which resource (secondary)? Context = 4-dim type context + 5-dim res1 one-hot
-        self.resource2_head = ActionHead(obs_output_dim + 4 + N_RESOURCES, N_RESOURCES, hidden_dim)
+        if self.film:
+            self.resource2_head = ActionHead(
+                obs_output_dim,
+                N_RESOURCES,
+                hidden_dim,
+                context_dim=4 + N_RESOURCES,
+                film=True,
+            )
+        else:
+            self.resource2_head = ActionHead(
+                obs_output_dim + 4 + N_RESOURCES, N_RESOURCES, hidden_dim
+            )
 
         # Log-prob relevance masks: for each action type, which heads contribute
         # to the joint log-probability? Shape: (N_ACTION_TYPES,) per head.

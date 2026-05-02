@@ -1,7 +1,16 @@
 """
 Top-level policy: dict observation → actions + value estimate.
 
-ObservationModule now expects a Charlesworth-style dict obs.
+ObservationModule expects a Charlesworth-style dict obs.
+
+Phase 2 additions (all opt-in, defaults preserve Phase 0/1 behavior):
+
+  - **2.4 AdaLN-conditioned action heads.** ``action_head_film=True`` flips
+    every context-using head from concat to FiLM modulation.
+  - **2.5 Decoupled value tower.** ``value_head_mode='decoupled'`` builds a
+    second ``ObservationModule`` exclusively for the value head, breaking
+    the feature-sharing tug-of-war between policy gradient and value loss.
+    ``'shared'`` (default) keeps the legacy single-encoder design.
 """
 
 import torch
@@ -10,6 +19,21 @@ import torch.nn as nn
 from catan_rl.models.action_heads_module import MultiActionHeads
 from catan_rl.models.observation_module import ObservationModule
 from catan_rl.models.utils import init_weights
+
+
+def _build_value_net(in_dim: int, hidden_dims: tuple[int, ...]) -> nn.Sequential:
+    """Linear→LayerNorm→ReLU stack ending in a single scalar (gain=1.0)."""
+    layers: list[nn.Module] = []
+    prev_dim = in_dim
+    for hdim in hidden_dims:
+        layers.append(init_weights(nn.Linear(prev_dim, hdim)))
+        layers.append(nn.LayerNorm(hdim))
+        layers.append(nn.ReLU())
+        prev_dim = hdim
+    final = nn.Linear(prev_dim, 1)
+    init_weights(final, gain=1.0)
+    layers.append(final)
+    return nn.Sequential(*layers)
 
 
 class CatanPolicy(nn.Module):
@@ -27,36 +51,52 @@ class CatanPolicy(nn.Module):
         obs_output_dim: int = 512,
         value_hidden_dims: tuple[int, ...] = (256, 128),
         action_head_hidden_dim: int = 128,
+        action_head_film: bool = False,
+        value_head_mode: str = "shared",
         **obs_module_kwargs,
     ):
         super().__init__()
+        if value_head_mode not in ("shared", "decoupled"):
+            raise ValueError(
+                f"value_head_mode must be 'shared' or 'decoupled', got {value_head_mode!r}"
+            )
+        self.value_head_mode = value_head_mode
 
-        # Encode observations → fixed-size vector
+        # Policy-side observation encoder (also used by the value head when
+        # ``value_head_mode='shared'``).
         self.observation_module = ObservationModule(
             obs_output_dim=obs_output_dim, **obs_module_kwargs
         )
 
-        # Multi-head action selection
+        # Phase 2.5: decoupled value tower has its own encoder. Same
+        # architecture as the policy encoder — separate weights only — so the
+        # two heads stop fighting over a single shared trunk.
+        if value_head_mode == "decoupled":
+            self.value_observation_module = ObservationModule(
+                obs_output_dim=obs_output_dim, **obs_module_kwargs
+            )
+        else:
+            self.value_observation_module = None
+
+        # Multi-head action selection (Phase 2.4 AdaLN-conditioned when on).
         self.action_heads = MultiActionHeads(
-            obs_output_dim=obs_output_dim, hidden_dim=action_head_hidden_dim
+            obs_output_dim=obs_output_dim,
+            hidden_dim=action_head_hidden_dim,
+            film=action_head_film,
         )
 
-        # Value network: predicts expected return from current state.
-        # Architecture: Linear→LayerNorm→ReLU for each hidden layer,
-        # then a final Linear→scalar with gain=1.0 (not 0.01, because
-        # we want the value output to have meaningful scale from the start).
-        value_layers = []
-        prev_dim = obs_output_dim
-        for hdim in value_hidden_dims:
-            value_layers.append(init_weights(nn.Linear(prev_dim, hdim)))
-            value_layers.append(nn.LayerNorm(hdim))
-            value_layers.append(nn.ReLU())
-            prev_dim = hdim
-        # Final output layer with gain=1.0
-        final = nn.Linear(prev_dim, 1)
-        init_weights(final, gain=1.0)
-        value_layers.append(final)
-        self.value_net = nn.Sequential(*value_layers)
+        # Value tower: Linear→LayerNorm→ReLU stack → scalar.
+        self.value_net = _build_value_net(obs_output_dim, value_hidden_dims)
+
+    def _value_features(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+        """Run the value-head's observation encoder.
+
+        Shared mode reuses the policy encoder's output (caller already has it).
+        Decoupled mode runs a separate encoder so the value gradient never
+        touches the policy trunk.
+        """
+        assert self.value_observation_module is not None
+        return self.value_observation_module(obs)
 
     def act(
         self,
@@ -77,7 +117,10 @@ class CatanPolicy(nn.Module):
             log_prob: (B,) probability of the chosen actions under current policy.
         """
         obs_out = self.observation_module(obs)
-        value = self.value_net(obs_out)
+        if self.value_head_mode == "decoupled":
+            value = self.value_net(self._value_features(obs))
+        else:
+            value = self.value_net(obs_out)
         actions, log_prob, _ = self.action_heads(obs_out, masks, deterministic=deterministic)
         return actions, value, log_prob
 
@@ -107,7 +150,10 @@ class CatanPolicy(nn.Module):
             With ``return_per_head=True``: (value, log_prob, entropy, per_head_dict).
         """
         obs_out = self.observation_module(obs)
-        value = self.value_net(obs_out)
+        if self.value_head_mode == "decoupled":
+            value = self.value_net(self._value_features(obs))
+        else:
+            value = self.value_net(obs_out)
         if return_per_head:
             _, log_prob, entropy, per_head = self.action_heads(
                 obs_out, masks, actions=actions, return_per_head=True
@@ -117,6 +163,10 @@ class CatanPolicy(nn.Module):
         return value, log_prob, entropy
 
     def get_value(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
-        """Cheap value-only forward pass (no action heads)."""
-        obs_out = self.observation_module(obs)
-        return self.value_net(obs_out)
+        """Cheap value-only forward pass (no action heads).
+
+        Decoupled mode skips the policy encoder entirely.
+        """
+        if self.value_head_mode == "decoupled":
+            return self.value_net(self._value_features(obs))
+        return self.value_net(self.observation_module(obs))
