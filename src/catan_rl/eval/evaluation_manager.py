@@ -157,11 +157,17 @@ class EvaluationManager:
     """
 
     def __init__(
-        self, n_games: int = 20, opponent_type: str = "random", max_turns: int | None = 500
+        self,
+        n_games: int = 20,
+        opponent_type: str = "random",
+        max_turns: int | None = 500,
+        use_thermometer_encoding: bool = True,
     ):
         self.n_games = n_games
         self.opponent_type = opponent_type
         self.max_turns = max_turns
+        # Phase 1.3: must match the policy's expected obs schema.
+        self.use_thermometer_encoding = bool(use_thermometer_encoding)
 
     # ── Default eval ─────────────────────────────────────────────────────
 
@@ -189,7 +195,12 @@ class EvaluationManager:
         Returns:
             ``{'win_rate', 'avg_vp', 'avg_game_length', 'truncation_rate'}``.
         """
-        env = CatanEnv(render_mode=None, opponent_type=self.opponent_type, max_turns=self.max_turns)
+        env = CatanEnv(
+            render_mode=None,
+            opponent_type=self.opponent_type,
+            max_turns=self.max_turns,
+            use_thermometer_encoding=self.use_thermometer_encoding,
+        )
         n = len(seeds) if seeds is not None else self.n_games
         wins = 0
         truncations = 0
@@ -254,9 +265,15 @@ class EvaluationManager:
             render_mode=None,
             opponent_type="policy",
             max_turns=self.max_turns,
+            use_thermometer_encoding=self.use_thermometer_encoding,
         )
         env_b = (
-            CatanEnv(render_mode=None, opponent_type="policy", max_turns=self.max_turns)
+            CatanEnv(
+                render_mode=None,
+                opponent_type="policy",
+                max_turns=self.max_turns,
+                use_thermometer_encoding=self.use_thermometer_encoding,
+            )
             if swap_first_player
             else None
         )

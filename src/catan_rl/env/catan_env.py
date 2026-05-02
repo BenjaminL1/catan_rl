@@ -90,7 +90,11 @@ DOTS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1, None: 0}
 
 
 def bucket8(v: float, max_v: float) -> np.ndarray:
-    """8-threshold binary encoding: bit i=1 if v >= (i+1)*max_v/8."""
+    """8-threshold binary encoding: bit i=1 if v >= (i+1)*max_v/8.
+
+    Legacy thermometer encoding used when ``use_thermometer_encoding=True``.
+    Phase 1.3 introduces ``compact_scalar`` as the lower-dim alternative.
+    """
     arr = np.zeros(8, dtype=np.float32)
     if max_v <= 0:
         return arr
@@ -98,6 +102,20 @@ def bucket8(v: float, max_v: float) -> np.ndarray:
         if v >= (i + 1) * max_v / 8.0:
             arr[i] = 1.0
     return arr
+
+
+def compact_scalar(v: float, max_v: float) -> list[float]:
+    """Phase 1.3 compact replacement for ``bucket8``: a single ``v / max_v``.
+
+    Returned as a single-element list so the caller can use the same
+    ``f.extend(...)`` interface as the legacy thermometer path. Values are
+    clipped to ``[0, max_v]`` then divided so the resulting feature is in
+    ``[0, 1]`` matching the rest of the per-player obs dynamic range.
+    """
+    if max_v <= 0:
+        return [0.0]
+    clipped = max(0.0, min(float(v), float(max_v)))
+    return [clipped / float(max_v)]
 
 
 def _compute_income(p, board) -> list:
@@ -124,19 +142,37 @@ def _compute_income(p, board) -> list:
 class CatanEnv(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"]}
 
-    def __init__(self, render_mode=None, opponent_type="random", max_turns=500):
+    def __init__(
+        self,
+        render_mode=None,
+        opponent_type="random",
+        max_turns=500,
+        use_thermometer_encoding: bool = True,
+    ):
         super().__init__()
         self.render_mode = render_mode
         self.opponent_type = opponent_type
         self.max_turns = max_turns
+
+        # Phase 1.3: choose between the legacy bucket8-thermometer player
+        # encoding and the compact normalized-scalar version. Default True
+        # preserves checkpoint_07390040.pt loadability; phase1_full.yaml
+        # opts in to the compact encoding.
+        self.use_thermometer_encoding = bool(use_thermometer_encoding)
+        self._curr_player_dim = CURR_PLAYER_DIM if self.use_thermometer_encoding else 54
+        self._next_player_dim = NEXT_PLAYER_DIM if self.use_thermometer_encoding else 61
 
         # Spaces
         self.action_space = spaces.MultiDiscrete([13, 54, 72, 19, 5, 5])
         self.observation_space = spaces.Dict(
             {
                 "tile_representations": spaces.Box(0.0, 1.0, (N_TILES, TILE_DIM), dtype=np.float32),
-                "current_player_main": spaces.Box(-1.0, 2.0, (CURR_PLAYER_DIM,), dtype=np.float32),
-                "next_player_main": spaces.Box(-1.0, 2.0, (NEXT_PLAYER_DIM,), dtype=np.float32),
+                "current_player_main": spaces.Box(
+                    -1.0, 2.0, (self._curr_player_dim,), dtype=np.float32
+                ),
+                "next_player_main": spaces.Box(
+                    -1.0, 2.0, (self._next_player_dim,), dtype=np.float32
+                ),
                 "current_player_hidden_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
                 "current_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
                 "next_player_played_dev": spaces.Box(0, 5, (MAX_DEV_SEQ,), dtype=np.int32),
@@ -864,16 +900,25 @@ class CatanEnv(gym.Env):
         return tiles
 
     def _build_current_player_main(self, p) -> np.ndarray:
-        """Build 166-dim feature vector for the acting player."""
+        """Build the per-player feature vector.
+
+        Dim depends on ``use_thermometer_encoding``: 166 (legacy bucket8)
+        or 53 (Phase 1.3 compact). The encoding is identical in information
+        content; only the representation of integer-valued counts differs.
+        """
         board = self.game.board
         f = []
+        # Phase 1.3: switch between the legacy 8-threshold bucket and a
+        # single normalized scalar. Module-level helpers keep both call
+        # sites identical (both use ``f.extend``).
+        encode = bucket8 if self.use_thermometer_encoding else compact_scalar
 
-        # Resources (5 × 8 = 40) in RESOURCES_CW order
+        # Resources in RESOURCES_CW order (5 × {8 | 1})
         for r in RESOURCES_CW:
-            f.extend(bucket8(p.resources.get(r, 0), 8))
+            f.extend(encode(p.resources.get(r, 0), 8))
 
-        # VP (8)
-        f.extend(bucket8(p.victoryPoints, 15))
+        # VP ({8 | 1})
+        f.extend(encode(p.victoryPoints, 15))
 
         # Income (5 floats)
         income = _compute_income(p, board)
@@ -898,24 +943,24 @@ class CatanEnv(gym.Env):
         f.append(1.0 if p.longestRoadFlag else 0.0)
         f.append(1.0 if p.largestArmyFlag else 0.0)
 
-        # Road length (8)
-        f.extend(bucket8(p.maxRoadLength, 15))
+        # Road length ({8 | 1})
+        f.extend(encode(p.maxRoadLength, 15))
 
-        # Knights played (8)
-        f.extend(bucket8(p.knightsPlayed, 8))
+        # Knights played ({8 | 1})
+        f.extend(encode(p.knightsPlayed, 8))
 
-        # Settlements left (8)
-        f.extend(bucket8(p.settlementsLeft, 5))
+        # Settlements left ({8 | 1})
+        f.extend(encode(p.settlementsLeft, 5))
 
-        # Cities left (8)
-        f.extend(bucket8(p.citiesLeft, 4))
+        # Cities left ({8 | 1})
+        f.extend(encode(p.citiesLeft, 4))
 
-        # Roads left (1 normalized)
+        # Roads left (1 normalized; same in both modes)
         f.append(p.roadsLeft / 15.0)
 
-        # Dev cards (5 × 8 = 40) in DEV_CARD_ORDER
+        # Dev cards in DEV_CARD_ORDER (5 × {8 | 1})
         for c in DEV_CARD_ORDER:
-            f.extend(bucket8(p.devCards.get(c, 0), 8))
+            f.extend(encode(p.devCards.get(c, 0), 8))
 
         # Phase flags (5)
         f.append(1.0 if self.initial_placement_phase else 0.0)
@@ -934,9 +979,9 @@ class CatanEnv(gym.Env):
         f.append(1.0 if self.robber_placement_pending else 0.0)
         f.append(1.0 if self.discard_pending else 0.0)
 
-        # Deck remaining (8)
+        # Deck remaining ({8 | 1})
         deck_total = sum(board.devCardStack.values())
-        f.extend(bucket8(deck_total, 25))
+        f.extend(encode(deck_total, 25))
 
         # Dice roll one-hot 2-12 (11)
         dice_oh = [0.0] * 11
@@ -953,15 +998,19 @@ class CatanEnv(gym.Env):
         f.append(1.0 if p.devCardPlayedThisTurn else 0.0)
 
         arr = np.array(f, dtype=np.float32)
-        assert len(arr) == CURR_PLAYER_DIM, (
-            f"curr_player_main dim={len(arr)} expected {CURR_PLAYER_DIM}"
+        assert len(arr) == self._curr_player_dim, (
+            f"curr_player_main dim={len(arr)} expected {self._curr_player_dim} "
+            f"(use_thermometer_encoding={self.use_thermometer_encoding})"
         )
         return arr
 
     def _build_next_player_main(self, p, acting_player) -> np.ndarray:
-        """Build 173-dim feature vector for the non-acting player.
-        Same as current_player_main (166) + num_hidden_dev_oh (6) + total_res_norm (1).
-        Uses BroadcastHandTracker for exact resource tracking.
+        """Build the per-opponent feature vector.
+
+        Dim depends on ``use_thermometer_encoding``: 173 (legacy) or 60
+        (Phase 1.3 compact). Layout = current-player vector (166 or 53)
+        + 6 hidden-dev-count one-hot + 1 total-resources/20.
+        Uses ``BroadcastHandTracker`` for exact resource tracking.
         """
         # Temporarily override p.resources with tracker data for encoding
         tracked = self._hand_tracker.get_hand(p.name)
@@ -984,8 +1033,9 @@ class CatanEnv(gym.Env):
         total_res_norm = np.array([total_res / 20.0], dtype=np.float32)
 
         arr = np.concatenate([base, hidden_oh, total_res_norm])
-        assert len(arr) == NEXT_PLAYER_DIM, (
-            f"next_player_main dim={len(arr)} expected {NEXT_PLAYER_DIM}"
+        assert len(arr) == self._next_player_dim, (
+            f"next_player_main dim={len(arr)} expected {self._next_player_dim} "
+            f"(use_thermometer_encoding={self.use_thermometer_encoding})"
         )
         return arr
 

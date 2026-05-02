@@ -71,6 +71,15 @@ Dict with keys `tile_representations (19,79)`, `current_player_main (166,)`, `ne
 ## Active roadmap
 See `docs/plans/superhuman_roadmap.md` (Phase 0 = correctness/eval-harness, Phase 1 = sample efficiency, Phase 2 = architecture, Phase 3 = self-play diversity, Phase 4 = optional MCTS/GRU/belief).
 
+## Phase 1 (landed)
+- **1.1 Value clipping** (PPO2-style): `loss_v = max(MSE_unclipped, MSE_clipped)` with `clip_range_vf=0.2`. Config: `use_value_clipping` (default `True`).
+- **1.2 Per-rollout advantage normalization**: `advantage_norm: 'rollout' | 'batch' | 'none'`. Default `'rollout'` standardizes globally over the buffer; the trainer's per-batch step is a no-op in that mode.
+- **1.3 Compact obs schema**: `use_thermometer_encoding=False` (Phase 1 default in `configs/phase1_full.yaml`) drops bucket8 thermometers. Player feature dims: 166/173 (legacy) → 54/61 (compact). `_maybe_apply_compact_obs_dims` in `arguments.py` auto-aligns model input dims when only the flag is flipped. **Phase 1 lineage is incompatible with `checkpoint_07390040.pt`** — fresh training only.
+- **1.4 Dev-card count encoding**: `use_devcard_mha=False` swaps MHA + sum-pool for `DevCardCountEncoder` (bincount → 2-layer MLP). Saves ~36k params; permutation-invariant by construction.
+- **1.5 D6 dihedral symmetry augmentation**: `symmetry_aug_prob=0.5` in `phase1_full.yaml`. `catan_rl.augmentation.apply_symmetry` permutes the tile axis, the within-tile corner/edge feature blocks, and the corner/edge/tile action axes through precomputed tables in `catan_rl.augmentation.symmetry_tables`.
+
+Phase 1 YAML configs: `configs/phase1_full.yaml` plus 5 leave-one-outs (`phase1_no_{value_clip, advantage_norm, thermometer_drop, devcard_count, symmetry_aug}.yaml`).
+
 ## Phase 0 (landed)
 - `compute_gae` / `compute_gae_vectorized` accept separate `terminated` and `truncated` arrays. Truncations bootstrap with `V(s_T)`; the GAE accumulator resets at any episode boundary. Legacy single-`dones` calling convention still works for back-compat.
 - `CompositeRolloutBuffer` stores `terminated` and `truncated` separately; `buffer.dones` is a derived OR-mask for any old code that still reads it.

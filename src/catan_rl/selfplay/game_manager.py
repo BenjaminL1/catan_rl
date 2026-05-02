@@ -32,6 +32,7 @@ class GameManager:
         league=None,
         build_policy_fn: Callable | None = None,
         device: str = "cpu",
+        use_thermometer_encoding: bool = True,
     ):
         self.n_envs = n_envs
         self.league = league
@@ -45,7 +46,12 @@ class GameManager:
         opp_type = "policy" if use_league else opponent_type
 
         self.envs = [
-            CatanEnv(render_mode=None, opponent_type=opp_type, max_turns=max_turns)
+            CatanEnv(
+                render_mode=None,
+                opponent_type=opp_type,
+                max_turns=max_turns,
+                use_thermometer_encoding=use_thermometer_encoding,
+            )
             for _ in range(n_envs)
         ]
 

@@ -1,0 +1,5 @@
+# Phase 1 leave-one-out: D6 symmetry augmentation (1.5) disabled.
+_base: phase1_full.yaml
+
+phase1:
+  symmetry_aug_prob: 0.0

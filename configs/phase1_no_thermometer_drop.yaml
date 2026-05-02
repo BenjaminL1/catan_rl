@@ -1,0 +1,11 @@
+# Phase 1 leave-one-out: keep the legacy bucket8 thermometer encoding (1.3
+# disabled). All other Phase 1 features remain on. Used to ablate whether the
+# obs schema change is responsible for any improvement.
+_base: phase1_full.yaml
+
+model:
+  curr_player_main_in_dim: 166
+  other_player_main_in_dim: 173
+
+phase1:
+  use_thermometer_encoding: true

@@ -1,0 +1,5 @@
+# Phase 1 leave-one-out: keep the MHA-based dev-card encoder (1.4 disabled).
+_base: phase1_full.yaml
+
+phase1:
+  use_devcard_mha: true

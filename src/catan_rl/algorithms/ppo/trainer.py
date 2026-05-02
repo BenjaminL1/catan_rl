@@ -128,11 +128,15 @@ class CatanPPO:
         # Multi-env: in-process parallel games (no subprocess overhead on M1)
         self.n_envs = config.get("n_envs", 1)
 
-        # Rollout buffer (Charlesworth-style dict observations)
+        # Rollout buffer (Charlesworth-style dict observations).
+        # Phase 1.3: align buffer storage dims to the configured player encoding
+        # so compact-mode obs (54/61) don't get broadcast into legacy 166/173 slots.
         self.buffer = CompositeRolloutBuffer(
             n_steps=self.n_steps,
             device=self.device,
             n_envs=self.n_envs,
+            curr_player_dim=int(config.get("curr_player_main_in_dim", 166)),
+            next_player_dim=int(config.get("other_player_main_in_dim", 173)),
         )
 
         # KL early stopping: break out of update epochs if policy drifts too far
@@ -154,6 +158,12 @@ class CatanPPO:
             raise ValueError(
                 f"advantage_norm must be 'rollout'|'batch'|'none', got {self.advantage_norm!r}"
             )
+
+        # Phase 1.5: D6 dihedral-symmetry augmentation per minibatch.
+        # 0.0 = off (default for back-compat); 0.5 recommended in phase1_full.
+        self.symmetry_aug_prob = float(config.get("symmetry_aug_prob", 0.0))
+        if not 0.0 <= self.symmetry_aug_prob <= 1.0:
+            raise ValueError(f"symmetry_aug_prob must be in [0, 1], got {self.symmetry_aug_prob!r}")
 
         # Entropy floor: prevent policy collapse by boosting entropy_coef if needed
         self.entropy_floor = config.get("entropy_floor", 0.003)
@@ -180,7 +190,8 @@ class CatanPPO:
         def build_policy_fn(device: str = "cpu"):
             return build_agent_model(device=device, **model_kwargs)
 
-        # Environment manager: use league for policy opponents when league has policies
+        # Environment manager: use league for policy opponents when league has policies.
+        # Phase 1.3: thermometer-vs-compact obs encoding flag plumbed into env.
         self.game_manager = GameManager(
             n_envs=self.n_envs,
             opponent_type="random",
@@ -188,16 +199,19 @@ class CatanPPO:
             league=self.league,
             build_policy_fn=build_policy_fn,
             device=self.device,
+            use_thermometer_encoding=bool(config.get("use_thermometer_encoding", True)),
         )
 
         # Evaluation opponent: starts as configured, auto-upgrades to heuristic
         # once the model crosses eval_upgrade_threshold win rate vs the current opponent.
         self._eval_opponent = config.get("opponent_type", "random")
         self._eval_upgrade_threshold = config.get("eval_upgrade_threshold", 0.95)
+        self._use_thermometer_encoding = bool(config.get("use_thermometer_encoding", True))
         self.eval_manager = EvaluationManager(
             n_games=config.get("eval_games", 40),
             opponent_type=self._eval_opponent,
             max_turns=config.get("max_turns", 500),
+            use_thermometer_encoding=self._use_thermometer_encoding,
         )
 
         # Logging
@@ -466,7 +480,9 @@ class CatanPPO:
             epoch_kl = 0.0
             epoch_batches = 0
 
-            for batch in self.buffer.get_batches(self.batch_size):
+            for batch in self.buffer.get_batches(
+                self.batch_size, symmetry_aug_prob=self.symmetry_aug_prob
+            ):
                 obs = batch["obs"]
                 actions = batch["actions"]
                 old_log_prob = batch["old_log_prob"]
@@ -735,6 +751,7 @@ class CatanPPO:
                             n_games=self.config.get("eval_games", 40),
                             opponent_type="heuristic",
                             max_turns=self.config.get("max_turns", 500),
+                            use_thermometer_encoding=self._use_thermometer_encoding,
                         )
                         # Reset win-rate history — old random-opponent values are not comparable
                         self._eval_win_rate_history = []
@@ -840,6 +857,7 @@ class CatanPPO:
                 n_games=config.get("eval_games", 40),
                 opponent_type=trainer._eval_opponent,
                 max_turns=config.get("max_turns", 500),
+                use_thermometer_encoding=trainer._use_thermometer_encoding,
             )
 
         print(

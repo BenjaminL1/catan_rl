@@ -77,6 +77,25 @@ One-page description of the training loop. For details, see the linked source fi
 | Eval harness (rules-invariant / champion-bench / exploitability / league-rating) | `scripts/eval_harness.py` |
 | Migrate pre-Phase-0 checkpoint | `scripts/migrate_checkpoint.py` |
 
+## Phase 1 sample-efficiency upgrades
+
+All five sub-features are config-flagged so leave-one-out ablations work.
+Defaults preserve back-compat with `checkpoint_07390040.pt`; opt in via
+`configs/phase1_full.yaml`.
+
+| Sub-feature | Config key | Default | Effect |
+|---|---|---|---|
+| 1.1 PPO2 value clipping | `use_value_clipping`, `clip_range_vf` | `True`, `0.2` | Pessimistic value loss `max(MSE_unclipped, MSE_clipped)` |
+| 1.2 Per-rollout adv. norm | `advantage_norm` | `"rollout"` | Standardize over the whole buffer; alt: `"batch"`, `"none"` |
+| 1.3 Compact obs schema | `use_thermometer_encoding` | `True` (legacy) | Drop bucket8: 166/173 → 54/61 |
+| 1.4 Dev-card count enc. | `use_devcard_mha` | `True` (legacy) | Replace MHA over padded sequence with bincount + MLP (~36k fewer params) |
+| 1.5 D6 symmetry aug. | `symmetry_aug_prob` | `0.0` | Per-minibatch, with this probability sample one of 11 non-identity D6 elements and permute tile/corner/edge slots |
+
+Phase 1 lineage is **not** state-dict-compatible with `checkpoint_07390040.pt`
+(compact obs changes the model's first-layer input dim). Phase 1 training
+runs from scratch; the frozen champion stays on the legacy 166/173 lineage
+for benchmark purposes.
+
 ## Phase 0 diagnostics
 
 The trainer's TensorBoard scalars now include per-head entropy diagnostics
