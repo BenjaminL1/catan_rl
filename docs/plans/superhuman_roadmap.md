@@ -597,6 +597,16 @@ If WR vs `phase1_full` < 52% after both Option A and Option B: **stop and reasse
 
 ## 6. Phase 3 — Self-Play Upgrades
 
+**Status (2026-05-02):** 3.1 PFSP-hard, 3.2 latest-policy regularization,
+3.4 TrueSkill ratings, 3.5 Nash-weighted pruning, and 3.6 opponent-ID
+embedding all landed on `feat/phase-3-self-play-diversity`. 3.3 duo
+exploiter cycle is **scaffolded but deferred** (config keys parse, full
+implementation in a follow-up PR — see ADR
+[`0008-phase-3-self-play-diversity.md`](../decisions/0008-phase-3-self-play-diversity.md)).
+Configs: `configs/phase3_full.yaml` plus
+`phase3_no_{pfsp_hard, latest_policy, trueskill, nash_pruning, opp_id_emb}.yaml`.
+Param count: ~2.22M (phase2_full) → ~2.24M (phase3_full).
+
 **Why fourth.** Architectural gains saturate when opponent distribution is too narrow. AlphaStar showed that diverse opponent populations give the largest late-game gains. Phase 3 also delivers the bulk of the **exploitability < 5%** improvement (exploitability *is* a self-play diversity signal).
 
 ### 6.1 Sub-features

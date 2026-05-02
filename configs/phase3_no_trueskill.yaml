@@ -1,0 +1,6 @@
+# Phase 3 leave-one-out: drops 3.4 TrueSkill league rating. PFSP and
+# Nash pruning still operate on cumulative win rates.
+_base: phase3_full.yaml
+
+league:
+  use_trueskill: false

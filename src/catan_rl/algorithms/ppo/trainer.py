@@ -29,6 +29,12 @@ from catan_rl.models.build_agent_model import build_agent_model
 from catan_rl.models.utils import ValueFunctionNormalizer
 from catan_rl.selfplay.game_manager import GameManager
 from catan_rl.selfplay.league import League
+from catan_rl.selfplay.ratings import RatingTable
+
+# Sentinel ID for the *current* learning policy in the rating table. Stays
+# the same across the run; opponents have monotonically increasing IDs that
+# never collide with this.
+RATINGS_MAIN_ID = -99
 
 
 class CatanPPO:
@@ -91,6 +97,11 @@ class CatanPPO:
                 "action_head_film",
                 # Phase 2.5 value tower mode
                 "value_head_mode",
+                # Phase 3.6 opponent identity embedding
+                "use_opponent_id_emb",
+                "opp_id_emb_dim",
+                "n_opp_kinds",
+                "league_maxlen",
             )
             if k in config
         }
@@ -147,6 +158,7 @@ class CatanPPO:
             n_envs=self.n_envs,
             curr_player_dim=int(config.get("curr_player_main_in_dim", 166)),
             next_player_dim=int(config.get("other_player_main_in_dim", 173)),
+            store_opponent_id=bool(config.get("use_opponent_id_emb", False)),
         )
 
         # KL early stopping: break out of update epochs if policy drifts too far
@@ -191,10 +203,54 @@ class CatanPPO:
             add_every=config.get("add_policy_every", 4),
             random_weight=config.get("league_random_weight", 0.0),
             heuristic_weight=config.get("heuristic_opponent_weight", 0.0),
+            # Phase 3.1 PFSP-hard / PFSP-var sampling.
+            pfsp_mode=config.get("pfsp_mode", "linear"),
+            pfsp_p=config.get("pfsp_p", 2.0),
+            pfsp_window=config.get("pfsp_window", 32),
+            # Phase 3.2 latest-policy regularization.
+            latest_policy_weight=config.get("latest_policy_weight", 0.0),
         )
 
         # Add initial policy so league always has at least one (required for policy opponents)
         self.league.add(copy.deepcopy(self._raw_policy_state_dict()))
+
+        # ── Phase 3.4: TrueSkill / Glicko-2 league ratings ─────────────────
+        # ``use_trueskill`` defaults off so legacy configs stay byte-for-byte
+        # identical. ``trueskill_decay`` (default 1.001 per update) inflates
+        # σ slowly to handle non-stationary policies — without it, the
+        # main's σ collapses to ~1.0 within a few hundred updates and PFSP
+        # win predictions become brittle.
+        self.use_trueskill = bool(config.get("use_trueskill", False))
+        self.trueskill_decay = float(config.get("trueskill_decay", 1.001))
+        self.rating_table: RatingTable | None = RatingTable() if self.use_trueskill else None
+
+        # ── Phase 3.5: Nash-weighted checkpoint pruning ────────────────────
+        # ``prune_strategy='nash'`` periodically replaces the FIFO eviction
+        # rule with a replicator-dynamics evaluation: the policy with the
+        # lowest Nash mixture mass is dropped, keeping the league biased
+        # toward strategically-distinct opponents.
+        self.prune_strategy = config.get("prune_strategy", "fifo")
+        if self.prune_strategy not in ("fifo", "nash"):
+            raise ValueError(
+                f"prune_strategy must be 'fifo' or 'nash', got {self.prune_strategy!r}"
+            )
+        self.nash_prune_every = int(config.get("prune_every", 20))
+        self.nash_top_k = int(config.get("nash_top_k", 32))
+        self.nash_prune_games = int(config.get("nash_prune_round_games", 50))
+        self._adds_since_prune = 0
+
+        # ── Phase 3.3: Duo-exploiter cycle (scaffolded, not yet active) ────
+        # Configs are accepted so ``phase3_full.yaml`` parses cleanly and
+        # users opting in see an explicit "deferred to follow-up PR" message
+        # rather than a silent no-op. The actual interleaved exploiter
+        # training will land in a successor PR — see roadmap §6.1.3 and
+        # ADR 0008 for the design.
+        self.exploiter_mode = config.get("exploiter_mode", "off")
+        if self.exploiter_mode not in ("off", "duo"):
+            raise ValueError(f"exploiter_mode must be 'off' or 'duo', got {self.exploiter_mode!r}")
+        self.exploiter_cycle_steps = int(config.get("exploiter_cycle_steps", 1_000_000))
+        self.exploiter_priority_multiplier = float(config.get("exploiter_priority_multiplier", 1.5))
+        self._exploiter_stub_warned = False
 
         # Build policy factory for league/GameManager (creates policy instances for inference)
         def build_policy_fn(device: str = "cpu"):
@@ -202,6 +258,10 @@ class CatanPPO:
 
         # Environment manager: use league for policy opponents when league has policies.
         # Phase 1.3: thermometer-vs-compact obs encoding flag plumbed into env.
+        # Phase 3.2: ``current_policy_state_fn`` lets the league's
+        # ``current_self`` opponent draw a live snapshot of self.policy.
+        # Phase 3.4: ``record_match_fn`` updates the TrueSkill rating table
+        # from every concluded league match.
         self.game_manager = GameManager(
             n_envs=self.n_envs,
             opponent_type="random",
@@ -210,6 +270,11 @@ class CatanPPO:
             build_policy_fn=build_policy_fn,
             device=self.device,
             use_thermometer_encoding=bool(config.get("use_thermometer_encoding", True)),
+            current_policy_state_fn=self._raw_policy_state_dict,
+            record_match_fn=self._record_rating_match if self.use_trueskill else None,
+            use_opponent_id_emb=bool(config.get("use_opponent_id_emb", False)),
+            opp_id_mask_prob=float(config.get("opp_id_mask_prob", 0.40)),
+            league_maxlen=int(config.get("league_maxlen", 100)),
         )
 
         # Evaluation opponent: starts as configured, auto-upgrades to heuristic
@@ -256,6 +321,142 @@ class CatanPPO:
             sd = {k[len("_orig_mod.") :]: v for k, v in sd.items()}
         return sd
 
+    # ── Phase 3.4: TrueSkill rating helpers ───────────────────────────────
+    def _record_rating_match(self, opponent_policy_id: int, win: int) -> None:
+        """Update the rating table after a single match.
+
+        Skips matches where the opponent has no stable policy ID (random,
+        heuristic, current_self) — those would corrupt ratings by injecting
+        many "match" rows for non-policy entities. Random/heuristic remain
+        useful as PFSP signal but not as Elo signal.
+        """
+        if self.rating_table is None or opponent_policy_id < 0:
+            return
+        self.rating_table.record_match(RATINGS_MAIN_ID, opponent_policy_id, a_won=bool(win))
+
+    def _decay_ratings_sigma(self) -> None:
+        """Inflate every rating's σ by ``trueskill_decay``.
+
+        Without this, σ collapses toward 1.0 within a few hundred matches
+        and the rating system becomes overconfident in stale numbers. The
+        backend's own update already shrinks σ; this re-injects uncertainty
+        each PPO update so non-stationarity is reflected.
+        """
+        if self.rating_table is None or self.trueskill_decay == 1.0:
+            return
+        from catan_rl.selfplay.ratings import Rating
+
+        for k, r in list(self.rating_table.ratings.items()):
+            self.rating_table.ratings[k] = Rating(mu=r.mu, sigma=r.sigma * self.trueskill_decay)
+
+    # ── Phase 3.3: Duo-exploiter cycle (deferred scaffolding) ──────────────
+    def _maybe_run_exploiter_cycle(self) -> None:
+        """Trigger an exploiter training cycle when due.
+
+        Scheduled every ``exploiter_cycle_steps`` of main training when
+        ``exploiter_mode='duo'``. The implementation is intentionally a
+        no-op for now — the interleaved exploiter trainer is planned for a
+        follow-up PR. We still emit a single-shot warning so users opting
+        in via YAML get an explicit pointer.
+        """
+        if self.exploiter_mode != "duo":
+            return
+        if self.global_step < self.exploiter_cycle_steps:
+            return
+        if self._exploiter_stub_warned:
+            return
+        self._exploiter_stub_warned = True
+        print(
+            "[exploiter] duo-exploiter cycle scheduled but not yet implemented "
+            "(deferred to follow-up PR; see ADR 0008 §3.3). Continuing main training."
+        )
+        if self.writer is not None:
+            self.writer.add_scalar("train/exploiter_cycle_deferred", 1.0, self.global_step)
+
+    # ── Phase 3.5: Nash-weighted checkpoint pruning ────────────────────────
+    def _maybe_run_nash_pruning(self) -> None:
+        """Periodically replace FIFO eviction with Nash-weighted pruning.
+
+        Triggered every ``prune_every`` league adds **and** only when the
+        league is at capacity (otherwise FIFO/Nash agree: nothing to evict).
+
+        Cost: ``nash_top_k * (nash_top_k - 1) / 2 * nash_prune_round_games``
+        h2h games. With defaults (32, 50) that's ~24,800 games — substantial,
+        which is why this runs at most every 20 league adds.
+        """
+        if self.prune_strategy != "nash":
+            return
+        if len(self.league) < self.league.policies.maxlen:
+            return  # No eviction needed yet.
+        if self._adds_since_prune < self.nash_prune_every:
+            return
+        self._adds_since_prune = 0
+
+        # Pick the most recent K entries — proxy for "currently relevant"
+        # without a full league-wide round-robin (would cost ``maxlen^2/2``).
+        ids = list(self.league._policy_ids)[-self.nash_top_k :]
+        if len(ids) < 2:
+            return
+        # Map each ID back to its state_dict (deque-aligned with _policy_ids).
+        state_dicts: dict[int, dict] = {
+            pid: sd
+            for pid, sd in zip(self.league._policy_ids, self.league.policies, strict=True)
+            if pid in ids
+        }
+        payoff = self._build_payoff_matrix(ids, state_dicts)
+        evicted = self.league.prune_nash(payoff, ids)
+        if self.rating_table is not None:
+            self.rating_table.ratings.pop(evicted, None)
+
+    def _build_payoff_matrix(self, ids: list[int], state_dicts: dict[int, dict]) -> "np.ndarray":
+        """Round-robin h2h, returning the (k, k) win-rate matrix.
+
+        Uses the existing eval manager's deterministic ``evaluate_h2h`` so
+        first-mover bias cancels across both orderings of each seed pair.
+        """
+        from catan_rl.eval.evaluation_manager import EvaluationManager, standard_eval_seeds
+
+        em = EvaluationManager(opponent_type="policy", max_turns=500)
+        seeds = standard_eval_seeds(0, max(2, self.nash_prune_games // 2))
+        k = len(ids)
+        payoff = np.full((k, k), 0.5, dtype=np.float64)  # diagonal stays 0.5
+
+        # Use a single shared inference policy for memory; load weights per-call.
+        from catan_rl.models.build_agent_model import build_agent_model
+
+        pol_a = build_agent_model(device=self.device)
+        pol_b = build_agent_model(device=self.device)
+
+        for i in range(k):
+            pol_a.load_state_dict(state_dicts[ids[i]])
+            pol_a.eval()
+            for j in range(i + 1, k):
+                pol_b.load_state_dict(state_dicts[ids[j]])
+                pol_b.eval()
+                h2h = em.evaluate_h2h(pol_a, pol_b, seeds, device=self.device)
+                wr = float(h2h["win_rate_a"])
+                payoff[i, j] = wr
+                payoff[j, i] = 1.0 - wr
+        return payoff
+
+    def _log_rating_scalars(self, writer: "SummaryWriter | None", step: int) -> None:
+        """Push TrueSkill scalars to TensorBoard.
+
+        Logs the main agent's μ/σ plus the top-K opponents' conservative
+        ratings. Names use the ``eval/trueskill_*`` prefix so they live next
+        to the eval-harness scalars rather than the per-update train scalars.
+        """
+        if self.rating_table is None or writer is None:
+            return
+        main = self.rating_table.get(RATINGS_MAIN_ID)
+        writer.add_scalar("eval/trueskill_main_mu", main.mu, step)
+        writer.add_scalar("eval/trueskill_main_sigma", main.sigma, step)
+        writer.add_scalar("eval/trueskill_main_conservative", main.conservative, step)
+        for rank, (key, rating) in enumerate(self.rating_table.top_k(5), start=1):
+            if key == RATINGS_MAIN_ID:
+                continue
+            writer.add_scalar(f"eval/trueskill_top{rank}_conservative", rating.conservative, step)
+
     def _obs_to_tensor_dict(self, obs: dict) -> dict[str, torch.Tensor]:
         """Convert a single env obs dict (numpy/ints) to a batched tensor dict (B=1)."""
         return self._batch_obs_to_tensor_dict([obs])
@@ -274,7 +475,7 @@ class CatanPPO:
         hid = np.stack([o["current_player_hidden_dev"] for o in obs_list])  # (B,16) int32
         cpd = np.stack([o["current_player_played_dev"] for o in obs_list])  # (B,16) int32
         npd = np.stack([o["next_player_played_dev"] for o in obs_list])  # (B,16) int32
-        return {
+        out = {
             "tile_representations": torch.from_numpy(tile).to(device),
             "current_player_main": torch.from_numpy(curr).to(device),
             "next_player_main": torch.from_numpy(nxt).to(device),
@@ -282,6 +483,13 @@ class CatanPPO:
             "current_player_played_dev": torch.from_numpy(cpd).to(device).long(),
             "next_player_played_dev": torch.from_numpy(npd).to(device).long(),
         }
+        # Phase 3.6: opponent identity passes through when present in obs.
+        if "opponent_kind" in obs_list[0]:
+            kind = np.stack([int(o["opponent_kind"]) for o in obs_list])
+            pid = np.stack([int(o["opponent_policy_id"]) for o in obs_list])
+            out["opponent_kind"] = torch.from_numpy(kind).to(device).long()
+            out["opponent_policy_id"] = torch.from_numpy(pid).to(device).long()
+        return out
 
     def _batch_masks_to_tensor(self, masks_list: list[dict]) -> dict[str, torch.Tensor]:
         """Stack a list of B per-env mask dicts into batched bool tensors."""
@@ -699,7 +907,19 @@ class CatanPPO:
                 update_num += 1
 
                 # ── League: add policy every N updates (Charlesworth-style) ─
-                self.league.maybe_add(update_num, self._raw_policy_state_dict())
+                added = self.league.maybe_add(update_num, self._raw_policy_state_dict())
+                if added:
+                    self._adds_since_prune += 1
+                    # Phase 3.5: Nash pruning fires after the add so the
+                    # league's just-grown size is reflected.
+                    self._maybe_run_nash_pruning()
+
+                # Phase 3.4: ratings decay + scalar logging.
+                self._decay_ratings_sigma()
+                self._log_rating_scalars(self.writer, self.global_step)
+
+                # Phase 3.3: duo exploiter cycle scheduling (stubbed).
+                self._maybe_run_exploiter_cycle()
 
                 # ── Logging ───────────────────────────────────────────────
                 elapsed = time.time() - start_time

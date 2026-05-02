@@ -73,7 +73,7 @@ ignore = ["E741", "RUF012"]
 # violations that only became visible because we drew the boundary here.
 "src/catan_rl/algorithms/common/rollout_buffer.py" = ["RUF013"]
 "src/catan_rl/algorithms/common/gae.py" = ["RUF002"]  # Greek/minus in math docstring
-"src/catan_rl/algorithms/ppo/trainer.py" = ["B007", "SIM102", "RUF001"]
+"src/catan_rl/algorithms/ppo/trainer.py" = ["B007", "SIM102", "RUF001", "RUF002", "RUF003"]
 "src/catan_rl/eval/evaluation_manager.py" = ["E", "B023", "RUF059"]
 "src/catan_rl/eval/rules_invariants.py" = ["RUF005"]  # tuple concatenation is intentional
 "src/catan_rl/eval/champion_bench.py" = ["RUF046"]  # int(round(...)) is intentional
