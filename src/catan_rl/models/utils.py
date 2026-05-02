@@ -22,12 +22,34 @@ OBS_TILE_DIM: int = 79
 + 6×6 vertex features (54) + 6×4 edge features (24) → 19 + 36 + 24 = 79."""
 
 CURR_PLAYER_DIM: int = 166
-"""Acting player's flat scalar feature vector (resources, VP, ports, dev cards,
-phase flags, dice, Karma, etc.). See `docs/obs_schema.md` for the layout."""
+"""Legacy thermometer-encoded acting-player feature vector. Phase 0 default.
+Used when ``use_thermometer_encoding=True`` (back-compat with checkpoints
+trained before Phase 1.3). See `docs/obs_schema.md` for the layout."""
 
 NEXT_PLAYER_DIM: int = 173
-"""Opponent's flat scalar feature vector: CURR_PLAYER_DIM (166) +
-6 hidden-dev-count one-hot + 1 total-resources/20 normalized."""
+"""Legacy thermometer-encoded opponent feature vector: CURR_PLAYER_DIM (166)
++ 6 hidden-dev-count one-hot + 1 total-resources/20 normalized."""
+
+CURR_PLAYER_DIM_COMPACT: int = 54
+"""Phase 1.3 compact acting-player feature vector. The legacy ``bucket8``
+thermometer encodings on integer-valued counts are replaced with single
+normalized scalars, dropping 112 dims (166 → 54) without information loss.
+Selected when ``use_thermometer_encoding=False``."""
+
+NEXT_PLAYER_DIM_COMPACT: int = 61
+"""Phase 1.3 compact opponent feature vector: CURR_PLAYER_DIM_COMPACT (54)
++ 6 hidden-dev-count one-hot + 1 total-resources/20 normalized."""
+
+
+def curr_player_dim(use_thermometer_encoding: bool) -> int:
+    """Return the canonical curr-player dim for the given encoding mode."""
+    return CURR_PLAYER_DIM if use_thermometer_encoding else CURR_PLAYER_DIM_COMPACT
+
+
+def next_player_dim(use_thermometer_encoding: bool) -> int:
+    """Return the canonical next-player dim for the given encoding mode."""
+    return NEXT_PLAYER_DIM if use_thermometer_encoding else NEXT_PLAYER_DIM_COMPACT
+
 
 MAX_DEV_SEQ: int = 15
 """Maximum dev-card sequence length (0-padded; vocab IDs 0=pad, 1-5 = card type)."""

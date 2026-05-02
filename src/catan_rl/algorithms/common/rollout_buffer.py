@@ -54,11 +54,24 @@ class CompositeRolloutBuffer:
         mask_shapes: dict[str, int] = None,
         device: str = "cpu",
         n_envs: int = 1,
+        curr_player_dim: int = CURR_PLAYER_DIM,
+        next_player_dim: int = NEXT_PLAYER_DIM,
     ):
+        """Allocate fixed-size NumPy storage for one rollout's transitions.
+
+        Args:
+            curr_player_dim: dimension of ``current_player_main``. Defaults to
+                the legacy 166 (Phase 0). With Phase 1.3 compact encoding pass
+                ``CURR_PLAYER_DIM_COMPACT`` (54).
+            next_player_dim: dimension of ``next_player_main``. Defaults to
+                the legacy 173. With compact encoding pass 61.
+        """
         self.n_steps = n_steps
         self.n_envs = n_envs
         self.n_action_heads = n_action_heads
         self.device = device
+        self.curr_player_dim = int(curr_player_dim)
+        self.next_player_dim = int(next_player_dim)
         self.pos = 0
         self.full = False
 
@@ -76,10 +89,11 @@ class CompositeRolloutBuffer:
             }
         self.mask_shapes = mask_shapes
 
-        # Pre-allocate storage for dict observations (constants from models/utils).
+        # Pre-allocate storage for dict observations. Player-feature dims are
+        # encoding-dependent (Phase 1.3); tile dim is fixed at OBS_TILE_DIM.
         self.tile_representations = np.zeros((n_steps, N_TILES, OBS_TILE_DIM), dtype=np.float32)
-        self.current_player_main = np.zeros((n_steps, CURR_PLAYER_DIM), dtype=np.float32)
-        self.next_player_main = np.zeros((n_steps, NEXT_PLAYER_DIM), dtype=np.float32)
+        self.current_player_main = np.zeros((n_steps, self.curr_player_dim), dtype=np.float32)
+        self.next_player_main = np.zeros((n_steps, self.next_player_dim), dtype=np.float32)
         # Dev cards: padded sequences of ints + lengths.
         self.curr_hidden_dev = np.zeros((n_steps, _DEV_SEQ_BUFFER_WIDTH), dtype=np.int64)
         self.curr_hidden_dev_len = np.zeros(n_steps, dtype=np.int32)
@@ -270,7 +284,13 @@ class CompositeRolloutBuffer:
         self._t_masks = {k: torch.from_numpy(self.masks[k][:n]).to(device) for k in self.masks}
         self._tensors_ready = True
 
-    def get_batches(self, batch_size: int) -> Generator[dict[str, torch.Tensor], None, None]:
+    def get_batches(
+        self,
+        batch_size: int,
+        *,
+        symmetry_aug_prob: float = 0.0,
+        symmetry_rng: np.random.Generator | None = None,
+    ) -> Generator[dict[str, torch.Tensor], None, None]:
         """Yield shuffled minibatches as dicts of tensors on self.device.
 
         Each yielded dict contains:
@@ -281,9 +301,16 @@ class CompositeRolloutBuffer:
           'advantages': (B,)
           'returns':    (B,)
           'masks':      {key: (B, mask_dim)}   per-head bool masks
+
+        Phase 1.5: when ``symmetry_aug_prob > 0``, each minibatch is, with
+        that probability, transformed by a single non-identity D6 element
+        (uniform over {1..11}). The same element applies to the entire
+        minibatch — mixing multiple symmetries within one batch breaks the
+        equivariance assumption, so we deliberately do not.
         """
         n = self.n_steps if self.full else self.pos
         indices = np.random.permutation(n)
+        rng = symmetry_rng if symmetry_rng is not None else np.random.default_rng()
 
         for start in range(0, n, batch_size):
             batch_idx = indices[start : start + batch_size]
@@ -297,13 +324,24 @@ class CompositeRolloutBuffer:
                 "current_player_played_dev": self._t_curr_played[idx_t],
                 "next_player_played_dev": self._t_next_played[idx_t],
             }
+            actions = self._t_actions[idx_t]
+            masks = {k: self._t_masks[k][idx_t] for k in self._t_masks}
+
+            # Phase 1.5: symmetry augmentation.
+            if symmetry_aug_prob > 0.0 and rng.random() < symmetry_aug_prob:
+                # Lazy import so the augmentation package isn't pulled in by
+                # rollout-only code paths or by environments that disable it.
+                from catan_rl.augmentation import apply_symmetry, sample_d6_element
+
+                g = sample_d6_element(rng, exclude_identity=True)
+                obs_batch, actions, masks = apply_symmetry(obs_batch, actions, masks, g)
 
             yield {
                 "obs": obs_batch,
-                "actions": self._t_actions[idx_t],
+                "actions": actions,
                 "old_values": self._t_values[idx_t],
                 "old_log_prob": self._t_log_probs[idx_t],
                 "advantages": self._t_advantages[idx_t],
                 "returns": self._t_returns[idx_t],
-                "masks": {k: self._t_masks[k][idx_t] for k in self._t_masks},
+                "masks": masks,
             }

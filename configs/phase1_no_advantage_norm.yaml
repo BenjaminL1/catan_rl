@@ -1,0 +1,6 @@
+# Phase 1 leave-one-out: per-rollout advantage norm (1.2) disabled
+# — falls back to legacy per-batch standardization.
+_base: phase1_full.yaml
+
+ppo:
+  advantage_norm: batch

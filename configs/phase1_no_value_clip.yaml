@@ -1,0 +1,5 @@
+# Phase 1 leave-one-out: value clipping (1.1) disabled.
+_base: phase1_full.yaml
+
+ppo:
+  use_value_clipping: false

@@ -91,6 +91,14 @@ MODEL_CONFIG: dict[str, Any] = {
     "action_head_hidden_dim": 128,
     "value_hidden_dims": (256, 128),
     "dropout": 0.0,
+    # Phase 1.3 obs-encoding flag. True keeps the legacy 166/173 thermometer
+    # schema (matches checkpoint_07390040.pt). False switches env + model to
+    # the compact 53/60 schema. ``_maybe_apply_compact_obs_dims`` (in
+    # ``resolve_config``) auto-aligns ``curr_player_main_in_dim`` /
+    # ``other_player_main_in_dim`` when the user only flips this flag.
+    "use_thermometer_encoding": True,
+    # Phase 1.5 dihedral data augmentation probability per minibatch.
+    "symmetry_aug_prob": 0.0,
 }
 
 
@@ -197,8 +205,32 @@ def _flatten_yaml(raw: dict[str, Any]) -> dict[str, Any]:
     return flat
 
 
+def _maybe_apply_compact_obs_dims(config: dict[str, Any]) -> dict[str, Any]:
+    """Phase 1.3: when ``use_thermometer_encoding=False`` and the user hasn't
+    overridden the player-feature dims, auto-set them to the compact values.
+
+    Without this helper, a YAML override that sets ``use_thermometer_encoding:
+    false`` but inherits the legacy 166/173 dims from ``_base.yaml`` would
+    silently produce a dim mismatch between env and model.
+    """
+    if config.get("use_thermometer_encoding", True):
+        return config
+    # Compact mode requested. Override only if the user kept the legacy defaults.
+    if config.get("curr_player_main_in_dim") == 166:
+        config["curr_player_main_in_dim"] = 54
+    if config.get("other_player_main_in_dim") == 173:
+        config["other_player_main_in_dim"] = 61
+    return config
+
+
 def resolve_config(yaml_path: str | Path | None = None) -> dict[str, Any]:
-    """Return the legacy default config, or load from YAML if ``yaml_path`` given."""
+    """Return the legacy default config, or load from YAML if ``yaml_path`` given.
+
+    Applies ``_maybe_apply_compact_obs_dims`` so opting in to the Phase 1.3
+    compact encoding via ``use_thermometer_encoding: false`` automatically
+    selects the matching 53/60 input dims unless the user explicitly set
+    them otherwise.
+    """
     if yaml_path is None:
-        return get_config()
-    return load_config_from_yaml(yaml_path)
+        return _maybe_apply_compact_obs_dims(get_config())
+    return _maybe_apply_compact_obs_dims(load_config_from_yaml(yaml_path))

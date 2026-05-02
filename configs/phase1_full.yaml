@@ -1,0 +1,36 @@
+# Phase 1 full bundle: all five sample-efficiency features active.
+#
+# 1.1 use_value_clipping=True, clip_range_vf=0.2 (PPO2-style value clip)
+# 1.2 advantage_norm='rollout' (per-rollout standardization)
+# 1.3 use_thermometer_encoding=False (compact 54/61 obs)
+# 1.4 use_devcard_mha=False (count-encoding)
+# 1.5 symmetry_aug_prob=0.5 (D6 dihedral augmentation per minibatch)
+#
+# Run for 5M steps from scratch (Phase 1 obs schema is incompatible with
+# checkpoint_07390040.pt — fresh lineage). Compare against phase0_fixed
+# at 5M to gate progression to Phase 2.
+_base: _base.yaml
+
+model:
+  # Compact obs schema (set automatically by ``_maybe_apply_compact_obs_dims``
+  # when use_thermometer_encoding=False, but we set it explicitly here for
+  # transparency in TB hparam logs).
+  curr_player_main_in_dim: 54
+  other_player_main_in_dim: 61
+
+ppo:
+  # Phase 1.1 + 1.2
+  use_value_clipping: true
+  clip_range_vf: 0.2
+  advantage_norm: rollout
+
+phase1:
+  # 1.3 obs encoding switch
+  use_thermometer_encoding: false
+  # 1.4 dev-card encoding switch
+  use_devcard_mha: false
+  # 1.5 symmetry augmentation probability per minibatch
+  symmetry_aug_prob: 0.5
+
+schedule:
+  total_timesteps: 5_000_000

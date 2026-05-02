@@ -79,6 +79,11 @@ ignore = ["E741", "RUF012"]
 "src/catan_rl/eval/champion_bench.py" = ["RUF046"]  # int(round(...)) is intentional
 "src/catan_rl/selfplay/game_manager.py" = ["B904", "B905"]
 "src/catan_rl/selfplay/league.py" = ["SIM108"]
+# Phase 1.5 augmentation: math docstrings carry proper Unicode (×, −, ↔, →);
+# the boardGraph iteration legitimately needs the key for documentation; one
+# axial-rotation comment exceeds 100 chars; ``B`` is a documented batch-size
+# local in dihedral.py.
+"src/catan_rl/augmentation/**" = ["RUF002", "B007", "E501", "RUF059"]
 "scripts/eval_harness.py" = ["RUF046", "E402", "F841", "RUF059", "SIM102"]
 "scripts/migrate_checkpoint.py" = ["E501", "E402"]
 
