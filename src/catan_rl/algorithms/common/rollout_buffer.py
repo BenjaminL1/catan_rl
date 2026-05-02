@@ -1,11 +1,15 @@
 """
 Custom rollout buffer for composite (multi-head) actions and dict observations.
 
-Observations are now Charlesworth-style dicts. We store:
-  - tile_representations: (n_steps, 19, 78)
-  - current_player_main: (n_steps, 166)
-  - next_player_main: (n_steps, 173)
+Observations are Charlesworth-style dicts. We store:
+  - tile_representations: (n_steps, N_TILES, OBS_TILE_DIM)
+  - current_player_main: (n_steps, CURR_PLAYER_DIM)
+  - next_player_main: (n_steps, NEXT_PLAYER_DIM)
   - dev-card sequences as padded int arrays plus lengths.
+
+Phase 0 splits the legacy single ``done`` flag into separate ``terminated`` and
+``truncated`` arrays so GAE can correctly bootstrap on truncation rather than
+zeroing the value (Schulman 2015 §3.2; the bug was conflating the two).
 """
 
 from collections.abc import Generator
@@ -15,6 +19,18 @@ import numpy as np
 import torch
 
 from catan_rl.algorithms.common.gae import compute_gae, compute_gae_vectorized
+from catan_rl.models.utils import (
+    CURR_PLAYER_DIM,
+    MAX_DEV_SEQ,
+    N_TILES,
+    NEXT_PLAYER_DIM,
+    OBS_TILE_DIM,
+)
+
+# Internal padded-sequence width: MAX_DEV_SEQ rounded up to a multiple of 8 for
+# even tensor alignment. Anything past length-N is zero-padding regardless of
+# buffer width.
+_DEV_SEQ_BUFFER_WIDTH = max(MAX_DEV_SEQ, 16)
 
 
 class CompositeRolloutBuffer:
@@ -60,20 +76,24 @@ class CompositeRolloutBuffer:
             }
         self.mask_shapes = mask_shapes
 
-        # Pre-allocate storage for dict observations
-        self.tile_representations = np.zeros((n_steps, 19, 79), dtype=np.float32)
-        self.current_player_main = np.zeros((n_steps, 166), dtype=np.float32)
-        self.next_player_main = np.zeros((n_steps, 173), dtype=np.float32)
-        # Dev cards: padded sequences of ints + lengths
-        self.curr_hidden_dev = np.zeros((n_steps, 16), dtype=np.int64)
+        # Pre-allocate storage for dict observations (constants from models/utils).
+        self.tile_representations = np.zeros((n_steps, N_TILES, OBS_TILE_DIM), dtype=np.float32)
+        self.current_player_main = np.zeros((n_steps, CURR_PLAYER_DIM), dtype=np.float32)
+        self.next_player_main = np.zeros((n_steps, NEXT_PLAYER_DIM), dtype=np.float32)
+        # Dev cards: padded sequences of ints + lengths.
+        self.curr_hidden_dev = np.zeros((n_steps, _DEV_SEQ_BUFFER_WIDTH), dtype=np.int64)
         self.curr_hidden_dev_len = np.zeros(n_steps, dtype=np.int32)
-        self.curr_played_dev = np.zeros((n_steps, 16), dtype=np.int64)
+        self.curr_played_dev = np.zeros((n_steps, _DEV_SEQ_BUFFER_WIDTH), dtype=np.int64)
         self.curr_played_dev_len = np.zeros(n_steps, dtype=np.int32)
-        self.next_played_dev = np.zeros((n_steps, 16), dtype=np.int64)
+        self.next_played_dev = np.zeros((n_steps, _DEV_SEQ_BUFFER_WIDTH), dtype=np.int64)
         self.next_played_dev_len = np.zeros(n_steps, dtype=np.int32)
         self.actions = np.zeros((n_steps, n_action_heads), dtype=np.int64)
         self.rewards = np.zeros(n_steps, dtype=np.float32)
-        self.dones = np.zeros(n_steps, dtype=np.float32)
+        # Phase 0: separate terminated (real game-over) from truncated (max_turns).
+        # GAE handles each correctly: terminated zeros the bootstrap; truncated
+        # keeps it but resets the GAE accumulator at the boundary.
+        self.terminated = np.zeros(n_steps, dtype=np.float32)
+        self.truncated = np.zeros(n_steps, dtype=np.float32)
         self.values = np.zeros(n_steps, dtype=np.float32)
         self.log_probs = np.zeros(n_steps, dtype=np.float32)
         self.advantages = np.zeros(n_steps, dtype=np.float32)
@@ -107,12 +127,26 @@ class CompositeRolloutBuffer:
         obs: dict[str, Any],
         action: np.ndarray,
         reward: float,
-        done: bool,
+        terminated: bool,
+        truncated: bool,
         value: float,
         log_prob: float,
         masks: dict[str, np.ndarray],
     ) -> None:
-        """Store one transition."""
+        """Store one transition.
+
+        Args:
+            obs: dict from env.step.
+            action: (n_action_heads,) int64.
+            reward: scalar reward for this step.
+            terminated: True if the episode genuinely ended (someone hit 15 VP).
+            truncated: True if the episode was cut short by max_turns.
+                A step is at most one of {terminated, truncated}; both False
+                means the trajectory continues.
+            value: bootstrap value V(s_t) used for advantage computation.
+            log_prob: log-probability of ``action`` under the behavior policy.
+            masks: per-head action mask dict that was active at this step.
+        """
         # obs is a dict from env.step
         self.tile_representations[self.pos] = obs["tile_representations"]
         self.current_player_main[self.pos] = obs["current_player_main"]
@@ -137,7 +171,8 @@ class CompositeRolloutBuffer:
         )
         self.actions[self.pos] = action
         self.rewards[self.pos] = reward
-        self.dones[self.pos] = float(done)
+        self.terminated[self.pos] = float(terminated)
+        self.truncated[self.pos] = float(truncated)
         self.values[self.pos] = value
         self.log_probs[self.pos] = log_prob
         for key in self.masks:
@@ -146,6 +181,14 @@ class CompositeRolloutBuffer:
         self.pos += 1
         if self.pos >= self.n_steps:
             self.full = True
+
+    @property
+    def dones(self) -> np.ndarray:
+        """Back-compat OR-mask for code that still reads a single ``done`` flag.
+
+        Phase 0 callers should consume ``terminated`` / ``truncated`` directly.
+        """
+        return np.maximum(self.terminated, self.truncated)
 
     def compute_returns_and_advantages(
         self, last_value, gamma: float = 0.995, gae_lambda: float = 0.95
@@ -164,14 +207,21 @@ class CompositeRolloutBuffer:
                 else float(last_value[0])
             )
             self.advantages[:n], self.returns[:n] = compute_gae(
-                self.rewards[:n], self.values[:n], self.dones[:n], lv, gamma, gae_lambda
+                self.rewards[:n],
+                self.values[:n],
+                self.terminated[:n],
+                self.truncated[:n],
+                lv,
+                gamma,
+                gae_lambda,
             )
         else:
             last_values = np.asarray(last_value, dtype=np.float32)
             self.advantages[:n], self.returns[:n] = compute_gae_vectorized(
                 self.rewards[:n],
                 self.values[:n],
-                self.dones[:n],
+                self.terminated[:n],
+                self.truncated[:n],
                 last_values,
                 self.n_envs,
                 gamma,

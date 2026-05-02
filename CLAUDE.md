@@ -71,6 +71,16 @@ Dict with keys `tile_representations (19,79)`, `current_player_main (166,)`, `ne
 ## Active roadmap
 See `docs/plans/superhuman_roadmap.md` (Phase 0 = correctness/eval-harness, Phase 1 = sample efficiency, Phase 2 = architecture, Phase 3 = self-play diversity, Phase 4 = optional MCTS/GRU/belief).
 
+## Phase 0 (landed)
+- `compute_gae` / `compute_gae_vectorized` accept separate `terminated` and `truncated` arrays. Truncations bootstrap with `V(s_T)`; the GAE accumulator resets at any episode boundary. Legacy single-`dones` calling convention still works for back-compat.
+- `CompositeRolloutBuffer` stores `terminated` and `truncated` separately; `buffer.dones` is a derived OR-mask for any old code that still reads it.
+- `MultiActionHeads` and `CatanPolicy.evaluate_actions` accept `return_per_head=True` and return per-head entropy/log-prob/weight. Trainer logs `train/entropy_head_<name>` (unconditional) and `_cond` (relevance-weighted), plus `train/entropy_collapse_flag`.
+- `catan_rl.eval.rules_invariants.run()` is a runtime-callable 1v1 invariant gate (8 default checks; opt-in 9th drift check).
+- `catan_rl.selfplay.ratings.RatingSystem/Rating/RatingTable` — TrueSkill if available, in-house Glicko-2 fallback otherwise.
+- `scripts/eval_harness.py` runs `--mode {rules-invariant, champion-bench, exploitability, league-rating, all}` and writes JSON to `runs/eval_harness/<run_name>/`.
+- `scripts/migrate_checkpoint.py` upgrades pre-Phase-0 checkpoints (config-only patch — no policy state change).
+- Observation dim constants `OBS_TILE_DIM, CURR_PLAYER_DIM, NEXT_PLAYER_DIM, MAX_DEV_SEQ, N_TILES, DEV_CARD_VOCAB` are exported from `catan_rl.models.utils`. New code should import them rather than hardcoding `79`/`166`/etc.
+
 ## Branch & commit conventions
 - Branches: `<type>/<kebab-slug>` (`feat/`, `fix/`, `refactor/`, `chore/`, `docs/`, `test/`).
 - Conventional commits, lowercase, under 72 chars.

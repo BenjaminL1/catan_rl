@@ -1,11 +1,39 @@
 """
-Model utility functions: weight initialization, value normalization, and module cloning.
+Model utility functions: weight initialization, value normalization, module cloning,
+and the canonical observation-dimension constants.
+
+The constants below are the single source of truth for the observation schema. Any
+code that hardcoded `79`, `166`, `173`, or `15` should import from here instead.
+Phase 1.3 of the roadmap will reduce these (drop bucket8 thermometer encodings) —
+when that happens, this is the one place to change.
 """
 
 import copy
 
 import torch
 import torch.nn as nn
+
+# ── Observation dimensions (single source of truth) ─────────────────────────
+N_TILES: int = 19
+"""Number of hexes on a standard Catan board."""
+
+OBS_TILE_DIM: int = 79
+"""Per-tile feature dim: 6 resource + 11 number + 1 robber + 1 dots
++ 6×6 vertex features (54) + 6×4 edge features (24) → 19 + 36 + 24 = 79."""
+
+CURR_PLAYER_DIM: int = 166
+"""Acting player's flat scalar feature vector (resources, VP, ports, dev cards,
+phase flags, dice, Karma, etc.). See `docs/obs_schema.md` for the layout."""
+
+NEXT_PLAYER_DIM: int = 173
+"""Opponent's flat scalar feature vector: CURR_PLAYER_DIM (166) +
+6 hidden-dev-count one-hot + 1 total-resources/20 normalized."""
+
+MAX_DEV_SEQ: int = 15
+"""Maximum dev-card sequence length (0-padded; vocab IDs 0=pad, 1-5 = card type)."""
+
+DEV_CARD_VOCAB: int = 6
+"""Dev card embedding vocabulary size (pad + 5 card types)."""
 
 
 def get_clones(module: nn.Module, num_copies: int) -> nn.ModuleList:

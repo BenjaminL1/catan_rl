@@ -82,22 +82,37 @@ class CatanPolicy(nn.Module):
         return actions, value, log_prob
 
     def evaluate_actions(
-        self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor], actions: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self,
+        obs: dict[str, torch.Tensor],
+        masks: dict[str, torch.Tensor],
+        actions: torch.Tensor,
+        return_per_head: bool = False,
+    ) -> tuple:
         """Used during PPO update to re-evaluate previously taken actions.
 
         Args:
             obs:     dict of stored observations from rollout buffer.
             masks:   per-head masks that were active when these actions were taken.
             actions: (B, 6) the composite actions that were actually taken.
+            return_per_head: When True, also returns the per-head entropy /
+                weight / log-prob dict from MultiActionHeads. Used by Phase 0's
+                per-head entropy logging for collapse detection.
 
         Returns:
-            value:    (B, 1) current value estimate for these states.
-            log_prob: (B,) log-probability of these actions under current policy.
-            entropy:  scalar — entropy bonus to encourage exploration.
+            Default::
+                value:    (B, 1) current value estimate for these states.
+                log_prob: (B,) log-probability of these actions under current policy.
+                entropy:  scalar — entropy bonus to encourage exploration.
+
+            With ``return_per_head=True``: (value, log_prob, entropy, per_head_dict).
         """
         obs_out = self.observation_module(obs)
         value = self.value_net(obs_out)
+        if return_per_head:
+            _, log_prob, entropy, per_head = self.action_heads(
+                obs_out, masks, actions=actions, return_per_head=True
+            )
+            return value, log_prob, entropy, per_head
         _, log_prob, entropy = self.action_heads(obs_out, masks, actions=actions)
         return value, log_prob, entropy
 

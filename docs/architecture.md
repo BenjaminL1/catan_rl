@@ -74,4 +74,27 @@ One-page description of the training loop. For details, see the linked source fi
 | Evaluate vs heuristic/random | `scripts/evaluate.py` |
 | Play vs trained model (GUI) | `scripts/play_vs_model.py` |
 | Setup-phase trainer | `scripts/train_setup.py` |
-| Eval harness (Phase 0+) | `scripts/eval_harness.py` (planned) |
+| Eval harness (rules-invariant / champion-bench / exploitability / league-rating) | `scripts/eval_harness.py` |
+| Migrate pre-Phase-0 checkpoint | `scripts/migrate_checkpoint.py` |
+
+## Phase 0 diagnostics
+
+The trainer's TensorBoard scalars now include per-head entropy diagnostics
+that detect silent collapse on individual action heads:
+
+  - `train/entropy_head_<name>` — unconditional mean entropy of head `<name>`
+    (one of: `type, corner, edge, tile, resource1, resource2`).
+  - `train/entropy_head_<name>_cond` — relevance-weighted mean: only averages
+    over samples where this head's output actually contributed to the
+    chosen action.
+  - `train/entropy_collapse_flag` — set to `1.0` if any head's unconditional
+    entropy stayed below `entropy_collapse_threshold` (config) for
+    `entropy_collapse_consecutive_updates` consecutive updates.
+
+The legacy `train/entropy` joint-entropy scalar is preserved.
+
+GAE handling now distinguishes terminated (real game-over) from truncated
+(`max_turns` cutoff): terminations zero the bootstrap value; truncations keep
+the bootstrap (`V(s_T)`) but reset the GAE accumulator at the boundary. See
+`catan_rl.algorithms.common.gae` for the recurrence and
+`tests/unit/algorithms/test_gae.py` for the contract tests.

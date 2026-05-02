@@ -87,7 +87,7 @@ class GameManager:
             infos.append(info)
         return observations, infos
 
-    def step_one(self, env_idx: int, action: np.ndarray) -> tuple[dict, float, bool, dict]:
+    def step_one(self, env_idx: int, action: np.ndarray) -> tuple[dict, float, bool, bool, dict]:
         """Step a single environment (for round-robin collection).
 
         Args:
@@ -95,17 +95,23 @@ class GameManager:
             action: (6,) action array.
 
         Returns:
-            obs: Next observation (from reset if done).
+            obs: Next observation (from reset if episode ended).
             reward: Reward from this step.
-            done: Whether the episode ended.
-            info: Info dict (terminal_stats, is_success when done).
+            terminated: True iff the episode genuinely ended (someone won).
+            truncated: True iff the episode was cut by max_turns.
+            info: Info dict (terminal_stats, is_success when terminated).
+
+        When the opponent NN turn is deferred (``info['opp_turn_pending']``),
+        terminated and truncated are both False and the caller
+        (``collect_rollouts``) is expected to drive the deferred turn via
+        ``apply_opponent_action`` until the transition completes.
         """
         env = self.envs[env_idx]
         obs, reward, terminated, truncated, info = env.step(action)
-        done = terminated or truncated
         if info.get("opp_turn_pending"):
             # Opponent NN turn deferred — caller (collect_rollouts) handles batching
-            return obs, reward, False, info
+            return obs, reward, False, False, info
+        done = terminated or truncated
         if done:
             info["terminal_observation"] = obs
             # Report result to league for PFSP win-rate tracking
@@ -114,7 +120,7 @@ class GameManager:
                 self.league.update_result(self._rollout_opp_policy_id, win)
             options = self._sample_and_prepare_opponent() if self.league else {}
             obs, _ = env.reset(options=options)
-        return obs, reward, done, info
+        return obs, reward, terminated, truncated, info
 
     def step_all(self, actions: list[np.ndarray]):
         """Step all environments with the given actions.
@@ -155,15 +161,19 @@ class GameManager:
         """Get opponent (obs, masks) for an env with a deferred NN turn."""
         return self.envs[env_idx].get_opponent_obs_masks()
 
-    def apply_opponent_action(self, env_idx: int, action: np.ndarray):
-        """Apply one opponent NN action. Returns (turn_complete, obs, reward, done, info).
+    def apply_opponent_action(
+        self, env_idx: int, action: np.ndarray
+    ) -> tuple[bool, dict | None, float, bool, bool, dict]:
+        """Apply one opponent NN action.
 
-        When turn_complete=True and done=True, also resets the env and resamples opponent.
+        Returns ``(turn_complete, obs, reward, terminated, truncated, info)``.
+        When ``turn_complete`` is True and the episode ended, also resets
+        the env and resamples its opponent.
         """
         env = self.envs[env_idx]
         turn_complete, obs, reward, terminated, truncated, info = env.apply_opponent_action(action)
         if not turn_complete:
-            return False, None, 0.0, False, {}
+            return False, None, 0.0, False, False, {}
         done = terminated or truncated
         if done:
             info["terminal_observation"] = obs
@@ -172,7 +182,7 @@ class GameManager:
                 self.league.update_result(self._rollout_opp_policy_id, win)
             options = self._sample_and_prepare_opponent() if self.league else {}
             obs, _ = env.reset(options=options)
-        return True, obs, reward, done, info
+        return True, obs, reward, terminated, truncated, info
 
     def get_masks(self) -> list[dict[str, np.ndarray]]:
         """Get action masks from all environments."""

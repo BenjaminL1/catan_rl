@@ -131,24 +131,52 @@ class MultiActionHeads(nn.Module):
             torch.tensor([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0], dtype=torch.float32),
         )
 
+    HEAD_NAMES: tuple[str, ...] = (
+        "type",
+        "corner",
+        "edge",
+        "tile",
+        "resource1",
+        "resource2",
+    )
+    """Stable per-head identifiers for diagnostic logging.
+
+    Order matches both the action tuple ``[type, corner, edge, tile, res1, res2]``
+    and the order of the relevance-mask buffers (``lp_mask_corner`` etc.). Used
+    by Phase 0's per-head entropy logging in the trainer.
+    """
+
     def forward(
         self,
         obs_output: torch.Tensor,
         masks: dict[str, torch.Tensor],
         actions: torch.Tensor | None = None,
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
+        return_per_head: bool = False,
+    ) -> tuple:
+        """Forward through all 6 heads with autoregressive context.
+
         Args:
             obs_output:    (B, obs_output_dim) from observation module.
             masks:         per-head bool masks from the environment.
             actions:       (B, 6) int64 — provide during PPO update to re-evaluate.
             deterministic: True → argmax actions (for evaluation).
+            return_per_head: If True, append a per-head diagnostic dict to the
+                return tuple. Each entry contains the head's per-sample entropy
+                and relevance weight, useful for collapse detection (Phase 0).
 
         Returns:
-            actions:  (B, 6) int64 composite action.
-            log_prob: (B,) joint log-probability.
-            entropy:  scalar — mean entropy across batch and heads.
+            Without ``return_per_head`` (default):
+                actions:  (B, 6) int64 composite action.
+                log_prob: (B,) joint log-probability.
+                entropy:  scalar — mean entropy across batch and heads.
+
+            With ``return_per_head=True`` an extra fourth element is returned:
+                per_head: dict[str, dict] keyed by HEAD_NAMES with values
+                  {'entropy_per_sample': (B,), 'weight': (B,),
+                   'log_prob': (B,)}. ``weight`` is 1.0 where the head is
+                  relevant for the chosen action type and 0.0 otherwise; the
+                  type head always has weight 1.
         """
         B = obs_output.shape[0]
         device = obs_output.device
@@ -319,4 +347,48 @@ class MultiActionHeads(nn.Module):
         )
         entropy = entropy_per_sample.mean()  # scalar
 
-        return actions, log_prob, entropy
+        if not return_per_head:
+            return actions, log_prob, entropy
+
+        # Per-head diagnostic dict for Phase 0's collapse-detection logging.
+        # The type head is unconditionally weighted; downstream heads carry
+        # the relevance mask so the trainer can compute either:
+        #   - the unconditional mean (collapse signal — drops to 0 if the
+        #     head's distribution becomes nearly deterministic on every
+        #     sample, even ones where the head is irrelevant);
+        #   - the conditional mean over relevant samples (the "true" entropy
+        #     for action types that use the head).
+        type_weight = torch.ones_like(lp_m_corner)
+        per_head: dict[str, dict[str, torch.Tensor]] = {
+            "type": {
+                "entropy_per_sample": type_ent,
+                "weight": type_weight,
+                "log_prob": type_lp,
+            },
+            "corner": {
+                "entropy_per_sample": corner_ent,
+                "weight": lp_m_corner,
+                "log_prob": corner_lp,
+            },
+            "edge": {
+                "entropy_per_sample": edge_ent,
+                "weight": lp_m_edge,
+                "log_prob": edge_lp,
+            },
+            "tile": {
+                "entropy_per_sample": tile_ent,
+                "weight": lp_m_tile,
+                "log_prob": tile_lp,
+            },
+            "resource1": {
+                "entropy_per_sample": res1_ent,
+                "weight": lp_m_res1,
+                "log_prob": res1_lp,
+            },
+            "resource2": {
+                "entropy_per_sample": res2_ent,
+                "weight": lp_m_res2,
+                "log_prob": res2_lp,
+            },
+        }
+        return actions, log_prob, entropy, per_head

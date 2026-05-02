@@ -30,7 +30,9 @@ The env returns a dict with these keys:
 | `current_player_played_dev` | `(15,)` | `int32` | `[0, 5]` | Same encoding |
 | `next_player_played_dev` | `(15,)` | `int32` | `[0, 5]` | Same encoding |
 
-Constants are also exported as `OBS_TILE_DIM`, `CURR_PLAYER_DIM`, `NEXT_PLAYER_DIM`, `MAX_DEV_SEQ`.
+Constants live in `catan_rl.models.utils` and are the single source of truth:
+`N_TILES`, `OBS_TILE_DIM`, `CURR_PLAYER_DIM`, `NEXT_PLAYER_DIM`, `MAX_DEV_SEQ`,
+`DEV_CARD_VOCAB`. Import them rather than hardcoding the literals.
 
 ## Tile feature breakdown (79 dims)
 
