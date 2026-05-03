@@ -27,6 +27,8 @@ phase4:
   opp_action_loss_weight: 0.03
 
 schedule:
-  # Same budget as phase3_full; Phase 4 features add overhead but no new
-  # data needs.
-  total_timesteps: 8_000_000
+  # Inherit ``_base.yaml``'s 200M-step total. ``configs/phase4_full.yaml``
+  # is now the default for ``scripts/train.py``, so the budget should
+  # cover a real run rather than the prior ablation cap. Override at the
+  # CLI with ``--total-timesteps`` for short ablation runs.
+  total_timesteps: 200_000_000

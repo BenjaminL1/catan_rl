@@ -26,14 +26,20 @@ if os.path.isdir(_SRC) and _SRC not in sys.path:
 from catan_rl.algorithms.ppo.arguments import resolve_config
 from catan_rl.algorithms.ppo.trainer import CatanPPO
 
+DEFAULT_CONFIG = "configs/phase4_full.yaml"
+
 
 def main():
     parser = argparse.ArgumentParser(description="Train Catan RL agent (Charlesworth-style)")
     parser.add_argument(
         "--config",
         type=str,
-        default=None,
-        help="Path to a YAML config under configs/ (e.g. configs/phase0_baseline.yaml)",
+        default=DEFAULT_CONFIG,
+        help=(
+            f"Path to a YAML config under configs/ (default: {DEFAULT_CONFIG}). "
+            "Pass an empty string ('') to fall back to the legacy hard-coded "
+            "config in arguments.py."
+        ),
     )
     parser.add_argument(
         "--phase", type=str, default="train", help=argparse.SUPPRESS
@@ -75,8 +81,10 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve config: legacy hard-coded defaults, or YAML if --config given.
-    config = resolve_config(args.config)
+    # Resolve config: YAML by default (phase4_full.yaml), or legacy
+    # hard-coded defaults when ``--config ''`` (empty string) is passed.
+    config_path = args.config if args.config else None
+    config = resolve_config(config_path)
 
     # CLI overrides
     if args.total_timesteps:
