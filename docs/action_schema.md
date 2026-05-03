@@ -64,4 +64,30 @@ log_prob(action) = lp_type(action_type)
                  + lp_mask_resource2[action_type] * lp_res2(res2)
 ```
 
-Phase 1.5 of the roadmap will add D6 × Z_2 symmetry data augmentation that permutes corner/edge/tile actions and (optionally) swaps `current` ↔ `next` player observations.
+## Phase-specific additions affecting action heads
+
+- **Phase 1.5 D6 symmetry augmentation (landed):** with probability
+  `symmetry_aug_prob` per minibatch, `MultiActionHeads`'s training-time
+  inputs are permuted by one of 11 non-identity D6 elements via tables
+  in `catan_rl.augmentation.symmetry_tables`. Permutes the corner/edge/tile
+  action axes plus the within-tile vertex/edge feature blocks.
+- **Phase 2.4 AdaLN/FiLM heads (landed):** when `action_head_film=True`,
+  the context-using heads (`corner`, `resource1`, `resource2`) replace
+  concat-MLP conditioning with FiLM modulation. Layer norm is followed
+  by `(1 + γ) ⊙ x + β` where `(γ, β)` come from a small generator MLP
+  over the head's context. γ-init=0 so the modulation is identity at
+  construction. `type/edge/tile` heads have no context and stay on the
+  legacy path.
+- **Phase 0 per-head entropy logging:** each head's unconditional and
+  conditional (relevance-weighted) entropy is logged per update under
+  `train/entropy_head_<name>` and `train/entropy_head_<name>_cond`. A
+  `train/entropy_collapse_flag` fires when any head's unconditional
+  entropy stays below `entropy_collapse_threshold` for
+  `entropy_collapse_consecutive_updates` consecutive updates.
+- **Phase 4.1 ISMCTS visit-count target:** when wired into the rollout
+  loop (deferred follow-up), `ISMCTS.search` returns a visit-count
+  distribution over the 13 action types. Convert via
+  `visits_to_distribution(visits, temperature)` and use as a
+  cross-entropy target on the **type head only** during PPO update.
+  Sub-heads (corner/edge/tile/resource1/resource2) are not currently
+  searched — the search tree is fixed at depth 1 over action types.

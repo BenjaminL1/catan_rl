@@ -2,7 +2,19 @@
 
 A reinforcement learning agent trained to play 1v1 Settlers of Catan (Colonist.io ruleset) using a custom PPO implementation. The agent uses a Transformer-based observation encoder and a 6-head autoregressive action representation to handle Catan's complex, multi-phase action space.
 
-Trained via self-play league on an Apple M1 Pro (CPU-only). Reached ~7.4M steps before archiving.
+Trained via self-play league on an Apple M1 Pro (CPU-only). The original
+1.54M-param baseline reached ~7.4M steps before archiving; subsequent
+phases extended the architecture to ~2.74M params (`phase4_full`) with
+GNN topology priors, AdaLN action heads, decoupled value tower with
+optional GRU recurrence, opponent-belief and opponent-action auxiliary
+losses, AlphaStar-style PFSP-hard self-play with TrueSkill ratings and
+Nash pruning, duo exploiter cycles, and an ISMCTS module for inference-
+time policy improvement.
+
+The full progression and design choices live in
+[`docs/plans/superhuman_roadmap.md`](docs/plans/superhuman_roadmap.md)
+and the ADRs under [`docs/decisions/`](docs/decisions/). Every phase
+feature is config-flagged for ablation; defaults preserve back-compat.
 
 ---
 
@@ -55,28 +67,61 @@ Total parameters: **1.54M**
 
 Each head is a 2-layer MLP → MaskedCategorical. Joint log-prob is the sum of relevant head log-probs (irrelevant heads zero-weighted via registered buffers).
 
-### PPO Hyperparameters
+### PPO Hyperparameters (current defaults — see `arguments.py` for source of truth)
 
 | Param | Value |
 |-------|-------|
-| n_steps | 2048 |
-| n_envs | 4 |
+| n_steps | 4096 |
+| n_envs | 8 |
 | batch_size | 512 |
-| n_epochs | 10 |
+| n_epochs | 6 |
 | γ (discount) | 0.995 |
 | λ (GAE) | 0.95 |
 | clip ε | 0.2 |
-| LR | 3e-4 → 1e-5 (linear decay) |
-| Entropy coef | 0.04 → 0.005 (annealed, updates 50–200) |
-| Value normalization | Running normalizer |
-| Total target steps | 100M |
+| target_kl | 0.025 |
+| LR | 1e-4 → 1e-5 (linear decay) |
+| Entropy coef | 0.04 → 0.005 (annealed updates 500–3000) |
+| Value normalization | Running normalizer (Welford) |
+| Total target steps | 200M |
 
 ### Self-Play (League)
 
 - In-memory deque of past policy state dicts (maxlen=100)
 - New policy added every 4 PPO updates
-- Sampling: uniform base + linear recency bias toward most recent 25 policies
+- Sampling: uniform base + linear recency bias toward most recent 25 policies (legacy)
 - Pure self-play (no random opponents after warm-up)
+
+### Phase progression — optional features (all config-flagged)
+
+Each row is opt-in via the `configs/phaseN_*.yaml` it ships in. Defaults
+preserve the original 1.54M baseline. See ADRs under `docs/decisions/`
+for full design rationale.
+
+| Phase | Feature | Config flag | Notes |
+|---|---|---|---|
+| 0 | terminated/truncated split + per-head entropy + eval harness | always-on | trainer correctness |
+| 1.1 | PPO2 value clipping | `use_value_clipping` | `loss = max(unclipped_MSE, clipped_MSE)` |
+| 1.2 | Per-rollout advantage norm | `advantage_norm` | `'rollout' \| 'batch' \| 'none'` |
+| 1.3 | Compact obs schema | `use_thermometer_encoding` | drops bucket8: 166/173 → 54/61 |
+| 1.4 | Dev-card count encoding | `use_devcard_mha` | swaps MHA for bincount + MLP |
+| 1.5 | D6 dihedral symmetry aug | `symmetry_aug_prob` | per-minibatch augmentation, 11 non-identity D6 elements |
+| 2.1 | Axial positional embedding | `use_axial_pos_emb` | learned `(q, r)` embedding into tile encoder |
+| 2.2 | Modern transformer recipe | `transformer_dropout`, `transformer_activation` | dropout + GELU FFN |
+| 2.3 | GNN encoder | `use_graph_encoder` | tripartite hex/vertex/edge message passing |
+| 2.4 | AdaLN/FiLM action heads | `action_head_film` | FiLM modulation on context-using heads |
+| 2.5 | Decoupled value tower | `value_head_mode='decoupled'` | separate ObservationModule for value |
+| 2.5b | Belief head (1v1) | `use_belief_head` | predicts opponent's hidden dev-card type distribution |
+| 2.5c | Opponent-action aux head (1v1) | `use_opponent_action_head` | predicts opponent's next action type, league-only |
+| 3.1 | PFSP-hard sampling | `pfsp_mode='hard'` | `(1-w)^p` priorities + sliding window |
+| 3.2 | Latest-policy regularization | `latest_policy_weight` | `current_self` opponent in league |
+| 3.3 | Duo exploiter cycles | `exploiter_mode='duo'` | periodic exploiter trains vs frozen main, injected back with PFSP boost |
+| 3.4 | TrueSkill league rating | `use_trueskill` | μ/σ tracking + σ-decay |
+| 3.5 | Nash-weighted pruning | `prune_strategy='nash'` | replicator-dynamics eviction at capacity |
+| 3.6 | Opponent ID embedding | `use_opponent_id_emb` | 6-way kind + policy_id embedding, 40% mask |
+| 4.1 | ISMCTS (library) | — | single-step PUCT + belief-determinization; rollout-loop integration deferred |
+| 4.2 | GRU recurrent value head | `use_recurrent_value` | value-only GRU; resets on `terminated`, preserves on `truncated` |
+
+Param count: ~1.54M (baseline) → 2.22M (`phase2_full`) → 2.24M (`phase3_full`) → 2.74M (`phase4_full`).
 
 ---
 
@@ -91,6 +136,7 @@ src/catan_rl/
   algorithms/
     ppo/                CatanPPO trainer + arguments
     common/             GAE, rollout buffer (shared with future PPG/MCTS)
+    search/             ISMCTS module (Phase 4.1); PUCT + belief-determinization
   selfplay/             League (PFSP), GameManager (multi-env opponent sampling)
   eval/                 EvaluationManager, rules-invariants (Phase 0)
   setup_phase/          Decoupled setup-phase trainer (Monte Carlo rollouts)
@@ -172,7 +218,7 @@ make typecheck       # mypy
 ## Training Notes
 
 - Hardware: Apple M1 Pro, CPU-only (MPS too slow at batch=1 inference)
-- Real-world throughput: ~30–35 steps/s during active compute; ~2–2.5M steps/day accounting for sleep/idle
+- Real-world throughput: ~25-30 steps/s on `phase4_full` (~2.74M params with all features active); ~30-35 steps/s on the 1.54M baseline; ~2–2.5M steps/day accounting for sleep/idle
 - Checkpoints saved every 500k steps; eval vs heuristic every 100k steps
 - Bottleneck profiling (n_envs=4, n_steps=2048): NN inference ~53% of rollout time, obs-building ~33%
 - Obs-building optimized: cached per-tile static features and corner geometry at episode reset → ~1.8× speedup on `_build_tile_features`
