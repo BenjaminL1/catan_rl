@@ -1,0 +1,7 @@
+# Phase 4 leave-one-out: drops the GNN encoder. Ablates whether the
+# explicit hex/vertex/edge message passing pays for itself on top of
+# the axial-pos-emb tile transformer that Phase 2.1 already provides.
+_base: phase4_full.yaml
+
+model:
+  use_graph_encoder: false

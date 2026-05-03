@@ -1,0 +1,8 @@
+# Phase 4 leave-one-out: drops the opponent next-action auxiliary head.
+# Belief head stays on. Ablates whether predicting opponent *moves*
+# (action distribution) adds value beyond predicting opponent *cards*
+# (belief distribution).
+_base: phase4_full.yaml
+
+model:
+  use_opponent_action_head: false

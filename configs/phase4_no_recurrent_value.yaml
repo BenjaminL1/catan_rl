@@ -1,0 +1,7 @@
+# Phase 4 leave-one-out: drops the GRU recurrent value head. Ablates
+# whether the recurrence helps with stalemate-detection / draw prediction
+# in a 1v1 league where many games push toward ``max_turns=500``.
+_base: phase4_full.yaml
+
+model:
+  use_recurrent_value: false

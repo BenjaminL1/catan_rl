@@ -19,6 +19,8 @@ import torch.nn as nn
 from catan_rl.models.action_heads_module import MultiActionHeads
 from catan_rl.models.belief_head import BeliefHead
 from catan_rl.models.observation_module import ObservationModule
+from catan_rl.models.opponent_action_head import OpponentActionHead
+from catan_rl.models.recurrent_value import RecurrentValueHead
 from catan_rl.models.utils import init_weights
 
 
@@ -56,6 +58,10 @@ class CatanPolicy(nn.Module):
         value_head_mode: str = "shared",
         use_belief_head: bool = False,
         belief_head_hidden_dim: int = 128,
+        use_opponent_action_head: bool = False,
+        opponent_action_head_hidden_dim: int = 128,
+        use_recurrent_value: bool = False,
+        gru_hidden_dim: int = 64,
         **obs_module_kwargs,
     ):
         super().__init__()
@@ -88,8 +94,24 @@ class CatanPolicy(nn.Module):
             film=action_head_film,
         )
 
-        # Value tower: Linear→LayerNorm→ReLU stack → scalar.
-        self.value_net = _build_value_net(obs_output_dim, value_hidden_dims)
+        # Value tower. Phase 4.2 introduces an opt-in recurrent variant
+        # (``use_recurrent_value=True``) that wraps the value MLP in a
+        # GRUCell. When enabled, ``value_net`` is *not* built — all value
+        # evaluations go through ``recurrent_value_head`` instead, which
+        # owns its own MLP. Callers that need a value forward pass MUST
+        # supply a hidden state when ``use_recurrent_value=True``.
+        self.use_recurrent_value = bool(use_recurrent_value)
+        self.gru_hidden_dim = int(gru_hidden_dim)
+        if self.use_recurrent_value:
+            self.recurrent_value_head = RecurrentValueHead(
+                obs_output_dim,
+                hidden_dim=self.gru_hidden_dim,
+                value_hidden_dims=value_hidden_dims,
+            )
+            self.value_net = None  # type: ignore[assignment]
+        else:
+            self.recurrent_value_head = None
+            self.value_net = _build_value_net(obs_output_dim, value_hidden_dims)
 
         # Phase 2.5b: optional opponent-belief head reading the policy
         # encoder's output. Trainer-only signal — no inference dependency.
@@ -97,6 +119,18 @@ class CatanPolicy(nn.Module):
         self.belief_head = (
             BeliefHead(obs_output_dim, hidden_dim=belief_head_hidden_dim)
             if self.use_belief_head
+            else None
+        )
+
+        # Phase 2.5c: optional opponent-action auxiliary head — predicts
+        # the opponent's next action TYPE distribution (13-way). Same
+        # plumbing pattern as the belief head; loss only fires on rollouts
+        # where the opponent is a historical league policy (filter is
+        # applied trainer-side via ``opp_action_target_valid``).
+        self.use_opponent_action_head = bool(use_opponent_action_head)
+        self.opponent_action_head = (
+            OpponentActionHead(obs_output_dim, hidden_dim=opponent_action_head_hidden_dim)
+            if self.use_opponent_action_head
             else None
         )
 
@@ -115,20 +149,37 @@ class CatanPolicy(nn.Module):
         obs: dict[str, torch.Tensor],
         masks: dict[str, torch.Tensor],
         deterministic: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        value_hidden_in: torch.Tensor | None = None,
+    ) -> (
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+        | tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]
+    ):
         """Used during rollout collection (playing games to gather experience).
 
         Args:
-            obs:           dict of batched observations from environment.
-            masks:         per-head action masks from environment.
-            deterministic: True for evaluation (argmax), False for training (sample).
+            obs:             dict of batched observations from environment.
+            masks:           per-head action masks from environment.
+            deterministic:   True for evaluation (argmax), False for training (sample).
+            value_hidden_in: ``(B, gru_hidden_dim)`` hidden state for the
+                recurrent value head. Only required when
+                ``use_recurrent_value=True`` — caller (the trainer) tracks
+                per-env state across rollout steps.
 
         Returns:
-            actions:  (B, 6) composite action (type, corner, edge, tile, res1, res2).
-            value:    (B, 1) how good the agent thinks this state is.
-            log_prob: (B,) probability of the chosen actions under current policy.
+            Without recurrent value: ``(actions, value, log_prob)``.
+            With recurrent value: ``(actions, value, log_prob, hidden_out)``
+            where ``hidden_out`` is the new GRU state to feed back at the
+            next step.
         """
         obs_out = self.observation_module(obs)
+        if self.use_recurrent_value:
+            if value_hidden_in is None:
+                value_hidden_in = self.recurrent_value_head.initial_hidden(
+                    obs_out.shape[0], device=obs_out.device
+                )
+            value, hidden_out = self.recurrent_value_head(obs_out, value_hidden_in)
+            actions, log_prob, _ = self.action_heads(obs_out, masks, deterministic=deterministic)
+            return actions, value, log_prob, hidden_out
         if self.value_head_mode == "decoupled":
             value = self.value_net(self._value_features(obs))
         else:
@@ -143,6 +194,7 @@ class CatanPolicy(nn.Module):
         actions: torch.Tensor,
         return_per_head: bool = False,
         return_belief_logits: bool = False,
+        return_opp_action_logits: bool = False,
     ) -> tuple:
         """Used during PPO update to re-evaluate previously taken actions.
 
@@ -169,7 +221,17 @@ class CatanPolicy(nn.Module):
             appended as the final element. Both flags can be combined.
         """
         obs_out = self.observation_module(obs)
-        if self.value_head_mode == "decoupled":
+        if self.use_recurrent_value:
+            # Replay one GRU step from the buffered ``h_t``. No BPTT past
+            # this single step — gradient backs into the GRU weights but
+            # not into the previous timestep's hidden state.
+            value_hidden_in = obs.get("value_hidden_in")
+            if value_hidden_in is None:
+                value_hidden_in = self.recurrent_value_head.initial_hidden(
+                    obs_out.shape[0], device=obs_out.device
+                )
+            value, _hidden_out = self.recurrent_value_head(obs_out, value_hidden_in)
+        elif self.value_head_mode == "decoupled":
             value = self.value_net(self._value_features(obs))
         else:
             value = self.value_net(obs_out)
@@ -177,24 +239,47 @@ class CatanPolicy(nn.Module):
         belief_logits: torch.Tensor | None = None
         if return_belief_logits and self.belief_head is not None:
             belief_logits = self.belief_head(obs_out)
+        opp_action_logits: torch.Tensor | None = None
+        if return_opp_action_logits and self.opponent_action_head is not None:
+            opp_action_logits = self.opponent_action_head(obs_out)
 
+        # Build the return tuple incrementally so any combination of the
+        # three optional fields lands in a stable order:
+        #   (value, log_prob, entropy[, per_head][, belief_logits][, opp_action_logits])
         if return_per_head:
             _, log_prob, entropy, per_head = self.action_heads(
                 obs_out, masks, actions=actions, return_per_head=True
             )
-            if return_belief_logits:
-                return value, log_prob, entropy, per_head, belief_logits
-            return value, log_prob, entropy, per_head
-        _, log_prob, entropy = self.action_heads(obs_out, masks, actions=actions)
+            extras: tuple = (per_head,)
+        else:
+            _, log_prob, entropy = self.action_heads(obs_out, masks, actions=actions)
+            extras = ()
         if return_belief_logits:
-            return value, log_prob, entropy, belief_logits
+            extras = extras + (belief_logits,)
+        if return_opp_action_logits:
+            extras = extras + (opp_action_logits,)
+        if extras:
+            return (value, log_prob, entropy) + extras
         return value, log_prob, entropy
 
-    def get_value(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def get_value(
+        self,
+        obs: dict[str, torch.Tensor],
+        value_hidden_in: torch.Tensor | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Cheap value-only forward pass (no action heads).
 
-        Decoupled mode skips the policy encoder entirely.
+        Decoupled mode skips the policy encoder entirely. Recurrent mode
+        runs one GRU step and additionally returns the new hidden state.
         """
+        if self.use_recurrent_value:
+            obs_out = self.observation_module(obs)
+            if value_hidden_in is None:
+                value_hidden_in = self.recurrent_value_head.initial_hidden(
+                    obs_out.shape[0], device=obs_out.device
+                )
+            value, hidden_out = self.recurrent_value_head(obs_out, value_hidden_in)
+            return value, hidden_out
         if self.value_head_mode == "decoupled":
             return self.value_net(self._value_features(obs))
         return self.value_net(self.observation_module(obs))

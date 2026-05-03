@@ -105,6 +105,17 @@ class CatanPPO:
                 # Phase 2.5b belief head
                 "use_belief_head",
                 "belief_head_hidden_dim",
+                # Phase 2.5c opponent-action aux head
+                "use_opponent_action_head",
+                "opponent_action_head_hidden_dim",
+                # Phase 4.2 recurrent value head
+                "use_recurrent_value",
+                "gru_hidden_dim",
+                # Phase 2.3 GNN encoder
+                "use_graph_encoder",
+                "graph_hidden_dim",
+                "graph_n_rounds",
+                "graph_out_dim",
             )
             if k in config
         }
@@ -163,6 +174,10 @@ class CatanPPO:
             next_player_dim=int(config.get("other_player_main_in_dim", 173)),
             store_opponent_id=bool(config.get("use_opponent_id_emb", False)),
             store_belief_target=bool(config.get("use_belief_head", False)),
+            store_opp_action_target=bool(config.get("use_opponent_action_head", False)),
+            gru_hidden_dim=int(config.get("gru_hidden_dim", 0))
+            if bool(config.get("use_recurrent_value", False))
+            else 0,
         )
 
         # KL early stopping: break out of update epochs if policy drifts too far
@@ -185,12 +200,29 @@ class CatanPPO:
                 f"advantage_norm must be 'rollout'|'batch'|'none', got {self.advantage_norm!r}"
             )
 
+        # Phase 4.2: per-env recurrent-value hidden state, maintained
+        # across rollout steps. Reset to zeros on episode termination.
+        # ``None`` when the recurrent value head is disabled.
+        self.use_recurrent_value = bool(config.get("use_recurrent_value", False))
+        self._gru_hidden_dim = int(config.get("gru_hidden_dim", 64))
+        if self.use_recurrent_value:
+            self._value_hidden_state = torch.zeros(
+                self.n_envs, self._gru_hidden_dim, device=self.device
+            )
+        else:
+            self._value_hidden_state = None
+
         # Phase 2.5b: belief-head auxiliary-loss weight. Active only when
         # ``use_belief_head=True`` and ``belief_target`` is in the buffer's
         # obs schema. Default 0.05 per roadmap §5.1.6 — small enough that
         # PPO objectives still dominate, large enough to shape the encoder
         # in the first ~1M steps where reward signal is sparse.
         self.belief_loss_weight = float(config.get("belief_loss_weight", 0.05))
+        # Phase 2.5c: opponent next-action auxiliary loss weight. Smaller
+        # than belief (0.03) per roadmap §5.1.7 because the supervision is
+        # noisier — opponent action is conditional on their hidden hand
+        # which we don't see, so the head can never reach perfect accuracy.
+        self.opp_action_loss_weight = float(config.get("opp_action_loss_weight", 0.03))
 
         # Phase 1.5: D6 dihedral-symmetry augmentation per minibatch.
         # 0.0 = off (default for back-compat); 0.5 recommended in phase1_full.
@@ -640,6 +672,19 @@ class CatanPPO:
         if "belief_target" in obs_list[0]:
             target = np.stack([o["belief_target"] for o in obs_list])
             out["belief_target"] = torch.from_numpy(target).to(device)
+        # Phase 4.2: GRU hidden-state input passes through when present.
+        if "value_hidden_in" in obs_list[0]:
+            hidden = np.stack([np.asarray(o["value_hidden_in"]) for o in obs_list])
+            out["value_hidden_in"] = torch.from_numpy(hidden.astype(np.float32)).to(device)
+        # Phase 2.5c: opp-action target passes through when present.
+        if "opp_next_action_type" in obs_list[0]:
+            opp_act = np.array([int(o["opp_next_action_type"]) for o in obs_list], dtype=np.int64)
+            valid = np.array(
+                [bool(o.get("opp_action_target_valid", False)) for o in obs_list],
+                dtype=bool,
+            )
+            out["opp_next_action_type"] = torch.from_numpy(opp_act).to(device)
+            out["opp_action_target_valid"] = torch.from_numpy(valid).to(device)
         return out
 
     def _batch_masks_to_tensor(self, masks_list: list[dict]) -> dict[str, torch.Tensor]:
@@ -652,7 +697,7 @@ class CatanPPO:
 
     def _run_batched_opponent_turns(
         self, pending: list[int], partial_rewards: list[float]
-    ) -> dict[int, tuple]:
+    ) -> tuple[dict[int, tuple], dict[int, int]]:
         """Run batched opponent NN inference until all pending envs finish their turn.
 
         Args:
@@ -660,11 +705,17 @@ class CatanPPO:
             partial_rewards: reward accumulated before opponent acts, aligned with pending
 
         Returns:
-            dict mapping env_idx → (final_obs, total_reward, terminated, truncated, info)
+            (results, first_opp_action_type) where:
+              - results: dict env_idx → (final_obs, total_reward, terminated, truncated, info)
+              - first_opp_action_type: dict env_idx → int (action type of the
+                opponent's *first* action in this turn). Phase 2.5c uses this
+                as the supervision target for the opponent-action aux head.
+                Empty when no opp turn ran.
         """
         gm = self.game_manager
         opp_policy = gm.rollout_opp_policy
         results = {}
+        first_opp_action: dict[int, int] = {}
         # Use dict so slot alignment survives as pending shrinks each loop
         accum = {env_i: partial_rewards[slot] for slot, env_i in enumerate(pending)}
 
@@ -675,11 +726,21 @@ class CatanPPO:
             opp_mask_t = self._batch_masks_to_tensor([p[1] for p in opp_pairs])
 
             with torch.inference_mode():
-                opp_actions, _, _ = opp_policy.act(opp_obs_t, opp_mask_t, deterministic=True)
+                # Phase 4.2: opponent policies built with the recurrent
+                # value head return ``(actions, value, log_prob, hidden)``.
+                # We only need the actions — the opponent has no use for
+                # carrying hidden state across our rollout's main steps.
+                opp_act_out = opp_policy.act(opp_obs_t, opp_mask_t, deterministic=True)
+                opp_actions = opp_act_out[0]
             opp_actions_np = opp_actions.cpu().numpy()  # (len(pending), 6)
 
             still_pending = []
             for slot, env_i in enumerate(pending):
+                # Phase 2.5c: capture the *first* action of each opp's turn
+                # (subsequent loops are continuations of the same turn for
+                # envs that didn't EndTurn yet).
+                if env_i not in first_opp_action:
+                    first_opp_action[env_i] = int(opp_actions_np[slot][0])
                 turn_done, obs, rew_delta, terminated, truncated, info = gm.apply_opponent_action(
                     env_i, opp_actions_np[slot]
                 )
@@ -689,7 +750,7 @@ class CatanPPO:
                     still_pending.append(env_i)
             pending = still_pending
 
-        return results
+        return results, first_opp_action
 
     def collect_rollouts(self) -> dict[str, float]:
         """Play n_steps of games and store transitions in the buffer.
@@ -709,6 +770,13 @@ class CatanPPO:
         ep_rewards = [0.0] * self.n_envs
         ep_lengths = [0] * self.n_envs
         steps_collected = 0
+        # Phase 4.2: reset per-env hidden state at the start of each rollout.
+        # NOTE: this resets ACROSS rollouts. The per-step termination reset
+        # happens further down where we observe ``terminated``.
+        if self.use_recurrent_value:
+            self._value_hidden_state = torch.zeros(
+                self.n_envs, self._gru_hidden_dim, device=self.device
+            )
 
         while steps_collected < self.n_steps:
             # Clamp batch to remaining steps (handles n_steps % n_envs != 0)
@@ -720,8 +788,22 @@ class CatanPPO:
             obs_t = self._batch_obs_to_tensor_dict(obs_batch)
             masks_t = self._batch_masks_to_tensor(masks_list)
 
-            with torch.inference_mode():
-                actions, values, log_probs = self.policy.act(obs_t, masks_t)
+            # Phase 4.2: snapshot the input hidden state BEFORE the act()
+            # call so we can store the same h_t the GRU saw in this step.
+            value_hidden_in_np = None
+            if self.use_recurrent_value:
+                hidden_in_batch = self._value_hidden_state[:batch_n]
+                value_hidden_in_np = hidden_in_batch.detach().cpu().numpy()
+                with torch.inference_mode():
+                    actions, values, log_probs, hidden_out = self.policy.act(
+                        obs_t, masks_t, value_hidden_in=hidden_in_batch
+                    )
+                # Update the live state — broadcast back into the per-env tensor.
+                self._value_hidden_state = self._value_hidden_state.clone()
+                self._value_hidden_state[:batch_n] = hidden_out.detach()
+            else:
+                with torch.inference_mode():
+                    actions, values, log_probs = self.policy.act(obs_t, masks_t)
 
             actions_np = actions.cpu().numpy()  # (batch_n, 6)
             values_squeezed = values.squeeze(-1)
@@ -747,15 +829,37 @@ class CatanPPO:
                     observations[i] = new_obs
                     immediate.append((i, new_obs, reward, terminated, truncated, info))
 
-            # Phase 2: batch opponent inference for deferred turns
+            # Phase 2: batch opponent inference for deferred turns.
+            # Phase 2.5c: also captures the opponent's first action type
+            # for the opp-action auxiliary loss target.
+            first_opp_action: dict[int, int] = {}
             if pending_opp and self.game_manager.rollout_opp_policy is not None:
-                opp_results = self._run_batched_opponent_turns(pending_opp, pending_prewd)
+                opp_results, first_opp_action = self._run_batched_opponent_turns(
+                    pending_opp, pending_prewd
+                )
                 for env_i, (fin_obs, fin_rew, fin_term, fin_trunc, fin_info) in opp_results.items():
                     observations[env_i] = fin_obs
                     immediate.append((env_i, fin_obs, fin_rew, fin_term, fin_trunc, fin_info))
 
-            # Phase 3: store all completed transitions to buffer
+            # Phase 3: store all completed transitions to buffer.
+            # Phase 2.5c: inject the opponent-next-action target into the
+            # agent's pre-step obs dict for envs whose opponent turn fired
+            # in this loop. Validity = the rollout opponent has a stable
+            # league policy ID (≥ 0); current_self (-2) and random (-1)
+            # are excluded because training the head against ourselves is
+            # the degenerate fixed point AlphaStar warns about.
+            opp_id = self.game_manager._rollout_opp_policy_id
             for env_i, _new_obs, reward, terminated, truncated, info in immediate:
+                if self.buffer.store_opp_action_target and env_i in first_opp_action:
+                    obs_batch[env_i] = dict(obs_batch[env_i])  # avoid mutating cached dict
+                    obs_batch[env_i]["opp_next_action_type"] = first_opp_action[env_i]
+                    obs_batch[env_i]["opp_action_target_valid"] = bool(opp_id >= 0)
+                # Phase 4.2: attach the GRU hidden-state input that fed
+                # this step's value estimate, so the PPO update can replay
+                # the recurrent forward pass against the same h_t.
+                if self.use_recurrent_value and value_hidden_in_np is not None:
+                    obs_batch[env_i] = dict(obs_batch[env_i])
+                    obs_batch[env_i]["value_hidden_in"] = value_hidden_in_np[env_i]
                 self.buffer.add(
                     obs_batch[env_i],
                     actions_np[env_i],
@@ -781,11 +885,27 @@ class CatanPPO:
                     self.episode_wins.append(1.0 if won else 0.0)
                     ep_rewards[env_i] = 0.0
                     ep_lengths[env_i] = 0
+                    # Phase 4.2: reset the GRU hidden state on TRUE
+                    # termination (someone hit 15 VP). Truncation preserves
+                    # the state because the trajectory is being cut for
+                    # bookkeeping, not because the underlying state changed
+                    # — the bootstrap value uses the live h_t.
+                    if self.use_recurrent_value and bool(terminated):
+                        self._value_hidden_state[env_i] = 0.0
 
-        # Bootstrapped last values — one batched forward pass for all envs
+        # Bootstrapped last values — one batched forward pass for all envs.
+        # Phase 4.2: with the recurrent value head, ``get_value`` returns
+        # ``(value, hidden_out)``; we throw away the hidden_out (this is
+        # the bootstrap, not a step we're going to update on).
         with torch.inference_mode():
             obs_t = self._batch_obs_to_tensor_dict(observations)
-            raw_last = self.policy.get_value(obs_t).squeeze(-1)
+            if self.use_recurrent_value:
+                raw_last_full = self.policy.get_value(
+                    obs_t, value_hidden_in=self._value_hidden_state
+                )
+                raw_last = raw_last_full[0].squeeze(-1)
+            else:
+                raw_last = self.policy.get_value(obs_t).squeeze(-1)
             if self.normalize_values:
                 last_values = self.value_normalizer.denormalize(raw_last).cpu().numpy()
             else:
@@ -835,6 +955,8 @@ class CatanPPO:
         total_kl = 0.0
         total_belief_loss = 0.0
         n_belief_updates = 0
+        total_opp_action_loss = 0.0
+        n_opp_action_updates = 0
         n_updates = 0
         epochs_completed = 0
 
@@ -871,25 +993,26 @@ class CatanPPO:
                 # 'rollout' and 'none' both bypass per-batch normalization.
 
                 # Forward pass: re-evaluate old actions under current policy.
-                # Per-head dict is requested so we can log collapse diagnostics
-                # without a second forward pass. With belief head enabled, we
-                # also pull belief logits from the same encoder pass.
+                # Per-head dict is always requested for collapse diagnostics.
+                # Belief and opp-action heads pull from the same encoder
+                # pass so we never re-encode for an aux loss.
                 want_belief = self.policy.belief_head is not None and "belief_target" in obs
-                if want_belief:
-                    (
-                        values,
-                        new_log_prob,
-                        entropy,
-                        per_head,
-                        belief_logits,
-                    ) = self.policy.evaluate_actions(
-                        obs, masks, actions, return_per_head=True, return_belief_logits=True
-                    )
-                else:
-                    values, new_log_prob, entropy, per_head = self.policy.evaluate_actions(
-                        obs, masks, actions, return_per_head=True
-                    )
-                    belief_logits = None
+                want_opp_action = (
+                    self.policy.opponent_action_head is not None and "opp_next_action_type" in obs
+                )
+                eval_out = self.policy.evaluate_actions(
+                    obs,
+                    masks,
+                    actions,
+                    return_per_head=True,
+                    return_belief_logits=want_belief,
+                    return_opp_action_logits=want_opp_action,
+                )
+                # Order: (value, log_prob, entropy, per_head, [belief], [opp_action]).
+                values, new_log_prob, entropy, per_head = eval_out[:4]
+                rest = list(eval_out[4:])
+                belief_logits = rest.pop(0) if want_belief else None
+                opp_action_logits = rest.pop(0) if want_opp_action else None
                 values = values.squeeze(-1)  # (B,)
 
                 # ── Policy loss (clipped surrogate objective) ─────────
@@ -940,10 +1063,27 @@ class CatanPPO:
 
                     belief_loss_term = _BH.soft_cross_entropy(belief_logits, obs["belief_target"])
 
+                # ── Phase 2.5c: opponent next-action aux loss ─────────
+                # Masked cross-entropy on rows where the opponent was a
+                # historical league policy. Returns ``None`` if the
+                # minibatch contains no valid rows; we skip the loss term
+                # in that case rather than averaging zero.
+                opp_action_loss_term = None
+                if opp_action_logits is not None:
+                    from catan_rl.models.opponent_action_head import OpponentActionHead as _OAH
+
+                    opp_action_loss_term = _OAH.masked_cross_entropy(
+                        opp_action_logits,
+                        obs["opp_next_action_type"],
+                        obs["opp_action_target_valid"].bool(),
+                    )
+
                 # ── Total loss ────────────────────────────────────────
                 loss = pg_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
                 if belief_loss_term is not None:
                     loss = loss + self.belief_loss_weight * belief_loss_term
+                if opp_action_loss_term is not None:
+                    loss = loss + self.opp_action_loss_weight * opp_action_loss_term
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -973,6 +1113,9 @@ class CatanPPO:
                 if belief_loss_term is not None:
                     total_belief_loss += belief_loss_term.item()
                     n_belief_updates += 1
+                if opp_action_loss_term is not None:
+                    total_opp_action_loss += opp_action_loss_term.item()
+                    n_opp_action_updates += 1
                 epoch_kl += batch_kl
                 n_updates += 1
                 epoch_batches += 1
@@ -1005,6 +1148,9 @@ class CatanPPO:
         # Phase 2.5b: belief auxiliary-loss diagnostic.
         if n_belief_updates > 0:
             result["belief_loss"] = total_belief_loss / n_belief_updates
+        # Phase 2.5c: opponent next-action aux-loss diagnostic.
+        if n_opp_action_updates > 0:
+            result["opp_action_loss"] = total_opp_action_loss / n_opp_action_updates
         # Per-head entropy diagnostics (Phase 0).
         for name in head_names:
             count = max(head_sample_count[name], 1)
