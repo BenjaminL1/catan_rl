@@ -114,7 +114,40 @@ value-only loss never reach policy-encoder parameters.
   scoped 2.3):** deferred to a follow-up. The axial pos embedding closes
   most of the topology gap at a fraction of the engineering cost; revisit
   if Phase 2 ablations show a residual gap that pos-emb alone can't close.
-- **Belief head / opponent-action auxiliary loss (originally scoped 2.5b/c):**
-  deferred. These add training-time auxiliary losses and env-side aux
-  targets; they belong in their own phase once we've confirmed Phase 2's
-  baseline gain is stable.
+- **Opponent-action auxiliary loss (originally scoped 2.5c):** still
+  deferred. Distinct from 2.5b because it predicts the opponent's *next
+  action distribution* against historical league policies (not their
+  hidden hand), and requires the rollout buffer to carry per-step opponent
+  policy IDs *and* the actually-observed opponent action — a larger
+  surface change.
+
+## Follow-up: 2.5b belief head (landed)
+
+The opponent hidden-dev-card belief head was originally bundled with 2.5
+"decoupled value tower" but deferred when 2.5 shipped. It landed in a
+follow-up branch (`feat/phase-2-5b-belief-head`):
+
+- New `src/catan_rl/models/belief_head.py`. Two-layer MLP from the policy
+  encoder's 512-dim output to a 5-way logit over dev-card types
+  `{KNIGHT, VP, ROADBUILDER, YOP, MONOPOLY}`. Final layer init gain=0.01
+  so initial outputs are near zero → softmax near uniform → loss starts
+  at the well-defined `log(5) ≈ 1.609` rather than at an arbitrary value.
+- Loss is `BeliefHead.soft_cross_entropy(logits, target)` =
+  `-Σ target_i · log_softmax(logits)_i`. Equivalent to KL up to the
+  constant entropy of the target, so the gradient is identical.
+- Env exposes `obs['belief_target']` only when `use_belief_head=True` —
+  it's a training-only field, never read by the policy at inference time
+  so the policy genuinely has to predict (not look up) the distribution.
+- When the opponent has zero hidden cards the env returns the uniform
+  distribution; soft CE on a degenerate all-zeros target is undefined.
+- Buffer opt-in `store_belief_target=True` mirrors Phase 3.6's
+  `store_opponent_id` pattern. Both default off so legacy lineages don't
+  pay the buffer footprint.
+- **Why 1v1-only:** with no P2P trade and a single opponent, the
+  broadcast tracker reveals everything except dev-card *type* — exactly
+  what we model. With P2P trade the env's "true" target is stale by the
+  time the loss fires; with 4 players the joint distribution output dim
+  explodes (5⁴=625) or factorizes away most of the structure.
+
+Param count: phase2_full ~2.22M → phase2_belief_head ~2.29M (~70k for the
+new MLP). Config: `configs/phase2_belief_head.yaml` extends `phase2_full`.

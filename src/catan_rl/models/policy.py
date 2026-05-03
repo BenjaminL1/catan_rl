@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 
 from catan_rl.models.action_heads_module import MultiActionHeads
+from catan_rl.models.belief_head import BeliefHead
 from catan_rl.models.observation_module import ObservationModule
 from catan_rl.models.utils import init_weights
 
@@ -53,6 +54,8 @@ class CatanPolicy(nn.Module):
         action_head_hidden_dim: int = 128,
         action_head_film: bool = False,
         value_head_mode: str = "shared",
+        use_belief_head: bool = False,
+        belief_head_hidden_dim: int = 128,
         **obs_module_kwargs,
     ):
         super().__init__()
@@ -87,6 +90,15 @@ class CatanPolicy(nn.Module):
 
         # Value tower: Linear→LayerNorm→ReLU stack → scalar.
         self.value_net = _build_value_net(obs_output_dim, value_hidden_dims)
+
+        # Phase 2.5b: optional opponent-belief head reading the policy
+        # encoder's output. Trainer-only signal — no inference dependency.
+        self.use_belief_head = bool(use_belief_head)
+        self.belief_head = (
+            BeliefHead(obs_output_dim, hidden_dim=belief_head_hidden_dim)
+            if self.use_belief_head
+            else None
+        )
 
     def _value_features(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
         """Run the value-head's observation encoder.
@@ -130,6 +142,7 @@ class CatanPolicy(nn.Module):
         masks: dict[str, torch.Tensor],
         actions: torch.Tensor,
         return_per_head: bool = False,
+        return_belief_logits: bool = False,
     ) -> tuple:
         """Used during PPO update to re-evaluate previously taken actions.
 
@@ -140,6 +153,10 @@ class CatanPolicy(nn.Module):
             return_per_head: When True, also returns the per-head entropy /
                 weight / log-prob dict from MultiActionHeads. Used by Phase 0's
                 per-head entropy logging for collapse detection.
+            return_belief_logits: When True (and the policy has a belief
+                head), append ``(B, 5)`` belief logits to the return tuple.
+                Trainer uses these against ``obs['belief_target']`` for the
+                Phase 2.5b auxiliary loss.
 
         Returns:
             Default::
@@ -148,18 +165,29 @@ class CatanPolicy(nn.Module):
                 entropy:  scalar — entropy bonus to encourage exploration.
 
             With ``return_per_head=True``: (value, log_prob, entropy, per_head_dict).
+            With ``return_belief_logits=True``: belief_logits ``(B, 5)``
+            appended as the final element. Both flags can be combined.
         """
         obs_out = self.observation_module(obs)
         if self.value_head_mode == "decoupled":
             value = self.value_net(self._value_features(obs))
         else:
             value = self.value_net(obs_out)
+
+        belief_logits: torch.Tensor | None = None
+        if return_belief_logits and self.belief_head is not None:
+            belief_logits = self.belief_head(obs_out)
+
         if return_per_head:
             _, log_prob, entropy, per_head = self.action_heads(
                 obs_out, masks, actions=actions, return_per_head=True
             )
+            if return_belief_logits:
+                return value, log_prob, entropy, per_head, belief_logits
             return value, log_prob, entropy, per_head
         _, log_prob, entropy = self.action_heads(obs_out, masks, actions=actions)
+        if return_belief_logits:
+            return value, log_prob, entropy, belief_logits
         return value, log_prob, entropy
 
     def get_value(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:

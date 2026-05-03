@@ -57,6 +57,7 @@ class CompositeRolloutBuffer:
         curr_player_dim: int = CURR_PLAYER_DIM,
         next_player_dim: int = NEXT_PLAYER_DIM,
         store_opponent_id: bool = False,
+        store_belief_target: bool = False,
     ):
         """Allocate fixed-size NumPy storage for one rollout's transitions.
 
@@ -77,6 +78,9 @@ class CompositeRolloutBuffer:
         # encoder will read it; off by default to keep the buffer footprint
         # unchanged for legacy lineages.
         self.store_opponent_id = bool(store_opponent_id)
+        # Phase 2.5b: belief-head supervision target. Same opt-in pattern
+        # as opponent_id; off by default.
+        self.store_belief_target = bool(store_belief_target)
         self.pos = 0
         self.full = False
 
@@ -125,6 +129,11 @@ class CompositeRolloutBuffer:
         else:
             self.opponent_kind = None
             self.opponent_policy_id = None
+        # Phase 2.5b: belief target — float vector per step, shape (n, 5).
+        if self.store_belief_target:
+            self.belief_target = np.zeros((n_steps, 5), dtype=np.float32)
+        else:
+            self.belief_target = None
 
         self.masks = {}
         for key, size in mask_shapes.items():
@@ -205,6 +214,10 @@ class CompositeRolloutBuffer:
         if self.store_opponent_id:
             self.opponent_kind[self.pos] = int(obs.get("opponent_kind", 0))
             self.opponent_policy_id[self.pos] = int(obs.get("opponent_policy_id", 0))
+        if self.store_belief_target:
+            self.belief_target[self.pos] = obs.get(
+                "belief_target", np.full(5, 0.2, dtype=np.float32)
+            )
         for key in self.masks:
             self.masks[key][self.pos] = masks[key]
 
@@ -304,6 +317,10 @@ class CompositeRolloutBuffer:
         else:
             self._t_opp_kind = None
             self._t_opp_policy_id = None
+        if self.store_belief_target:
+            self._t_belief_target = torch.from_numpy(self.belief_target[:n]).to(device)
+        else:
+            self._t_belief_target = None
         self._tensors_ready = True
 
     def get_batches(
@@ -349,6 +366,8 @@ class CompositeRolloutBuffer:
             if self.store_opponent_id:
                 obs_batch["opponent_kind"] = self._t_opp_kind[idx_t]
                 obs_batch["opponent_policy_id"] = self._t_opp_policy_id[idx_t]
+            if self.store_belief_target:
+                obs_batch["belief_target"] = self._t_belief_target[idx_t]
             actions = self._t_actions[idx_t]
             masks = {k: self._t_masks[k][idx_t] for k in self._t_masks}
 

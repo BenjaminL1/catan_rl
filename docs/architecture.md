@@ -107,6 +107,7 @@ behavior; opt in via `configs/phase2_full.yaml` (or the four leave-one-outs).
 | 2.2 Modern transformer recipe | `transformer_dropout`, `transformer_activation` | `None`, `"relu"` | Pre-norm was already on; adds optional dropout (0.05 in `phase2_full`) and GELU FFN activation |
 | 2.4 AdaLN action heads | `action_head_film` | `False` | Replaces concat-MLP conditioning on context-using heads (corner / resource1 / resource2) with FiLM modulation: `(1+γ) ⊙ LN(x) + β` where `(γ, β)` are per-sample, generated from the head's context. γ-init=0 → identity at construction |
 | 2.5 Decoupled value tower | `value_head_mode` | `"shared"` | `"decoupled"` builds a second `ObservationModule` exclusively for the value head, breaking gradient interference between policy loss and value loss. ~+0.7M params |
+| 2.5b Belief head (1v1) | `use_belief_head`, `belief_head_hidden_dim`, `belief_loss_weight` | `False`, `128`, `0.05` | 2-layer MLP from policy encoder → 5-way logits over opponent hidden dev-card types. Soft cross-entropy against env's true normalized count vector (training-only target via `obs['belief_target']`). Default loss weight 0.05; trainer logs `train/belief_loss`. |
 
 Phase 2 lineage stays on the Phase 1 obs schema (compact 54/61). The full
 phase2_full policy is ~2.22M params (vs ~1.54M for phase1_full); the bulk of

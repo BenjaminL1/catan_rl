@@ -38,6 +38,7 @@ class GameManager:
         use_opponent_id_emb: bool = False,
         opp_id_mask_prob: float = 0.40,
         league_maxlen: int = 100,
+        use_belief_head: bool = False,
     ):
         self.n_envs = n_envs
         self.league = league
@@ -69,6 +70,7 @@ class GameManager:
                 use_opponent_id_emb=use_opponent_id_emb,
                 opp_id_mask_prob=opp_id_mask_prob,
                 league_maxlen=league_maxlen,
+                use_belief_head=use_belief_head,
             )
             for _ in range(n_envs)
         ]

@@ -44,6 +44,9 @@ DEFAULT_MODEL_CONFIG = {
     "opp_id_emb_dim": 16,
     "n_opp_kinds": 6,
     "league_maxlen": 100,
+    # Phase 2.5b belief head (1v1 opponent hidden dev-card distribution).
+    "use_belief_head": False,
+    "belief_head_hidden_dim": 128,
 }
 
 
@@ -89,6 +92,8 @@ def build_agent_model(device: str = "cpu", **overrides) -> CatanPolicy:
         opp_id_emb_dim=cfg["opp_id_emb_dim"],
         n_opp_kinds=cfg["n_opp_kinds"],
         league_maxlen=cfg["league_maxlen"],
+        use_belief_head=cfg["use_belief_head"],
+        belief_head_hidden_dim=cfg["belief_head_hidden_dim"],
     )
 
     # Count parameters for logging

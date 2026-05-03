@@ -1,0 +1,14 @@
+# Phase 2.5b belief head on top of phase2_full. The auxiliary loss reads
+# the env's true opponent hidden dev-card distribution and trains the
+# encoder to predict it via soft cross-entropy at weight 0.05.
+#
+# Used either as a standalone phase2 ablation (vs phase2_full) or as the
+# starting point for stacking into a phase3-belief follow-up.
+_base: phase2_full.yaml
+
+model:
+  use_belief_head: true
+  belief_head_hidden_dim: 128
+
+phase2_belief:
+  belief_loss_weight: 0.05
