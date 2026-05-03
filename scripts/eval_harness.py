@@ -144,13 +144,27 @@ def cmd_league_rating(args: argparse.Namespace, output_dir: Path) -> bool:
     print(f"[league-rating] round-robin over {len(paths)} checkpoints")
 
     table = RatingTable()
-    em = EvaluationManager(opponent_type="policy", max_turns=500)
     seeds = standard_eval_seeds(0, args.league_rating_games)
 
-    # Load all policies once; expensive but bounded.
+    # Load all policies once; expensive but bounded. ``EvaluationManager``
+    # has to be parameterized to match the policies' expected obs schema —
+    # phase 3.6 / 2.5b add obs keys that the env only emits when the
+    # corresponding flag is set. We derive the flags from the FIRST
+    # trainer's config and assume all checkpoints in the round-robin
+    # share a schema (true within a single training run).
     trainers = [CatanPPO.load(p) for p in paths]
     for t in trainers:
         t.policy.eval()
+    cfg0 = trainers[0].config if trainers else {}
+    em = EvaluationManager(
+        opponent_type="policy",
+        max_turns=500,
+        use_thermometer_encoding=bool(cfg0.get("use_thermometer_encoding", True)),
+        use_opponent_id_emb=bool(cfg0.get("use_opponent_id_emb", False)),
+        opp_id_mask_prob=float(cfg0.get("opp_id_mask_prob", 0.40)),
+        league_maxlen=int(cfg0.get("league_maxlen", 100)),
+        use_belief_head=bool(cfg0.get("use_belief_head", False)),
+    )
 
     for i, (path_a, ta) in enumerate(zip(paths, trainers, strict=True)):
         for j in range(i + 1, len(paths)):

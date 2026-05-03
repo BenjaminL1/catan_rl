@@ -58,7 +58,7 @@ def _obs_to_tensor_dict(obs: dict, device: str) -> dict[str, torch.Tensor]:
             arr = np.zeros(1, dtype=np.int64)
         return [torch.tensor(arr, dtype=torch.long, device=device)]
 
-    return {
+    out: dict[str, torch.Tensor] = {
         "tile_representations": torch.tensor(
             obs["tile_representations"], dtype=torch.float32, device=device
         ).unsqueeze(0),
@@ -72,6 +72,23 @@ def _obs_to_tensor_dict(obs: dict, device: str) -> dict[str, torch.Tensor]:
         "current_player_played_dev": _dev_seq("current_player_played_dev"),
         "next_player_played_dev": _dev_seq("next_player_played_dev"),
     }
+    # Phase 3.6 opponent identity (env emits these only when
+    # ``use_opponent_id_emb=True`` was set on the env). The policy will
+    # KeyError if it's built with the embedding but the obs is missing
+    # these — pass them through whenever the env produces them.
+    if "opponent_kind" in obs:
+        out["opponent_kind"] = torch.tensor(
+            int(obs["opponent_kind"]), dtype=torch.long, device=device
+        ).unsqueeze(0)
+        out["opponent_policy_id"] = torch.tensor(
+            int(obs["opponent_policy_id"]), dtype=torch.long, device=device
+        ).unsqueeze(0)
+    # Phase 2.5b belief target (training-only, but the env still emits it).
+    if "belief_target" in obs:
+        out["belief_target"] = torch.tensor(
+            obs["belief_target"], dtype=torch.float32, device=device
+        ).unsqueeze(0)
+    return out
 
 
 def _masks_to_tensor(masks: dict, device: str) -> dict[str, torch.Tensor]:
@@ -111,11 +128,16 @@ def _play_one_game(
     while not (terminated or truncated):
         masks = env.get_action_masks()
         with torch.no_grad():
-            actions, _, _ = policy.act(
+            # Phase 4.2: recurrent value head returns ``(actions, value,
+            # log_prob, hidden_out)``. We only need actions for eval — the
+            # GRU state isn't carried across episodes here (eval games are
+            # short and the value-head state doesn't drive action selection).
+            act_out = policy.act(
                 _obs_to_tensor_dict(obs, device),
                 _masks_to_tensor(masks, device),
                 deterministic=deterministic,
             )
+            actions = act_out[0]
         action_np = actions.squeeze(0).cpu().numpy()
         obs, _, terminated, truncated, info = env.step(action_np)
 
@@ -129,11 +151,13 @@ def _play_one_game(
                 )
             opp_obs, opp_masks = env.get_opponent_obs_masks()
             with torch.no_grad():
-                opp_actions, _, _ = opponent_policy.act(
+                # Same recurrent-aware unpack as above.
+                opp_act_out = opponent_policy.act(
                     _obs_to_tensor_dict(opp_obs, device),
                     _masks_to_tensor(opp_masks, device),
                     deterministic=deterministic,
                 )
+                opp_actions = opp_act_out[0]
             opp_action_np = opp_actions.squeeze(0).cpu().numpy()
             (
                 turn_complete,
@@ -162,12 +186,25 @@ class EvaluationManager:
         opponent_type: str = "random",
         max_turns: int | None = 500,
         use_thermometer_encoding: bool = True,
+        use_opponent_id_emb: bool = False,
+        opp_id_mask_prob: float = 0.40,
+        league_maxlen: int = 100,
+        use_belief_head: bool = False,
     ):
         self.n_games = n_games
         self.opponent_type = opponent_type
         self.max_turns = max_turns
         # Phase 1.3: must match the policy's expected obs schema.
         self.use_thermometer_encoding = bool(use_thermometer_encoding)
+        # Phase 3.6 / 2.5b: env emits extra obs keys when these are True;
+        # the policy crashes with ``KeyError`` if eval envs don't match
+        # the training env's schema. Must mirror trainer's env construction.
+        # Eval-time we always force opp_kind to UNKNOWN by setting mask_prob
+        # to 1.0 (the policy must be robust to the unknown distribution).
+        self.use_opponent_id_emb = bool(use_opponent_id_emb)
+        self.opp_id_mask_prob = float(opp_id_mask_prob)
+        self.league_maxlen = int(league_maxlen)
+        self.use_belief_head = bool(use_belief_head)
 
     # ── Default eval ─────────────────────────────────────────────────────
 
@@ -200,6 +237,10 @@ class EvaluationManager:
             opponent_type=self.opponent_type,
             max_turns=self.max_turns,
             use_thermometer_encoding=self.use_thermometer_encoding,
+            use_opponent_id_emb=self.use_opponent_id_emb,
+            opp_id_mask_prob=self.opp_id_mask_prob,
+            league_maxlen=self.league_maxlen,
+            use_belief_head=self.use_belief_head,
         )
         n = len(seeds) if seeds is not None else self.n_games
         wins = 0
@@ -266,6 +307,10 @@ class EvaluationManager:
             opponent_type="policy",
             max_turns=self.max_turns,
             use_thermometer_encoding=self.use_thermometer_encoding,
+            use_opponent_id_emb=self.use_opponent_id_emb,
+            opp_id_mask_prob=self.opp_id_mask_prob,
+            league_maxlen=self.league_maxlen,
+            use_belief_head=self.use_belief_head,
         )
         env_b = (
             CatanEnv(
@@ -273,6 +318,10 @@ class EvaluationManager:
                 opponent_type="policy",
                 max_turns=self.max_turns,
                 use_thermometer_encoding=self.use_thermometer_encoding,
+                use_opponent_id_emb=self.use_opponent_id_emb,
+                opp_id_mask_prob=self.opp_id_mask_prob,
+                league_maxlen=self.league_maxlen,
+                use_belief_head=self.use_belief_head,
             )
             if swap_first_player
             else None

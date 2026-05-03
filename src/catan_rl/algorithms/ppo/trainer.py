@@ -335,6 +335,14 @@ class CatanPPO:
             opponent_type=self._eval_opponent,
             max_turns=config.get("max_turns", 500),
             use_thermometer_encoding=self._use_thermometer_encoding,
+            # Eval envs MUST emit the same obs schema the policy expects,
+            # otherwise ``policy.act`` crashes with KeyError on the missing
+            # phase-specific keys (Phase 3.6 opponent_kind, Phase 2.5b
+            # belief_target). Mirror the trainer's env construction.
+            use_opponent_id_emb=bool(config.get("use_opponent_id_emb", False)),
+            opp_id_mask_prob=float(config.get("opp_id_mask_prob", 0.40)),
+            league_maxlen=int(config.get("league_maxlen", 100)),
+            use_belief_head=bool(config.get("use_belief_head", False)),
         )
 
         # Logging
@@ -595,7 +603,15 @@ class CatanPPO:
         """
         from catan_rl.eval.evaluation_manager import EvaluationManager, standard_eval_seeds
 
-        em = EvaluationManager(opponent_type="policy", max_turns=500)
+        em = EvaluationManager(
+            opponent_type="policy",
+            max_turns=500,
+            use_thermometer_encoding=self._use_thermometer_encoding,
+            use_opponent_id_emb=bool(self.config.get("use_opponent_id_emb", False)),
+            opp_id_mask_prob=float(self.config.get("opp_id_mask_prob", 0.40)),
+            league_maxlen=int(self.config.get("league_maxlen", 100)),
+            use_belief_head=bool(self.config.get("use_belief_head", False)),
+        )
         seeds = standard_eval_seeds(0, max(2, self.nash_prune_games // 2))
         k = len(ids)
         payoff = np.full((k, k), 0.5, dtype=np.float64)  # diagonal stays 0.5
@@ -1314,6 +1330,10 @@ class CatanPPO:
                             opponent_type="heuristic",
                             max_turns=self.config.get("max_turns", 500),
                             use_thermometer_encoding=self._use_thermometer_encoding,
+                            use_opponent_id_emb=bool(self.config.get("use_opponent_id_emb", False)),
+                            opp_id_mask_prob=float(self.config.get("opp_id_mask_prob", 0.40)),
+                            league_maxlen=int(self.config.get("league_maxlen", 100)),
+                            use_belief_head=bool(self.config.get("use_belief_head", False)),
                         )
                         # Reset win-rate history — old random-opponent values are not comparable
                         self._eval_win_rate_history = []
@@ -1420,6 +1440,10 @@ class CatanPPO:
                 opponent_type=trainer._eval_opponent,
                 max_turns=config.get("max_turns", 500),
                 use_thermometer_encoding=trainer._use_thermometer_encoding,
+                use_opponent_id_emb=bool(config.get("use_opponent_id_emb", False)),
+                opp_id_mask_prob=float(config.get("opp_id_mask_prob", 0.40)),
+                league_maxlen=int(config.get("league_maxlen", 100)),
+                use_belief_head=bool(config.get("use_belief_head", False)),
             )
 
         print(
