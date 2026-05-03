@@ -102,6 +102,9 @@ class CatanPPO:
                 "opp_id_emb_dim",
                 "n_opp_kinds",
                 "league_maxlen",
+                # Phase 2.5b belief head
+                "use_belief_head",
+                "belief_head_hidden_dim",
             )
             if k in config
         }
@@ -159,6 +162,7 @@ class CatanPPO:
             curr_player_dim=int(config.get("curr_player_main_in_dim", 166)),
             next_player_dim=int(config.get("other_player_main_in_dim", 173)),
             store_opponent_id=bool(config.get("use_opponent_id_emb", False)),
+            store_belief_target=bool(config.get("use_belief_head", False)),
         )
 
         # KL early stopping: break out of update epochs if policy drifts too far
@@ -180,6 +184,13 @@ class CatanPPO:
             raise ValueError(
                 f"advantage_norm must be 'rollout'|'batch'|'none', got {self.advantage_norm!r}"
             )
+
+        # Phase 2.5b: belief-head auxiliary-loss weight. Active only when
+        # ``use_belief_head=True`` and ``belief_target`` is in the buffer's
+        # obs schema. Default 0.05 per roadmap §5.1.6 — small enough that
+        # PPO objectives still dominate, large enough to shape the encoder
+        # in the first ~1M steps where reward signal is sparse.
+        self.belief_loss_weight = float(config.get("belief_loss_weight", 0.05))
 
         # Phase 1.5: D6 dihedral-symmetry augmentation per minibatch.
         # 0.0 = off (default for back-compat); 0.5 recommended in phase1_full.
@@ -279,6 +290,7 @@ class CatanPPO:
             use_opponent_id_emb=bool(config.get("use_opponent_id_emb", False)),
             opp_id_mask_prob=float(config.get("opp_id_mask_prob", 0.40)),
             league_maxlen=int(config.get("league_maxlen", 100)),
+            use_belief_head=bool(config.get("use_belief_head", False)),
         )
 
         # Evaluation opponent: starts as configured, auto-upgrades to heuristic
@@ -624,6 +636,10 @@ class CatanPPO:
             pid = np.stack([int(o["opponent_policy_id"]) for o in obs_list])
             out["opponent_kind"] = torch.from_numpy(kind).to(device).long()
             out["opponent_policy_id"] = torch.from_numpy(pid).to(device).long()
+        # Phase 2.5b: belief target passes through when present (training only).
+        if "belief_target" in obs_list[0]:
+            target = np.stack([o["belief_target"] for o in obs_list])
+            out["belief_target"] = torch.from_numpy(target).to(device)
         return out
 
     def _batch_masks_to_tensor(self, masks_list: list[dict]) -> dict[str, torch.Tensor]:
@@ -817,6 +833,8 @@ class CatanPPO:
         total_entropy = 0.0
         total_clip_fraction = 0.0
         total_kl = 0.0
+        total_belief_loss = 0.0
+        n_belief_updates = 0
         n_updates = 0
         epochs_completed = 0
 
@@ -854,10 +872,24 @@ class CatanPPO:
 
                 # Forward pass: re-evaluate old actions under current policy.
                 # Per-head dict is requested so we can log collapse diagnostics
-                # without a second forward pass.
-                values, new_log_prob, entropy, per_head = self.policy.evaluate_actions(
-                    obs, masks, actions, return_per_head=True
-                )
+                # without a second forward pass. With belief head enabled, we
+                # also pull belief logits from the same encoder pass.
+                want_belief = self.policy.belief_head is not None and "belief_target" in obs
+                if want_belief:
+                    (
+                        values,
+                        new_log_prob,
+                        entropy,
+                        per_head,
+                        belief_logits,
+                    ) = self.policy.evaluate_actions(
+                        obs, masks, actions, return_per_head=True, return_belief_logits=True
+                    )
+                else:
+                    values, new_log_prob, entropy, per_head = self.policy.evaluate_actions(
+                        obs, masks, actions, return_per_head=True
+                    )
+                    belief_logits = None
                 values = values.squeeze(-1)  # (B,)
 
                 # ── Policy loss (clipped surrogate objective) ─────────
@@ -897,8 +929,21 @@ class CatanPPO:
                 # ── Entropy bonus ─────────────────────────────────────
                 entropy_loss = -entropy
 
+                # ── Phase 2.5b: belief auxiliary loss ─────────────────
+                # Soft cross-entropy against the env's true opponent
+                # hidden-card distribution. Weight is small (default 0.05)
+                # so PPO objectives still dominate; the belief signal
+                # mostly shapes the encoder's early-training trajectory.
+                belief_loss_term = None
+                if belief_logits is not None:
+                    from catan_rl.models.belief_head import BeliefHead as _BH
+
+                    belief_loss_term = _BH.soft_cross_entropy(belief_logits, obs["belief_target"])
+
                 # ── Total loss ────────────────────────────────────────
                 loss = pg_loss + self.value_coef * value_loss + self.entropy_coef * entropy_loss
+                if belief_loss_term is not None:
+                    loss = loss + self.belief_loss_weight * belief_loss_term
 
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -925,6 +970,9 @@ class CatanPPO:
                 total_entropy += entropy.item()
                 total_clip_fraction += clip_fraction
                 total_kl += batch_kl
+                if belief_loss_term is not None:
+                    total_belief_loss += belief_loss_term.item()
+                    n_belief_updates += 1
                 epoch_kl += batch_kl
                 n_updates += 1
                 epoch_batches += 1
@@ -954,6 +1002,9 @@ class CatanPPO:
             "approx_kl": total_kl / n_updates,
             "epochs_completed": float(epochs_completed),
         }
+        # Phase 2.5b: belief auxiliary-loss diagnostic.
+        if n_belief_updates > 0:
+            result["belief_loss"] = total_belief_loss / n_belief_updates
         # Per-head entropy diagnostics (Phase 0).
         for name in head_names:
             count = max(head_sample_count[name], 1)

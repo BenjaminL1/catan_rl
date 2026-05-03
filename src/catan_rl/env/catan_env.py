@@ -80,6 +80,10 @@ TILE_DIM = 79
 CURR_PLAYER_DIM = 166
 NEXT_PLAYER_DIM = 173
 
+# Phase 2.5b belief head target dim. Must match BeliefHead.N_DEV_CARD_TYPES
+# and the order in DEV_CARD_ORDER above (KNIGHT, VP, ROADBUILDER, YOP, MONOPOLY).
+N_DEV_CARD_TYPES = 5
+
 # Number-token dot counts (out of 36 ways to roll)
 DOTS = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1, None: 0}
 
@@ -162,6 +166,7 @@ class CatanEnv(gym.Env):
         use_opponent_id_emb: bool = False,
         opp_id_mask_prob: float = 0.40,
         league_maxlen: int = 100,
+        use_belief_head: bool = False,
     ):
         super().__init__()
         self.render_mode = render_mode
@@ -205,6 +210,16 @@ class CatanEnv(gym.Env):
         if self.use_opponent_id_emb:
             obs_spaces["opponent_kind"] = spaces.Discrete(self.N_OPP_KINDS)
             obs_spaces["opponent_policy_id"] = spaces.Discrete(self._league_maxlen + 1)
+        # Phase 2.5b: belief head supervision target. The env reveals the
+        # opponent's true hidden dev-card *type* distribution as a 5-vector
+        # — only the trainer reads it; the policy never receives it as
+        # input, so this isn't cheating. Off by default to keep legacy obs
+        # schema stable.
+        self.use_belief_head = bool(use_belief_head)
+        if self.use_belief_head:
+            obs_spaces["belief_target"] = spaces.Box(
+                0.0, 1.0, (N_DEV_CARD_TYPES,), dtype=np.float32
+            )
         self.observation_space = spaces.Dict(obs_spaces)
 
         # Runtime state — populated in reset()
@@ -882,6 +897,31 @@ class CatanEnv(gym.Env):
             return self.OPP_KIND_UNKNOWN, self._league_maxlen
         return self._opp_kind, self._opp_policy_id
 
+    def _belief_target(self, opponent_player) -> np.ndarray:
+        """Phase 2.5b: opponent's true hidden dev-card type distribution.
+
+        Sums ``opponent.devCards`` (unplayed, including VPs) and
+        ``opponent.newDevCards`` (just-bought, not yet playable) across
+        the 5 types in ``DEV_CARD_ORDER``. Normalizes to a probability
+        vector. When the opponent holds zero hidden cards, returns the
+        uniform distribution — a degenerate all-zeros target would make
+        soft-CE undefined (``log(0)``).
+
+        Used as a *training-only* target by the belief head; never enters
+        the obs schema as input, so the policy can't learn to read it.
+        """
+        counts = np.zeros(N_DEV_CARD_TYPES, dtype=np.float32)
+        for c in opponent_player.newDevCards:
+            idx = DEV_CARD_ORDER.index(c) if c in DEV_CARD_ORDER else -1
+            if idx >= 0:
+                counts[idx] += 1.0
+        for i, name in enumerate(DEV_CARD_ORDER):
+            counts[i] += float(opponent_player.devCards.get(name, 0))
+        total = counts.sum()
+        if total <= 0:
+            return np.full(N_DEV_CARD_TYPES, 1.0 / N_DEV_CARD_TYPES, dtype=np.float32)
+        return counts / total
+
     def _get_obs(self) -> dict:
         return self._get_obs_for_player(self.agent_player)
 
@@ -909,6 +949,8 @@ class CatanEnv(gym.Env):
             kind, pid = self._opponent_id_obs()
             obs["opponent_kind"] = np.int64(kind)
             obs["opponent_policy_id"] = np.int64(pid)
+        if self.use_belief_head:
+            obs["belief_target"] = self._belief_target(other_player)
         return obs
 
     def _build_tile_features(self, acting_player) -> np.ndarray:

@@ -22,6 +22,12 @@ venv/
 .venv/
 env/
 .env/
+# Carve-outs for project-tracked paths that match the venv-style ``env/``
+# rule above. Without these, ``src/catan_rl/env/`` and ``tests/unit/env/``
+# get silently dropped from new commits (the wildcard matches both venvs
+# *and* the project's RL env package).
+!src/catan_rl/env/
+!tests/unit/env/
 
 # Training artifacts — large, generated, not committed
 checkpoints/
