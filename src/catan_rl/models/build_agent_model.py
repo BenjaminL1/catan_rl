@@ -47,6 +47,17 @@ DEFAULT_MODEL_CONFIG = {
     # Phase 2.5b belief head (1v1 opponent hidden dev-card distribution).
     "use_belief_head": False,
     "belief_head_hidden_dim": 128,
+    # Phase 2.5c opponent next-action auxiliary head.
+    "use_opponent_action_head": False,
+    "opponent_action_head_hidden_dim": 128,
+    # Phase 4.2 GRU recurrent value head (value-only, policy stays Markovian).
+    "use_recurrent_value": False,
+    "gru_hidden_dim": 64,
+    # Phase 2.3 GNN encoder over hex/vertex/edge graph.
+    "use_graph_encoder": False,
+    "graph_hidden_dim": 64,
+    "graph_n_rounds": 2,
+    "graph_out_dim": 64,
 }
 
 
@@ -94,6 +105,14 @@ def build_agent_model(device: str = "cpu", **overrides) -> CatanPolicy:
         league_maxlen=cfg["league_maxlen"],
         use_belief_head=cfg["use_belief_head"],
         belief_head_hidden_dim=cfg["belief_head_hidden_dim"],
+        use_opponent_action_head=cfg["use_opponent_action_head"],
+        opponent_action_head_hidden_dim=cfg["opponent_action_head_hidden_dim"],
+        use_recurrent_value=cfg["use_recurrent_value"],
+        gru_hidden_dim=cfg["gru_hidden_dim"],
+        use_graph_encoder=cfg["use_graph_encoder"],
+        graph_hidden_dim=cfg["graph_hidden_dim"],
+        graph_n_rounds=cfg["graph_n_rounds"],
+        graph_out_dim=cfg["graph_out_dim"],
     )
 
     # Count parameters for logging

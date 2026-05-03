@@ -14,6 +14,7 @@ Environment now returns a dict:
 import torch
 import torch.nn as nn
 
+from catan_rl.models.graph_encoder import GraphEncoder
 from catan_rl.models.multi_headed_attention import MultiHeadedAttention
 from catan_rl.models.player_modules import CurrentPlayerModule, OtherPlayersModule
 from catan_rl.models.tile_encoder import TileEncoder
@@ -51,6 +52,11 @@ class ObservationModule(nn.Module):
         opp_id_emb_dim: int = 16,
         n_opp_kinds: int = 6,
         league_maxlen: int = 100,
+        # Phase 2.3 GNN encoder over hex/vertex/edge graph (off by default).
+        use_graph_encoder: bool = False,
+        graph_hidden_dim: int = 64,
+        graph_n_rounds: int = 2,
+        graph_out_dim: int = 64,
     ) -> None:
         super().__init__()
         self.obs_output_dim = obs_output_dim
@@ -125,9 +131,24 @@ class ObservationModule(nn.Module):
             nn.init.normal_(self.opp_kind_emb.weight, mean=0.0, std=0.02)
             nn.init.normal_(self.opp_policy_emb.weight, mean=0.0, std=0.02)
 
+        # Phase 2.3: optional GNN encoder over the hex/vertex/edge graph.
+        # When enabled, its pooled output is concatenated to the fusion
+        # input alongside the tile-encoder output (which we keep around
+        # because it captures pairwise tile-tile attention that the GNN's
+        # message-passing flow doesn't).
+        self.use_graph_encoder = bool(use_graph_encoder)
+        self.graph_out_dim = int(graph_out_dim) if self.use_graph_encoder else 0
+        if self.use_graph_encoder:
+            self.graph_encoder = GraphEncoder(
+                tile_in_dim=tile_in_dim,
+                hidden_dim=int(graph_hidden_dim),
+                n_rounds=int(graph_n_rounds),
+                out_dim=int(graph_out_dim),
+            )
+
         # Final fusion: tiles (19 * proj_tile_dim) + current(128) + next(128)
-        # + opt opp_id_emb_dim.
-        fusion_in_dim = 19 * proj_tile_dim + 2 * 128 + self.opp_id_emb_dim
+        # + opt opp_id_emb_dim + opt graph_out_dim.
+        fusion_in_dim = 19 * proj_tile_dim + 2 * 128 + self.opp_id_emb_dim + self.graph_out_dim
         self.final_layer = init_weights(nn.Linear(fusion_in_dim, obs_output_dim))
         self.relu = nn.ReLU()
         self.norm = nn.LayerNorm(obs_output_dim)
@@ -170,5 +191,7 @@ class ObservationModule(nn.Module):
             kind_emb = self.opp_kind_emb(kind_idx.long())  # (B, half)
             pid_emb = self.opp_policy_emb(pid_idx.long())  # (B, half)
             parts.append(torch.cat([kind_emb, pid_emb], dim=-1))
+        if self.use_graph_encoder:
+            parts.append(self.graph_encoder(obs_dict["tile_representations"]))
         final_input = torch.cat(parts, dim=-1)
         return self.relu(self.norm(self.final_layer(final_input)))

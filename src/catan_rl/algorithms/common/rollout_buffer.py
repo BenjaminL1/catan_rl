@@ -58,6 +58,8 @@ class CompositeRolloutBuffer:
         next_player_dim: int = NEXT_PLAYER_DIM,
         store_opponent_id: bool = False,
         store_belief_target: bool = False,
+        store_opp_action_target: bool = False,
+        gru_hidden_dim: int = 0,
     ):
         """Allocate fixed-size NumPy storage for one rollout's transitions.
 
@@ -81,6 +83,17 @@ class CompositeRolloutBuffer:
         # Phase 2.5b: belief-head supervision target. Same opt-in pattern
         # as opponent_id; off by default.
         self.store_belief_target = bool(store_belief_target)
+        # Phase 2.5c: opponent's next action-type, captured from the
+        # deferred-opp turn that follows the agent's step. Two parallel
+        # arrays — the int target plus a validity mask (True only when
+        # the opp at this step is a historical league policy, never the
+        # current agent or random/heuristic).
+        self.store_opp_action_target = bool(store_opp_action_target)
+        # Phase 4.2: per-step GRU hidden state used by the recurrent
+        # value head. ``gru_hidden_dim=0`` disables; any positive width
+        # allocates the storage. Stored as the *input* hidden state at
+        # each step (h_t going INTO the GRU at that step).
+        self.gru_hidden_dim = int(gru_hidden_dim)
         self.pos = 0
         self.full = False
 
@@ -134,6 +147,18 @@ class CompositeRolloutBuffer:
             self.belief_target = np.zeros((n_steps, 5), dtype=np.float32)
         else:
             self.belief_target = None
+        # Phase 2.5c: opp action-type target + validity mask.
+        if self.store_opp_action_target:
+            self.opp_next_action_type = np.zeros(n_steps, dtype=np.int64)
+            self.opp_action_target_valid = np.zeros(n_steps, dtype=bool)
+        else:
+            self.opp_next_action_type = None
+            self.opp_action_target_valid = None
+        # Phase 4.2: input GRU hidden state per step. (n, gru_hidden_dim).
+        if self.gru_hidden_dim > 0:
+            self.value_hidden_in = np.zeros((n_steps, self.gru_hidden_dim), dtype=np.float32)
+        else:
+            self.value_hidden_in = None
 
         self.masks = {}
         for key, size in mask_shapes.items():
@@ -218,6 +243,13 @@ class CompositeRolloutBuffer:
             self.belief_target[self.pos] = obs.get(
                 "belief_target", np.full(5, 0.2, dtype=np.float32)
             )
+        if self.store_opp_action_target:
+            self.opp_next_action_type[self.pos] = int(obs.get("opp_next_action_type", 0))
+            self.opp_action_target_valid[self.pos] = bool(obs.get("opp_action_target_valid", False))
+        if self.gru_hidden_dim > 0:
+            hidden = obs.get("value_hidden_in")
+            if hidden is not None:
+                self.value_hidden_in[self.pos] = np.asarray(hidden, dtype=np.float32)
         for key in self.masks:
             self.masks[key][self.pos] = masks[key]
 
@@ -321,6 +353,16 @@ class CompositeRolloutBuffer:
             self._t_belief_target = torch.from_numpy(self.belief_target[:n]).to(device)
         else:
             self._t_belief_target = None
+        if self.store_opp_action_target:
+            self._t_opp_next_action = torch.from_numpy(self.opp_next_action_type[:n]).to(device)
+            self._t_opp_action_valid = torch.from_numpy(self.opp_action_target_valid[:n]).to(device)
+        else:
+            self._t_opp_next_action = None
+            self._t_opp_action_valid = None
+        if self.gru_hidden_dim > 0:
+            self._t_value_hidden = torch.from_numpy(self.value_hidden_in[:n]).to(device)
+        else:
+            self._t_value_hidden = None
         self._tensors_ready = True
 
     def get_batches(
@@ -368,6 +410,11 @@ class CompositeRolloutBuffer:
                 obs_batch["opponent_policy_id"] = self._t_opp_policy_id[idx_t]
             if self.store_belief_target:
                 obs_batch["belief_target"] = self._t_belief_target[idx_t]
+            if self.store_opp_action_target:
+                obs_batch["opp_next_action_type"] = self._t_opp_next_action[idx_t]
+                obs_batch["opp_action_target_valid"] = self._t_opp_action_valid[idx_t]
+            if self.gru_hidden_dim > 0:
+                obs_batch["value_hidden_in"] = self._t_value_hidden[idx_t]
             actions = self._t_actions[idx_t]
             masks = {k: self._t_masks[k][idx_t] for k in self._t_masks}
 

@@ -1,0 +1,32 @@
+# Phase 2.3 + 2.5c + 4.2 stacked on top of phase3_full. The ISMCTS
+# module (Phase 4.1) is available as a library but not engaged from the
+# rollout loop yet — its activation is gated on belief-head quality and
+# is best added in a follow-up after we've measured belief loss.
+_base: phase3_full.yaml
+
+model:
+  # Phase 2.3 GNN encoder over hex/vertex/edge graph.
+  use_graph_encoder: true
+  graph_hidden_dim: 64
+  graph_n_rounds: 2
+  graph_out_dim: 64
+  # Phase 2.5b belief head (already present in phase3_full lineage; just
+  # confirm it's on for the auxiliary-loss path).
+  use_belief_head: true
+  belief_head_hidden_dim: 128
+  # Phase 2.5c opponent next-action auxiliary head.
+  use_opponent_action_head: true
+  opponent_action_head_hidden_dim: 128
+  # Phase 4.2 GRU recurrent value head (value-only, policy stays Markovian).
+  use_recurrent_value: true
+  gru_hidden_dim: 64
+
+phase4:
+  # Phase 2.5b/c loss weights (trainer reads these from the flat config).
+  belief_loss_weight: 0.05
+  opp_action_loss_weight: 0.03
+
+schedule:
+  # Same budget as phase3_full; Phase 4 features add overhead but no new
+  # data needs.
+  total_timesteps: 8_000_000

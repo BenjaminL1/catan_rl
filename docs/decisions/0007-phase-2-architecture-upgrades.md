@@ -111,15 +111,16 @@ value-only loss never reach policy-encoder parameters.
 ## Alternatives considered
 
 - **GNN encoder over the (tile, vertex, edge) tripartite graph (originally
-  scoped 2.3):** deferred to a follow-up. The axial pos embedding closes
-  most of the topology gap at a fraction of the engineering cost; revisit
-  if Phase 2 ablations show a residual gap that pos-emb alone can't close.
-- **Opponent-action auxiliary loss (originally scoped 2.5c):** still
-  deferred. Distinct from 2.5b because it predicts the opponent's *next
-  action distribution* against historical league policies (not their
-  hidden hand), and requires the rollout buffer to carry per-step opponent
-  policy IDs *and* the actually-observed opponent action — a larger
-  surface change.
+  scoped 2.3):** landed in `feat/phase-2-3-and-phase-4` (see
+  [`0009-phase-4-search-and-recurrence.md`](0009-phase-4-search-and-recurrence.md))
+  alongside Phase 4 work. The axial pos embedding (Phase 2.1) already
+  closes most of the topology gap at a fraction of the engineering cost,
+  so the GNN augments the tile encoder rather than replacing it.
+- **Opponent-action auxiliary loss (originally scoped 2.5c):** also
+  landed in the same Phase-4 follow-up branch — predicts opponent's
+  next action TYPE (13-way) only on rollouts where the opponent is a
+  historical league policy, with masked CE in
+  ``OpponentActionHead.masked_cross_entropy``.
 
 ## Follow-up: 2.5b belief head (landed)
 

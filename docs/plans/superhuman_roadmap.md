@@ -437,15 +437,18 @@ If `phase1_full` fails (< 50% WR vs `phase0_fixed`), run leave-one-out 3M-step a
 
 ## 5. Phase 2 — Architecture Upgrades
 
-**Status (2026-05-02):** 2.1 + 2.2 + 2.4 + 2.5 (Option A) landed on
-`feat/phase-2-architecture`. 2.5b belief head landed on
-`feat/phase-2-5b-belief-head` (follow-up). 2.3 GNN and 2.5c opp-action
-auxiliary loss are still deferred (see ADR
+**Status (2026-05-02):** all of Phase 2 landed across multiple PRs.
+2.1 + 2.2 + 2.4 + 2.5 (Option A) on `feat/phase-2-architecture`; 2.5b
+belief head on `feat/phase-2-5b-belief-head`; 2.3 GNN encoder + 2.5c
+opp-action auxiliary loss on `feat/phase-2-3-and-phase-4` (alongside
+Phase 4 work). See ADRs
 [`0007-phase-2-architecture-upgrades.md`](../decisions/0007-phase-2-architecture-upgrades.md)
-for what shipped vs deferred). Configs: `configs/phase2_full.yaml` plus
+and [`0009-phase-4-search-and-recurrence.md`](../decisions/0009-phase-4-search-and-recurrence.md).
+Configs: `configs/phase2_full.yaml` plus
 `phase2_no_{axial_pos, transformer_recipe, film, decoupled_value}.yaml`,
-plus `phase2_belief_head.yaml` (turns 2.5b on). Param count:
-~1.54M → ~2.22M (phase2_full) → ~2.29M (phase2_belief_head).
+plus `phase2_belief_head.yaml`. Param count:
+~1.54M → ~2.22M (phase2_full) → ~2.29M (phase2_belief_head) → see
+phase4_full (~2.74M) for the full architectural stack.
 
 **Why third.** With trainer correct (Phase 0) and sample-efficient on existing arch (Phase 1), any architecture gain is real and not eaten by training noise. Adds inductive biases the network lacks: 2D positional structure, explicit GNN over hex/vertex/edge incidence, decoupled value/policy, AdaLN-conditioned heads. Includes 1v1-specific cheap wins (belief head, opponent-action aux loss).
 
@@ -736,6 +739,16 @@ Else: proceed to Phase 4 selectively based on which gap remains:
 ---
 
 ## 7. Phase 4 — Optional / Compute-Permitting
+
+**Status (2026-05-02):** 4.1 ISMCTS module + 4.2 GRU recurrent value head
+landed on `feat/phase-2-3-and-phase-4` (alongside the Phase 2.3 GNN and
+2.5c opp-action items). 4.1's rollout-loop integration is gated on
+empirical belief loss < 1.0 nats and is a follow-up. 4.3 PBT is
+hardware-gated (requires multi-machine compute) and remains future
+work. See ADR
+[`0009-phase-4-search-and-recurrence.md`](../decisions/0009-phase-4-search-and-recurrence.md).
+Configs: `configs/phase4_full.yaml` plus
+`phase4_no_{graph, recurrent_value, opp_action}.yaml`.
 
 **Only run if Phase 3 misses success criteria.** Each item is high-cost-to-implement and may not pay off on CPU-only hardware. Items prioritized by which gap they close.
 
