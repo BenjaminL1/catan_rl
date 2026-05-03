@@ -120,6 +120,38 @@ class League:
         # career stats.
         self._policy_stats: dict[int, list[int]] = {}  # id → [wins, games]
         self._policy_window: dict[int, deque[int]] = {}  # id → recent outcomes
+        # Phase 3.3 priority boost: id → (multiplier, games_remaining).
+        # Decremented by ``update_result``; entries auto-clear on expiry.
+        self._priority_boost: dict[int, tuple[float, int]] = {}
+
+    # ── Construction helpers ─────────────────────────────────────────────────
+
+    @classmethod
+    def frozen_main_for_exploiter(cls, main_state_dict: dict, *, build_policy_fn=None) -> "League":
+        """Phase 3.3: build a single-opponent league for an exploiter cycle.
+
+        Returns a fresh League whose only policy entry is ``main_state_dict``,
+        with ``random_weight = heuristic_weight = latest_policy_weight = 0.0``
+        so every match the exploiter plays is against frozen main. The
+        exploiter's job during the cycle is to find a strategy that beats
+        this fixed snapshot — having any other opponent on the menu would
+        dilute the signal.
+
+        Stays on PFSP-linear (the cycle is too short for a hard sliding
+        window to matter) and ``add_every`` is set so high it never fires —
+        we don't want the exploiter polluting its own opponent pool.
+        """
+        lg = cls(
+            maxlen=1,
+            add_every=10**9,  # effectively never auto-add
+            random_weight=0.0,
+            heuristic_weight=0.0,
+            build_policy_fn=build_policy_fn,
+            pfsp_mode="linear",
+            latest_policy_weight=0.0,
+        )
+        lg.add(main_state_dict)
+        return lg
 
     # ── Adding policies ──────────────────────────────────────────────────────
 
@@ -130,6 +162,7 @@ class League:
             evict_id = self._policy_ids[0]
             self._policy_stats.pop(evict_id, None)
             self._policy_window.pop(evict_id, None)
+            self._priority_boost.pop(evict_id, None)
 
         policy_id = self._next_id
         self._next_id += 1
@@ -138,6 +171,21 @@ class League:
         self._policy_ids.append(policy_id)
         self._policy_stats[policy_id] = [0, 0]  # [wins, games] (cumulative)
         self._policy_window[policy_id] = deque(maxlen=self.pfsp_window)
+
+    def add_with_boost(
+        self, state_dict: dict, *, multiplier: float = 1.5, boost_games: int = 64
+    ) -> int:
+        """Phase 3.3: add a policy with an amplified PFSP priority.
+
+        Used by the duo-exploiter cycle to ensure the exploiter snapshot
+        is sampled more often than its baseline 0.5 WR would imply, for
+        ``boost_games`` games. After that window expires, sampling reverts
+        to the regular PFSP curve. Returns the new policy's stable ID.
+        """
+        self.add(state_dict)
+        new_id = self._policy_ids[-1]
+        self._priority_boost[new_id] = (float(multiplier), int(boost_games))
+        return int(new_id)
 
     def maybe_add(self, update_num: int, state_dict: dict) -> bool:
         """Add policy if update_num % add_every == 0. Returns True if added."""
@@ -221,6 +269,15 @@ class League:
             for i, pid in enumerate(ids):
                 w = self._opponent_win_rate(pid)
                 priorities[i] = w * ((1.0 - w) ** p_exp) + eps
+
+        # Phase 3.3: apply per-policy priority boosts. Multiplies the raw
+        # priority *before* normalization so a 1.5× boost on a 0.05-mass
+        # opponent really does shift the distribution toward it.
+        if self._priority_boost:
+            for i, pid in enumerate(ids):
+                if pid in self._priority_boost:
+                    multiplier, _ = self._priority_boost[pid]
+                    priorities[i] *= multiplier
         return priorities / priorities.sum()
 
     def _linear_recency_weights(self, n: int) -> np.ndarray:
@@ -250,6 +307,15 @@ class League:
             self._policy_stats[policy_id][1] += 1
         if policy_id in self._policy_window:
             self._policy_window[policy_id].append(int(bool(win)))
+        # Phase 3.3 priority-boost decay: drop the boost entry when its
+        # game budget is exhausted so PFSP returns to the regular curve.
+        if policy_id in self._priority_boost:
+            multiplier, remaining = self._priority_boost[policy_id]
+            remaining -= 1
+            if remaining <= 0:
+                del self._priority_boost[policy_id]
+            else:
+                self._priority_boost[policy_id] = (multiplier, remaining)
 
     # ── Nash pruning (Phase 3.5) ──────────────────────────────────────────
 
@@ -323,6 +389,7 @@ class League:
         self._policy_ids = new_ids
         self._policy_stats.pop(policy_id, None)
         self._policy_window.pop(policy_id, None)
+        self._priority_boost.pop(policy_id, None)
 
     # ── Inference helper ─────────────────────────────────────────────────────
 

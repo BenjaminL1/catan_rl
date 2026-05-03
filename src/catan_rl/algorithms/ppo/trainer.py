@@ -239,18 +239,22 @@ class CatanPPO:
         self.nash_prune_games = int(config.get("nash_prune_round_games", 50))
         self._adds_since_prune = 0
 
-        # ── Phase 3.3: Duo-exploiter cycle (scaffolded, not yet active) ────
-        # Configs are accepted so ``phase3_full.yaml`` parses cleanly and
-        # users opting in see an explicit "deferred to follow-up PR" message
-        # rather than a silent no-op. The actual interleaved exploiter
-        # training will land in a successor PR — see roadmap §6.1.3 and
-        # ADR 0008 for the design.
+        # ── Phase 3.3: Duo-exploiter cycle ─────────────────────────────────
+        # ``duo`` mode periodically pauses main training to spin up an
+        # exploiter — a fresh policy initialized from main that trains
+        # exclusively against a frozen main snapshot for ``exploiter_n_updates``
+        # PPO updates. The exploiter's final state is then injected back
+        # into main's league with an amplified PFSP priority for its first
+        # ``exploiter_priority_games`` matches.
         self.exploiter_mode = config.get("exploiter_mode", "off")
         if self.exploiter_mode not in ("off", "duo"):
             raise ValueError(f"exploiter_mode must be 'off' or 'duo', got {self.exploiter_mode!r}")
         self.exploiter_cycle_steps = int(config.get("exploiter_cycle_steps", 1_000_000))
+        self.exploiter_n_updates = int(config.get("exploiter_n_updates", 32))
         self.exploiter_priority_multiplier = float(config.get("exploiter_priority_multiplier", 1.5))
-        self._exploiter_stub_warned = False
+        self.exploiter_priority_games = int(config.get("exploiter_priority_games", 64))
+        self._exploiter_cycle_count = 0
+        self._last_exploiter_at = 0  # main step at which the prior cycle ended
 
         # Build policy factory for league/GameManager (creates policy instances for inference)
         def build_policy_fn(device: str = "cpu"):
@@ -309,6 +313,62 @@ class CatanPPO:
         self._head_collapse_counter: dict[str, int] = {n: 0 for n in _MAH.HEAD_NAMES}
         self._collapsed_heads_last: str = ""
 
+    # ── Phase 3.3: exploiter cycle snapshot/restore ────────────────────────
+    def _snapshot_for_exploiter(self) -> dict:
+        """Save enough state to swap in an exploiter trainer and roll back.
+
+        Captures:
+          - policy state_dict (the *main* weights we want to preserve)
+          - optimizer state_dict (Adam moments — would otherwise be reset)
+          - value_normalizer running mean/var
+          - global_step / episode counters / entropy_coef
+          - league reference (object identity, not a copy — restored verbatim)
+          - GameManager's league + record_match callback wiring
+          - rollout buffer position (we abandon any in-progress rollout
+            and the cycle starts with a fresh buffer.reset())
+
+        Notes:
+          The policy state_dict is enough to fully reconstruct the model
+          since architecture is fixed by ``model_kwargs``. We don't copy
+          the optimizer's *param-group* references because they live on
+          the params themselves; we copy ``state_dict()`` and re-`load` it.
+        """
+        return {
+            "policy": copy.deepcopy(self._raw_policy_state_dict()),
+            "optimizer": copy.deepcopy(self.optimizer.state_dict()),
+            "value_normalizer": copy.deepcopy(self.value_normalizer.state_dict()),
+            "global_step": self.global_step,
+            "entropy_coef": self.entropy_coef,
+            "episode_rewards": list(self.episode_rewards),
+            "episode_lengths": list(self.episode_lengths),
+            "episode_wins": list(self.episode_wins),
+            "league": self.league,
+            "game_manager_league": self.game_manager.league,
+            "game_manager_record_match_fn": self.game_manager._record_match_fn,
+            "game_manager_current_policy_state_fn": (self.game_manager._current_policy_state_fn),
+        }
+
+    def _restore_from_snapshot(self, snap: dict) -> None:
+        """Roll the trainer back to the state captured by ``_snapshot_for_exploiter``.
+
+        Re-loads policy + optimizer. Resets the rollout buffer (we discard
+        the exploiter's last partial rollout). Reinstates the league
+        reference on both ``self`` and ``self.game_manager``.
+        """
+        self.policy.load_state_dict(snap["policy"])
+        self.optimizer.load_state_dict(snap["optimizer"])
+        self.value_normalizer.load_state_dict(snap["value_normalizer"])
+        self.global_step = snap["global_step"]
+        self.entropy_coef = snap["entropy_coef"]
+        self.episode_rewards = snap["episode_rewards"]
+        self.episode_lengths = snap["episode_lengths"]
+        self.episode_wins = snap["episode_wins"]
+        self.league = snap["league"]
+        self.game_manager.league = snap["game_manager_league"]
+        self.game_manager._record_match_fn = snap["game_manager_record_match_fn"]
+        self.game_manager._current_policy_state_fn = snap["game_manager_current_policy_state_fn"]
+        self.buffer.reset()
+
     def _raw_policy_state_dict(self) -> dict:
         """Return policy state dict without torch.compile's _orig_mod. prefix.
 
@@ -349,29 +409,104 @@ class CatanPPO:
         for k, r in list(self.rating_table.ratings.items()):
             self.rating_table.ratings[k] = Rating(mu=r.mu, sigma=r.sigma * self.trueskill_decay)
 
-    # ── Phase 3.3: Duo-exploiter cycle (deferred scaffolding) ──────────────
+    # ── Phase 3.3: Duo-exploiter cycle ─────────────────────────────────────
     def _maybe_run_exploiter_cycle(self) -> None:
-        """Trigger an exploiter training cycle when due.
+        """Run an exploiter cycle if one is due.
 
-        Scheduled every ``exploiter_cycle_steps`` of main training when
-        ``exploiter_mode='duo'``. The implementation is intentionally a
-        no-op for now — the interleaved exploiter trainer is planned for a
-        follow-up PR. We still emit a single-shot warning so users opting
-        in via YAML get an explicit pointer.
+        Cycle structure:
+          1. Snapshot main (policy + optimizer + value normalizer + league refs).
+          2. Replace ``self.policy`` with a fresh build initialized from main.
+          3. Build a frozen-main league as the only opponent.
+          4. Train ``exploiter_n_updates`` PPO updates against frozen main.
+          5. Restore main from snapshot.
+          6. Push exploiter snapshot into the (restored) main league with
+             priority boost (``exploiter_priority_multiplier``) for its
+             first ``exploiter_priority_games`` matches.
+
+        Scalars during the cycle are namespaced under ``exploiter/`` so the
+        main-training plot lines stay clean.
         """
         if self.exploiter_mode != "duo":
             return
-        if self.global_step < self.exploiter_cycle_steps:
+        # Fire every ``exploiter_cycle_steps`` of *main* progress. ``_last_exploiter_at``
+        # tracks the step count at which the previous cycle ended, so the next
+        # cycle waits ``exploiter_cycle_steps`` further main steps.
+        next_due = self._last_exploiter_at + self.exploiter_cycle_steps
+        if self.global_step < next_due:
             return
-        if self._exploiter_stub_warned:
-            return
-        self._exploiter_stub_warned = True
+
+        cycle_idx = self._exploiter_cycle_count + 1
         print(
-            "[exploiter] duo-exploiter cycle scheduled but not yet implemented "
-            "(deferred to follow-up PR; see ADR 0008 §3.3). Continuing main training."
+            f"[exploiter] starting cycle {cycle_idx} at main step "
+            f"{self.global_step:,} (target {self.exploiter_n_updates} updates)"
+        )
+
+        snap = self._snapshot_for_exploiter()
+        try:
+            # Step 1+2: rebuild policy from main snapshot, fresh optimizer.
+            self.policy.load_state_dict(snap["policy"])
+            self.optimizer = torch.optim.AdamW(
+                self.policy.parameters(),
+                lr=self.config["learning_rate"],
+                weight_decay=self.config.get("weight_decay", 1e-4),
+            )
+
+            # Step 3: frozen-main league, sampled exclusively.
+            frozen_league = League.frozen_main_for_exploiter(snap["policy"])
+            self.league = frozen_league
+            self.game_manager.league = frozen_league
+            # Disable rating updates during the cycle — exploiter ratings are
+            # not commensurable with the main rating curve.
+            self.game_manager._record_match_fn = None
+            # ``current_self`` would self-evaluate the *exploiter*; null it out.
+            self.game_manager._current_policy_state_fn = None
+
+            # Step 4: short PPO loop. We reuse ``collect_rollouts`` and
+            # ``update`` so the exploiter trains with the same recipe.
+            self._train_exploiter_inner(cycle_idx)
+
+            exploiter_state = copy.deepcopy(self._raw_policy_state_dict())
+        finally:
+            # Step 5: ALWAYS restore main, even if the cycle errors out.
+            self._restore_from_snapshot(snap)
+
+        # Step 6: inject exploiter into main league with priority boost.
+        new_id = self.league.add_with_boost(
+            exploiter_state,
+            multiplier=self.exploiter_priority_multiplier,
+            boost_games=self.exploiter_priority_games,
         )
         if self.writer is not None:
-            self.writer.add_scalar("train/exploiter_cycle_deferred", 1.0, self.global_step)
+            self.writer.add_scalar("train/exploiter_cycles_completed", cycle_idx, self.global_step)
+            self.writer.add_scalar("train/exploiter_added_policy_id", new_id, self.global_step)
+        print(f"[exploiter] cycle {cycle_idx} done; injected as league policy id {new_id}")
+
+        self._exploiter_cycle_count = cycle_idx
+        self._last_exploiter_at = self.global_step
+
+    def _train_exploiter_inner(self, cycle_idx: int) -> None:
+        """Inner PPO loop run *as the exploiter* against frozen main.
+
+        Logs scalars under ``exploiter/`` to keep the main learning curve
+        clean. Doesn't increment ``self.global_step`` — main's step counter
+        is preserved across the cycle so eval/checkpoint scheduling still
+        fires from main's perspective.
+        """
+        saved_global_step = self.global_step
+        for update_idx in range(1, self.exploiter_n_updates + 1):
+            self.collect_rollouts()
+            update_stats = self.update()
+            # Roll back the global_step bump that ``collect_rollouts`` did,
+            # so main's step counter doesn't drift across cycles.
+            self.global_step = saved_global_step
+
+            if self.writer is None:
+                continue
+            tag_step = (cycle_idx - 1) * self.exploiter_n_updates + update_idx
+            self.writer.add_scalar("exploiter/update", update_idx, tag_step)
+            for key in ("entropy", "approx_kl", "value_loss", "policy_loss"):
+                if key in update_stats:
+                    self.writer.add_scalar(f"exploiter/{key}", update_stats[key], tag_step)
 
     # ── Phase 3.5: Nash-weighted checkpoint pruning ────────────────────────
     def _maybe_run_nash_pruning(self) -> None:
