@@ -617,10 +617,18 @@ class CatanPPO:
         payoff = np.full((k, k), 0.5, dtype=np.float64)  # diagonal stays 0.5
 
         # Use a single shared inference policy for memory; load weights per-call.
-        from catan_rl.models.build_agent_model import build_agent_model
-
-        pol_a = build_agent_model(device=self.device)
-        pol_b = build_agent_model(device=self.device)
+        # MUST use the league's ``build_policy_fn`` (set by trainer.__init__ with
+        # the full ``model_kwargs`` of this run) — calling ``build_agent_model``
+        # directly here would produce a legacy 1.54M baseline policy that can't
+        # load phase 1.3+ / phase 2+ / phase 3+ / phase 4 state_dicts. Crashed
+        # the run at step 1,617,920 with size-mismatch / missing-key errors.
+        if self.league._build_policy_fn is None:
+            raise RuntimeError(
+                "Nash pruning requires league.build_policy_fn to be set; "
+                "make sure GameManager construction populated it."
+            )
+        pol_a = self.league._build_policy_fn(device=self.device)
+        pol_b = self.league._build_policy_fn(device=self.device)
 
         for i in range(k):
             pol_a.load_state_dict(state_dicts[ids[i]])
