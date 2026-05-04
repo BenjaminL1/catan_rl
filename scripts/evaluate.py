@@ -37,9 +37,20 @@ def main():
     trainer = CatanPPO.load(args.checkpoint)
     trainer.policy.eval()
 
+    # Mirror the trainer's env-side flags so the EvaluationManager's
+    # CatanEnv emits the same obs schema the loaded policy expects.
+    # Without this, the env emits the legacy 166-dim current_player_main
+    # but the phase 1.3+ checkpoint expects the compact 54-dim — and
+    # the model crashes with a Linear-shape mismatch on the first step.
+    cfg = trainer.config
     evaluator = EvaluationManager(
         n_games=args.n_games,
         opponent_type=args.opponent,
+        use_thermometer_encoding=bool(cfg.get("use_thermometer_encoding", True)),
+        use_opponent_id_emb=bool(cfg.get("use_opponent_id_emb", False)),
+        opp_id_mask_prob=float(cfg.get("opp_id_mask_prob", 0.40)),
+        league_maxlen=int(cfg.get("league_maxlen", 100)),
+        use_belief_head=bool(cfg.get("use_belief_head", False)),
     )
 
     print(f"Evaluating against {args.opponent} over {args.n_games} games...")
