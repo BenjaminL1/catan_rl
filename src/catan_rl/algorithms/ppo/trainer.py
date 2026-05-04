@@ -1244,6 +1244,13 @@ class CatanPPO:
             f"({self.n_envs} envs, {self.n_steps} steps/update)..."
         )
         start_time = time.time()
+        # Resume-safe FPS: anchor to the global_step at train() entry so
+        # FPS = (steps since this call) / (wall since this call). Without
+        # this, a resumed run divides global_step (which already includes
+        # 1.5M+ pre-resume steps) by elapsed-since-now and reports a
+        # wildly inflated FPS that takes hours to decay toward the true
+        # rate.
+        start_global_step = self.global_step
         last_eval_step = 0
         last_checkpoint_step = 0
         eval_interval = self.config.get("eval_freq", self.checkpoint_freq)
@@ -1279,7 +1286,7 @@ class CatanPPO:
 
                 # ── Logging ───────────────────────────────────────────────
                 elapsed = time.time() - start_time
-                fps = self.global_step / max(elapsed, 1e-8)
+                fps = (self.global_step - start_global_step) / max(elapsed, 1e-8)
 
                 if verbose:
                     wr = rollout_stats.get("mean_win_rate", 0)
