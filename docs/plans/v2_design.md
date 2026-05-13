@@ -399,8 +399,17 @@ Each phase has a falsifiable gate before moving on.
 
 ### Step 3 — Behavior clone (Phase A.1, 1 day + ~1h compute)
 
-- `scripts/train_bc.py`: generate 50k heuristic games, train policy on (state, action) pairs.
-- **Gate**: BC policy reaches WR ≥ 0.45 vs heuristic in 100-game eval.
+Full plan in `docs/plans/v2_step3_bc.md` (post-panel revision 2026-05-13).
+Headline picks: **30k games** (70% canonical / 30% perturbed heuristic), skip
+forced moves, hard CE with per-head relevance weighting, value head BC at
+weight 0.1, belief head BC at weight 0.05, D6 augmentation at prob=1.0 with
+both-state-and-action transform, AdamW + constant 3e-4 + 500-step warmup,
+batch=1024, train to convergence (patience=3).
+
+**Compound gate** (5-0 rejected the original `WR ≥ 0.45 vs heuristic`):
+val NLL plateau + held-out top-1 type-head accuracy ≥ 0.60 + WR ≥ 0.40 vs
+heuristic in 200-game eval. The BC anchor's job is to be a useful prior for
+piKL, not to win outright.
 
 ### Step 4 — PPO + piKL anchor + KL early-stop (Phase A.2, 2-3 days + ~3-7 days compute)
 
