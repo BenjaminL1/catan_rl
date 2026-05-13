@@ -1,6 +1,7 @@
 # Settlers of Catan
 # Gameplay class with pygame
 
+import copy
 import queue
 import sys
 
@@ -15,6 +16,22 @@ from catan_rl.engine.broadcast import GameBroadcast
 from catan_rl.engine.dice import StackedDice
 from catan_rl.engine.player import *
 from catan_rl.engine.tracker import ResourceTracker
+
+
+class _HeadlessView:
+    """No-op stand-in for the pygame boardView when running headless.
+
+    Lifted out of the ``catanGame.__init__`` body so that ``deepcopy`` can
+    safely round-trip a game instance — locally-defined classes can confuse
+    ``copy.deepcopy`` on some Python implementations.
+    """
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: None
+
+    def __deepcopy__(self, memo):
+        return self  # stateless singleton-like; sharing is safe.
+
 
 # Catan gameplay class definition
 
@@ -48,12 +65,7 @@ class catanGame:
 
             self.boardView = catanGameView(self.board, self)
         else:
-
-            class DummyView:
-                def __getattr__(self, name):
-                    return lambda *args, **kwargs: None
-
-            self.boardView = DummyView()
+            self.boardView = _HeadlessView()
 
         # Run functions to view board and vertex graph
         # self.board.printGraph()
@@ -65,6 +77,47 @@ class catanGame:
             self.boardView.displayGameScreen()
         else:
             self.setup_players()
+
+    def __deepcopy__(self, memo):
+        # queue.Queue holds a `_thread.lock`, which copy.deepcopy refuses to
+        # pickle. We snapshot the queue's items, deepcopy the rest of the
+        # state through the shared memo (preserves the player <-> game cycle),
+        # and rebuild a fresh Queue on the copy.
+        cls = self.__class__
+        new = cls.__new__(cls)
+        memo[id(self)] = new
+        queue_items = list(self.playerQueue.queue) if self.playerQueue is not None else []
+        for key, value in self.__dict__.items():
+            if key == "playerQueue":
+                continue  # rebuilt below from the snapshot
+            setattr(new, key, copy.deepcopy(value, memo))
+        new.playerQueue = queue.Queue(self.numPlayers)
+        for item in copy.deepcopy(queue_items, memo):
+            new.playerQueue.put(item)
+        return new
+
+    def copy(self) -> "catanGame":
+        """Return an independent deep copy of the current game state.
+
+        Required by the AlphaZero-style MCTS in ``catan_rl/search/`` — search
+        needs to advance a hypothetical line of play without mutating the live
+        game. ``pygame`` boardViews can't be deepcopied; this method requires
+        the game to be running headless (``render_mode != 'human'``).
+
+        Reference behavior: the returned instance shares NO mutable state
+        with the original — stepping it does not affect ``self`` and vice
+        versa. The dice's internal bag (``StackedDice.bag``) is a plain list
+        and round-trips through ``deepcopy`` cleanly; the module-level
+        ``random`` module is not part of the deepcopied state, so consumed
+        randomness between original and copy will diverge as expected.
+        """
+        if not isinstance(self.boardView, _HeadlessView):
+            raise RuntimeError(
+                "catanGame.copy() is only supported when running headless "
+                "(render_mode != 'human'); the pygame boardView holds "
+                "unpicklable surface references."
+            )
+        return copy.deepcopy(self)
 
     def setup_players(self):
         playerColors = ["black", "darkslateblue", "magenta4", "orange1"]
