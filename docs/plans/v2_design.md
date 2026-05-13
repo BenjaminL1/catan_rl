@@ -1,6 +1,20 @@
 # Catan RL v2 — Superhuman 1v1 Catan Agent Design
 
-**Status**: design locked, implementation begins next.
+**Status**: design locked (post 5-expert panel revisions, 2026-05-13);
+implementation in flight (Step 1-2 ✅, Step 3 next).
+
+**Revision history**:
+- 2026-05-13 — Original draft.
+- 2026-05-13 — 5-expert panel (AlphaZero veteran, AlphaStar/PPO engineer,
+  Cicero/Pluribus researcher, Catanatron domain expert, M1 Pro efficiency
+  engineer) voted on 15 contested decisions. Consensus revisions: drop
+  per-step ΔVP shaping (D9, 4-1), cut heuristic mix from 60% to 25%
+  post-warmup (D8, 5-0), raise PPO target_kl 0.01 → 0.03 (D11, 3-2),
+  shrink opp-id embedding 16-d → 8-d (D7, compromise), shrink MCTS to
+  25×2 = 50 effective sims (D12, 4-1), compress chance-node fan-out
+  (D13, 5-0), shorten routine exploitability eval 5M → 1M with a final
+  5M run for paper-grade numbers (D15, 3-2). Phase B (MCTS) kept by
+  3-2; budgeted heavily. See §3.7 for the full vote table.
 
 **Target**: superhuman 1v1 Catan (Colonist.io ruleset) — defined as ≥ 0.95 WR
 against the engine heuristic, ≥ 0.70 WR against a strong AlphaBeta-d2
@@ -110,7 +124,7 @@ P2P trading entirely.
 | Recurrent value GRU | none | **none** | Phase 4.2 single-step BPTT was academically unusual and added 150k params for unclear value. Catan state is observable enough not to need recurrence. |
 | Belief head (opp dev-card type) | NONE | **Keep, 5-way soft-CE on env ground truth** | The only hidden info in 1v1; auxiliary supervision is free. Phase 2.5b kept. |
 | Opp-action head | NONE | **DROP** | Phase 2.5c added complexity for weak supervision; opp action is hard to predict from obs alone. |
-| Opp-id embedding | NONE | **Keep, 16-dim** | Phase 3.6; lets the policy switch personas for different opponent kinds. |
+| Opp-id embedding | NONE | **Keep, 8-dim** (panel compromise — was 16-d) | Phase 3.6; lets the policy switch personas. Panel 2-3 split on keep vs drop — 8-d cuts the parameter cost in half while preserving the signal, with `opp_id_mask_prob=0.40` providing the regularization. |
 | Symmetry augmentation (D6) | NONE | **Keep, prob=1.0** | Phase 1.5; free 1.5-2× effective data, correctness-preserving. |
 
 **Net architecture target: ~1.5M parameters.** Smaller than the archived
@@ -130,8 +144,12 @@ PPO as the warm-start.
    - Result: a starting policy at ~50% vs heuristic (because BC of heuristic
      IS approximately the heuristic).
 2. **PPO with piKL anchor** for ~5M steps:
-   - Loss: `PPO_loss + λ · KL(π || π_BC)` with λ = 0.1 → 0 linearly.
-   - Keeps the policy close to the BC anchor while RL diverges to higher quality.
+   - Loss: `PPO_loss + λ · KL(π || π_BC)` with **λ = 0.2 → 0 linearly over 2M steps**
+     (panel revision; was 0.1→0 over the full 5M).
+   - Keeps the policy close to the BC anchor for the first ~40% of training,
+     then lets RL diverge. Higher initial λ buys more stability against
+     early collapse off the BC prior; the shorter decay window means the
+     anchor doesn't drag the policy past its peak.
 3. **League** with PFSP-hard sampling, latest-policy reg, duo exploiter cycles.
    Drop Nash pruning (too slow on CPU; FIFO eviction is fine at this scale).
 
@@ -139,17 +157,23 @@ PPO as the warm-start.
 
 1. **Add `CatanGame.copy()` to the engine.** Required for multi-step search.
    ~200 LOC; deepcopy of board + player + tracker state + RNG state.
-2. **PUCT-MCTS with chance nodes:**
-   - Action nodes have chance children for dice rolls (11 possible 2d6 sums
-     given StackedDice's bag) and for dev-card draws.
-   - 64-200 sims per decision. Connect 4 succeeds at 64; Catan's branching
-     is similar after action masking.
+2. **PUCT-MCTS with chance nodes** (panel revised — much smaller budget):
+   - Action nodes have chance children for dice rolls; **compressed to 6 buckets**
+     `{2-3, 4-5, 6, 7, 8-9, 10-12}` weighted by StackedDice's actual remaining-bag
+     distribution (not the i.i.d. 2d6 prior). The 7 stays a singleton because of
+     the Karma 20% override and the discard/robber subphase that follows.
+     11-way fan-out at every chance node was a tree-budget catastrophe on CPU.
+   - **25 sims × 2 determinizations = 50 effective sims per decision** (was 200).
+     The panel split 4-1 on this — only the AlphaZero veteran wanted more, the
+     other four pointed out that 200 effective sims on M1 Pro CPU collapses FPS
+     by 10×. Start at 50; profile; scale up *only if* an A/B shows ≥ 5% WR gain
+     over policy-alone.
    - PUCT formula: `Q + c_puct · P · √N / (1+n)`, c_puct=1.5.
    - **Use the trained policy as PUCT prior** and **trained value head as
      leaf evaluator** — no rollouts, AlphaZero-style.
    - **Belief-determinization** for opponent dev cards: sample from belief
-     head's predicted distribution per determinization (4 determinizations,
-     50 sims each → 200 effective sims).
+     head's predicted distribution per determinization. The Cicero panelist
+     noted: feed the belief-head posterior in directly, not just as an aux loss.
 3. **Continue training under MCTS:**
    - Sample actions from MCTS visit count distribution (not policy logits).
    - AlphaZero loss: `CE(MCTS_visits || π) + MSE(MCTS_root_value || V)`.
@@ -174,7 +198,7 @@ PPO as the warm-start.
 | GAE λ | 0.95 | Standard |
 | Clip ε | 0.2 | Standard |
 | PPO epochs | 6 (with KL early-stop) | Lower than Charlesworth's 10 for wall-time; early-stop catches over-update. |
-| target_kl | 0.01 | Andrychowicz 2020: early-stop is one of the top robustness levers. |
+| target_kl | **0.03** (panel revision; was 0.01) | Andrychowicz 2020 + panel 3-2 vote: 0.01 is too conservative for a 13-head autoregressive policy with a piKL anchor already doing extra regularization; early-stop would fire on update 2 every time. 0.03 lets PPO actually move; piKL prevents drift. |
 | Minibatch size | 512 | |
 | n_envs | 16 | |
 | n_steps | 4096 | |
@@ -185,39 +209,110 @@ PPO as the warm-start.
 | Value normalization | Running mean/std, init mean=250 std=150 | Adjusted for 15-VP |
 | Max grad norm | 0.5 | |
 | Recompute returns | True (each epoch) | Charlesworth default |
-| Reward shaping | +0.05 × ΔVP_agent, -0.025 × ΔVP_opp, terminal ±1 + (vp_diff)/15 | Verified-correct from v1 env |
+| Reward shaping | **Terminal only: ±1 + (vp_diff)/15** (panel revision — dropped per-step ΔVP) | 4-1 panel consensus (Catanatron the lone dissenter). Per-step ΔVP shaping biases the policy toward greedy early VP accumulation and away from late longest-road/largest-army timing plays that win 1v1 Catan. The previous 47%-WR plateau showed this exact pathology. γ=0.998 with GAE λ=0.95 handles credit assignment across long episodes; let it do its job. |
 
 ### 3.4 Self-play
 
 - League maxlen=100, **FIFO eviction** (not Nash — too slow on CPU).
 - Add to league every 4 updates.
-- Sampling mix: 60% heuristic anchor, 5% random, 10% latest-self, 25% league.
-  - **Charlesworth had ZERO heuristic in the opponent mix** — direct
-    gradient on the metric we care about is more valuable.
+- **Curriculum opponent mix** (panel revision — unanimous 5-0 that the original
+  60% heuristic was the single biggest plateau risk; all five experts flagged
+  it as either their KEY FLIP or a clear consensus item):
+  - **First 2M steps (warmup)**: 60% heuristic / 25% league / 10% self-latest / 5% random.
+    Heavy heuristic exposure while the BC anchor is still meaningful and the
+    league is small.
+  - **After 2M steps (steady state)**: 25% heuristic / 50% league / 20% self-latest / 5% random.
+    Heuristic capped low enough that the policy isn't optimizing "beat one
+    fixed style"; the bulk of gradient comes from league + latest-self diversity.
+  - **Charlesworth had ZERO heuristic in the opponent mix.** v1 used 20% the
+    whole run and plateaued at 47%; v2 keeps a low-mix anchor so the metric we
+    eval against is also in the training distribution, but doesn't dominate.
 - PFSP-hard with `(1-w)^p`, p=2.0, sliding 32-game window.
 - Duo exploiter cycles every 1M main steps, 32 PPO updates per cycle.
 - TrueSkill ratings + σ-decay 1.001 per update.
-- Opp-id embedding: kind ∈ {unknown, random, heuristic, self_latest, league, exploiter}, 40% mask prob.
+- Opp-id embedding (8-dim, panel-revised): kind ∈ {unknown, random, heuristic, self_latest, league, exploiter}, 40% mask prob.
 
 ### 3.5 Search (Phase B+)
 
 | Param | Value | Source |
 |---|---|---|
 | c_puct | 1.5 | AlphaZero |
-| n_sims_per_det | 50 | |
-| n_determinizations | 4 | (effective 200 sims/decision) |
+| n_sims_per_det | **25** (panel revision; was 50) | M1 Pro wall-clock budget |
+| n_determinizations | **2** (panel revision; was 4) | **50 effective sims/decision** total |
 | Temperature on visit count | 1.0 during training, 0.1 (near-argmax) at eval | AlphaZero |
 | Dirichlet noise at root | α=0.3, ε=0.25 | AlphaZero |
-| Chance node sampling | Per StackedDice bag (11 outcomes) | Engine-aware |
+| Chance node sampling | **Compressed 6-bucket fan-out** (panel revision; was 11-way) | `{2-3, 4-5, 6, 7, 8-9, 10-12}` weighted by StackedDice's remaining-bag distribution. The 7 stays separate (Karma override + robber subphase). |
+| Belief-determinization source | Belief head posterior at the root | Cicero panelist: feed the trained 5-way belief logits directly as the sampling prior for opp dev cards. Use the trained head, not the uniform prior. |
+| Scale-up trigger | A/B WR delta ≥ 5% vs policy-alone | Only raise n_sims if search clearly earns it. |
 
 ### 3.6 Eval
 
 - **Heuristic bench**: 100 games every 100k steps, eval_games=100 (binomial CI ~±0.05 at p=0.5).
 - **Champion bench**: 5 historic checkpoints + 200 games each at major milestones.
 - **AlphaBeta-d2 bench**: 100 games every 500k steps. Port from Catanatron.
-- **Exploitability**: train a fresh 5M-step adversary against the frozen final policy.
+  Unanimous panel vote — the only fixed-strength, non-self-referential
+  benchmark in the harness. If you can't beat AlphaBeta-d2 consistently, you
+  don't have a superhuman agent, full stop.
+- **Exploitability** (panel revision, 3-2 vote):
+  - **Routine**: train a fresh **1M-step** best-response adversary against
+    snapshots every 5M main steps. Catches obvious holes; cheap.
+  - **Paper-grade (final only)**: one 5M-step adversary against the frozen
+    final checkpoint. Cicero panelist's argument: in 1v1 zero-sum, train-a-BR
+    exploitability is the actual metric we're optimizing — pay 5M for the
+    final reported number.
 - **TrueSkill within league**: continuous.
 - Async eval via subprocess (Phase 4.2 v1 design — proven to work).
+
+### 3.7 Expert-panel consensus (2026-05-13)
+
+Five experts were polled in parallel on 15 contested decisions. Each took a
+distinct worldview and voted independently. The table records each vote
+plus the consensus pick; the design above reflects the consensus.
+
+| # | Decision | AZ vet | AlphaStar/PPO | Cicero/Pluribus | Catanatron | M1 Pro eff | **Consensus** |
+|---|---|---|---|---|---|---|---|
+| D1  | Phase B MCTS exists at all | KEEP | DROP | KEEP | KEEP | DROP | **KEEP** (3-2; budget heavily) |
+| D2  | BC warm-start | BC | BC | BC | BC | BC | **BC** (unanimous) |
+| D3  | piKL anchor on PPO loss | KEEP | KEEP | KEEP | KEEP | DROP | **KEEP** (4-1) |
+| D4  | Network size 1.38M | KEEP | KEEP | KEEP | KEEP | SMALLER | **KEEP** (4-1) |
+| D5  | Tripartite GNN | KEEP | DROP | KEEP | KEEP | DROP | **KEEP** (3-2; ablate later) |
+| D6  | Belief head | KEEP | KEEP | KEEP | KEEP | KEEP | **KEEP** (unanimous) |
+| D7  | Opp-id 16-d emb | DROP | CUT-8 | KEEP | KEEP | DROP | **CUT TO 8-DIM** (compromise) |
+| D8  | 60% heuristic mix | LESS | LESS | LESS | LESS | LESS | **LESS** (unanimous; curriculum 60→25%) |
+| D9  | Per-step ΔVP reward shaping | TERMINAL | TERMINAL | TERMINAL | KEEP | TERMINAL | **TERMINAL ONLY** (4-1) |
+| D10 | D6 symmetry aug prob=1.0 | KEEP | KEEP | KEEP | KEEP | KEEP | **KEEP** (unanimous) |
+| D11 | target_kl=0.01 | HIGHER | HIGHER | KEEP | KEEP | HIGHER | **HIGHER (0.03)** (3-2) |
+| D12 | 200 effective MCTS sims | MORE | FEWER | FEWER | FEWER | FEWER | **FEWER (50 effective)** (4-1) |
+| D13 | 11-way chance fan-out | COMPR | COMPR | COMPR | COMPR | COMPR | **COMPRESSED 6-bucket** (unanimous) |
+| D14 | AlphaBeta-d2 bench | KEEP | KEEP | KEEP | KEEP | KEEP | **KEEP** (unanimous) |
+| D15 | 5M-step exploitability eval | KEEP | SHORTER | KEEP | SHORTER | SHORTER | **SHORTER (1M routine, 5M paper-final)** (3-2) |
+
+**Cross-panel KEY FLIPs** (each expert named the one decision they'd fight
+hardest to change vs the original plan):
+
+- D9 (drop ΔVP shaping) — 2 votes (AlphaZero veteran, Cicero/Pluribus).
+- D1 (drop Phase B entirely) — 2 votes (AlphaStar/PPO, M1 Pro eff).
+- D8 (cut heuristic mix) — 1 vote (Catanatron).
+
+D9 carried because Cicero and AZ converged from opposite worldviews:
+shaping biases the value head into a myopic VP-rate predictor, and the
+previous v1 47%-plateau showed exactly that pathology (racing to 10 VP
+and losing to a Largest Army timing flip).
+
+D1 didn't flip — Phase B kept by 3-2 — but the dissent earned the
+massive budget cut on D12 (50 effective sims, not 200) and the
+"scale-up only if A/B justifies" gate.
+
+**HIGH CONFIDENCE picks** (each expert's most-certain vote):
+
+- D1 keep-B (AZ vet): "every 2-player zero-sum game solved at superhuman
+  level in the last decade used decision-time search."
+- D10 keep-symm-at-1.0 (AlphaStar/PPO, Catanatron): "D6 is a correctness
+  property of the hex board, not a hyperparameter."
+- D2 BC (Cicero): "no universe where 50k heuristic games of supervised
+  pretraining is worse than another cold PPO run."
+- D9 terminal-only (M1 Pro eff): "per-step ΔVP shaping in Catan is a known
+  footgun."
 
 ---
 

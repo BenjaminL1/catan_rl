@@ -66,7 +66,10 @@ class CatanPolicy(nn.Module):
         tile_out_dim: int = 25,
         graph_out_dim: int = 64,
         dev_out_dim: int = 16,
-        opp_id_dim: int = 16,
+        # Panel revision 2026-05-13: 16 -> 8 (D7 compromise). 4 dim per
+        # embedding half (kind + policy-slot) is enough at our league size,
+        # with opp_id_mask_prob=0.40 providing additional regularization.
+        opp_id_dim: int = 8,
         trunk_dim: int = 512,
         # Toggles for ablations + Step-1 compatibility with deferred features.
         use_graph_encoder: bool = True,
