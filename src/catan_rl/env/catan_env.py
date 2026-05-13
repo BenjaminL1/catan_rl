@@ -41,6 +41,25 @@ from catan_rl.engine.broadcast import GameBroadcast  # re-exported for downstrea
 from catan_rl.engine.game import catanGame
 from catan_rl.engine.player import player as PlainPlayer
 from catan_rl.engine.tracker import ResourceTracker
+from catan_rl.env.hand_tracker import BroadcastHandTracker
+from catan_rl.policy.obs_encoder import (
+    EDGE_FEATURE_DIM,
+    HEX_FEATURE_DIM,
+    VERTEX_FEATURE_DIM,
+    EnvObsState,
+    ObsEncoder,
+)
+from catan_rl.policy.obs_schema import (
+    CURR_PLAYER_DIM,
+    N_DEV_TYPES,
+    N_OPP_KINDS,
+    N_OPP_POLICY_SLOTS,
+    NEXT_PLAYER_DIM,
+    OPP_KIND_HEURISTIC,
+    OPP_KIND_RANDOM,
+    OPP_KIND_UNKNOWN,
+    TILE_DIM,
+)
 
 __all__ = ["CatanEnv", "RESOURCES_CW", "DEV_CARD_ORDER", "ActionType"]
 
@@ -61,9 +80,17 @@ N_TILES = 19
 N_ACTION_TYPES = 13
 N_RESOURCES = 5
 
-# v2 placeholder obs: Step 1 ships a single zero-vector keyed "placeholder".
-# Step 2 will replace this with the v2 compact-schema obs encoder.
-_PLACEHOLDER_OBS_DIM = 64
+# Map ``opponent_type`` string → Phase 3.6 ``opp_kind`` int. Used when a
+# caller doesn't pass ``opponent_kind`` explicitly via reset options.
+_OPP_TYPE_TO_KIND: dict[str, int] = {
+    "random": OPP_KIND_RANDOM,
+    "heuristic": OPP_KIND_HEURISTIC,
+}
+
+
+def _kind_from_opp_type(opp_type: str) -> int:
+    """Return the Phase 3.6 ``opp_kind`` integer for ``opponent_type``."""
+    return _OPP_TYPE_TO_KIND.get(opp_type, OPP_KIND_UNKNOWN)
 
 
 class ActionType:
@@ -129,12 +156,37 @@ class CatanEnv(gym.Env):
         self.action_space = spaces.MultiDiscrete(
             [N_ACTION_TYPES, N_VERTICES, N_EDGES, N_TILES, N_RESOURCES, N_RESOURCES]
         )
-        # Step-1 placeholder obs; Step 2 replaces with the v2 schema.
+        # v2 obs schema (Phase 1.5). Box bounds are loose because most
+        # features are normalised but a couple are raw counts (dev cards
+        # in hand can briefly hit ~7 before being played).
         self.observation_space = spaces.Dict(
             {
-                "placeholder": spaces.Box(
-                    low=-np.inf, high=np.inf, shape=(_PLACEHOLDER_OBS_DIM,), dtype=np.float32
-                )
+                "tile_representations": spaces.Box(
+                    low=0.0, high=1.0, shape=(N_TILES, TILE_DIM), dtype=np.float32
+                ),
+                "current_player_main": spaces.Box(
+                    low=0.0, high=1.0, shape=(CURR_PLAYER_DIM,), dtype=np.float32
+                ),
+                "next_player_main": spaces.Box(
+                    low=0.0, high=1.0, shape=(NEXT_PLAYER_DIM,), dtype=np.float32
+                ),
+                "current_dev_counts": spaces.Box(
+                    low=0.0, high=25.0, shape=(N_DEV_TYPES,), dtype=np.float32
+                ),
+                "next_played_dev_counts": spaces.Box(
+                    low=0.0, high=25.0, shape=(N_DEV_TYPES,), dtype=np.float32
+                ),
+                "hex_features": spaces.Box(
+                    low=0.0, high=1.0, shape=(N_TILES, HEX_FEATURE_DIM), dtype=np.float32
+                ),
+                "vertex_features": spaces.Box(
+                    low=0.0, high=1.0, shape=(N_VERTICES, VERTEX_FEATURE_DIM), dtype=np.float32
+                ),
+                "edge_features": spaces.Box(
+                    low=0.0, high=1.0, shape=(N_EDGES, EDGE_FEATURE_DIM), dtype=np.float32
+                ),
+                "opponent_kind": spaces.Discrete(N_OPP_KINDS),
+                "opponent_policy_id": spaces.Discrete(N_OPP_POLICY_SLOTS),
             }
         )
 
@@ -146,6 +198,15 @@ class CatanEnv(gym.Env):
         self._idx_to_vertex: dict[int, Any] = {}
         self._edge_to_idx: dict[tuple[str, str], int] = {}
         self._idx_to_edge: dict[int, tuple[Any, Any]] = {}
+        # Obs encoder + hand tracker — rebuilt per reset because the
+        # resource shuffle changes per game.
+        self._obs_encoder: ObsEncoder | None = None
+        self._hand_tracker: BroadcastHandTracker | None = None
+        # Opp-id state (Phase 3.6 plumbing — defaults to UNKNOWN; PPO
+        # GameManager will pass real values via reset options later).
+        self._opp_kind: int = OPP_KIND_UNKNOWN
+        self._opp_policy_id: int = N_OPP_POLICY_SLOTS - 1
+        self._opp_id_mask_prob: float = 0.0
 
         # State-machine flags (also reset in reset()).
         self.initial_placement_phase = True
@@ -173,6 +234,16 @@ class CatanEnv(gym.Env):
 
         options = options or {}
         opp_type = options.get("opponent_type", self.opponent_type)
+        # Phase 3.6 opp-id plumbing (defaults to UNKNOWN — eval-time
+        # behaviour and BC pretrain default). PPO GameManager will pass
+        # real values via reset options once a league exists.
+        self._opp_kind = int(options.get("opponent_kind", _kind_from_opp_type(opp_type)))
+        self._opp_policy_id = int(options.get("opponent_policy_id", N_OPP_POLICY_SLOTS - 1))
+        if not 0 <= self._opp_kind < N_OPP_KINDS:
+            self._opp_kind = OPP_KIND_UNKNOWN
+        if not 0 <= self._opp_policy_id < N_OPP_POLICY_SLOTS:
+            self._opp_policy_id = N_OPP_POLICY_SLOTS - 1
+        self._opp_id_mask_prob = float(options.get("opp_id_mask_prob", 0.0))
 
         self.game = catanGame(render_mode=None)
         board = self.game.board
@@ -195,6 +266,16 @@ class CatanEnv(gym.Env):
         self.game.playerQueue.put(self.agent_player)
         self.game.playerQueue.put(self.opponent_player)
         self.game.resource_tracker = ResourceTracker([self.agent_player.name, opp.name])
+
+        # Obs encoder + hand tracker. Both built after the engine so the
+        # encoder's static caches match this game's board. Subscribe the
+        # tracker BEFORE setup runs so all setup resource_change events
+        # land in it naturally (no need to seed from player.resources).
+        self._obs_encoder = ObsEncoder(board)
+        self._hand_tracker = BroadcastHandTracker(
+            [self.agent_player.name, self.opponent_player.name]
+        )
+        self._hand_tracker.subscribe(self.game.broadcast)
 
         self._build_index_maps(board)
 
@@ -717,11 +798,35 @@ class CatanEnv(gym.Env):
         return _pack()
 
     # ------------------------------------------------------------------
-    # Observations (Step 1: placeholder; Step 2: v2 compact schema)
+    # Observations (Phase 1.5: v2 schema via ObsEncoder + BroadcastHandTracker)
     # ------------------------------------------------------------------
 
     def _get_obs(self) -> dict[str, np.ndarray]:
-        return {"placeholder": np.zeros(_PLACEHOLDER_OBS_DIM, dtype=np.float32)}
+        assert self._obs_encoder is not None and self.game is not None
+        assert self.agent_player is not None and self.opponent_player is not None
+        env_state = EnvObsState(
+            initial_placement_phase=self.initial_placement_phase,
+            setup_step=self._setup_step,
+            roll_pending=self.roll_pending,
+            discard_pending=self.discard_pending,
+            robber_placement_pending=self.robber_placement_pending,
+            road_building_roads_left=self.road_building_roads_left,
+            last_dice_roll=self.last_dice_roll,
+            opp_kind=self._opp_kind,
+            opp_policy_id=self._opp_policy_id,
+            # Stochastic opp-id mask: roll once per obs so within-step calls
+            # are consistent. Phase 3.6 default of 0.0 -> never mask.
+            opp_id_masked=(
+                self._opp_id_mask_prob > 0.0 and bool(np.random.random() < self._opp_id_mask_prob)
+            ),
+        )
+        return self._obs_encoder.build_obs(
+            self.game,
+            self.agent_player,
+            self.opponent_player,
+            env_state,
+            hand_tracker=self._hand_tracker,
+        )
 
     # ------------------------------------------------------------------
     # Vertex / edge index maps
