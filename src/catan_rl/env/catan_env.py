@@ -643,159 +643,33 @@ class CatanEnv(gym.Env):
         return self._compute_masks(self.agent_player)
 
     def _compute_masks(self, acting_player: PlainPlayer | None) -> dict[str, np.ndarray]:
+        """Thin wrapper around :func:`catan_rl.env.masks.compute_action_masks`.
+
+        Builds an ``EnvObsState`` from the env's current state-machine flags
+        and delegates. The standalone function lives in ``masks.py`` so the
+        BC dataset generator (Step 3) can produce the same masks without
+        instantiating an env.
+        """
+        from catan_rl.env.masks import compute_action_masks
+        from catan_rl.policy.obs_encoder import EnvObsState
+
         assert acting_player is not None and self.game is not None
-        board = self.game.board
-        p = acting_player
-        is_agent = p is self.agent_player
-
-        type_mask = np.zeros(N_ACTION_TYPES, dtype=bool)
-        corner_set = np.zeros(N_VERTICES, dtype=bool)
-        corner_city = np.zeros(N_VERTICES, dtype=bool)
-        edge_mask = np.zeros(N_EDGES, dtype=bool)
-        tile_mask = np.zeros(N_TILES, dtype=bool)
-        res1_trade = np.zeros(N_RESOURCES, dtype=bool)
-        res1_disc = np.zeros(N_RESOURCES, dtype=bool)
-        res1_def = np.zeros(N_RESOURCES, dtype=bool)
-        res2_def = np.zeros(N_RESOURCES, dtype=bool)
-
-        def _pack() -> dict[str, np.ndarray]:
-            return {
-                "type": type_mask,
-                "corner_settlement": corner_set,
-                "corner_city": corner_city,
-                "edge": edge_mask,
-                "tile": tile_mask,
-                "resource1_trade": res1_trade,
-                "resource1_discard": res1_disc,
-                "resource1_default": res1_def,
-                "resource2_default": res2_def,
-            }
-
-        if self.initial_placement_phase:
-            step = self._setup_step
-            if step in (0, 2):  # settle
-                type_mask[ActionType.BUILD_SETTLEMENT] = True
-                for v_px in board.get_setup_settlements(p):
-                    idx = self._vertex_to_idx.get(v_px)
-                    if idx is not None:
-                        corner_set[idx] = True
-            elif step in (1, 3):  # road
-                type_mask[ActionType.BUILD_ROAD] = True
-                for v1, v2 in board.get_setup_roads(p):
-                    idx = self._edge_to_idx.get(self._edge_key(v1, v2))
-                    if idx is not None:
-                        edge_mask[idx] = True
-            return _pack()
-
-        if self.discard_pending and is_agent:
-            type_mask[ActionType.DISCARD] = True
-            for i, r in enumerate(RESOURCES_CW):
-                if p.resources.get(r, 0) > 0:
-                    res1_disc[i] = True
-            if not res1_disc.any():
-                res1_disc[:] = True  # degenerate; should not happen with >0 cards
-            return _pack()
-
-        if self.robber_placement_pending and is_agent:
-            type_mask[ActionType.MOVE_ROBBER] = True
-            for hex_idx in board.get_robber_spots():
-                tile_mask[hex_idx] = True
-            if not tile_mask.any():
-                tile_mask[:] = True
-            return _pack()
-
-        if self.roll_pending and is_agent:
-            type_mask[ActionType.ROLL_DICE] = True
-            return _pack()
-
-        if self.road_building_roads_left > 0 and is_agent:
-            type_mask[ActionType.BUILD_ROAD] = True
-            for v1, v2 in board.get_potential_roads(p):
-                idx = self._edge_to_idx.get(self._edge_key(v1, v2))
-                if idx is not None:
-                    edge_mask[idx] = True
-            if not edge_mask.any():
-                # No legal roads left -> force EndTurn.
-                type_mask[ActionType.BUILD_ROAD] = False
-                type_mask[ActionType.END_TURN] = True
-            return _pack()
-
-        # ----- Main turn -----
-        res = p.resources
-
-        type_mask[ActionType.END_TURN] = True
-
-        pot_settle = board.get_potential_settlements(p)
-        if (
-            res.get("BRICK", 0) >= 1
-            and res.get("WOOD", 0) >= 1
-            and res.get("SHEEP", 0) >= 1
-            and res.get("WHEAT", 0) >= 1
-            and p.settlementsLeft > 0
-            and pot_settle
-        ):
-            type_mask[ActionType.BUILD_SETTLEMENT] = True
-            for v_px in pot_settle:
-                idx = self._vertex_to_idx.get(v_px)
-                if idx is not None:
-                    corner_set[idx] = True
-
-        pot_city = board.get_potential_cities(p)
-        if res.get("ORE", 0) >= 3 and res.get("WHEAT", 0) >= 2 and p.citiesLeft > 0 and pot_city:
-            type_mask[ActionType.BUILD_CITY] = True
-            for v_px in pot_city:
-                idx = self._vertex_to_idx.get(v_px)
-                if idx is not None:
-                    corner_city[idx] = True
-
-        pot_roads = board.get_potential_roads(p)
-        if res.get("BRICK", 0) >= 1 and res.get("WOOD", 0) >= 1 and p.roadsLeft > 0 and pot_roads:
-            type_mask[ActionType.BUILD_ROAD] = True
-            for v1, v2 in pot_roads:
-                idx = self._edge_to_idx.get(self._edge_key(v1, v2))
-                if idx is not None:
-                    edge_mask[idx] = True
-
-        deck_total = sum(self.game.board.devCardStack.values())
-        if (
-            res.get("ORE", 0) >= 1
-            and res.get("WHEAT", 0) >= 1
-            and res.get("SHEEP", 0) >= 1
-            and deck_total > 0
-        ):
-            type_mask[ActionType.BUY_DEV_CARD] = True
-
-        if p.devCards.get("KNIGHT", 0) > 0 and not p.devCardPlayedThisTurn:
-            type_mask[ActionType.PLAY_KNIGHT] = True
-
-        if p.devCards.get("YEAROFPLENTY", 0) > 0 and not p.devCardPlayedThisTurn:
-            type_mask[ActionType.PLAY_YOP] = True
-            res1_def[:] = True
-            res2_def[:] = True
-
-        if p.devCards.get("MONOPOLY", 0) > 0 and not p.devCardPlayedThisTurn:
-            type_mask[ActionType.PLAY_MONOPOLY] = True
-            res1_def[:] = True
-
-        if p.devCards.get("ROADBUILDER", 0) > 0 and not p.devCardPlayedThisTurn:
-            type_mask[ActionType.PLAY_ROAD_BUILDER] = True
-
-        for i, r in enumerate(RESOURCES_CW):
-            r_port = f"2:1 {r}"
-            if r_port in p.portList and res.get(r, 0) >= 2:
-                res1_trade[i] = True
-            elif "3:1 PORT" in p.portList and res.get(r, 0) >= 3:
-                res1_trade[i] = True
-            elif res.get(r, 0) >= 4:
-                res1_trade[i] = True
-        if res1_trade.any():
-            type_mask[ActionType.BANK_TRADE] = True
-            res2_def[:] = True
-
-        if not type_mask.any():
-            type_mask[ActionType.END_TURN] = True
-
-        return _pack()
+        env_state = EnvObsState(
+            initial_placement_phase=self.initial_placement_phase,
+            setup_step=self._setup_step,
+            roll_pending=self.roll_pending,
+            discard_pending=self.discard_pending,
+            robber_placement_pending=self.robber_placement_pending,
+            road_building_roads_left=self.road_building_roads_left,
+            last_dice_roll=self.last_dice_roll,
+        )
+        return compute_action_masks(
+            self.game,
+            acting_player,
+            env_state,
+            self._vertex_to_idx,
+            self._edge_to_idx,
+        )
 
     # ------------------------------------------------------------------
     # Observations (Phase 1.5: v2 schema via ObsEncoder + BroadcastHandTracker)
