@@ -1,0 +1,29 @@
+{
+  "metadata": {
+    "batch_size": 64,
+    "n_d6_elements_tested": 11,
+    "wall_clock_seconds": 0.8599498271942139
+  },
+  "E_full": {
+    "type_logits": 0.08597655458883806,
+    "value": 0.08386041698130695,
+    "belief_logits": 0.1976120729338039
+  },
+  "E_equiv_lo": {
+    "type_logits": 0.08589844947511499,
+    "value": 0.08396859534762123,
+    "belief_logits": 0.19862577590075406
+  },
+  "E_equiv_hi": {
+    "type_logits": 0.40294245156374847,
+    "value": 1.172471127726815,
+    "belief_logits": 0.41474992307749664
+  },
+  "r_h": {
+    "type_logits": 0.0002463541754725654,
+    "value": 0.0,
+    "belief_logits": 0.0
+  },
+  "max_r_h": 0.0002463541754725654,
+  "decision_rule": "AUG_PROB_0.5_BOTH_BC_AND_PPO"
+}

@@ -41,12 +41,11 @@ back to the opponent's raw ``player.resources`` dict (also valid in 1v1
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from catan_rl.engine.board import catanBoard
-from catan_rl.env.hand_tracker import BroadcastHandTracker
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
     DEV_CARD_ORDER,
@@ -61,6 +60,11 @@ from catan_rl.policy.obs_schema import (
     RESOURCES_CW,
     TILE_DIM,
 )
+
+if TYPE_CHECKING:
+    # Import only for type checking — avoids a circular import where
+    # ``env/__init__.py`` imports CatanEnv (which imports back here).
+    from catan_rl.env.hand_tracker import BroadcastHandTracker
 
 # ---------------------------------------------------------------------------
 # Constants
