@@ -43,11 +43,39 @@ implementation in flight (Step 1-2 ✅, Step 3 next).
   WR ≥ 0.40) with **NLL-gap-vs-measured-baseline** and **WR-relative-
   to-heuristic-self-WR**; symmetry-aug prob choice deferred to E0.3+E0.4
   result; added empirical KL-drift probe for the BC value head.
+- 2026-05-13 — **Faculty re-review round 2** flagged that the
+  corrections themselves were partly incomplete. Round-2 fixes:
+  (1) E0.1 redesigned from joint-flip to a **2×2 factorial** (isolates
+  whether heuristic over-mix and/or ΔVP shaping is the plateau cause,
+  vs. interaction);
+  (2) BC gate switched from fixed-margin thresholds (0.30 nats, 0.10
+  WR delta) to **proper statistical tests** — paired-bootstrap NLL test
+  with 99% CI and TOST-style WR equivalence test at α=0.05;
+  (3) ablation matrix **tiered by prior evidence**: Tier 1 (3 configs,
+  load-bearing v2 claims) + Tier 2 (3 configs, 3-2 panel splits) +
+  Tier 3 (4 configs, opt-in). Lands the matrix in 2 weeks vs the
+  naive 45-day plan;
+  (4) CFR future-work promise **explicitly withdrawn** (out of scope
+  for v2); replaced with a PPO-BR **sensitivity probe** (compare 1M
+  vs 5M BR to bound BR-suboptimality);
+  (5) E0.4 equivariance probe now uses **comparator-anchored
+  thresholds** (`equiv_lo` = GNN-only-no-axial baseline, `equiv_hi` =
+  vanilla MLP);
+  (6) `exploitability` → `PPO-BR-gap` rename completed in §3.7 vote
+  table, codebase layout, and §6 success criteria;
+  (7) BC value-head KL-drift probe distribution **specified as
+  current-PPO-policy rollouts** (was unspecified, would have measured
+  the wrong thing on heuristic-dist data);
+  (8) **wall-clock budget caps** added to §6: Phase A ≤ 10 days/seed
+  (30 days total across 3 seeds), Phase B ≤ 1 week on A100, BR-eval
+  overhead ≤ 20% of Phase A compute, ablation matrix ≤ 2 weeks.
 
 **Target**: superhuman 1v1 Catan (Colonist.io ruleset) — defined as ≥ 0.95 WR
 against the engine heuristic, ≥ 0.70 WR against a strong AlphaBeta-d2
-baseline (per Catanatron precedent), exploitability < 5% from a fresh
-5M-step adversary.
+baseline (per Catanatron precedent), PPO-BR-gap < 0.55 from a fresh
+5M-step PPO best-response adversary. Note (faculty review): PPO-BR-gap
+is a *lower bound* on true exploitability — Cicero/Pluribus use CFR
+for actual bounds; CFR-on-Catan is out of scope for v2.
 
 **Starting point**: Charlesworth's 4-player Catan deep-RL bot
 (settlers-rl.github.io, 2021-2022), the closest published prior art. This
@@ -68,25 +96,54 @@ shaping decision.
 
 ### E0.1 — v1-checkpoint plateau ablation (priority)
 
-**Question**: is the v1 47%-WR plateau caused by (a) heuristic over-mix +
-ΔVP shaping (current panel hypothesis), or by something deeper that v2
-inherits?
+**Question**: is the v1 47%-WR plateau caused by (a) heuristic over-mix,
+(b) ΔVP reward shaping, (c) both, or (d) something deeper that v2 inherits?
 
-**Method**: from the latest v1 checkpoint (`catan_rl/checkpoints/train/`),
-resume one PPO run with `heuristic_opp_weight=0.25` and `vp_shaping=off`,
-everything else held constant. Train 5M further steps. Eval every 100k
-steps.
+**Method (faculty re-review correction)**: the original draft of this
+experiment flipped two variables at once, which would have left the
+panel diagnosis unfalsifiable in the same way the prior plan was. The
+corrected design is a **2×2 factorial** from the latest v1 checkpoint
+(`catan_rl/checkpoints/train/checkpoint_07390040.pt`):
 
-**Decision rule**:
-- If heuristic-WR climbs past 0.52 within 3M steps → v1's plateau was
-  the panel-diagnosed mix + shaping. v2's D8 + D9 decisions are
-  vindicated and the existing plan continues.
-- If WR stays ≤ 0.49 after 5M → the panel diagnosis was wrong. Open
-  a follow-up investigation before committing more v2 work.
+| Run | `heuristic_opp_weight` | `vp_shaping` | Hypothesis tested |
+|---|---|---|---|
+| `e01_control` | 0.60 (current) | on (current) | Baseline — should reproduce the 47% plateau on the resume curve |
+| `e01_no_shaping` | 0.60 (current) | **off** | Isolates ΔVP shaping as the culprit |
+| `e01_no_overmix` | **0.25** | on (current) | Isolates heuristic over-mix as the culprit |
+| `e01_both` | **0.25** | **off** | Joint flip — interaction effect |
+
+Each run resumes for **1M further steps**, eval every 100k. Total compute
+~ 4 days at v1's measured ~25 FPS sustained. All 4 runs share the same
+checkpoint init + same seed; randomness across runs comes only from the
+RNG state at resume.
+
+**Decision rule (4-way contingency, not binary)**:
+
+- **`e01_control` ≈ 0.47 at end**: confirms resume curve baseline; the
+  47% number was the plateau and not transient noise. Proceed with
+  diagnosis.
+- **`e01_control` > 0.50**: the v1 run had not actually plateaued, just
+  decelerated; the entire panel diagnosis is moot. Stop, audit how
+  "plateau" was characterised.
+
+Conditional on `e01_control` ≈ 0.47:
+- **Both single-flip runs > 0.50**: each variable independently breaks
+  the plateau. Panel's D8 + D9 both vindicated. Proceed.
+- **Only `e01_no_shaping` > 0.50**: ΔVP shaping is the dominant cause;
+  D9 vindicated, D8 cosmetic. Keep D9 change; consider relaxing the
+  D8 mix change.
+- **Only `e01_no_overmix` > 0.50**: heuristic over-mix is the dominant
+  cause; D8 vindicated, D9 cosmetic. Symmetric to above.
+- **Neither single-flip breaks past 0.50, but `e01_both` does**: the
+  causes are sub-additive (interaction effect — neither suffices alone).
+  Both changes are required; v2 plan is fine.
+- **All three intervention runs stay ≤ 0.49**: neither variable nor
+  their joint flip breaks the plateau. The panel diagnosis is wrong.
+  **STOP** v2 work past Step 2 and open a follow-up investigation.
 
 The existing v1 training process (running unsupervised since 2026-05-12)
 is *not* this experiment — its config doesn't isolate the two variables.
-A clean controlled resume is required.
+A clean controlled 2×2 resume is required.
 
 ### E0.2 — Heuristic action distribution audit
 
@@ -136,21 +193,46 @@ best"). Over 200 games:
 **Question**: at initialisation and after BC, is the v2 network
 approximately D6-equivariant?
 
-**Method**: instantiate `CatanPolicy()` at random init. Build a single
-obs `s` and its D6-rotation `T(s)`. Forward both:
-- `||π(s) - T⁻¹(π(T(s)))||₁` over the type head.
-- Same for the value head and belief head.
+**Method**: instantiate `CatanPolicy()` at random init. Build a batch
+of 64 random obs `s_i` (drawn from heuristic-vs-heuristic distribution
+to avoid degenerate uniform-zero inputs). Compute the **equivariance
+loss** for each output head h:
 
-Repeat at the end of BC training (Step 3 deliverable). Compare.
+```
+E_h = mean_i mean_g ||h(s_i) - T_g⁻¹(h(T_g(s_i)))||₁ / ||h(s_i)||₁
+```
 
-**Decision rule**: the *axial positional embedding* (which we added to
-the TileEncoder, §3.1) is by construction *not* equivariant — it
-attaches a learned vector to each axial coord. The probe quantifies
-how much equivariance the architecture *loses* vs the GNN component
-(which is approximately equivariant). The result is used to set the
-symmetry-aug prob at Step 4 PPO training: high equivariance → prob=0.5
-is enough; low equivariance → prob=1.0 to force the policy to learn
-the invariance from data.
+where `g` ranges over the 12 elements of D6 and `T_g` is the joint
+state+action D6 transform. Report `E_h` for the type head, value head,
+and belief head. Repeat at the end of BC training.
+
+**Comparator baselines** (faculty re-review — fixed thresholds were
+unprincipled). Run the same probe on two reference networks built from
+the same v2 architecture with surgical modifications:
+
+| Comparator | Modification | Expected `E_h` | Interpretation |
+|---|---|---|---|
+| **`equiv_lo`** (lower-bound reference) | Strip axial pos emb, use only the GNN trunk (no TileEncoder transformer), zero out the fusion linear's tile-input columns | ≈ 0.0 | This *is* the equivariant function class; baseline for "how close can we get?" |
+| **`equiv_hi`** (upper-bound reference) | Random MLP on flattened obs (no pos emb, no GNN, no equivariance machinery) | ≈ 0.5–1.0 | Untrained, no inductive bias; baseline for "how far away can we be?" |
+
+**Decision rule** (now anchored): let `r_h = (E_h - E_h^lo) / (E_h^hi - E_h^lo) ∈ [0,1]`
+be the normalised equivariance gap.
+
+- **`r_h ≤ 0.10` for all 3 heads**: the network is approximately
+  equivariant. Symmetry aug at **prob=0.5** is enough; the architecture
+  already carries the invariance.
+- **`0.10 < r_h ≤ 0.40`**: partial equivariance loss (expected with
+  axial pos emb on). Symmetry aug at **prob=0.5** during BC, **prob=1.0**
+  during PPO (where the aug acts on rollouts and the policy needs to
+  learn the missing invariance from data).
+- **`r_h > 0.40`**: significant equivariance loss; the architecture
+  is fighting the symmetry. Symmetry aug at **prob=1.0 throughout**, and
+  flag for follow-up — may indicate axial pos emb is dominating the
+  encoder and should be scaled down (smaller `axial_pos_dim`).
+
+Reporting `r_h` as a number (not a verdict) makes this probe
+replicable and lets future-us audit whether the symmetry-aug choice
+was actually justified by the architecture.
 
 ---
 
@@ -447,10 +529,24 @@ random play; that residual is partly P-seat advantage, not all noise.
     overclaim the prior plan made; the corrected name is used everywhere.
   - **Routine**: 1M-step PPO-BR against snapshots every 5M main steps.
   - **Final**: 5M-step PPO-BR against the frozen final checkpoint.
-  - **Future work**: implement a depth-limited CFR pass on a tabular
-    abstraction of the late-game state for a real exploitability bound.
-    Tractable in 1v1 Catan because the branching factor is small after
-    action masking. Deferred to Phase C+.
+  - **Bias quantification** (faculty re-review): report PPO-BR-gap
+    with a **sensitivity number** computed by running the BR at two
+    budgets and comparing. Procedure: train one BR for 1M steps, save
+    its final WR `b_1M`. Train a second BR continuing from the same
+    checkpoint for another 4M steps, save `b_5M`. Report `b_5M` as the
+    headline number and `Δ_BR = b_5M − b_1M` as a sensitivity proxy
+    (how much the BR was still improving in the last 4M). A small
+    `Δ_BR` means the 5M BR is near-converged; a large `Δ_BR` means
+    the BR was still improving and the gap is loose. Without this, a
+    PPO-BR-gap number is unfalsifiable as a robustness measure.
+  - **Out of scope for v2**: a true exploitability bound via CFR
+    requires (i) a state-space abstraction with ≤ ~10⁶ buckets, (ii)
+    a subgame definition, (iii) algorithm choice (MCCFR vs CFR-D vs
+    CFR+), (iv) a non-trivial compute budget. A real plan is months
+    of work and is **explicitly out of scope** for v2. The plan
+    previously promised this as "future work"; the promise is
+    withdrawn here. v2's robustness claim is *PPO-BR-gap with
+    sensitivity*, period.
 - **TrueSkill within league**: continuous.
 - Async eval via subprocess (Phase 4.2 v1 design — proven to work).
 
@@ -476,7 +572,7 @@ plus the consensus pick; the design above reflects the consensus.
 | D12 | 200 effective MCTS sims | MORE | FEWER | FEWER | FEWER | FEWER | **FEWER (50 effective)** (4-1) |
 | D13 | 11-way chance fan-out | COMPR | COMPR | COMPR | COMPR | COMPR | **COMPRESSED 6-bucket** (unanimous) |
 | D14 | AlphaBeta-d2 bench | KEEP | KEEP | KEEP | KEEP | KEEP | **KEEP** (unanimous) |
-| D15 | 5M-step exploitability eval | KEEP | SHORTER | KEEP | SHORTER | SHORTER | **SHORTER (1M routine, 5M paper-final)** (3-2) |
+| D15 | 5M-step PPO-BR-gap eval (was "exploitability") | KEEP | SHORTER | KEEP | SHORTER | SHORTER | **SHORTER (1M routine, 5M paper-final)** (3-2) |
 
 **Cross-panel KEY FLIPs** (each expert named the one decision they'd fight
 hardest to change vs the original plan):
@@ -507,41 +603,71 @@ massive budget cut on D12 (50 effective sims, not 200) and the
 
 ### 3.8 Ablation budget (faculty review)
 
-v2 ships ~12 architecture / training features (axial pos emb, GNN, FiLM
-heads, belief head, opp-id emb, value-head-BC, symmetry aug, piKL anchor,
-duo exploiter, MCTS chance buckets, …). Without per-feature ablations
-we cannot:
-  (a) diagnose failure (which feature is the culprit when the gate fails?),
-  (b) defend the design (which features are *load-bearing* vs cosmetic?),
-  (c) publish (no claim is supportable without ablation evidence).
+v2 ships ~10 architecture / training features. Without per-feature
+ablations we cannot (a) diagnose failure, (b) defend the design, or
+(c) publish.
 
-**Leave-one-out config matrix.** Each row is a YAML config that ablates
-exactly one v2 feature, holding everything else constant. Run after
-Phase A converges; budget ~3-7 days compute per config on M1 Pro at
-5M steps each.
+**Compute reality** (faculty re-review): the naive "10 LOO configs ×
+5M steps × M1 Pro 25 FPS" matrix is **~45 days**, longer than the
+entire Phase A budget. The matrix is **tiered by prior strength of
+evidence** so the budget is bounded.
+
+#### Tier 1 — load-bearing claims, run unconditionally (3 configs, ≤ 1 week)
+
+These three ablations test the **core v2 algorithmic claims** that the
+panel + faculty review have flagged as unverified.
 
 | Config | Feature ablated | Hypothesis under test |
 |---|---|---|
-| `phase_a_no_bc.yaml` | BC warm-start (cold start PPO) | BC is load-bearing for the gate |
-| `phase_a_no_piKL.yaml` | piKL anchor (λ=0) | piKL prevents early collapse off BC anchor |
-| `phase_a_no_belief.yaml` | Belief head (weight 0) | Aux supervision contributes to ceiling |
-| `phase_a_no_oppid.yaml` | Opp-id embedding | Opp-id ≠ cosmetic at 8-dim |
-| `phase_a_no_gnn.yaml` | Tripartite GNN | GNN is load-bearing vs transformer-only |
-| `phase_a_no_axial.yaml` | Axial pos emb in TileEncoder | Pos emb is load-bearing vs permutation-equivariant transformer |
-| `phase_a_no_film.yaml` | FiLM heads (revert to concat) | FiLM ≠ concat at same param count |
-| `phase_a_no_symm.yaml` | D6 symmetry aug | Aug is a real data multiplier |
-| `phase_a_no_heur_anchor.yaml` | 25% heuristic in opp mix (0% instead) | Anchor helps the metric we eval against |
-| `phase_a_no_exploiter.yaml` | Duo exploiter cycles | Exploiter improves vs PFSP-only league |
+| `phase_a_no_bc.yaml` | BC warm-start (cold start PPO) | BC is load-bearing — the entire premise of the v2 algorithmic shift |
+| `phase_a_no_piKL.yaml` | piKL anchor (λ=0) | piKL prevents early collapse off BC anchor (Cicero's key claim) |
+| `phase_a_heur_at_0.yaml` | 25% → 0% heuristic in opp mix | Anchor helps the eval-target metric (D8 plateau-cause hypothesis) |
 
-**Acceptance rule for "feature is load-bearing"**: ablated config WR is
-≥ 0.05 below full config WR on the heuristic bench, with N ≥ 3 seeds,
-across at least the last 1M training steps of each run. Features that
-fail this bar are flagged as **candidates for removal** in v2.1.
+#### Tier 2 — architecture choices the panel was split on (3 configs, ≤ 1 week)
 
-**Phase B ablations** (Phase B onward):
+These three ablations test the **3-2 panel splits** — i.e., features
+where reasonable experts disagreed.
+
+| Config | Feature ablated | Hypothesis under test |
+|---|---|---|
+| `phase_a_no_gnn.yaml` | Tripartite GNN | GNN is load-bearing vs transformer+axial alone (panel D5, 3-2) |
+| `phase_a_no_oppid.yaml` | Opp-id embedding | Opp-id at 8-dim ≠ cosmetic (panel D7, 3-2 after compromise) |
+| `phase_a_no_bc_value.yaml` | BC value-head training (weight 0) | BC value bootstraps PPO vs adds contamination (panel D7, 3-2 + faculty empirical-probe gate) |
+
+#### Tier 3 — refinements, run only if Tier 1+2 leave gate unsolved (4 configs, ≤ 1 week each, opt-in)
+
+| Config | Feature ablated |
+|---|---|
+| `phase_a_no_axial.yaml` | Axial pos emb |
+| `phase_a_no_film.yaml` | FiLM heads (revert to concat with γ-init=0 baseline init) |
+| `phase_a_no_symm.yaml` | D6 symmetry aug |
+| `phase_a_no_belief.yaml` | Belief head |
+
+**Acceptance rule for "feature is load-bearing"**: ablated config
+symmetrized WR is **≥ 0.05 below full-config WR with p < 0.05** under a
+paired two-seed comparison (each ablation seed is initialised from the
+matching full-config seed at the BC handoff, so the comparison is
+correctly paired). Features failing this bar are flagged as **candidates
+for removal** in v2.1.
+
+**Compute envelope**: Tier 1 + Tier 2 = 6 configs × 5M steps × ~5 days
+each ≈ **30 days serial**. With 2-way M1 Pro parallelism (one tier at a
+time, one CPU per run) the matrix lands in **~2 weeks**. Tier 3 is
+opt-in only if Tier 1 + 2 leave the gate ambiguous.
+
+**Phase B ablations** (Phase B onward, separate budget):
 - `phase_b_no_search.yaml` — policy-only baseline (no MCTS at decision time).
 - `phase_b_full_chance.yaml` — 11-way chance fan-out vs 6-bucket (D13).
 - `phase_b_more_sims.yaml` — 200 effective sims vs 50 (D12 dissent).
+
+**Why not a fractional factorial design**: with 6 features and 2 levels
+each, a Plackett-Burman with N=8 runs would estimate main effects in
+fewer runs. We considered it. The reason we use the tiered LOO instead
+is interpretability: a paired LOO comparison gives a per-feature
+verdict directly, while PB main effects require careful interaction
+analysis. At the budget we have (2 weeks for the matrix), the savings
+from PB do not justify the interpretive cost. Revisit if the feature
+count grows past ~10.
 
 ---
 
@@ -577,11 +703,11 @@ catan_rl_v2/
 │   │   ├── pfsp.py
 │   │   ├── exploiter.py
 │   │   └── ratings.py
-│   └── eval/               ← NEW: heuristic + champion + AlphaBeta-d2 + exploitability
+│   └── eval/               ← NEW: heuristic + champion + AlphaBeta + ppo_br_gap
 │       ├── evaluation_manager.py
 │       ├── alphabeta_bench.py
 │       ├── champion_bench.py
-│       └── exploitability.py
+│       └── ppo_br_gap.py
 ├── scripts/
 │   ├── train_bc.py         Phase A.1: behavior-clone heuristic
 │   ├── train_ppo.py        Phase A.2: PPO + piKL anchor
@@ -685,9 +811,33 @@ trust at single-seed).
       "exploitability."
 - [ ] Beats the v1 archive checkpoint (`archive/phase4-may2026`) ≥ 0.70
       symmetrized in head-to-head, N=3 seeds.
-- [ ] Compute budget: ≤ 4 weeks on M1 Pro CPU + 1 week on a cloud A100 (Phase B).
-- [ ] **Optional / stretch**: depth-limited tabular CFR on a late-game
-      abstraction shows ≤ X% true exploitability. Deferred to Phase C+.
+
+**Wall-clock budget caps** (faculty re-review — the original §6 had no
+failure mode on time):
+
+- [ ] **Phase A (BC + PPO + piKL)**: ≤ **10 days** of M1 Pro CPU
+      wall-clock per seed, ≤ **30 days total across 3 seeds**. If a seed
+      doesn't hit the Phase A gate within 10 days, **stop that seed** and
+      audit before continuing. The plan is revised if 2 of 3 seeds blow
+      the budget.
+- [ ] **Phase B (search)**: ≤ **1 week** on a cloud A100 (or equivalent),
+      including both training and eval. If A100 not available, defer
+      Phase B and ship Phase A as the v2 deliverable.
+- [ ] **PPO-BR-gap routine overhead**: ≤ **20% of total Phase A compute**.
+      The routine eval (1M-step BR every 5M main steps) costs 1:5 ratio
+      with main training; budget 20% of Phase A budget for it. The final
+      5M-step BR adds another ~5% on the back end. **If routine BR
+      cost would exceed 20%, reduce eval frequency** (e.g., one BR every
+      10M main steps instead of every 5M).
+- [ ] **Ablation matrix budget** (§3.8): ≤ **2 weeks** on M1 Pro CPU.
+      With ~10 LOO configs at 5M steps each, the naive matrix is
+      ~45 days. The §3.8 tier-prioritisation lands the actual matrix
+      inside the 2-week cap by running only Tier-1 + Tier-2 (6 configs).
+
+If the plan exceeds the total budget (Phase A + ablation matrix +
+overhead = ~7 weeks M1 Pro + 1 week A100), **the plan is failing
+silently** and needs revision before continuing. The compute budget
+is a falsifiable gate, not aspiration.
 
 ---
 
@@ -713,12 +863,12 @@ trust at single-seed).
 - [Heinrich & Silver, *Deep Reinforcement Learning from Self-Play in
   Imperfect-Information Games*, arXiv 1603.01121](https://arxiv.org/abs/1603.01121) —
   fictitious self-play; the 2p-zero-sum theoretical analogue of PFSP.
-- [Hilton, Cobbe, Schulman, *Batch size-invariance for policy optimization*,
-  arXiv 2110.00641](https://arxiv.org/abs/2110.00641) — actual RL scaling-law
-  reference (vs the misapplied Chinchilla framing the BC plan originally
-  used).
-- [Cobbe et al., *Phasic Policy Gradient* (procgen scaling appendix)](https://arxiv.org/abs/2009.04416) —
-  same.
+- [Hilton, Cobbe, Schulman, *Batch size-invariance for policy
+  optimization*, arXiv 2110.00641](https://arxiv.org/abs/2110.00641) —
+  cited specifically because they observe approximate batch-size
+  invariance up to large batch on procgen with PPO, which supports the
+  BC plan's batch=1024 choice (§4) over the smaller batches typical of
+  pure-RL configs. Drop this if the BC batch choice is revisited.
 - [Stochastic MuZero (Antonoglou 2022)](https://openreview.net/pdf?id=X6D9bAHhBQ1) —
   chance nodes / afterstates for stochastic games.
 - [Vinyals et al., AlphaStar (Nature 2019)](https://www.nature.com/articles/s41586-019-1724-z) —

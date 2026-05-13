@@ -35,7 +35,7 @@ it's to be a non-uniform prior that piKL can leash and PPO can build on.
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Total games | **30,000 as starting point** (pending sample-efficiency sweep) | Panel 3-2 split (3 want 10-15k, 2 want 200k); 30k is the middle. Faculty review note: "10× tokens-per-param ≈ Chinchilla" is a **category error** — that scaling law is for autoregressive LM on natural-language tokens, not for structured (state, action) pairs at much higher per-sample information density. The right scaling literature is Cobbe et al. (procgen) and Hilton et al. (RL scaling), neither of which supports 10×. The honest position: **30k is a defensible starting point with no theoretical claim; we will sweep {10k, 30k, 100k} as part of the §3.8 ablation budget** if the gate fails. |
+| Total games | **30,000 as starting point** (Tier-3 sweep if gate fails) | Panel 3-2 split (3 want 10-15k, 2 want 200k); 30k is the middle. Faculty review note: "10× tokens-per-param ≈ Chinchilla" is a category error — that scaling law is for LM tokens, not structured (s,a) pairs. **No theoretical claim is made on 30k.** If Gate 2 of §6 fails with `Δ_NLL` CI not clearing zero, run the **Tier-3 sweep {10k, 30k, 100k}** per the §3.8 budget — this is the only ablation that touches data-scale. If Gate 1 plateaus before 2 epochs, the dataset is too small *for the gates set*, not necessarily too small overall — read the per-head NLL contributions before declaring failure. |
 | Source mix | **70% canonical heuristic vs heuristic, 30% perturbed vs heuristic** | Unanimous panel vote: pure heur-vs-heur is mode-collapsed on a single trajectory distribution. Variant mix broadens state coverage without injecting random-policy noise. |
 | Perturbation recipe (variant side) | ε-greedy with ε=0.10 over the heuristic's top-K candidate actions, OR ±15% noise on the heuristic's scoring weights | Cheap implementation, preserves "heuristic-like" plays but reaches different states. |
 | Player side filter | **Both players** | 3-2 vote: winner-only halves the data and is survivorship bias; the heuristic is symmetric so both sides are valid behavioral targets. Catanatron's "training on losing trajectories trains blind spots" concern is addressed by the variant mix above, not by filtering. |
@@ -134,15 +134,32 @@ argument is **hand-waved**. Mathematically, $V_\text{BC}(s) \approx
 As PPO improves, $V_\text{BC}$ becomes a stale baseline. Whether the value
 loss can catch up depends on the rate of policy improvement.
 
-**Empirical safeguard** (faculty review): during Step 4 PPO training, log
-`bc/v_drift_kl_per_1m_steps` = the KL divergence between the BC value
-head's predictions at step 0 vs at step N, on a fixed eval-state batch
-of 1024 obs (held out from BC training). Track for the first 1M PPO
-steps. **Decision rule**: if `v_drift_kl` does *not* decrease over the
-first 1M steps — i.e. the value head is unable to redirect — drop the
-BC value loss weight to 0.0 for the next run and re-enable only the
-detached-trunk variant (value head trains, gradients do not flow into
-the obs encoder).
+**Empirical safeguard** (faculty review + re-review): during Step 4 PPO
+training, log `bc/v_drift_l1_per_1m_steps` = the L1 difference between
+the BC value head's predictions at step 0 vs at step N, on a **rolling
+eval-state batch sampled from the *current* PPO policy's rollouts**
+(not from heuristic-vs-heuristic — that would measure drift on the
+*training* distribution, which is uninformative since V_BC was fit on
+it).
+
+Implementation: every 100k PPO steps, snapshot 1024 (s, a, z) tuples
+from the most recent rollout window. Compute `V_BC(s)` (using the
+frozen post-BC value-head weights) and `V_now(s)` (using the current
+PPO value-head). Report `mean |V_BC(s) − V_now(s)|` and the trend
+across the first 1M PPO steps.
+
+**Decision rule**: if `v_drift_l1` does *not* decrease over the first
+1M steps — i.e. the value head fails to redirect under PPO's value
+loss — **disable BC value training for the next seed** (weight 0). If
+it decreases but remains > 0.3 (i.e. predictions differ by ~30% of
+the value range), enable the **detached-trunk variant** for the next
+seed: the value head trains during BC, but its gradients do not flow
+back into the obs encoder. This protects the encoder from contamination
+while preserving the head warm-start.
+
+The probe runs without slowing PPO (1024 forward passes every 100k
+steps is ~0.1% overhead). It produces a single scalar per measurement
+window, easy to read on TensorBoard.
 
 The AZ vet's KEY FLIP carried this: V(s) bootstraps slowest under PPO and
 we have free `z` labels. Better to start PPO with V ≈ V_heuristic than
@@ -211,39 +228,87 @@ E0.2**, not numbers picked from intuition.
     P2-seat, both seats over 1000 games. Should be near 0.50 + a small
     seat advantage.
 
-**Compound gate** (all three pass):
+**Compound gate** (all three pass).
 
-1. **Convergence**: val NLL has plateaued for 3 consecutive eval ticks.
-   Implemented as early-stop trigger; not a hyperparameter.
+**Faculty re-review correction**: the prior formulation used fixed-margin
+thresholds (NLL gap ≥ 0.30 nats; WR ≥ measured-self − 0.10) that were
+still guesses dressed up with rhetoric. The corrected formulation
+replaces both with **proper statistical tests** that produce p-values,
+not verdicts.
 
-2. **Non-triviality**: held-out **per-head NLL gap ≥ 0.30 nats below
-   `BASE_NLL_FREQ`** on the type, corner, and edge heads. Faculty-review
-   formulation: a fixed nat-gap is a measurement-grounded threshold,
-   unlike "top-1 ≥ 0.60" which has no baseline.
+#### Gate 1 — convergence
 
-   Why 0.30 nats: a 0.30-nat improvement is e^0.30 ≈ 1.35× likelihood
-   improvement, large enough to exceed binomial sampling noise on a
-   10%-holdout val set at our data scale. Calibrate if the baseline NLL
-   is unusually low or high (e.g., heuristic is so deterministic that
-   `BASE_NLL_FREQ` is already < 0.5).
+Val NLL has plateaued for 3 consecutive eval ticks (early-stop trigger).
+Mechanical, not a hyperparameter.
 
-3. **Standalone sanity**: **symmetrized WR ≥ `BASE_WR_HEUR_SELF` − 0.10**
-   over 200 games (100 per seat, N=3 seeds). Faculty-review formulation:
-   a fixed 0.40 floor is unprincipled because we don't know what the
-   teacher's self-WR is; gating relative to the measured teacher self-WR
-   makes the threshold meaningful regardless of seat asymmetry.
+#### Gate 2 — non-triviality (paired-bootstrap NLL test)
 
-   Concretely, if the heuristic's symmetrized self-WR is 0.50, the
-   gate is `BC symmetrized WR ≥ 0.40`. If it's 0.55 (P1-seat advantage),
-   the gate is `≥ 0.45`. The number floats with the underlying truth.
+For each head h ∈ {type, corner, edge}, the BC policy must be a
+statistically significant improvement over the trivial frequency-
+baseline policy `freq` (predicts the marginal mode within the mask).
+Paired-bootstrap on the held-out 10%-of-games val split:
 
-If gate 2 fails but gate 1 passes, the loss weights are mis-balanced
-(probably value/belief swamping policy). If gate 3 fails but gate 2
-passes, the policy is matching the heuristic's argmax but losing on
-tie-break or low-mask-entropy states — investigate per-head NLL gap by
-head. If gate 1 plateaus very early (< 2 epochs), the dataset is too
-small *for the gates we set* — sweep upward in the §1 game-count
-ablation before declaring failure.
+```
+For each bootstrap sample b ∈ 1..10⁴:
+    resample (s, a) val pairs with replacement
+    compute Δ_h^b = NLL_freq(b) - NLL_BC(b)   # positive = BC better
+Report mean(Δ_h) and the 99% bootstrap CI.
+
+Gate passes for head h iff CI_lower(Δ_h) > 0.
+Compound gate 2 passes iff this holds for type, corner, AND edge heads.
+```
+
+Concrete implementation: `tests/integration/test_bc_gate2.py` loads the
+val split + the BC checkpoint, computes per-pair NLL for both
+policies, runs the paired bootstrap, and prints pass/fail per head
+with the CI bounds.
+
+The reason this is more honest than "NLL gap ≥ 0.30 nats": the gap
+needed to declare significance depends on the variance of the val
+distribution, not on a chosen number. If the heuristic is very
+deterministic, even a 0.05-nat gap may clear significance; if noisy,
+0.5 nats may not. The test reads the data, not the rhetoric.
+
+#### Gate 3 — standalone sanity (power-calibrated WR test)
+
+The natural null is "BC policy ≡ heuristic teacher." Run 600 games
+per seat (200 × N=3 seeds), pool. Test:
+
+```
+H₀: WR_BC = WR_heur_self          (BC indistinguishable from teacher)
+H₁: |WR_BC − WR_heur_self| > 0    (two-sided)
+
+At α = 0.05 and n = 600 games per seat, the Wald-CI half-width is
+~ 1.96 · √(0.25/600) ≈ 0.040.
+
+Gate 3 passes iff symmetrized |WR_BC − WR_heur_self| ≤ 0.04
+i.e. we can't statistically reject equivalence with the teacher.
+```
+
+This is a **TOST-style** (two one-sided tests) equivalence test, not a
+superiority test. The BC clone's job is to *match* the teacher, not
+beat it; a clone that beats the teacher by 0.10 WR is also a failure
+(usually a sign of policy collapse onto a heuristic-exploiting mode
+that won't survive PPO + piKL).
+
+If the symmetrized BC-vs-heur WR distribution is centered at the
+teacher self-WR with CI ≤ 0.04, the BC anchor is doing exactly what
+piKL needs: faithfully representing the teacher policy with small
+calibration error.
+
+#### Diagnosis ladder when a gate fails
+
+If gate 2 fails but gate 1 passes → loss weights mis-balanced
+  (probably value/belief swamping policy). Audit per-head NLL
+  contributions individually.
+If gate 3 fails *because BC WR > teacher self-WR + 0.04* → BC has
+  collapsed onto a heuristic-exploiting mode. Increase data,
+  decrease epochs.
+If gate 3 fails *because BC WR < teacher self-WR − 0.04* → BC didn't
+  finish learning the teacher. Increase data or epochs.
+If gate 1 plateaus very early (< 2 epochs at the 30k-game scale) →
+  dataset too small. Sweep upward (Tier-3 ablation: 10k → 30k → 100k
+  game-count sweep, per §3.8).
 
 ---
 
