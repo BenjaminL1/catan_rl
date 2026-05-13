@@ -15,6 +15,34 @@ implementation in flight (Step 1-2 ✅, Step 3 next).
   (D13, 5-0), shorten routine exploitability eval 5M → 1M with a final
   5M run for paper-grade numbers (D15, 3-2). Phase B (MCTS) kept by
   3-2; budgeted heavily. See §3.7 for the full vote table.
+- 2026-05-13 — **ML/game-theory faculty review** flagged
+  game-theoretic imprecision and unprincipled gates. Corrections applied:
+  (a) added §0 with four preflight experiments (v1-ablation, heuristic
+  action distribution audit, heuristic determinism audit, network
+  equivariance probe) that gate further work;
+  (b) reframed Phase B as ISMCTS-style policy improvement (not Nash
+  convergence) with cited prior art;
+  (c) flagged PFSP-hard as empirical (not theoretically grounded) and
+  cited fictitious self-play + double oracle as the principled 2p-zero-sum
+  analogues;
+  (d) renamed "Exploitability" → **"PPO-BR-gap"** throughout — a PPO-
+  trained BR is a *lower* bound on true exploitability, not an upper
+  bound (Cicero/Pluribus use CFR for this reason; CFR-on-late-game-
+  abstraction added as future work);
+  (e) all WR metrics now require **N ≥ 3 training seeds** and are reported
+  **seat-stratified** (P1, P2, symmetrized average) — the residual 1v1
+  seat asymmetry from snake-draft + 2nd-settlement-resource is real;
+  (f) AlphaBeta benchmark split: cheap d=2 sanity at every milestone +
+  expensive d=4 at the final gate (d=2 alone is too weak a baseline);
+  (g) added §3.8 ablation budget with leave-one-out configs for the
+  ~10 v2 features (without ablations no claim is defensible);
+  (h) dropped the param-count rationale in §3.1 (parameter count is a
+  poor capacity proxy; the real capacity gate is the BC generalization
+  gap measurement);
+  (i) Step 3 BC plan: replaced guessed gate thresholds (top-1 ≥ 0.60,
+  WR ≥ 0.40) with **NLL-gap-vs-measured-baseline** and **WR-relative-
+  to-heuristic-self-WR**; symmetry-aug prob choice deferred to E0.3+E0.4
+  result; added empirical KL-drift probe for the BC value head.
 
 **Target**: superhuman 1v1 Catan (Colonist.io ruleset) — defined as ≥ 0.95 WR
 against the engine heuristic, ≥ 0.70 WR against a strong AlphaBeta-d2
@@ -25,6 +53,104 @@ baseline (per Catanatron precedent), exploitability < 5% from a fresh
 (settlers-rl.github.io, 2021-2022), the closest published prior art. This
 doc reconstructs his design, identifies the 4-player-specific bloat, drops
 or modernizes every component, and pins down the v2 build.
+
+---
+
+## 0. Preflight experiments (block further implementation past Step 2)
+
+Faculty review (2026-05-13) flagged that several design decisions rely on
+*post-hoc* rationales (the "47% plateau caused by ΔVP shaping") and on
+*unmeasured* baselines (the BC gate at top-1 acc ≥ 0.60). These four
+experiments calibrate the plan against measurement, not rhetoric. Each is
+< 1 day of work. They run **concurrently** with Steps 1-2 finalisation;
+their results gate the Step 3 acceptance thresholds and the Step 4 reward
+shaping decision.
+
+### E0.1 — v1-checkpoint plateau ablation (priority)
+
+**Question**: is the v1 47%-WR plateau caused by (a) heuristic over-mix +
+ΔVP shaping (current panel hypothesis), or by something deeper that v2
+inherits?
+
+**Method**: from the latest v1 checkpoint (`catan_rl/checkpoints/train/`),
+resume one PPO run with `heuristic_opp_weight=0.25` and `vp_shaping=off`,
+everything else held constant. Train 5M further steps. Eval every 100k
+steps.
+
+**Decision rule**:
+- If heuristic-WR climbs past 0.52 within 3M steps → v1's plateau was
+  the panel-diagnosed mix + shaping. v2's D8 + D9 decisions are
+  vindicated and the existing plan continues.
+- If WR stays ≤ 0.49 after 5M → the panel diagnosis was wrong. Open
+  a follow-up investigation before committing more v2 work.
+
+The existing v1 training process (running unsupervised since 2026-05-12)
+is *not* this experiment — its config doesn't isolate the two variables.
+A clean controlled resume is required.
+
+### E0.2 — Heuristic action distribution audit
+
+**Question**: what are the actual baseline numbers for the BC gate?
+
+**Method**: run 1,000 `heuristicAIPlayer` self-play games. For each
+(state, action) pair, record per-head:
+- The action's **marginal frequency** (e.g., `P(type = EndTurn)`,
+  `P(corner = vertex_17)`).
+- The action's **conditional entropy** given the mask
+  (`H(action | legal action set)`).
+- The action's **top-1 baseline accuracy** under "always predict the
+  most frequent legal action" and under "always predict the heuristic's
+  modal action class."
+
+**Decision rule**: Step 3's BC gate threshold of "top-1 type-head
+accuracy ≥ 0.60" is replaced by **"top-1 type-head NLL gap ≥ 0.3 nats
+better than the measured frequency-baseline policy."** Number 0.3 nats
+corresponds to ≈ 26% relative likelihood improvement, large enough to
+exceed sampling noise on a 10%-holdout val set at our data scale.
+Other head thresholds are calibrated analogously.
+
+### E0.3 — Heuristic determinism audit
+
+**Question**: does the heuristic's action selection have D6-symmetric
+behaviour, or does it have deterministic tiebreakers (Python dict
+iteration order, fixed argmax over ties, etc.) that would make
+state-only D6 augmentation produce inconsistent labels?
+
+**Method**: instrument `heuristicAIPlayer.move()` to log every
+decision's *candidate set* (the set of actions evaluated as "tied
+best"). Over 200 games:
+- Fraction of decisions where the candidate set has size > 1.
+- Fraction of those where the chosen action is the lexicographically
+  first (by Python iteration order) — i.e. a deterministic tiebreaker.
+
+**Decision rule**:
+- If deterministic-tiebreaker fraction < 5% → state+action D6
+  augmentation at prob=1.0 is safe (the panel majority's position).
+- If 5-20% → fall back to **prob=0.5** (the OAI/M1 minority position).
+- If > 20% → consider replacing tiebreakers with random tiebreakers
+  in the heuristic before BC data generation. Otherwise the BC anchor
+  inherits Python-dict-order artefacts.
+
+### E0.4 — Network symmetry-equivariance probe
+
+**Question**: at initialisation and after BC, is the v2 network
+approximately D6-equivariant?
+
+**Method**: instantiate `CatanPolicy()` at random init. Build a single
+obs `s` and its D6-rotation `T(s)`. Forward both:
+- `||π(s) - T⁻¹(π(T(s)))||₁` over the type head.
+- Same for the value head and belief head.
+
+Repeat at the end of BC training (Step 3 deliverable). Compare.
+
+**Decision rule**: the *axial positional embedding* (which we added to
+the TileEncoder, §3.1) is by construction *not* equivariant — it
+attaches a learned vector to each axial coord. The probe quantifies
+how much equivariance the architecture *loses* vs the GNN component
+(which is approximately equivariant). The result is used to set the
+symmetry-aug prob at Step 4 PPO training: high equivariance → prob=0.5
+is enough; low equivariance → prob=1.0 to force the policy to learn
+the invariance from data.
 
 ---
 
@@ -127,8 +253,16 @@ P2P trading entirely.
 | Opp-id embedding | NONE | **Keep, 8-dim** (panel compromise — was 16-d) | Phase 3.6; lets the policy switch personas. Panel 2-3 split on keep vs drop — 8-d cuts the parameter cost in half while preserving the signal, with `opp_id_mask_prob=0.40` providing the regularization. |
 | Symmetry augmentation (D6) | NONE | **Keep, prob=1.0** | Phase 1.5; free 1.5-2× effective data, correctness-preserving. |
 
-**Net architecture target: ~1.5M parameters.** Smaller than the archived
-v1's 2.74M, larger than Charlesworth's 1.2M, right-sized for the problem.
+**Net architecture: ~1.4M parameters as a starting point.** This is *not*
+a principled capacity target — parameter count is a poor proxy for
+effective capacity (faculty review). The real capacity decision is
+deferred to a **generalization-gap audit** at the BC gate (Step 3): if
+train-vs-val NLL gap is small, the network can absorb more capacity;
+if large, we're already at the capacity ceiling for the data scale.
+The current 1.4M number bounds the M1 Pro CPU forward-pass latency for
+MCTS at the planned sim budget, which is the *hard* upper constraint;
+within that, the per-component widths are calibrated by ablation
+(§3.8), not by matching Charlesworth.
 
 ### 3.2 Training algorithm
 
@@ -153,7 +287,27 @@ PPO as the warm-start.
 3. **League** with PFSP-hard sampling, latest-policy reg, duo exploiter cycles.
    Drop Nash pruning (too slow on CPU; FIFO eviction is fine at this scale).
 
-#### Phase B — AlphaZero-style refinement (target: heuristic-WR ≥ 0.90)
+#### Phase B — Search-augmented policy improvement (target: heuristic-WR ≥ 0.90)
+
+**Theoretical framing** (faculty review, 2026-05-13): Catan is an
+extensive-form game with **imperfect information** (hidden dev cards) and
+**chance nodes** (dice + dev-card deck). AlphaZero's convergence guarantees
+are for perfect-information, deterministic-move games — they do *not*
+transfer here. The closest cited prior art is **Information Set Monte
+Carlo Tree Search** (Cowling, Powley, Whitehouse, *Information Set Monte
+Carlo Tree Search*, IEEE TCIAIG 2012), which is a heuristic policy-
+improvement method, not a Nash-convergent algorithm. The CFR-family
+methods (Counterfactual Regret Minimization, Zinkevich et al. 2007;
+DeepStack; Libratus; Pluribus) are the actually-Nash-convergent
+imperfect-info game algorithms.
+
+What Phase B claims: **MCTS used as a policy-improvement operator on top
+of a strong learned prior** (the post-piKL PPO policy). It is *not*
+claimed to converge to Nash, and it is *not* a substitute for CFR. The
+empirical hypothesis is that ISMCTS + the trained value/policy gives a
+meaningful WR boost vs the policy alone — same hypothesis Charlesworth's
+optional root-only forward search verified (his run-time search gained
+~90% relative WR over the bare RL policy).
 
 1. **Add `CatanGame.copy()` to the engine.** Required for multi-step search.
    ~200 LOC; deepcopy of board + player + tracker state + RNG state.
@@ -228,6 +382,14 @@ PPO as the warm-start.
     whole run and plateaued at 47%; v2 keeps a low-mix anchor so the metric we
     eval against is also in the training distribution, but doesn't dominate.
 - PFSP-hard with `(1-w)^p`, p=2.0, sliding 32-game window.
+  - **Theoretical caveat** (faculty review): PFSP was developed for
+    AlphaStar (asymmetric multi-player StarCraft II) and is an
+    *empirical* opponent-sampling heuristic. The theoretically-grounded
+    2p-zero-sum analogue is fictitious self-play (Heinrich & Silver 2015)
+    or double oracle (McMahan, Gordon, Greenwald 2003). Both converge to
+    Nash in the limit; PFSP does not. We use PFSP because it's
+    well-tooled and empirically effective, not because it has the right
+    convergence theorem.
 - Duo exploiter cycles every 1M main steps, 32 PPO updates per cycle.
 - TrueSkill ratings + σ-decay 1.001 per update.
 - Opp-id embedding (8-dim, panel-revised): kind ∈ {unknown, random, heuristic, self_latest, league, exploiter}, 40% mask prob.
@@ -247,19 +409,48 @@ PPO as the warm-start.
 
 ### 3.6 Eval
 
-- **Heuristic bench**: 100 games every 100k steps, eval_games=100 (binomial CI ~±0.05 at p=0.5).
-- **Champion bench**: 5 historic checkpoints + 200 games each at major milestones.
-- **AlphaBeta-d2 bench**: 100 games every 500k steps. Port from Catanatron.
-  Unanimous panel vote — the only fixed-strength, non-self-referential
-  benchmark in the harness. If you can't beat AlphaBeta-d2 consistently, you
-  don't have a superhuman agent, full stop.
-- **Exploitability** (panel revision, 3-2 vote):
-  - **Routine**: train a fresh **1M-step** best-response adversary against
-    snapshots every 5M main steps. Catches obvious holes; cheap.
-  - **Paper-grade (final only)**: one 5M-step adversary against the frozen
-    final checkpoint. Cicero panelist's argument: in 1v1 zero-sum, train-a-BR
-    exploitability is the actual metric we're optimizing — pay 5M for the
-    final reported number.
+**Variance discipline** (faculty review): every reported WR runs with
+**N ≥ 3 training seeds** (config: `seed_offset=0,1,2`). Single-seed
+numbers below ±0.05 of any threshold are not distinguishable from
+sampling noise on 100-game evals (binomial 95% CI ~ ±0.10 at p=0.5).
+A 200-game eval with N=3 seeds gives effective ±0.04 CI on the seed-
+averaged WR.
+
+**Seat-stratification** (faculty review): 1v1 Catan is not exactly
+symmetric — Player 2 places the 2nd settlement second (gets to "react")
+*and* receives starting resources from it. Report WR separately for
+**P1-seat** and **P2-seat** plus the symmetrized two-game average. The
+Step 1 smoke gate showed 647-vs-39 wins between seats under uniform
+random play; that residual is partly P-seat advantage, not all noise.
+
+- **Heuristic bench**: 100 games every 100k steps, eval_games=100,
+  N=3 seeds. Report P1-seat, P2-seat, and symmetrized average.
+- **Champion bench**: 5 historic checkpoints + 200 games each at major
+  milestones. N=3 seeds.
+- **AlphaBeta bench**:
+  - **AlphaBeta-d2** (CI-friendly): 100 games every 500k steps. Cheap,
+    fixed-strength sanity check. Beating d=2 is **necessary but not
+    sufficient** for "strong agent" — faculty review correctly notes
+    that classical Catanatron-style engines run at d=4-6 with α-β
+    pruning + opening books.
+  - **AlphaBeta-d4** (milestone-only): 100 games every 5M steps and at
+    final-checkpoint. This is the actually-strong classical baseline.
+- **PPO-BR-gap** (faculty-corrected from "Exploitability"):
+  - **What it measures**: train a fresh 1M-step PPO best-response
+    adversary against a frozen policy snapshot; report the gap between
+    the adversary's WR and 0.5.
+  - **What it does NOT measure**: true exploitability. A PPO-trained BR
+    is an *approximate* BR; if PPO under-trains, the gap is a **lower
+    bound** on true exploitability, not an upper bound (Cicero / Pluribus
+    use CFR-family algorithms specifically because they yield true BRs
+    in imperfect-info games). Calling this "exploitability" is an
+    overclaim the prior plan made; the corrected name is used everywhere.
+  - **Routine**: 1M-step PPO-BR against snapshots every 5M main steps.
+  - **Final**: 5M-step PPO-BR against the frozen final checkpoint.
+  - **Future work**: implement a depth-limited CFR pass on a tabular
+    abstraction of the late-game state for a real exploitability bound.
+    Tractable in 1v1 Catan because the branching factor is small after
+    action masking. Deferred to Phase C+.
 - **TrueSkill within league**: continuous.
 - Async eval via subprocess (Phase 4.2 v1 design — proven to work).
 
@@ -313,6 +504,44 @@ massive budget cut on D12 (50 effective sims, not 200) and the
   pretraining is worse than another cold PPO run."
 - D9 terminal-only (M1 Pro eff): "per-step ΔVP shaping in Catan is a known
   footgun."
+
+### 3.8 Ablation budget (faculty review)
+
+v2 ships ~12 architecture / training features (axial pos emb, GNN, FiLM
+heads, belief head, opp-id emb, value-head-BC, symmetry aug, piKL anchor,
+duo exploiter, MCTS chance buckets, …). Without per-feature ablations
+we cannot:
+  (a) diagnose failure (which feature is the culprit when the gate fails?),
+  (b) defend the design (which features are *load-bearing* vs cosmetic?),
+  (c) publish (no claim is supportable without ablation evidence).
+
+**Leave-one-out config matrix.** Each row is a YAML config that ablates
+exactly one v2 feature, holding everything else constant. Run after
+Phase A converges; budget ~3-7 days compute per config on M1 Pro at
+5M steps each.
+
+| Config | Feature ablated | Hypothesis under test |
+|---|---|---|
+| `phase_a_no_bc.yaml` | BC warm-start (cold start PPO) | BC is load-bearing for the gate |
+| `phase_a_no_piKL.yaml` | piKL anchor (λ=0) | piKL prevents early collapse off BC anchor |
+| `phase_a_no_belief.yaml` | Belief head (weight 0) | Aux supervision contributes to ceiling |
+| `phase_a_no_oppid.yaml` | Opp-id embedding | Opp-id ≠ cosmetic at 8-dim |
+| `phase_a_no_gnn.yaml` | Tripartite GNN | GNN is load-bearing vs transformer-only |
+| `phase_a_no_axial.yaml` | Axial pos emb in TileEncoder | Pos emb is load-bearing vs permutation-equivariant transformer |
+| `phase_a_no_film.yaml` | FiLM heads (revert to concat) | FiLM ≠ concat at same param count |
+| `phase_a_no_symm.yaml` | D6 symmetry aug | Aug is a real data multiplier |
+| `phase_a_no_heur_anchor.yaml` | 25% heuristic in opp mix (0% instead) | Anchor helps the metric we eval against |
+| `phase_a_no_exploiter.yaml` | Duo exploiter cycles | Exploiter improves vs PFSP-only league |
+
+**Acceptance rule for "feature is load-bearing"**: ablated config WR is
+≥ 0.05 below full config WR on the heuristic bench, with N ≥ 3 seeds,
+across at least the last 1M training steps of each run. Features that
+fail this bar are flagged as **candidates for removal** in v2.1.
+
+**Phase B ablations** (Phase B onward):
+- `phase_b_no_search.yaml` — policy-only baseline (no MCTS at decision time).
+- `phase_b_full_chance.yaml` — 11-way chance fan-out vs 6-bucket (D13).
+- `phase_b_more_sims.yaml` — 200 effective sims vs 50 (D12 dissent).
 
 ---
 
@@ -430,19 +659,35 @@ piKL, not to win outright.
 
 - Search-budget exploiter.
 - Optional: Suphx GRP.
-- Champion bench + AlphaBeta-d2 bench + exploitability test all green.
-- **Gate**: WR ≥ 0.95 vs heuristic AND AlphaBeta-d2 ≥ 0.70 AND exploitability < 0.55.
+- Champion bench + AlphaBeta-d2 + AlphaBeta-d4 bench + PPO-BR-gap test all green.
+- **Gate**: symmetrized WR ≥ 0.95 vs heuristic AND AlphaBeta-d4 ≥ 0.55 AND
+  PPO-BR-gap < 0.55 (all with N≥3 seeds).
 
 ---
 
 ## 6. Concrete success criteria (v2 = success when ALL pass)
 
-- [ ] WR ≥ 0.95 vs engine heuristic over 200 deterministic games
-- [ ] WR ≥ 0.70 vs Catanatron AlphaBeta-d2 over 100 games
-- [ ] Exploitability < 0.55 from a fresh 5M-step adversary trained against the
-      frozen final policy
-- [ ] Beats the v1 archive checkpoint (`archive/phase4-may2026`) ≥ 0.70 in head-to-head
-- [ ] Compute budget: ≤ 4 weeks on M1 Pro CPU + 1 week on a cloud A100 (Phase B)
+All metrics reported as the **symmetrized average across P1 and P2 seats**,
+with **N ≥ 3 training seeds**. Single-seat or single-seed numbers do not
+count for the gate (faculty review: 100-game CI ~ ±0.10 is too wide to
+trust at single-seed).
+
+- [ ] **Symmetrized WR ≥ 0.95** vs engine heuristic over 200 games (per seed).
+- [ ] **Symmetrized WR ≥ 0.55** vs Catanatron AlphaBeta-**d4** over 100 games.
+      Lowered from the prior 0.70-vs-d2 target — d=4 is a genuinely strong
+      classical baseline (Catanatron's measured d=4 beats d=2 by ~15-20pp);
+      0.55 vs d4 is a more honest superhuman gate than 0.70 vs d2.
+- [ ] **AlphaBeta-d2 reference**: symmetrized WR ≥ 0.85 (sanity that we didn't
+      regress on the cheap baseline while pushing on the hard one).
+- [ ] **PPO-BR-gap < 0.55** from a fresh 5M-step PPO adversary against the
+      frozen final policy. Reminder (§3.6): this is a lower bound on
+      exploitability, not a true bound. Reported as "PPO-BR-gap," not
+      "exploitability."
+- [ ] Beats the v1 archive checkpoint (`archive/phase4-may2026`) ≥ 0.70
+      symmetrized in head-to-head, N=3 seeds.
+- [ ] Compute budget: ≤ 4 weeks on M1 Pro CPU + 1 week on a cloud A100 (Phase B).
+- [ ] **Optional / stretch**: depth-limited tabular CFR on a late-game
+      abstraction shows ≤ X% true exploitability. Deferred to Phase C+.
 
 ---
 
@@ -457,6 +702,23 @@ piKL, not to win outright.
   first to beat jSettlers, used L2 policy activity loss.
 - [Silver et al., AlphaZero (Science 2018)](https://www.science.org/doi/10.1126/science.aar6404) —
   PUCT-MCTS + value bootstrap.
+- [Cowling, Powley, Whitehouse, *Information Set Monte Carlo Tree Search*,
+  IEEE TCIAIG 2012](https://ieeexplore.ieee.org/document/6203567) — the
+  honest theoretical framing for what Phase B is (heuristic policy
+  improvement in imperfect-info EFGs, not Nash convergence).
+- [Zinkevich et al., *Regret Minimization in Games with Incomplete
+  Information*, NeurIPS 2007](https://proceedings.neurips.cc/paper/2007/hash/08d98638c6fcd194a4b1e6992063e944-Abstract.html) —
+  CFR; the actually-Nash-convergent imperfect-info game algorithm. Cited
+  for the "future work" CFR-on-late-game-abstraction direction.
+- [Heinrich & Silver, *Deep Reinforcement Learning from Self-Play in
+  Imperfect-Information Games*, arXiv 1603.01121](https://arxiv.org/abs/1603.01121) —
+  fictitious self-play; the 2p-zero-sum theoretical analogue of PFSP.
+- [Hilton, Cobbe, Schulman, *Batch size-invariance for policy optimization*,
+  arXiv 2110.00641](https://arxiv.org/abs/2110.00641) — actual RL scaling-law
+  reference (vs the misapplied Chinchilla framing the BC plan originally
+  used).
+- [Cobbe et al., *Phasic Policy Gradient* (procgen scaling appendix)](https://arxiv.org/abs/2009.04416) —
+  same.
 - [Stochastic MuZero (Antonoglou 2022)](https://openreview.net/pdf?id=X6D9bAHhBQ1) —
   chance nodes / afterstates for stochastic games.
 - [Vinyals et al., AlphaStar (Nature 2019)](https://www.nature.com/articles/s41586-019-1724-z) —

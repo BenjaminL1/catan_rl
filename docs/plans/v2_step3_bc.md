@@ -1,6 +1,15 @@
 # v2 Step 3 — Behavior Clone (Phase A.1)
 
-**Status**: design locked (5-expert panel, 2026-05-13); implementation next.
+**Status**: design locked (5-expert panel 2026-05-13, faculty review
+2026-05-13); implementation gated on the §0 preflight experiments.
+
+**Preflight gate** (faculty review): Step 3 implementation does **not**
+start until `v2_design.md` §0 experiments E0.2 (heuristic action
+distribution audit) and E0.3 (heuristic determinism audit) have run.
+Their measured numbers feed the §6 acceptance gates and the §2
+augmentation prob choice. Without those measurements the gates are
+guessed thresholds and the augmentation choice is theoretical
+guesswork — exactly the failure mode the review flagged.
 
 **Goal**: pretrain the v2 policy network on heuristic gameplay so PPO + piKL has
 a useful prior. The BC anchor's job is *not* to be a strong standalone player —
@@ -26,7 +35,7 @@ it's to be a non-uniform prior that piKL can leash and PPO can build on.
 
 | Parameter | Value | Rationale |
 |---|---|---|
-| Total games | **30,000** | Panel 3-2 split (3 want 10-15k, 2 want 200k); 30k is the ~10× tokens-per-param middle ground (~1.5M (s,a) pairs at ~50 actions/game). Cheap to regenerate (~30 min compute) if scaling laws bite. |
+| Total games | **30,000 as starting point** (pending sample-efficiency sweep) | Panel 3-2 split (3 want 10-15k, 2 want 200k); 30k is the middle. Faculty review note: "10× tokens-per-param ≈ Chinchilla" is a **category error** — that scaling law is for autoregressive LM on natural-language tokens, not for structured (state, action) pairs at much higher per-sample information density. The right scaling literature is Cobbe et al. (procgen) and Hilton et al. (RL scaling), neither of which supports 10×. The honest position: **30k is a defensible starting point with no theoretical claim; we will sweep {10k, 30k, 100k} as part of the §3.8 ablation budget** if the gate fails. |
 | Source mix | **70% canonical heuristic vs heuristic, 30% perturbed vs heuristic** | Unanimous panel vote: pure heur-vs-heur is mode-collapsed on a single trajectory distribution. Variant mix broadens state coverage without injecting random-policy noise. |
 | Perturbation recipe (variant side) | ε-greedy with ε=0.10 over the heuristic's top-K candidate actions, OR ±15% noise on the heuristic's scoring weights | Cheap implementation, preserves "heuristic-like" plays but reaches different states. |
 | Player side filter | **Both players** | 3-2 vote: winner-only halves the data and is survivorship bias; the heuristic is symmetric so both sides are valid behavioral targets. Catanatron's "training on losing trajectories trains blind spots" concern is addressed by the variant mix above, not by filtering. |
@@ -50,22 +59,41 @@ Record per-pair:
 
 ## 2. Augmentation
 
-**D6 dihedral symmetry, prob = 1.0** (3-2 vote KEEP, with 2 of 3 KEEP votes
-specifying 1.0; the Catanatron DROP vote raised an important correctness flag):
+**D6 dihedral symmetry, prob = TBD pending preflight E0.3 + E0.4 results.**
 
-- Catanatron's argument: the heuristic has a deterministic tiebreak on corner
-  index, so D6-rotating the state but not the action would teach inconsistent
-  labels.
-- Resolution: augmentation transforms **both state and action** through the
-  precomputed D6 tables in `catan_rl/augmentation/symmetry_tables.py` (matching
-  v1 Phase 1.5's implementation). Under this transform every (T(s), T(a)) pair
-  is a *correct* sample of the same underlying policy — no inconsistency.
-- At prob=1.0 each minibatch is a uniform sample over the 12-element D6 group.
-  Catan boards are randomized per game (no canonical orientation at eval time),
-  so there's no "lose the canonical view" risk.
+Default before preflight: **prob = 0.5** (the conservative position, held by
+the OAI and M1 panelists). Re-set to **prob = 1.0** only if both preflight
+checks pass:
 
-Augmentation is applied in `__getitem__` of the dataset loader so the on-disk
-shards stay canonical (one copy of the data, 12× effective at train time).
+  - **E0.3 (heuristic determinism audit)**: deterministic-tiebreaker fraction
+    < 5%. Catanatron's panel argument was that if the heuristic's choice is
+    not equivariant under D6 (e.g. always-pick-lex-first-corner-in-tie),
+    rotating the state but copying the action creates inconsistent labels.
+  - **E0.4 (network equivariance probe)**: the random-init network is
+    approximately D6-equivariant. **Faculty review correction**: the axial
+    positional embedding in the TileEncoder is by construction *non*-
+    equivariant. If the probe shows low equivariance, prob=0.5 is the
+    correct hedge — it gives the network *some* augmentation without forcing
+    it to learn a property the architecture cannot represent natively.
+
+Implementation invariant (independent of prob): augmentation transforms
+**both state and action** through the precomputed D6 tables in
+`catan_rl/augmentation/symmetry_tables.py` (matching v1 Phase 1.5). Under
+this transform every (T(s), T(a)) pair is a correct sample of the policy
+under that group element. State-only augmentation is a correctness bug.
+
+**Correction to a prior claim**: the original draft said "Catan boards are
+randomized per game (no canonical orientation), so there's no canonical-view
+risk." Faculty review: this conflates the *resource/number-token shuffle*
+(random per game, orthogonal to D6) with the *board geometry* (fixed 19-tile
+hex lattice, the actual domain of the D6 action). The D6 augmentation
+covers the geometry symmetry only; it does not multiply effective data
+over the resource shuffle (which is already sampled by the dataset
+generation).
+
+Augmentation is applied in `__getitem__` of the dataset loader so the
+on-disk shards stay canonical (one copy of the data, 6× or 12× effective
+at train time depending on prob).
 
 ---
 
@@ -99,10 +127,28 @@ Train V(s) to predict the discounted terminal outcome `γ^(T−t) · z` (with
 ("V_heuristic ≠ V_PPO eventually") is real but addressed by keeping the
 weight small enough that PPO can correct it within the first ~500k steps.
 
+**Faculty-review correction**: the "PPO will redirect V within 500k steps"
+argument is **hand-waved**. Mathematically, $V_\text{BC}(s) \approx
+\mathbb{E}_\text{heuristic}[z|s]$, while PPO needs $V_\pi(s) =
+\mathbb{E}_\pi[z|s]$; the two are equal only at $\pi \approx \text{heur}$.
+As PPO improves, $V_\text{BC}$ becomes a stale baseline. Whether the value
+loss can catch up depends on the rate of policy improvement.
+
+**Empirical safeguard** (faculty review): during Step 4 PPO training, log
+`bc/v_drift_kl_per_1m_steps` = the KL divergence between the BC value
+head's predictions at step 0 vs at step N, on a fixed eval-state batch
+of 1024 obs (held out from BC training). Track for the first 1M PPO
+steps. **Decision rule**: if `v_drift_kl` does *not* decrease over the
+first 1M steps — i.e. the value head is unable to redirect — drop the
+BC value loss weight to 0.0 for the next run and re-enable only the
+detached-trunk variant (value head trains, gradients do not flow into
+the obs encoder).
+
 The AZ vet's KEY FLIP carried this: V(s) bootstraps slowest under PPO and
 we have free `z` labels. Better to start PPO with V ≈ V_heuristic than
 V ≈ 0 (random init); PPO's value loss + GAE will redirect V toward V_π as
-the policy diverges from the heuristic anchor.
+the policy diverges from the heuristic anchor — **subject to the empirical
+probe above**.
 
 ### 3.3 Belief soft-CE on env GT — weight 0.05
 
@@ -150,23 +196,54 @@ This satisfies the unanimous D14 vote (both NLL and WR).
 
 ## 6. Acceptance gate
 
-5-0 panel rejected the original `WR ≥ 0.45 vs heuristic in 100-game eval`. The
-dispersion of dissent (2 said "raise the WR floor", 3 said "use a different
-metric") meets in the middle as a **compound gate** — all three sub-gates must
-pass:
+5-0 panel rejected the original `WR ≥ 0.45 vs heuristic in 100-game eval`.
+Faculty review additionally flagged that the panel's *replacement* thresholds
+(top-1 ≥ 0.60, WR ≥ 0.40) are **also unprincipled guesses**. Both rounds
+of feedback agreed on the shape (compound gate) but disagreed on the
+calibration. The corrected gate uses **measured baselines from preflight
+E0.2**, not numbers picked from intuition.
 
-1. **Val NLL has plateaued** for 3 consecutive evals (early-stop trigger).
-2. **Held-out top-1 type-head accuracy ≥ 0.60**. This is the "we actually
-   cloned the policy" signal — Cicero & Catanatron's KEY FLIPs both argued
-   that this is the BC-as-prior metric that matters, not raw WR.
-3. **WR ≥ 0.40 vs heuristic in a 200-game eval** (binomial 95% CI ~ ±0.068
-   at p=0.5, so 0.40 implies the lower bound clears 1/3). Generous floor —
-   piKL will pull us up from here; we are not gating on standalone strength.
+**Required preflight measurements** (E0.2, before this gate is set):
+  - `BASE_NLL_FREQ` — per-head NLL of an always-predict-the-marginal-mode
+    policy on 1000 heuristic-vs-heuristic games.
+  - `BASE_TOP1_FREQ` — top-1 accuracy of the same trivial baseline.
+  - `BASE_WR_HEUR_SELF` — heuristic vs heuristic self-play WR, P1-seat and
+    P2-seat, both seats over 1000 games. Should be near 0.50 + a small
+    seat advantage.
 
-If gate 2 fails but gate 1 passes, the loss weights are likely mis-balanced
-(probably value/belief swamping policy). If gate 3 fails but gate 2 passes,
-the policy is matching the heuristic's argmax but losing on tie-break or low-
-mask-entropy states — investigate per-head accuracy by head.
+**Compound gate** (all three pass):
+
+1. **Convergence**: val NLL has plateaued for 3 consecutive eval ticks.
+   Implemented as early-stop trigger; not a hyperparameter.
+
+2. **Non-triviality**: held-out **per-head NLL gap ≥ 0.30 nats below
+   `BASE_NLL_FREQ`** on the type, corner, and edge heads. Faculty-review
+   formulation: a fixed nat-gap is a measurement-grounded threshold,
+   unlike "top-1 ≥ 0.60" which has no baseline.
+
+   Why 0.30 nats: a 0.30-nat improvement is e^0.30 ≈ 1.35× likelihood
+   improvement, large enough to exceed binomial sampling noise on a
+   10%-holdout val set at our data scale. Calibrate if the baseline NLL
+   is unusually low or high (e.g., heuristic is so deterministic that
+   `BASE_NLL_FREQ` is already < 0.5).
+
+3. **Standalone sanity**: **symmetrized WR ≥ `BASE_WR_HEUR_SELF` − 0.10**
+   over 200 games (100 per seat, N=3 seeds). Faculty-review formulation:
+   a fixed 0.40 floor is unprincipled because we don't know what the
+   teacher's self-WR is; gating relative to the measured teacher self-WR
+   makes the threshold meaningful regardless of seat asymmetry.
+
+   Concretely, if the heuristic's symmetrized self-WR is 0.50, the
+   gate is `BC symmetrized WR ≥ 0.40`. If it's 0.55 (P1-seat advantage),
+   the gate is `≥ 0.45`. The number floats with the underlying truth.
+
+If gate 2 fails but gate 1 passes, the loss weights are mis-balanced
+(probably value/belief swamping policy). If gate 3 fails but gate 2
+passes, the policy is matching the heuristic's argmax but losing on
+tie-break or low-mask-entropy states — investigate per-head NLL gap by
+head. If gate 1 plateaus very early (< 2 epochs), the dataset is too
+small *for the gates we set* — sweep upward in the §1 game-count
+ablation before declaring failure.
 
 ---
 
