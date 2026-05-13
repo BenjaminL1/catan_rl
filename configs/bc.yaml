@@ -1,0 +1,115 @@
+# Step 3 Behavior-clone config (v2_step3_bc.md, post-preflight 2026-05-13).
+#
+# Every threshold below is either (a) a hyperparameter chosen in the plan or
+# (b) calibrated against a preflight measurement under runs/preflight/.
+# The provenance is recorded in the inline comments so the choices can be
+# audited later.
+#
+# Source numbers (do not edit by hand):
+#   runs/preflight/e02/distribution.json
+#   runs/preflight/e03/determinism.json
+#   runs/preflight/e04/equivariance.json
+
+# ---------------------------------------------------------------------------
+# Dataset generation (§1)
+# ---------------------------------------------------------------------------
+dataset:
+  n_games: 30000                # 5-expert panel compromise (10-15k vs 200k)
+  perturb_pct: 0.30             # 30% perturbed-vs-canonical mix per §1
+  perturbation:
+    epsilon_greedy_pct: 0.5     # of the perturbed games, half use ε-greedy
+    weight_noise_pct: 0.5       # the other half use ±15% scoring-weight noise
+    epsilon: 0.10               # ε for the ε-greedy variant
+    weight_noise_std: 0.15      # weight-noise fraction
+  max_turns_per_game: 400       # truncation cap (16.3% truncate rate measured)
+  skip_forced_moves: true       # mask_sum=1 pairs dropped at write time (§1 D4)
+  n_workers: 8                  # parallel rollouts; M1 Pro has 10 perf cores
+
+# ---------------------------------------------------------------------------
+# Loader (§2 augmentation + filtering)
+# ---------------------------------------------------------------------------
+loader:
+  # E0.4 measured r_h ≈ 0 at random init → aug-prob=0.5 sufficient
+  # (faculty re-review threshold: r_h ≤ 0.10 → 0.5, > 0.10 → 1.0).
+  # E0.3 showed no deterministic tiebreakers (lex-first rate matches
+  # uniform) so 0.5 vs 1.0 is a model-capacity question, not correctness.
+  # Plan: start at 0.5; re-probe equivariance after BC to revisit.
+  aug_prob: 0.5
+  batch_size: 1024              # M1 Pro throughput-bound at BC; large batch OK
+  num_workers: 4                # DataLoader worker procs (NOT optimizer batches)
+  shuffle: true
+  val_split_pct: 0.10           # 10% holdout by game_id (not by sample)
+
+# ---------------------------------------------------------------------------
+# Loss (§3)
+# ---------------------------------------------------------------------------
+loss:
+  policy_weight: 1.0            # implicit (each per-head CE sums to L_policy)
+  value_weight: 0.10            # BC value head; throttled per AZ/M1 split
+  belief_weight: 0.05           # matches PPO config so handoff is consistent
+  use_relevance_weighting: true # per-head loss normalised by P(head_active)
+
+# ---------------------------------------------------------------------------
+# Optimizer + schedule (§4)
+# ---------------------------------------------------------------------------
+optimizer:
+  name: AdamW                   # matches PPO; weight_decay decoupled
+  lr: 3e-4                      # constant peak
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+
+schedule:
+  warmup_steps: 500
+  lr_after_warmup: 3e-4         # constant after warmup (3-2 panel vote
+                                # against cosine for short BC run)
+
+train:
+  max_epochs: 10                # cap on the to-convergence loop
+  patience: 3                   # val-NLL early-stop patience (§4 D13)
+  val_every_steps: 500          # inner-loop NLL eval cadence
+  wr_eval_every_epochs: 1       # outer-loop WR-vs-heuristic cadence
+  wr_eval_games: 200            # binomial SE ≈ 0.035 at p=0.5
+  amp: false                    # CPU only; bf16 not worth kernel cost
+
+# ---------------------------------------------------------------------------
+# Acceptance gate (§6)
+# ---------------------------------------------------------------------------
+# Faculty re-review (round 2) corrected the plan's fixed-margin thresholds
+# to proper statistical tests. Numbers below come from preflight E0.2.
+gate:
+  # Gate 1 — convergence
+  early_stop_patience: 3        # same as train.patience
+
+  # Gate 2 — non-triviality (paired-bootstrap NLL test, 99% CI)
+  # NLL gap (NLL_freq - NLL_BC) per-head must clear zero at p<0.01.
+  bootstrap:
+    n_resamples: 10000
+    alpha: 0.01
+    heads_required: [type, corner, edge]
+  # Reference baseline NLL numbers from E0.2 (informational; the actual
+  # test computes NLL_freq from the val split's frequency distribution).
+  base_nll_freq:
+    type: 1.430                 # nats — measured 1000-game audit
+  base_top1_freq:
+    type: 0.5055                # frequency-baseline top-1 accuracy on type head
+
+  # Gate 3 — TOST WR equivalence (faculty-revised formulation)
+  # Pass iff symmetrised |WR_BC - BASE_WR_HEUR_SELF| ≤ 0.04 with the
+  # measurement's binomial CI.
+  tost:
+    base_wr_heur_self_symmetrised: 0.4185
+    equivalence_margin: 0.04
+    alpha: 0.05
+    n_games_per_seat: 300       # 600 total per seed, N=3 seeds = 1800
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+provenance:
+  preflight_e02: runs/preflight/e02/distribution.json
+  preflight_e03: runs/preflight/e03/determinism.json
+  preflight_e04: runs/preflight/e04/equivariance.json
+  design_doc: docs/plans/v2_step3_bc.md
+  base_design: docs/plans/v2_design.md
