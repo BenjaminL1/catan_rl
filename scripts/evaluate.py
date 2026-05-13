@@ -31,6 +31,12 @@ def main():
         choices=["random", "heuristic"],
         help="Opponent type",
     )
+    parser.add_argument(
+        "--output-json",
+        type=str,
+        default=None,
+        help="If set, write evaluator stats as JSON to this path. Used by the trainer's async eval path.",  # noqa: E501
+    )
     args = parser.parse_args()
 
     # Load trainer (just for the policy)
@@ -60,6 +66,14 @@ def main():
     print(f"  Win Rate:        {stats['win_rate']:.1%}")
     print(f"  Average VP:      {stats['avg_vp']:.1f}")
     print(f"  Average Length:  {stats['avg_game_length']:.0f} steps")
+
+    if args.output_json:
+        import json
+
+        # Coerce numpy scalars to plain Python floats so json.dump works.
+        out = {k: (float(v) if hasattr(v, "item") else v) for k, v in stats.items()}
+        with open(args.output_json, "w") as f:
+            json.dump(out, f)
 
 
 if __name__ == "__main__":

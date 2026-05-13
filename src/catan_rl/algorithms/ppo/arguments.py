@@ -63,6 +63,11 @@ TRAIN_CONFIG: dict[str, Any] = {
     # torch.compile: disabled — reduce-overhead mode uses CUDA graphs (GPU-only);
     # on CPU it adds per-call overhead that outweighs any kernel fusion gains.
     "torch_compile": False,
+    # Vec env mode: "serial" runs N envs in-process (default; what every
+    # existing config uses). "subproc" forks one subprocess per env and
+    # pipes commands over multiprocessing.Pipe — breaks the single-core
+    # bottleneck on env stepping but adds IPC overhead at small n_envs.
+    "vec_env_mode": "serial",
     "eval_freq": 100_000,  # evaluate every 100k steps
     # checkpoint_freq controls save interval (500k); eval_freq controls eval interval (100k)
     # ── Phase 0: eval harness + per-head entropy diagnostics ─────────────

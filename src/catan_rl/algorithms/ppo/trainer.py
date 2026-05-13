@@ -13,8 +13,12 @@ prevent the policy from changing too much in one update (catastrophic
 forgetting). See Schulman et al. 2017.
 """
 
+import contextlib
 import copy
+import json
 import os
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -27,9 +31,12 @@ from catan_rl.algorithms.common.rollout_buffer import CompositeRolloutBuffer
 from catan_rl.eval.evaluation_manager import EvaluationManager
 from catan_rl.models.build_agent_model import build_agent_model
 from catan_rl.models.utils import ValueFunctionNormalizer
-from catan_rl.selfplay.game_manager import GameManager
+from catan_rl.selfplay.game_manager import (
+    GameManager,  # noqa: F401  (kept for back-compat re-exports)
+)
 from catan_rl.selfplay.league import League
 from catan_rl.selfplay.ratings import RatingTable
+from catan_rl.selfplay.vec_env_factory import make_vec_env
 
 # Sentinel ID for the *current* learning policy in the rating table. Stays
 # the same across the run; opponents have monotonically increasing IDs that
@@ -150,6 +157,9 @@ class CatanPPO:
         self.entropy_coef = self._entropy_coef_start
         self.value_coef = config["value_coef"]
         self.max_grad_norm = config["max_grad_norm"]
+        # Opt-in: clip each action-head's gradients separately before the
+        # global clip. Helps when one head dominates the combined norm.
+        self.per_head_grad_clip = bool(config.get("per_head_grad_clip", False))
         self.total_timesteps = config["total_timesteps"]
         self.checkpoint_freq = config["checkpoint_freq"]
         # Linear LR decay (Charlesworth-style)
@@ -309,7 +319,12 @@ class CatanPPO:
         # ``current_self`` opponent draw a live snapshot of self.policy.
         # Phase 3.4: ``record_match_fn`` updates the TrueSkill rating table
         # from every concluded league match.
-        self.game_manager = GameManager(
+        # ``vec_env_mode`` switches between in-process serial (default) and
+        # one-subprocess-per-env IPC ("subproc"). The factory raises on an
+        # unknown mode at construction time, so a YAML typo fails loud.
+        self._vec_env_mode = str(config.get("vec_env_mode", "serial"))
+        self.game_manager = make_vec_env(
+            self._vec_env_mode,
             n_envs=self.n_envs,
             opponent_type="random",
             max_turns=config.get("max_turns", 500),
@@ -324,6 +339,15 @@ class CatanPPO:
             league_maxlen=int(config.get("league_maxlen", 100)),
             use_belief_head=bool(config.get("use_belief_head", False)),
         )
+
+        # Async-eval scaffolding: when ``eval_async`` is True (default), the
+        # train loop spawns scripts/evaluate.py as a subprocess at eval-trigger
+        # time and reads back the JSON result on a later iteration. The
+        # ``_pending_eval`` dict tracks the in-flight eval (popen, paths, step,
+        # opponent). Without this, an inline 100-game eval blocks the trainer
+        # for several minutes per cycle on M1 Pro CPU.
+        self._eval_async = bool(config.get("eval_async", True))
+        self._pending_eval: dict | None = None
 
         # Evaluation opponent: starts as configured, auto-upgrades to heuristic
         # once the model crosses eval_upgrade_threshold win rate vs the current opponent.
@@ -345,9 +369,12 @@ class CatanPPO:
             use_belief_head=bool(config.get("use_belief_head", False)),
         )
 
-        # Logging
+        # Logging — lazy SummaryWriter so transient consumers of the trainer
+        # (e.g., scripts/evaluate.py, async-eval subprocesses) don't spam the
+        # log dir with empty 88-byte placeholder events files. Only train()
+        # actually writes scalars; lazy construction avoids the side effect.
         self.log_dir = config.get("log_dir", "runs/train")
-        self.writer = SummaryWriter(self.log_dir)
+        self.writer: SummaryWriter | None = None
 
         # Checkpoint directory
         self.checkpoint_dir = config.get("checkpoint_dir", "checkpoints/train")
@@ -407,7 +434,10 @@ class CatanPPO:
         the exploiter's last partial rollout). Reinstates the league
         reference on both ``self`` and ``self.game_manager``.
         """
-        self.policy.load_state_dict(snap["policy"])
+        # Snap was captured via _raw_policy_state_dict which strips the
+        # _orig_mod. prefix — load into the underlying module accordingly.
+        policy_target = self.policy._orig_mod if hasattr(self.policy, "_orig_mod") else self.policy
+        policy_target.load_state_dict(snap["policy"])
         self.optimizer.load_state_dict(snap["optimizer"])
         self.value_normalizer.load_state_dict(snap["value_normalizer"])
         self.global_step = snap["global_step"]
@@ -496,7 +526,13 @@ class CatanPPO:
         snap = self._snapshot_for_exploiter()
         try:
             # Step 1+2: rebuild policy from main snapshot, fresh optimizer.
-            self.policy.load_state_dict(snap["policy"])
+            # ``_raw_policy_state_dict`` strips the ``_orig_mod.`` prefix that
+            # torch.compile introduces, so we must load into the underlying
+            # module (mirrors the fix in ``CatanPPO.load()`` at line 1631).
+            policy_target = (
+                self.policy._orig_mod if hasattr(self.policy, "_orig_mod") else self.policy
+            )
+            policy_target.load_state_dict(snap["policy"])
             self.optimizer = torch.optim.AdamW(
                 self.policy.parameters(),
                 lr=self.config["learning_rate"],
@@ -616,6 +652,21 @@ class CatanPPO:
         k = len(ids)
         payoff = np.full((k, k), 0.5, dtype=np.float64)  # diagonal stays 0.5
 
+        # Visibility: this loop can take 30-60+ minutes with the default
+        # nash_top_k=16 / nash_prune_games=16 and is silent on TB. Without
+        # this announcement, supervisor monitors mistakenly flag the run as
+        # hung. Estimate: k*(k-1)/2 * games-per-pair sequential games.
+        n_pairs = k * (k - 1) // 2
+        total_games = n_pairs * self.nash_prune_games
+        print(
+            f"  [NASH PRUNE] starting payoff matrix: k={k} ids, "
+            f"{n_pairs} pairs × {self.nash_prune_games} games = "
+            f"{total_games} sequential h2h games (TB will be silent during this).",
+            flush=True,
+        )
+        if self.writer is not None:
+            self.writer.add_scalar("train/nash_pruning_active", 1.0, self.global_step)
+
         # Use a single shared inference policy for memory; load weights per-call.
         # MUST use the league's ``build_policy_fn`` (set by trainer.__init__ with
         # the full ``model_kwargs`` of this run) — calling ``build_agent_model``
@@ -630,6 +681,10 @@ class CatanPPO:
         pol_a = self.league._build_policy_fn(device=self.device)
         pol_b = self.league._build_policy_fn(device=self.device)
 
+        import time as _time
+
+        nash_t0 = _time.time()
+        pair_idx = 0
         for i in range(k):
             pol_a.load_state_dict(state_dicts[ids[i]])
             pol_a.eval()
@@ -640,6 +695,23 @@ class CatanPPO:
                 wr = float(h2h["win_rate_a"])
                 payoff[i, j] = wr
                 payoff[j, i] = 1.0 - wr
+                pair_idx += 1
+                # Progress ping every ~10% of the way through, so a
+                # supervisor watching stdout can tell the run is alive.
+                if n_pairs > 0 and pair_idx % max(1, n_pairs // 10) == 0:
+                    elapsed = _time.time() - nash_t0
+                    print(
+                        f"  [NASH PRUNE] {pair_idx}/{n_pairs} pairs done (elapsed {elapsed:.0f}s)",
+                        flush=True,
+                    )
+        elapsed = _time.time() - nash_t0
+        print(
+            f"  [NASH PRUNE] payoff matrix complete in {elapsed:.0f}s.",
+            flush=True,
+        )
+        if self.writer is not None:
+            self.writer.add_scalar("train/nash_pruning_active", 0.0, self.global_step)
+            self.writer.add_scalar("train/nash_pruning_seconds", elapsed, self.global_step)
         return payoff
 
     def _log_rating_scalars(self, writer: "SummaryWriter | None", step: int) -> None:
@@ -837,15 +909,29 @@ class CatanPPO:
                 values_np = values_squeezed.cpu().numpy()  # (batch_n,)
             log_probs_np = log_probs.cpu().numpy()  # (batch_n,)
 
-            # Phase 1: step all main agents; collect envs that need opponent NN turns
+            # Phase 1: step all main agents; collect envs that need opponent NN turns.
+            # ``step_all`` lets subproc-mode dispatch all N STEP commands in
+            # parallel; serial-mode it's just a tight in-process loop. Either
+            # way the per-env tuples come back in the same shape and we
+            # post-process identically.
             pending_opp = []  # env indices whose opponent turn is deferred
             pending_prewd = []  # partial reward accumulated before opponent acts
             immediate = []  # env indices with complete transitions
 
+            actions_for_step = [actions_np[i] for i in range(batch_n)]
+            (
+                step_obs_list,
+                step_reward_list,
+                step_term_list,
+                step_trunc_list,
+                step_info_list,
+            ) = self.game_manager.step_all(actions_for_step)
             for i in range(batch_n):
-                new_obs, reward, terminated, truncated, info = self.game_manager.step_one(
-                    i, actions_np[i]
-                )
+                new_obs = step_obs_list[i]
+                reward = step_reward_list[i]
+                terminated = step_term_list[i]
+                truncated = step_trunc_list[i]
+                info = step_info_list[i]
                 if info.get("opp_turn_pending"):
                     pending_opp.append(i)
                     pending_prewd.append(reward)
@@ -1111,6 +1197,26 @@ class CatanPPO:
 
                 self.optimizer.zero_grad()
                 loss.backward()
+                # Per-head gradient clipping: bound each action-head's gradient
+                # norm independently before the global clip. Without this, a
+                # head with dominant gradient (e.g., the type head with 13
+                # logits and many active rollout steps) can saturate the
+                # global max_grad_norm budget, starving the other heads. The
+                # global clip then runs as a backstop on the combined norm.
+                if getattr(self, "per_head_grad_clip", False):
+                    ah = getattr(self.policy, "action_heads", None)
+                    if ah is not None:
+                        for head_name in (
+                            "type_head",
+                            "corner_head",
+                            "edge_head",
+                            "tile_head",
+                            "resource1_head",
+                            "resource2_head",
+                        ):
+                            head = getattr(ah, head_name, None)
+                            if head is not None:
+                                nn.utils.clip_grad_norm_(head.parameters(), self.max_grad_norm)
                 nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
@@ -1175,6 +1281,14 @@ class CatanPPO:
         # Phase 2.5c: opponent next-action aux-loss diagnostic.
         if n_opp_action_updates > 0:
             result["opp_action_loss"] = total_opp_action_loss / n_opp_action_updates
+        # Aux-loss firing rates: fraction of minibatch updates where the
+        # masked CE actually had any qualifying rows. opp_action_head only
+        # trains on rows where the opponent is a historical league policy
+        # (excludes random / heuristic / current_self / no-opp). If the rate
+        # drops below ~0.5, the head is mostly dead weight on this rollout
+        # mix. belief firing rate is logged for symmetry.
+        result["belief_loss_fired_rate"] = n_belief_updates / float(n_updates)
+        result["opp_action_loss_fired_rate"] = n_opp_action_updates / float(n_updates)
         # Per-head entropy diagnostics (Phase 0).
         for name in head_names:
             count = max(head_sample_count[name], 1)
@@ -1243,6 +1357,9 @@ class CatanPPO:
             f"Starting training for {self.total_timesteps:,} timesteps "
             f"({self.n_envs} envs, {self.n_steps} steps/update)..."
         )
+        # Materialize the SummaryWriter lazily here (see __init__ comment).
+        if self.writer is None:
+            self.writer = SummaryWriter(self.log_dir)
         start_time = time.time()
         # Resume-safe FPS: anchor to the global_step at train() entry so
         # FPS = (steps since this call) / (wall since this call). Without
@@ -1317,64 +1434,34 @@ class CatanPPO:
                 self.writer.add_scalar("train/learning_rate", current_lr, self.global_step)
 
                 # ── Periodic evaluation ───────────────────────────────────
-                if self.global_step - last_eval_step >= eval_interval:
-                    self.policy.eval()
-                    eval_stats = self.eval_manager.evaluate(self.policy, self.device)
-                    self.policy.train()
+                # Two paths: async (default) — spawn evaluate.py as a subprocess
+                # at trigger time, read the JSON result on a later iteration.
+                # sync (legacy) — run inline; blocks the train loop.
+                wr_now: float | None = None
+                if self._eval_async:
+                    # 1) Reap any pending async eval.
+                    if (
+                        self._pending_eval is not None
+                        and self._pending_eval["popen"].poll() is not None
+                    ):
+                        wr_now = self._reap_async_eval()
+                    # 2) Trigger a new async eval if interval elapsed and slot is free.
+                    if (
+                        self._pending_eval is None
+                        and self.global_step - last_eval_step >= eval_interval
+                    ):
+                        self._launch_async_eval()
+                        last_eval_step = self.global_step
+                else:
+                    if self.global_step - last_eval_step >= eval_interval:
+                        self.policy.eval()
+                        eval_stats = self.eval_manager.evaluate(self.policy, self.device)
+                        self.policy.train()
+                        wr_now = self._record_eval_result(eval_stats, self.global_step)
+                        last_eval_step = self.global_step
 
-                    wr_now = eval_stats["win_rate"]
-                    print(
-                        f"  [EVAL vs {self._eval_opponent}] Win rate: {wr_now:.2f}, "
-                        f"Avg VP: {eval_stats['avg_vp']:.1f}, "
-                        f"Avg Length: {eval_stats['avg_game_length']:.0f}"
-                    )
-
-                    for key, val in eval_stats.items():
-                        self.writer.add_scalar(f"eval/{key}", val, self.global_step)
-                    self.writer.add_scalar(
-                        "eval/opponent_is_heuristic",
-                        1.0 if self._eval_opponent == "heuristic" else 0.0,
-                        self.global_step,
-                    )
-
-                    # Upgrade eval opponent from random → heuristic once threshold is crossed
-                    if self._eval_opponent == "random" and wr_now >= self._eval_upgrade_threshold:
-                        self._eval_opponent = "heuristic"
-                        self.eval_manager = EvaluationManager(
-                            n_games=self.config.get("eval_games", 40),
-                            opponent_type="heuristic",
-                            max_turns=self.config.get("max_turns", 500),
-                            use_thermometer_encoding=self._use_thermometer_encoding,
-                            use_opponent_id_emb=bool(self.config.get("use_opponent_id_emb", False)),
-                            opp_id_mask_prob=float(self.config.get("opp_id_mask_prob", 0.40)),
-                            league_maxlen=int(self.config.get("league_maxlen", 100)),
-                            use_belief_head=bool(self.config.get("use_belief_head", False)),
-                        )
-                        # Reset win-rate history — old random-opponent values are not comparable
-                        self._eval_win_rate_history = []
-                        print(
-                            f"  [EVAL] Upgraded eval opponent to HEURISTIC "
-                            f"(WR {wr_now:.2f} >= {self._eval_upgrade_threshold:.2f})"
-                        )
-                        self.writer.add_scalar("eval/opponent_upgraded", 1.0, self.global_step)
-
-                    # Stagnation detection: warn if win rate hasn't improved
-                    self._eval_win_rate_history.append(wr_now)
-                    window = self._eval_win_rate_history[-self.stagnation_window :]
-                    if len(window) >= self.stagnation_window:
-                        improvement = max(window) - min(window)
-                        if improvement < self.stagnation_threshold:
-                            print(
-                                f"  [WARN] STAGNATION detected: win rate range "
-                                f"{min(window):.2f}–{max(window):.2f} over last "
-                                f"{self.stagnation_window} evals (< {self.stagnation_threshold} "
-                                f"improvement). Check EV and entropy in TensorBoard."
-                            )
-                            self.writer.add_scalar("train/stagnation_flag", 1.0, self.global_step)
-
-                    last_eval_step = self.global_step
-
-                    # Early stopping check
+                # Early stopping check (on whichever path produced wr_now this iter).
+                if wr_now is not None:
                     target = self.config.get("win_rate_target")
                     if target and wr_now >= target:
                         print(f"  Win rate target {target} reached! Saving final model.")
@@ -1406,6 +1493,125 @@ class CatanPPO:
         self.save(os.path.join(self.checkpoint_dir, "final_model.pt"))
         self.writer.close()
         print(f"Training complete. Total steps: {self.global_step:,}")
+
+    # ── Async eval helpers ──────────────────────────────────────────────
+    # The trainer snapshots the policy + config to a temp checkpoint, spawns
+    # ``scripts/evaluate.py`` as a subprocess, and reads back the JSON result
+    # on a later iteration. This decouples eval wall-clock from the train
+    # loop — important once eval_games scales beyond ~40 on M1 Pro CPU.
+
+    def _launch_async_eval(self) -> None:
+        """Snapshot the trainer and spawn an evaluate.py subprocess. Non-blocking."""
+        ckpt_path = f"/tmp/eval_pending_{self.global_step}.pt"
+        result_path = f"/tmp/eval_result_{self.global_step}.json"
+        self.save(ckpt_path)
+        cmd = [
+            sys.executable,
+            "scripts/evaluate.py",
+            ckpt_path,
+            "--opponent",
+            self._eval_opponent,
+            "--n-games",
+            str(self.config.get("eval_games", 40)),
+            "--output-json",
+            result_path,
+        ]
+        popen = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self._pending_eval = {
+            "popen": popen,
+            "ckpt_path": ckpt_path,
+            "result_path": result_path,
+            "step": self.global_step,
+            "opponent": self._eval_opponent,
+        }
+        print(
+            f"  [EVAL ASYNC] launched pid={popen.pid} step={self.global_step:,} "
+            f"opponent={self._eval_opponent}"
+        )
+
+    def _reap_async_eval(self) -> float | None:
+        """Read the result of a finished subprocess eval. Returns WR or None."""
+        pe = self._pending_eval
+        assert pe is not None
+        rc = pe["popen"].returncode
+        wr_now: float | None = None
+        if rc == 0 and os.path.exists(pe["result_path"]):
+            try:
+                with open(pe["result_path"]) as f:
+                    eval_stats = json.load(f)
+                wr_now = self._record_eval_result(eval_stats, pe["step"], opp=pe["opponent"])
+            except Exception as e:
+                print(f"  [EVAL ASYNC] failed to parse {pe['result_path']}: {e}")
+        else:
+            print(
+                f"  [EVAL ASYNC] subprocess at step {pe['step']:,} exited rc={rc}; "
+                f"result missing or eval failed."
+            )
+        # Clean up the temp files regardless.
+        for p in (pe["ckpt_path"], pe["result_path"]):
+            with contextlib.suppress(OSError):
+                os.remove(p)
+        self._pending_eval = None
+        return wr_now
+
+    def _record_eval_result(self, eval_stats: dict, step: int, opp: str | None = None) -> float:
+        """Log eval stats to TensorBoard, handle auto-upgrade + stagnation. Returns WR."""
+        if opp is None:
+            opp = self._eval_opponent
+        wr_now = float(eval_stats["win_rate"])
+        print(
+            f"  [EVAL vs {opp}] step={step:,} Win rate: {wr_now:.2f}, "
+            f"Avg VP: {eval_stats.get('avg_vp', 0):.1f}, "
+            f"Avg Length: {eval_stats.get('avg_game_length', 0):.0f}"
+        )
+        for key, val in eval_stats.items():
+            try:  # noqa: SIM105
+                self.writer.add_scalar(f"eval/{key}", float(val), step)
+            except (TypeError, ValueError):
+                # Skip non-numeric keys defensively (e.g. nested dicts).
+                pass
+        self.writer.add_scalar(
+            "eval/opponent_is_heuristic",
+            1.0 if opp == "heuristic" else 0.0,
+            step,
+        )
+
+        # Auto-upgrade random → heuristic. Logged at the eval's own step so the
+        # TB scalar series stays monotone in step.
+        if self._eval_opponent == "random" and wr_now >= self._eval_upgrade_threshold:
+            self._eval_opponent = "heuristic"
+            self.eval_manager = EvaluationManager(
+                n_games=self.config.get("eval_games", 40),
+                opponent_type="heuristic",
+                max_turns=self.config.get("max_turns", 500),
+                use_thermometer_encoding=self._use_thermometer_encoding,
+                use_opponent_id_emb=bool(self.config.get("use_opponent_id_emb", False)),
+                opp_id_mask_prob=float(self.config.get("opp_id_mask_prob", 0.40)),
+                league_maxlen=int(self.config.get("league_maxlen", 100)),
+                use_belief_head=bool(self.config.get("use_belief_head", False)),
+            )
+            self._eval_win_rate_history = []
+            print(
+                f"  [EVAL] Upgraded eval opponent to HEURISTIC "
+                f"(WR {wr_now:.2f} >= {self._eval_upgrade_threshold:.2f})"
+            )
+            self.writer.add_scalar("eval/opponent_upgraded", 1.0, step)
+
+        # Stagnation detection.
+        self._eval_win_rate_history.append(wr_now)
+        window = self._eval_win_rate_history[-self.stagnation_window :]
+        if len(window) >= self.stagnation_window:
+            improvement = max(window) - min(window)
+            if improvement < self.stagnation_threshold:
+                print(
+                    f"  [WARN] STAGNATION detected: win rate range "
+                    f"{min(window):.2f}–{max(window):.2f} over last "
+                    f"{self.stagnation_window} evals (< {self.stagnation_threshold} "
+                    f"improvement). Check EV and entropy in TensorBoard."
+                )
+                self.writer.add_scalar("train/stagnation_flag", 1.0, step)
+
+        return wr_now
 
     def save(self, path: str) -> None:
         """Save everything needed to resume training."""

@@ -1,34 +1,126 @@
-# Phase 2.3 + 2.5c + 4.2 stacked on top of phase3_full. The ISMCTS
-# module (Phase 4.1) is available as a library but not engaged from the
-# rollout loop yet — its activation is gated on belief-head quality and
-# is best added in a follow-up after we've measured belief loss.
+# Phase 4 full bundle — Phase 1-4 architecture + speed pack + plateau-breaking
+# interventions from the RL-architecture audit (May 11).
+#
+# Inheritance: phase3_full.yaml → phase2_full.yaml → phase1_full.yaml → _base.yaml
+#
+# ── Layered changes (read bottom-up) ──────────────────────────────────────────
+# Layer 4 (this file, plateau-breaking audit):
+#   - league.heuristic_opponent_weight: 0.20 → 0.60 (was 0.40 intended; got
+#     silently reverted to 0.20 by a duplicate `league:` block in the prior
+#     version of this file — fixed by consolidating into ONE league section.)
+#   - model.symmetry_aug_prob: 0.5 → 1.0 (free 1.5-2× effective data, D6
+#     dihedral augmentation is correctness-preserving)
+#   - phase3.exploiter_mode: 'off' → 'duo' (AlphaStar-style duo exploiter
+#     cycles; was scaffolded but never enabled)
+#   - ppo.target_kl: 0.025 → 0.008 (observed KL is 0.001-0.005, so this is
+#     still mostly non-binding but will bite occasionally — gives a real
+#     early-stop guard instead of dead code)
+#
+# Layer 3 (Nash pruning disabled):
+#   - league.prune_strategy: 'nash' → 'fifo' (Nash pruning was burning ~2h
+#     per round of CPU policy-vs-policy games; FIFO eviction is fine at the
+#     current scale, and the Nash code stays intact for future re-enablement
+#     once we move to GPU/faster compute)
+#
+# Layer 2 (speed pack):
+#   - ppo.n_envs: 8 → 16 (bigger forward batch → ~1.5× rollout phase)
+#   - ppo.n_epochs: 6 → 4 (saves ~33% on PPO update; KL is clean)
+#   - misc.torch_compile: false → true (kernel fusion, +18%)
+#
+# Layer 1 (multi-agent debate consensus):
+#   - eval.eval_games: 40 → 100 (halve eval noise)
+#   - entropy.entropy_coef_start: 0.04 → 0.06 (more exploration)
+#   - league.heuristic_opponent_weight: 0.20 → 0.40 [SUPERSEDED BY LAYER 4]
+#
+# Phase 2-4 architecture (inherited from base):
+#   - Phase 2.3 GNN encoder, 2.5b belief head, 2.5c opp-action head
+#   - Phase 4.2 recurrent value GRU
+#   - Phase 3.6 opponent-id embedding (in phase3_full.yaml)
+
 _base: phase3_full.yaml
 
 model:
-  # Phase 2.3 GNN encoder over hex/vertex/edge graph.
+  # Phase 2.3 GNN encoder over hex/vertex/edge graph
   use_graph_encoder: true
   graph_hidden_dim: 64
   graph_n_rounds: 2
   graph_out_dim: 64
-  # Phase 2.5b belief head (already present in phase3_full lineage; just
-  # confirm it's on for the auxiliary-loss path).
+  # Phase 2.5b belief head
   use_belief_head: true
   belief_head_hidden_dim: 128
-  # Phase 2.5c opponent next-action auxiliary head.
+  # Phase 2.5c opponent next-action auxiliary head
   use_opponent_action_head: true
   opponent_action_head_hidden_dim: 128
-  # Phase 4.2 GRU recurrent value head (value-only, policy stays Markovian).
+  # Phase 4.2 GRU recurrent value head (value-only, policy stays Markovian)
   use_recurrent_value: true
   gru_hidden_dim: 64
 
+# Layer 4: bump D6 symmetry augmentation to full. MUST live in ``phase1:``
+# (not ``model:``) — the YAML loader's _flatten_yaml runs the model section
+# first, then phase1/phase2/etc., so a phase1 override would otherwise win.
+# We override it where it was originally declared.
+phase1:
+  symmetry_aug_prob: 1.0
+
 phase4:
-  # Phase 2.5b/c loss weights (trainer reads these from the flat config).
+  # Phase 2.5b/c loss weights (trainer reads these from the flat config)
   belief_loss_weight: 0.05
   opp_action_loss_weight: 0.03
 
+phase3:
+  # Layer 4: activate duo exploiter cycles. Was scaffolded but never enabled
+  # in any prior run. AlphaStar-style targeted hard-counter training.
+  # Cycle structure: periodically snapshot main → train an exploiter against
+  # frozen main copy → reincorporate exploiter weights as a boosted league
+  # entry. Expected ~10% wall-clock overhead (1 cycle ≈ 1h main step + 1h
+  # exploiter step every ~10h training).
+  exploiter_mode: duo
+  exploiter_cycle_steps: 1_000_000   # main steps between cycles
+  exploiter_n_updates: 32             # PPO updates per exploiter cycle
+  exploiter_priority_multiplier: 1.5
+  exploiter_priority_games: 64
+
 schedule:
-  # Inherit ``_base.yaml``'s 200M-step total. ``configs/phase4_full.yaml``
-  # is now the default for ``scripts/train.py``, so the budget should
-  # cover a real run rather than the prior ablation cap. Override at the
-  # CLI with ``--total-timesteps`` for short ablation runs.
   total_timesteps: 200_000_000
+
+ppo:
+  # Layer 2: speed pack
+  n_envs: 16
+  n_epochs: 4
+  # Layer 4: tightened target_kl. Observed KL ~0.001-0.005 means 0.025 was
+  # dead code; 0.008 still mostly non-binding but provides a real early-stop
+  # guard if LR or entropy bumps push updates harder.
+  target_kl: 0.008
+  # Layer 4: per-head gradient clipping. Each action head's gradients are
+  # bounded independently before the global max_grad_norm clip. Prevents
+  # heads with dominant gradient magnitude (e.g., the 13-way type head)
+  # from saturating the global norm budget at the others' expense.
+  per_head_grad_clip: true
+
+entropy:
+  # Layer 1: more exploration
+  entropy_coef_start: 0.06
+
+eval:
+  # Layer 1: halve eval noise
+  eval_games: 100
+
+# ── CONSOLIDATED league section ────────────────────────────────────────────
+# CRITICAL: had been split across two `league:` blocks in the prior file,
+# which yaml.safe_load resolves by keeping ONLY the last block. That
+# silently dropped heuristic_opponent_weight=0.40 back to the phase3 default
+# of 0.20 for the entire post-consensus run. Consolidated here.
+league:
+  # Layer 4: bumped from intended 0.40 (which never took effect) to 0.60.
+  # More heuristic gradient signal on the metric we actually care about.
+  # 0.60 + 0.05 random + 0.10 latest_self = 0.75 special, 0.25 league.
+  heuristic_opponent_weight: 0.60
+  # Layer 3: Nash pruning disabled — too expensive on M1 Pro CPU.
+  prune_strategy: fifo
+  # Nash params retained for future re-enablement (GPU/faster compute).
+  nash_top_k: 8
+  nash_prune_round_games: 8
+
+misc:
+  # Layer 2: speed pack
+  torch_compile: true

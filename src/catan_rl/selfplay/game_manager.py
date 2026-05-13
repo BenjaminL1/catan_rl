@@ -1,8 +1,15 @@
 """
 Manages parallel environment instances for experience collection.
 
-Runs N environments sequentially (no subprocess overhead on macOS).
-Supports league-based policy opponents for Charlesworth-style self-play.
+Two implementations:
+- ``GameManager``: serial in-process N envs (default). Lowest overhead for
+  small N; what every existing config and test path uses.
+- ``SubprocGameManager`` (in ``subproc_vec_env.py``): one subprocess per env,
+  IPC over Pipe. Opt-in via ``vec_env_mode='subproc'``.
+
+Both share ``BaseGameManager`` for league sampling, opponent policy state,
+and match-result reporting — the parts that must stay main-process-only
+because they touch the trainer-owned league + shared opponent NN.
 """
 
 import copy
@@ -13,33 +20,37 @@ import numpy as np
 from catan_rl.env.catan_env import CatanEnv
 
 
-class GameManager:
-    """Manages multiple CatanEnv instances for vectorized rollout collection.
+class BaseGameManager:
+    """Shared league + opponent-policy state for serial and subproc managers.
 
-    On M1 Mac, subprocesses have high overhead due to "spawn" (not "fork").
-    So we run environments sequentially in the same process. This is simpler
-    and actually faster for small numbers of environments.
+    Subclasses are responsible for actually owning ``CatanEnv`` instances
+    (in-process or out-of-process) and implementing the per-env step / reset
+    / mask / opponent-action methods. This base provides:
 
-    When league is provided: samples opponent from league at each reset.
-    Maintains one policy instance per env for loading different state dicts.
+    - ``_sample_and_prepare_opponent``: samples a league policy and loads it
+      into ``self.rollout_opp_policy`` (one shared policy per rollout for
+      batched inference). Returns the env-side options dict.
+    - ``_report_match``: notifies the league + rating system of a finished
+      match.
+    - ``rollout_opp_policy`` / ``_rollout_opp_policy_id``: the shared
+      opponent NN and its current league-stable ID.
+
+    None of this code reaches the env. Subprocess workers therefore never
+    need to hold opponent policies or state_dicts — keeping IPC payloads
+    small and avoiding the cost of broadcasting ~2.7M parameters every
+    league update.
     """
 
     def __init__(
         self,
-        n_envs: int = 1,
-        opponent_type: str = "random",  # fallback when league empty; else uses league
-        max_turns: int | None = 500,
-        league=None,
-        build_policy_fn: Callable | None = None,
-        device: str = "cpu",
-        use_thermometer_encoding: bool = True,
-        current_policy_state_fn: Callable[[], dict] | None = None,
-        record_match_fn: Callable[[int, int], None] | None = None,
-        use_opponent_id_emb: bool = False,
-        opp_id_mask_prob: float = 0.40,
-        league_maxlen: int = 100,
-        use_belief_head: bool = False,
-    ):
+        n_envs: int,
+        opponent_type: str,
+        league,
+        build_policy_fn: Callable | None,
+        device: str,
+        current_policy_state_fn: Callable[[], dict] | None,
+        record_match_fn: Callable[[int, int], None] | None,
+    ) -> None:
         self.n_envs = n_envs
         self.league = league
         self._build_policy_fn = build_policy_fn
@@ -59,21 +70,7 @@ class GameManager:
 
         # Use policy opponents when league is provided and has build fn
         use_league = league is not None and build_policy_fn is not None and len(league) > 0
-        opp_type = "policy" if use_league else opponent_type
-
-        self.envs = [
-            CatanEnv(
-                render_mode=None,
-                opponent_type=opp_type,
-                max_turns=max_turns,
-                use_thermometer_encoding=use_thermometer_encoding,
-                use_opponent_id_emb=use_opponent_id_emb,
-                opp_id_mask_prob=opp_id_mask_prob,
-                league_maxlen=league_maxlen,
-                use_belief_head=use_belief_head,
-            )
-            for _ in range(n_envs)
-        ]
+        self._opp_type_initial = "policy" if use_league else opponent_type
 
         # ONE shared opponent policy for all envs in a rollout (enables batched inference)
         if use_league:
@@ -134,6 +131,60 @@ class GameManager:
             "opponent_policy_id": opp_id_for_emb,
         }
 
+
+class GameManager(BaseGameManager):
+    """Serial in-process vec env. The default mode.
+
+    On M1 Mac, subprocesses have non-trivial startup overhead and per-step
+    IPC cost. For small ``n_envs`` (≤ ~4) this serial path is faster wall-
+    clock per rollout step. For larger ``n_envs`` or when the env stepping
+    cost dominates, ``SubprocGameManager`` parallelizes across cores.
+
+    When league is provided: samples opponent from league at each reset.
+    Maintains one shared opponent policy across all envs for batched
+    inference (see ``BaseGameManager``).
+    """
+
+    def __init__(
+        self,
+        n_envs: int = 1,
+        opponent_type: str = "random",  # fallback when league empty; else uses league
+        max_turns: int | None = 500,
+        league=None,
+        build_policy_fn: Callable | None = None,
+        device: str = "cpu",
+        use_thermometer_encoding: bool = True,
+        current_policy_state_fn: Callable[[], dict] | None = None,
+        record_match_fn: Callable[[int, int], None] | None = None,
+        use_opponent_id_emb: bool = False,
+        opp_id_mask_prob: float = 0.40,
+        league_maxlen: int = 100,
+        use_belief_head: bool = False,
+    ):
+        super().__init__(
+            n_envs=n_envs,
+            opponent_type=opponent_type,
+            league=league,
+            build_policy_fn=build_policy_fn,
+            device=device,
+            current_policy_state_fn=current_policy_state_fn,
+            record_match_fn=record_match_fn,
+        )
+
+        self.envs = [
+            CatanEnv(
+                render_mode=None,
+                opponent_type=self._opp_type_initial,
+                max_turns=max_turns,
+                use_thermometer_encoding=use_thermometer_encoding,
+                use_opponent_id_emb=use_opponent_id_emb,
+                opp_id_mask_prob=opp_id_mask_prob,
+                league_maxlen=league_maxlen,
+                use_belief_head=use_belief_head,
+            )
+            for _ in range(n_envs)
+        ]
+
     def reset_all(self) -> tuple[list[dict], list[dict]]:
         """Reset all environments and return (observations, infos)."""
         observations, infos = [], []
@@ -178,39 +229,55 @@ class GameManager:
             obs, _ = env.reset(options=options)
         return obs, reward, terminated, truncated, info
 
-    def step_all(self, actions: list[np.ndarray]):
+    def step_all(
+        self, actions: list[np.ndarray]
+    ) -> tuple[list[dict], list[float], list[bool], list[bool], list[dict]]:
         """Step all environments with the given actions.
 
         Args:
             actions: list of (6,) action arrays, one per env.
 
         Returns:
-            observations: list of dict observations.
+            observations: list of dict observations (post-reset on done).
             rewards: list of floats.
-            dones: list of bools (terminated | truncated).
-            infos: list of info dicts.
+            terminated: list of bools (true win/loss only — used by the GRU
+                hidden-state reset and PPO bootstrapping).
+            truncated: list of bools (max_turns timeouts only).
+            infos: list of info dicts (with ``opp_turn_pending`` set when
+                the opponent NN turn is deferred).
+
+        Behavior is identical to calling ``step_one`` for each env in turn,
+        except the loop is internal so the subproc-mode override can
+        pipeline IPC.
         """
-        observations, rewards, dones, infos = [], [], [], []
+        observations: list[dict] = []
+        rewards: list[float] = []
+        terminated_list: list[bool] = []
+        truncated_list: list[bool] = []
+        infos: list[dict] = []
         for i, (env, action) in enumerate(zip(self.envs, actions)):
             obs, reward, terminated, truncated, info = env.step(action)
+            if info.get("opp_turn_pending"):
+                # Deferred — caller drives the opp NN handoff, no reset here.
+                observations.append(obs)
+                rewards.append(reward)
+                terminated_list.append(False)
+                truncated_list.append(False)
+                infos.append(info)
+                continue
             done = terminated or truncated
             if done:
                 info["terminal_observation"] = obs
-                terminal_info = info
                 win = 1 if info.get("is_success") else 0
-                self._report_match(self._opponent_policy_ids[i], win)
+                self._report_match(self._rollout_opp_policy_id, win)
                 options = self._sample_and_prepare_opponent(i) if self.league else {}
                 obs, _ = env.reset(options=options)
-                observations.append(obs)
-                rewards.append(reward)
-                dones.append(done)
-                infos.append(terminal_info)
-            else:
-                observations.append(obs)
-                rewards.append(reward)
-                dones.append(done)
-                infos.append(info)
-        return observations, rewards, dones, infos
+            observations.append(obs)
+            rewards.append(reward)
+            terminated_list.append(bool(terminated))
+            truncated_list.append(bool(truncated))
+            infos.append(info)
+        return observations, rewards, terminated_list, truncated_list, infos
 
     def get_opponent_obs_masks(self, env_idx: int):
         """Get opponent (obs, masks) for an env with a deferred NN turn."""
@@ -246,3 +313,7 @@ class GameManager:
         """Change the opponent type for all environments."""
         for env in self.envs:
             env.opponent_type = opponent_type
+
+    def close(self) -> None:
+        """No-op for the serial manager (envs share the parent process)."""
+        return None

@@ -167,11 +167,21 @@ class CatanEnv(gym.Env):
         opp_id_mask_prob: float = 0.40,
         league_maxlen: int = 100,
         use_belief_head: bool = False,
+        agent_vp_shaping_alpha: float = 0.05,
+        opp_vp_shaping_alpha: float = 0.025,
     ):
         super().__init__()
         self.render_mode = render_mode
         self.opponent_type = opponent_type
         self.max_turns = max_turns
+        # Per-turn VP-delta reward shaping coefficients. Built-in to the env
+        # (this is not new — the literals 0.05 and 0.025 used to be hardcoded
+        # in step()). Made configurable so the trainer can tune the gradient
+        # strength on dense VP signal without an env edit. Conservative defaults
+        # match the prior hardcoded behavior; bumping these strengthens
+        # per-turn VP gradient and can help break a plateau.
+        self.agent_vp_shaping_alpha = float(agent_vp_shaping_alpha)
+        self.opp_vp_shaping_alpha = float(opp_vp_shaping_alpha)
 
         # Phase 1.3: choose between the legacy bucket8-thermometer player
         # encoding and the compact normalized-scalar version. Default True
@@ -430,7 +440,7 @@ class CatanEnv(gym.Env):
                 self._turn_count = 0
 
             obs = self._get_obs()
-            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
+            reward += self.agent_vp_shaping_alpha * (agent.victoryPoints - agent_vp_before)
             return obs, reward, terminated, truncated, info
 
         # ---- Discard phase ----
@@ -474,7 +484,7 @@ class CatanEnv(gym.Env):
             self.robber_placement_pending = False
 
             obs = self._get_obs()
-            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
+            reward += self.agent_vp_shaping_alpha * (agent.victoryPoints - agent_vp_before)
             return obs, reward, terminated, truncated, info
 
         # ---- Roll pending ----
@@ -511,7 +521,7 @@ class CatanEnv(gym.Env):
                 agent.build_road(v1, v2, board, is_free=True)
                 self.game.check_longest_road(agent)
                 self.road_building_roads_left -= 1
-                reward += 0.05 * (agent.victoryPoints - agent_vp_before)
+                reward += self.agent_vp_shaping_alpha * (agent.victoryPoints - agent_vp_before)
                 obs = self._get_obs()
                 return obs, reward, False, False, {}
             else:
@@ -550,7 +560,7 @@ class CatanEnv(gym.Env):
                 self._pending_opp_vp_before = opp_vp_before
                 obs = self._get_obs()
                 return obs, reward, False, False, {"opp_turn_pending": True}
-            reward -= 0.025 * (opponent.victoryPoints - opp_vp_before)
+            reward -= self.opp_vp_shaping_alpha * (opponent.victoryPoints - opp_vp_before)
             terminated, truncated = self._check_terminal()
             if not terminated and not truncated:
                 self.roll_pending = True
@@ -634,7 +644,7 @@ class CatanEnv(gym.Env):
             reward = self._compute_terminal_reward()
             info = self._make_terminal_info(terminated)
         else:
-            reward += 0.05 * (agent.victoryPoints - agent_vp_before)
+            reward += self.agent_vp_shaping_alpha * (agent.victoryPoints - agent_vp_before)
         return obs, reward, terminated, truncated, info
 
     # ------------------------------------------------------------------

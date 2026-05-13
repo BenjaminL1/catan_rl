@@ -49,9 +49,17 @@ KEY_SCALARS = [
 
 
 def latest_events_file(logdir: str) -> str | None:
-    """Pick the most recently-modified TF events file under ``logdir``."""
+    """Pick the most recently-modified TF events file with actual scalar content.
+
+    Filters out placeholder ``events.out.tfevents.*`` files written by transient
+    sub-processes (e.g. async-eval workers that import EvaluationManager and
+    construct a SummaryWriter but never log a scalar). Those placeholders are
+    a fixed 88 bytes (TF event header only) and would otherwise shadow the
+    real training file via mtime. Anything <1KB is treated as empty.
+    """
     candidates = glob.glob(os.path.join(logdir, "**", "events.out.tfevents.*"), recursive=True)
     candidates += glob.glob(os.path.join(logdir, "events.out.tfevents.*"))
+    candidates = [c for c in candidates if os.path.getsize(c) > 1024]
     if not candidates:
         return None
     return max(candidates, key=os.path.getmtime)
@@ -120,6 +128,52 @@ def emit_alerts(scalars: dict[str, list[tuple[int, float]]], step: int) -> list[
     kl = latest("train/approx_kl")
     if kl is not None and kl > 0.10:
         alerts.append(f"ALERT:HIGH_KL={kl:.3f}")
+
+    # ── Overnight-supervisor detectors ────────────────────────────────────
+    # Both fire only after enough data accumulates so we don't alarm early.
+
+    # WR plateau: last 4 eval/win_rate values within ±0.02 of each other.
+    # Earliest possible fire is at step 400k (4th eval at every 100k).
+    # Edge-triggered: only emit when the latest eval *step* has changed
+    # since the previous poll, so the supervisor doesn't get spammed every
+    # 5 min while the plateau persists between eval cycles. State stored in
+    # /tmp/_monitor_wr_plateau_last_step (single int).
+    wr_history = scalars.get("eval/win_rate", [])
+    if len(wr_history) >= 4:
+        last4_pairs = wr_history[-4:]
+        last4 = [v for _, v in last4_pairs]
+        latest_eval_step = int(last4_pairs[-1][0])
+        spread = max(last4) - min(last4)
+        if spread <= 0.04:
+            state_file = "/tmp/_monitor_wr_plateau_last_step"
+            prev = -1
+            try:
+                with open(state_file) as f:
+                    prev = int(f.read().strip() or "-1")
+            except (OSError, ValueError):
+                prev = -1
+            if latest_eval_step != prev:
+                alerts.append(
+                    f"ALERT:WR_PLATEAU last4={[round(v, 3) for v in last4]} spread={spread:.3f}"
+                )
+                try:
+                    with open(state_file, "w") as f:
+                        f.write(str(latest_eval_step))
+                except OSError:
+                    pass
+
+    # FPS regression: current FPS dropped below 50% of the trailing
+    # ~30-min average. Approximated as the last 10 FPS samples (with a
+    # fresh sample roughly every PPO update / ~3 min, that's a 30 min
+    # window). Catches thermal throttling and CPU contention drift.
+    fps_history = scalars.get("train/fps", [])
+    if len(fps_history) >= 12 and fps is not None:
+        # Skip the most recent 2 (= one rollout's worth) so we compare
+        # "now" against the trailing window, not against itself.
+        prior = [v for _, v in fps_history[-12:-2]]
+        baseline = sum(prior) / len(prior)
+        if baseline >= 5.0 and fps < 0.5 * baseline:
+            alerts.append(f"ALERT:FPS_REGRESSION current={fps:.1f} baseline={baseline:.1f}")
 
     return alerts
 
