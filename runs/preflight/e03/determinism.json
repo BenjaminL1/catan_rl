@@ -1,0 +1,41 @@
+{
+  "metadata": {
+    "n_games": 200,
+    "n_multi_candidate_decisions": 82781,
+    "p1_wins": 86,
+    "p2_wins": 85,
+    "truncated": 29,
+    "wall_clock_seconds": 10.188357830047607,
+    "seed_offset": 0
+  },
+  "observed_lex_first_rate": 0.1264541380268419,
+  "expected_lex_first_under_uniform_random": 0.12699522451190742,
+  "deterministic_tiebreaker_fraction": 0.0,
+  "decision_rule": "AUG_PROB_1.0",
+  "by_method": {
+    "build_settlement": {
+      "n_decisions": 3708,
+      "observed_lex_first_rate": 0.3036677454153182,
+      "expected_lex_first_rate_under_uniform": 0.31961630618445724,
+      "ratio_observed_over_expected": 0.9501009164409315
+    },
+    "build_city": {
+      "n_decisions": 6017,
+      "observed_lex_first_rate": 0.3895629051022104,
+      "expected_lex_first_rate_under_uniform": 0.37988477092681844,
+      "ratio_observed_over_expected": 1.0254764994968866
+    },
+    "build_road": {
+      "n_decisions": 57343,
+      "observed_lex_first_rate": 0.10585424550511832,
+      "expected_lex_first_rate_under_uniform": 0.1054321963287979,
+      "ratio_observed_over_expected": 1.0040030388345913
+    },
+    "move_robber": {
+      "n_decisions": 15713,
+      "observed_lex_first_rate": 0.05905937758543881,
+      "expected_lex_first_rate_under_uniform": 0.06339268861702517,
+      "ratio_observed_over_expected": 0.9316433625687462
+    }
+  }
+}
