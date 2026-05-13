@@ -472,18 +472,31 @@ class player:
         r2: resource player wants to receive
         Automatically give player the best available trade ratio
         """
+
+        def _emit_trade_delta(give: int) -> None:
+            # Build the delta as a sum so r1 == r2 trades (degenerate but
+            # legal under the action mask) don't lose their give-side
+            # value to dict-key collision. The dict-literal form
+            # ``{r1: -give, r2: +1}`` produces {r1: +1} when r1 == r2,
+            # mis-reporting the actual net change of ``+1 - give`` and
+            # silently corrupting any broadcast hand-tracker downstream.
+            delta: dict[str, int] = {}
+            delta[r1] = delta.get(r1, 0) - give
+            delta[r2] = delta.get(r2, 0) + 1
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.resource_change(
+                    self.name,
+                    delta=delta,
+                    source="TRADE_BANK",
+                )
+
         # Get r1 port string
         r1_port = "2:1 " + r1
         # Can use 2:1 port with r1
         if r1_port in self.portList and self.resources[r1] >= 2:
             self.resources[r1] -= 2
             self.resources[r2] += 1
-            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
-                self.game.broadcast.resource_change(
-                    self.name,
-                    delta={r1: -2, r2: +1},
-                    source="TRADE_BANK",
-                )
+            _emit_trade_delta(2)
             # print("Traded 2 {} for 1 {} using {} Port".format(r1, r2, r1))
             return
 
@@ -491,12 +504,7 @@ class player:
         elif "3:1 PORT" in self.portList and self.resources[r1] >= 3:
             self.resources[r1] -= 3
             self.resources[r2] += 1
-            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
-                self.game.broadcast.resource_change(
-                    self.name,
-                    delta={r1: -3, r2: +1},
-                    source="TRADE_BANK",
-                )
+            _emit_trade_delta(3)
             # print("Traded 3 {} for 1 {} using 3:1 Port".format(r1, r2))
             return
 
@@ -504,12 +512,7 @@ class player:
         elif self.resources[r1] >= 4:
             self.resources[r1] -= 4
             self.resources[r2] += 1
-            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
-                self.game.broadcast.resource_change(
-                    self.name,
-                    delta={r1: -4, r2: +1},
-                    source="TRADE_BANK",
-                )
+            _emit_trade_delta(4)
             # print("Traded 4 {} for 1 {}".format(r1, r2))
             return
 
