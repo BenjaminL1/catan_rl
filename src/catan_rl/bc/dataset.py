@@ -199,14 +199,42 @@ def _record_decision(
     action: np.ndarray,
     phase: str,
 ) -> None:
-    """Build obs + mask AT THE MOMENT of the call and append a record."""
+    """Build obs + mask AT THE MOMENT of the call and append a record.
+
+    Skips recording when the heuristic's chosen action is not actually
+    legal under the current mask. This happens when:
+      * ``trade_with_bank`` is called with r1 the player has < 2/3/4 of
+        (it no-ops silently inside the engine);
+      * ``draw_devCard`` is called when the player lacks WHEAT/ORE/SHEEP
+        or the dev deck is empty (also silent no-op).
+    The heuristic *calls* the method unconditionally but the action
+    isn't a real decision because it has no effect. Recording it would
+    corrupt BC training — we'd be supervising on actions the network
+    couldn't take under the same mask at inference time. Surfaced by
+    a failing TDD test on the BC loader.
+    """
     ctx.env_state.initial_placement_phase = phase == "setup"
+    # During setup, infer setup_step from the action type so the mask
+    # accepts the chosen action. The env's state machine alternates
+    # settle/road, and the agent_player's buildGraph counts tell us
+    # which sub-step the heuristic is on. (We can't read it from env
+    # directly — there's no env in BC data-gen path.)
+    if phase == "setup":
+        act_type = int(action[0])
+        if act_type == ActionType.BUILD_SETTLEMENT:
+            n_existing = len(ctx.agent_player.buildGraph["SETTLEMENTS"])
+            ctx.env_state.setup_step = 0 if n_existing == 0 else 2
+        elif act_type == ActionType.BUILD_ROAD:
+            n_existing = len(ctx.agent_player.buildGraph["ROADS"])
+            ctx.env_state.setup_step = 1 if n_existing == 0 else 3
     obs = ctx.encoder.build_obs(
         ctx.game, ctx.agent_player, ctx.opp_player, ctx.env_state, hand_tracker=ctx.hand_tracker
     )
     mask = compute_action_masks(
         ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
     )
+    if not bool(mask["type"][int(action[0])]):
+        return
     belief = _belief_target_for(ctx.opp_player)
     forced = bool(int(mask["type"].sum()) <= 1)
     step_idx = len(ctx.records)
