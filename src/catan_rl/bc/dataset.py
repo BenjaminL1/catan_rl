@@ -510,18 +510,22 @@ def play_game(
     record.p2_won = int(p2.victoryPoints >= game.maxPoints)
     record.truncated = not (record.p1_won or record.p2_won)
 
-    # Fill discounted terminal outcome z_disc for every decision.
+    # Fill discounted terminal outcome z_disc per decision, counting
+    # steps from terminal *in each seat's own decision stream*. The flat
+    # decision list interleaves P1 and P2; if we discount by flat index
+    # the value head ends up learning the wall-clock game length (a
+    # privileged future signal) rather than per-seat steps-to-terminal.
     if record.p1_won:
         z_by_seat = (1.0, -1.0)
     elif record.p2_won:
         z_by_seat = (-1.0, 1.0)
     else:
         z_by_seat = (0.0, 0.0)
-    n = len(record.decisions)
-    for i, dec in enumerate(record.decisions):
-        # Treat the final decision as t=T, earlier as t<T; discount
-        # propagates back from the terminal time step.
-        dec.z_disc = (discount ** (n - 1 - i)) * z_by_seat[dec.player_seat]
+    steps_to_term = [0, 0]  # per-seat: decisions remaining for this seat
+    for dec in reversed(record.decisions):
+        seat = dec.player_seat
+        dec.z_disc = (discount ** steps_to_term[seat]) * z_by_seat[seat]
+        steps_to_term[seat] += 1
 
     return record
 

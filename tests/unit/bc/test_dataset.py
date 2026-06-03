@@ -90,6 +90,43 @@ def test_play_game_z_disc_matches_terminal_outcome() -> None:
     pytest.skip("no non-truncated games in 20 seeds — adjust max_turns")
 
 
+def test_z_disc_uses_per_seat_steps_not_flat_index() -> None:
+    """Regression for the value-head game-length leak (review #4, 2026-06-03).
+
+    Before the fix, ``z_disc[i] = γ^(n-1-i)`` walked a flat decision index
+    that interleaved both seats; P1's last decision was at distance
+    ``len(P2's_remaining_decisions)`` from "terminal" rather than 0. With
+    the per-seat fix, each seat's last decision is at discount^0
+    regardless of how many decisions the other seat made after it.
+
+    Pin: for a non-truncated game, the last decision *of each seat*
+    has |z_disc| == 1.0 (γ^0). Pre-fix this only held for the seat that
+    made the very last decision; the other seat had |z_disc| ≤ γ^k for
+    some k > 0.
+    """
+    for seed in range(20):
+        record = play_game(
+            game_id=0, seed=seed, perturbation="canonical", max_turns=400, discount=0.99
+        )
+        if record.truncated:
+            continue
+        last_seat0 = next((d for d in reversed(record.decisions) if d.player_seat == 0), None)
+        last_seat1 = next((d for d in reversed(record.decisions) if d.player_seat == 1), None)
+        if last_seat0 is None or last_seat1 is None:
+            continue
+        # Both seats' last decisions land at discount^0 == 1.0 under the
+        # per-seat scheme — the absolute value tracks z_by_seat[seat]
+        # which is ±1 on non-truncated games.
+        assert abs(abs(last_seat0.z_disc) - 1.0) < 1e-6, (
+            f"seed={seed}: seat 0 last z_disc={last_seat0.z_disc}, expected ±1.0"
+        )
+        assert abs(abs(last_seat1.z_disc) - 1.0) < 1e-6, (
+            f"seed={seed}: seat 1 last z_disc={last_seat1.z_disc}, expected ±1.0"
+        )
+        return
+    pytest.skip("no non-truncated games in 20 seeds")
+
+
 def test_play_game_z_disc_discounted_back_in_time() -> None:
     """z_disc magnitude must decay with discount γ as we go back in time."""
     for seed in range(20):
