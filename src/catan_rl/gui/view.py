@@ -1,11 +1,14 @@
 # Settlers of Catan
 # Game view class implementation with pygame
 
+import math
 import sys
 
 import pygame
 
 from catan_rl.engine.geometry import *
+from catan_rl.gui import render
+from catan_rl.gui import render_constants as RC
 
 pygame.init()
 
@@ -38,58 +41,54 @@ class catanGameView:
     # Function to display the initial board
 
     def displayInitialBoard(self):
-        # Dictionary to store RGB Color values
-        colorDict_RGB = {
-            "BRICK": (255, 51, 51),
-            "ORE": (128, 128, 128),
-            "WHEAT": (255, 255, 51),
-            "WOOD": (0, 153, 0),
-            "SHEEP": (51, 255, 51),
-            "DESERT": (255, 255, 204),
-        }
-        self.colorDict = colorDict_RGB
-        pygame.draw.rect(
-            self.screen, pygame.Color("royalblue2"), (0, 0, self.board.width, self.board.height)
-        )  # blue background
+        # Back-compat: external code may still read ``self.colorDict``.
+        self.colorDict = dict(RC.TILE_COLORS)
 
-        # Render each hexTile
+        render.draw_water(self.screen, (self.board.width, self.board.height))
+        hex_centers = [self.board.hexTileDict[i].to_pixel(self.board.flat) for i in range(19)]
+        render.draw_island_outline(self.screen, hex_centers)
+
         for hexTile in self.board.hexTileDict.values():
-            hexTileCorners = hexTile.get_corners(self.board.flat)
-
-            hexTileColor_rgb = colorDict_RGB[hexTile.resource_type]
-            pygame.draw.polygon(
+            render.draw_hex_tile(self.screen, hexTile, self.board, with_bevel=True)
+            center = hexTile.to_pixel(self.board.flat)
+            cx_int = int(center.x)
+            cy_int = int(center.y)
+            render.draw_resource_symbol(
                 self.screen,
-                pygame.Color(hexTileColor_rgb[0], hexTileColor_rgb[1], hexTileColor_rgb[2]),
-                hexTileCorners,
-                self.board.width == 0,
+                (cx_int, cy_int + RC.RESOURCE_SYMBOL_VERTICAL_OFFSET),
+                hexTile.resource_type,
             )
-            # print(hexTile.index, hexTileCorners)
-
-            # Get pixel center coordinates of hex
-            hexTile.pixelCenter = hexTile.to_pixel(self.board.flat)
-            if hexTile.resource_type != "DESERT":  # skip desert text/number
-                resourceText = self.font_resource.render(
-                    str(hexTile.resource_type) + " (" + str(hexTile.number_token) + ")",
-                    False,
-                    (0, 0, 0),
+            num = getattr(hexTile, "number_token", None)
+            if num is not None and num != 0 and hexTile.resource_type != "DESERT":
+                render.draw_number_token(
+                    self.screen,
+                    (cx_int, cy_int + RC.NUMBER_TOKEN_VERTICAL_OFFSET),
+                    num,
                 )
-                # add text to hex
-                self.screen.blit(resourceText, (hexTile.pixelCenter.x - 25, hexTile.pixelCenter.y))
 
-        # Display the Ports - update images/formatting later
-        for vCoord, vertexInfo in self.board.boardGraph.items():
-            if vertexInfo.port != None:
-                portText = self.font_ports.render(vertexInfo.port, False, (0, 0, 0))
-                # print("Displaying {} port with coordinates x ={} and y={}".format(vertexInfo.port, vCoord.x, vCoord.y))
-
-                if vCoord.x < 430 and vCoord.y > 130:
-                    self.screen.blit(portText, (vCoord.x - 50, vCoord.y))
-                elif vCoord.x > 430 and vCoord.y < 130:
-                    self.screen.blit(portText, (vCoord.x, vCoord.y - 15))
-                elif vCoord.x < 430 and vCoord.y < 130:
-                    self.screen.blit(portText, (vCoord.x - 50, vCoord.y - 15))
-                else:
-                    self.screen.blit(portText, (vCoord.x, vCoord.y))
+        board_cx = self.board.width / 2.0
+        board_cy = self.board.height / 2.0
+        vertex_pixel = self.board.vertex_index_to_pixel_dict
+        for v1_idx, v2_idx, ratio, resource in render.collect_port_edges(self.board):
+            v1_px = vertex_pixel[v1_idx]
+            v2_px = vertex_pixel[v2_idx]
+            mid_x = (float(v1_px.x) + float(v2_px.x)) / 2.0
+            mid_y = (float(v1_px.y) + float(v2_px.y)) / 2.0
+            dx = mid_x - board_cx
+            dy = mid_y - board_cy
+            # Guard the centroid-degenerate case; ports near the board
+            # center are impossible by engine construction but cheap to
+            # defend against.
+            d = math.hypot(dx, dy) or 1.0
+            ax = int(mid_x + dx * RC.PORT_PUSH_DISTANCE / d)
+            ay = int(mid_y + dy * RC.PORT_PUSH_DISTANCE / d)
+            render.draw_port_planks(
+                self.screen,
+                (ax, ay),
+                (int(v1_px.x), int(v1_px.y)),
+                (int(v2_px.x), int(v2_px.y)),
+            )
+            render.draw_port_ship(self.screen, ratio, resource, (ax, ay))
 
         pygame.display.update()
 
@@ -200,16 +199,10 @@ class catanGameView:
     # Function to display robber
 
     def displayRobber(self):
-        # Robber text
-        robberText = self.font_Robber.render("R", False, (0, 0, 0))
-        # Get the coordinates for the robber
-        robberCoords = None
         for hexTile in self.board.hexTileDict.values():
             if hexTile.has_robber:
-                robberCoords = hexTile.pixelCenter
-                break
-        if robberCoords is not None:
-            self.screen.blit(robberText, (int(robberCoords.x) - 20, int(robberCoords.y) - 35))
+                render.draw_robber_pawn(self.screen, hexTile, self.board)
+                return
 
     def displayPlayerStats(self):
         if not hasattr(self.game, "currentPlayer") or self.game.currentPlayer is None:
@@ -445,10 +438,9 @@ class catanGameView:
     # Function to control the move-robber action with display
 
     def moveRobber_display(self, currentPlayer, possibleRobberDict):
-        # Get all spots the player can move robber to and show circles
-        # Add in the Rect representations of possible robber spots
         for R in possibleRobberDict.keys():
-            possibleRobberDict[R] = self.draw_possible_robber(possibleRobberDict[R].pixelCenter)
+            hex_tile = possibleRobberDict[R]
+            possibleRobberDict[R] = self.draw_possible_robber(hex_tile.to_pixel(self.board.flat))
 
         pygame.display.update()
 
