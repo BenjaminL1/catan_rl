@@ -1,0 +1,66 @@
+# Default PPO training config — audit-derived defaults for v2.
+#
+# Every value here is also the dataclass default in
+# `src/catan_rl/ppo/arguments.py`. This file exists so that:
+#   1. A run is fully reproducible from a YAML snapshot, and
+#   2. Overrides are localised (env var > YAML > dataclass default).
+#
+# DO NOT change these defaults without updating the docstring in
+# arguments.py (and ideally the hardware audit's rationale).
+
+rollout:
+  n_envs: 128                    # audit: above MPS crossover for SGD, amortises Python overhead
+  n_steps: 256                   # 128 envs * 256 steps = 32768 transitions / rollout
+  vec_env_mode: subproc          # audit: meaningful win at n_envs>=32
+  max_turns: 400                 # truncation cap
+  opponent_type: heuristic       # default for Phase 1-7 sanity training; league later
+
+ppo:
+  n_epochs: 4                    # passes over the rollout buffer per update
+  batch_size: 512                # audit: MPS SGD 2.3x faster than CPU at 512
+  clip_range: 0.2                # PPO2 canonical
+  clip_range_vf: 0.2             # PPO2 value clip; reference is old_v
+  target_kl: 0.02                # early-stop within an update when KL exceeds
+  kl_approx: k3                  # Schulman 2020 unbiased low-variance
+  advantage_norm: rollout        # standardise over the buffer once
+  use_value_clipping: true       # PPO2-style max(MSE_unclipped, MSE_clipped)
+
+gae:
+  gamma: 0.995                   # ~200-step effective horizon (one Catan game)
+  gae_lambda: 0.95               # standard bias-variance trade-off
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.04       # Charlesworth-style anneal
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05              # belief-head aux (CE vs engine ground truth)
+  opp_action_coef: 0.03          # opp-action aux (only fires vs league opponents)
+
+optimizer:
+  lr_start: 3.0e-4
+  lr_end: 1.0e-5
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 0     # 0 = infer from total_steps / rollout size
+
+checkpoint:
+  save_every_updates: 50
+  keep_last_n: 5
+  save_optimizer_state: true     # required for clean resume
+
+eval:
+  eval_every_updates: 20
+  eval_games: 200                # binomial SE ~0.035 at p=0.5
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [random, heuristic]
+
+total_steps: 50003968            # 1526 rollouts * 128 envs * 256 steps ~= 50.0M; must be a multiple of n_envs * n_steps
+seed: 42
+device: auto                     # CUDA -> MPS -> CPU at runtime
+torch_compile: false             # audit: harmful on MPS, only useful for CUDA reduce-overhead
+run_name: ppo
+output_dir: runs/train
