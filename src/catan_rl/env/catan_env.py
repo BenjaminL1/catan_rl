@@ -28,6 +28,7 @@ What is preserved verbatim:
 from __future__ import annotations
 
 import queue
+import random
 from collections.abc import Sequence
 from typing import Any
 
@@ -231,6 +232,10 @@ class CatanEnv(gym.Env):
         super().reset(seed=seed)
         if seed is not None:
             np.random.seed(seed)
+            # StackedDice (engine/dice.py) uses the stdlib ``random``
+            # module — a separate global PRNG from ``np.random``. Seed it
+            # too so eval-gating decisions are reproducible across runs.
+            random.seed(seed)
 
         options = options or {}
         opp_type = options.get("opponent_type", self.opponent_type)
