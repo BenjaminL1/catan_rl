@@ -3,8 +3,12 @@
 The 12 elements of the dihedral group D6 are encoded as integers 0..11:
 
   * ``g = 0..5``  → rotation by ``g · 60°`` counter-clockwise.
-  * ``g = 6..11`` → reflection across the q-axis (i.e. ``r ↔ -q-r``)
-    followed by rotation by ``(g - 6) · 60°``.
+  * ``g = 6..11`` → the canonical D6 mirror — the axial map
+    ``(q, r) → (q, -q - r)``, which fixes the line ``r = -q/2`` in
+    axial coords and maps to a 150°-from-x-axis line in pixel space —
+    composed with rotation by ``(g - 6) · 60°``. Cayley convention is
+    the textbook D6 algebra: ``s·r^i ∘ r^j = s·r^(i - j) mod 6``,
+    pinned by ``test_symmetry_tables.test_cayley_convention``.
 
 Tile, vertex (corner), and edge permutations are computed once from a
 freshly-instantiated ``catanBoard`` and cached. The board's static
@@ -14,8 +18,12 @@ matters; the random resource shuffle does not affect the symmetry tables.
 Math derivation (kept here so future-us can audit):
 
   * Axial rotation by 60° CCW is the involution ``(q, r) → (-r, q + r)``.
-  * Reflection across the q-axis is ``(q, r) → (q, -q - r)``. All D6
-    reflections are this single mirror composed with a rotation.
+  * The canonical mirror is the axial map ``(q, r) → (q, -q - r)``.
+    Its pixel-space image (under the engine's ``f0=√3, f1=√3/2, f2=0,
+    f3=3/2`` pointy-top layout) is the matrix
+    ``[[1/2, -√3/2], [-√3/2, -1/2]]`` — a reflection across the line at
+    150° from the x-axis. All D6 reflections are this single mirror
+    composed with a rotation.
   * Vertex permutations are derived by rotating the *centered* pixel
     coordinate and finding the nearest existing vertex; tolerance is 1px
     (the rotation should be exact, so any closer-than-1px hit is the
@@ -183,11 +191,27 @@ def _board_data() -> _BoardData:
 def _rotate_pixel(x: float, y: float, theta_rad: float, *, mirror: bool) -> tuple[float, float]:
     """Rotate (and optionally pre-mirror) a centred pixel coordinate.
 
-    The mirror is across the y-axis (``x → -x``); composed with rotation
-    this generates all 6 reflection axes through hex vertex pairs.
+    The mirror is the pixel-space image of the axial-coordinate reflection
+    ``(q, r) → (q, -q-r)`` that ``tile_perm`` uses, NOT the simpler
+    ``x → -x``. The pointy-top hex layout (``f0=√3, f1=√3/2, f2=0,
+    f3=3/2``) maps the axial q-axis reflection to a 150°-line reflection
+    in pixel space, with matrix::
+
+        [[ 1/2,  -√3/2],
+         [-√3/2, -1/2 ]]
+
+    Pre-2026-06-03 this function used ``x → -x`` (reflection across the
+    y-axis at 90°), differing from the axial convention by 60°. The
+    mismatch caused ``A_{corner_perm(g)[v]} ≠ tile_perm(g)[A_v]`` for
+    all 54 vertices on every reflection (g=6..11), silently corrupting
+    any code that composed both perms. See
+    ``memory/project_d6_reflection_bug.md`` for the full incident.
     """
     if mirror:
-        x = -x
+        # Pixel image of axial reflection r ↔ -q-r.
+        x_new = 0.5 * x - (math.sqrt(3.0) / 2.0) * y
+        y_new = -(math.sqrt(3.0) / 2.0) * x - 0.5 * y
+        x, y = x_new, y_new
     cos_t, sin_t = math.cos(theta_rad), math.sin(theta_rad)
     return cos_t * x - sin_t * y, sin_t * x + cos_t * y
 

@@ -150,6 +150,69 @@ def test_reflection_applied_twice_is_identity(perm_fn) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_cayley_convention() -> None:
+    """Pin the Cayley composition rule the tables actually follow.
+
+    Empirically verified 2026-06-03 (post reflection-axis fix): the
+    tables satisfy the textbook D6 algebra ``s·r^i ∘ r^j = s·r^(i-j) mod 6``.
+
+    This pin exists so that future code which composes D6 elements
+    algebraically (inverse computation, optimization) does not silently
+    diverge from the table-derived composition.
+    """
+    # Permutation composition: ``(p_left[p_right])[x] = p_left[p_right[x]]``
+    # i.e. apply ``right`` first, then ``left``. So ``p_left ∘ p_right``
+    # in the function-composition sense corresponds to fancy-indexing
+    # ``p_left[p_right]``.
+    for i in range(6):
+        for j in range(6):
+            s_ri = 6 + i  # reflection composed with r^i (left operand)
+            r_j = j  # rotation r^j (right operand, applied first)
+            p_left = corner_perm(s_ri)
+            p_right = corner_perm(r_j)
+            composed = p_left[p_right]
+            expected_idx = 6 + ((i - j) % 6)
+            assert (composed == corner_perm(expected_idx)).all(), (
+                f"Cayley s·r^{i} ∘ r^{j}: expected s·r^{(i - j) % 6} "
+                f"(textbook D6), got perm differing from element {expected_idx}"
+            )
+
+
+def test_engine_topology_d6_symmetric_under_corner_and_tile_perm() -> None:
+    """Pin the topology relation ``A_{corner_perm(g)[v]} = tile_perm(g)[A_v]``
+    for all 12 D6 elements and all 54 vertices.
+
+    Pre-2026-06-03 this relation failed for every reflection (g=6..11)
+    because ``tile_perm`` used axial-coordinate reflection while
+    ``corner_perm`` used pixel-space ``x → -x`` — two different geometric
+    axes (150° vs 90°). The PPO main-loop aug survived only because both
+    self-play sides saw the same wrong transform; BC labels would have
+    been silently corrupted. See ``memory/project_d6_reflection_bug.md``.
+
+    Any regression to the reflection axis must fail this test. If a
+    future ``port_perm`` is added, it must also satisfy a port-specific
+    analog of this same topology relation.
+    """
+    from catan_rl.engine.board import catanBoard
+
+    board = catanBoard()
+    adjacency = {}
+    for v_idx in range(54):
+        px = board.vertex_index_to_pixel_dict[v_idx]
+        adjacency[v_idx] = frozenset(board.boardGraph[px].adjacent_hex_indices)
+
+    for g in range(D6_GROUP_SIZE):
+        p = tile_perm(g)
+        c_p = corner_perm(g)
+        for v in range(54):
+            lhs = adjacency[int(c_p[v])]
+            rhs = frozenset(int(p[h]) for h in adjacency[v])
+            assert lhs == rhs, (
+                f"g={g} v={v}: A_{{corner_perm[v]={int(c_p[v])}}}={sorted(lhs)} "
+                f"!= tile_perm(A_v)={sorted(rhs)}"
+            )
+
+
 def test_edge_perm_consistent_with_corner_perm() -> None:
     """For every edge (a, b), under D6 element g, edge_perm(g) must map to
     the edge whose endpoints are (corner_perm(g)[a], corner_perm(g)[b])."""
