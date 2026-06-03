@@ -290,7 +290,7 @@ class ObsEncoder:
         opponent_player: Any,
         env_state: EnvObsState,
         hand_tracker: BroadcastHandTracker | None = None,
-    ) -> dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray | np.int64]:
         """Build the obs dict for the agent's POV."""
         opp_resources = self._opp_resources(opponent_player, hand_tracker)
         opp_kind = OPP_KIND_UNKNOWN if env_state.opp_id_masked else int(env_state.opp_kind)
@@ -469,9 +469,11 @@ class ObsEncoder:
         """
         feats: list[float] = []
 
-        # 5 resources (Charlesworth order)
+        # 5 resources (Charlesworth order). Clip to [0, 1]: the 1v1 ruleset
+        # discards at 9 cards on a 7-roll but lets a player accumulate
+        # arbitrarily many between 7-rolls, so r/8.0 can exceed 1.0. Saturate.
         for r in RESOURCES_CW:
-            feats.append(float(resources.get(r, 0)) / 8.0)
+            feats.append(min(1.0, float(resources.get(r, 0)) / 8.0))
 
         # VP
         feats.append(float(player.victoryPoints) / 15.0)
@@ -501,18 +503,20 @@ class ObsEncoder:
         # Road length / 15.
         feats.append(float(getattr(player, "maxRoadLength", 0)) / 15.0)
 
-        # Knights played / 8.
-        feats.append(float(getattr(player, "knightsPlayed", 0)) / 8.0)
+        # Knights played / 8. Clipped: the dev deck holds 14 KNIGHT cards so
+        # a player can play >8 in long games, pushing this above 1.0.
+        feats.append(min(1.0, float(getattr(player, "knightsPlayed", 0)) / 8.0))
 
         # Settlements / cities / roads left.
         feats.append(float(getattr(player, "settlementsLeft", 5)) / 5.0)
         feats.append(float(getattr(player, "citiesLeft", 4)) / 4.0)
         feats.append(float(getattr(player, "roadsLeft", 15)) / 15.0)
 
-        # Dev cards in DEV_CARD_ORDER (5 floats).
+        # Dev cards in DEV_CARD_ORDER (5 floats). Clipped: KNIGHT count in
+        # hand can exceed 8 in long games (14 in the deck).
         dev = getattr(player, "devCards", {}) or {}
         for c in DEV_CARD_ORDER:
-            feats.append(float(dev.get(c, 0)) / 8.0)
+            feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
 
         # Phase flags (5).
         in_setup = bool(env_state.initial_placement_phase)
@@ -542,7 +546,16 @@ class ObsEncoder:
             dice_oh[last_dice - 2] = 1.0
         feats.extend(dice_oh)
 
-        # Karma flags: agent last rolled 7, opp last rolled 7.
+        # Karma flags — encode the *persistent* Karma buff state from this
+        # player's perspective. `last_player_to_roll_7` is updated only when a
+        # 7 rolls (never reset on turn change), so both flags persist across
+        # however many turns it takes for another 7 to roll.
+        #   flag 0: this player is the most recent 7-roller → no buff against
+        #           them; the *other* player is currently under the 20% buff.
+        #   flag 1: some other player is the most recent 7-roller AND this
+        #           player is not → karma_buff_active(player) is True; this
+        #           player's next roll has a 20% chance of being forced to 7.
+        # Both flags are 0 when no 7 has been rolled yet in the game.
         last7 = getattr(game, "last_player_to_roll_7", None)
         feats.append(1.0 if last7 is player else 0.0)
         feats.append(1.0 if (last7 is not None and last7 is not player) else 0.0)
@@ -571,7 +584,8 @@ class ObsEncoder:
         feats.extend(hidden_oh)
 
         total_res = float(sum(resources.values()))
-        feats.append(total_res / 20.0)
+        # Same saturation reasoning as the per-resource clip above.
+        feats.append(min(1.0, total_res / 20.0))
 
         if len(feats) != NEXT_PLAYER_DIM:
             raise RuntimeError(f"next_player_main dim={len(feats)} expected {NEXT_PLAYER_DIM}")
