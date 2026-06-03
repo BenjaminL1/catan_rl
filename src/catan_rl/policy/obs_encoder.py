@@ -101,7 +101,8 @@ _NUMBER_TOKEN_ORDER: tuple[int | None, ...] = (
 _N_NUMBER_ONEHOT = len(_NUMBER_TOKEN_ORDER)  # 11
 
 # Dot count by number token (the standard Catan dot-count is how many of
-# the 36 2d6 outcomes roll that number).
+# the 36 2d6 outcomes roll that number). Public alias ``DOTS_BY_TOKEN``
+# is exposed for downstream consumers (e.g. setup-phase analytic scorer).
 _DOTS_BY_TOKEN: dict[int | None, int] = {
     None: 0,
     2: 1,
@@ -116,6 +117,9 @@ _DOTS_BY_TOKEN: dict[int | None, int] = {
     12: 1,
 }
 _MAX_DOTS = 5  # used to normalise dim 18
+
+# Public alias of the dot-count table for cross-module imports.
+DOTS_BY_TOKEN: dict[int | None, int] = _DOTS_BY_TOKEN
 
 # Hex-feature dim for the GNN: same as tile_representations dims 0..18.
 HEX_FEATURE_DIM = 19
@@ -500,8 +504,10 @@ class ObsEncoder:
         feats.append(1.0 if getattr(player, "longestRoadFlag", False) else 0.0)
         feats.append(1.0 if getattr(player, "largestArmyFlag", False) else 0.0)
 
-        # Road length / 15.
-        feats.append(float(getattr(player, "maxRoadLength", 0)) / 15.0)
+        # Road length / 15. Clipped: Road Builder dev card adds 2 roads
+        # in a single turn so the longest path can exceed 15 edges in
+        # late-game corner cases.
+        feats.append(min(1.0, float(getattr(player, "maxRoadLength", 0)) / 15.0))
 
         # Knights played / 8. Clipped: the dev deck holds 14 KNIGHT cards so
         # a player can play >8 in long games, pushing this above 1.0.
