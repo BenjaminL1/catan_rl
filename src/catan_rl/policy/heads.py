@@ -225,6 +225,24 @@ class CatanActionHeads(nn.Module):
             torch.where(is_discard, masks["resource1_discard"], default),
         )
 
+    @staticmethod
+    def _resource2_mask(
+        type_idx: torch.Tensor,
+        res1_idx: torch.Tensor,
+        masks: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        # BANK_TRADE: forbid r2 == r1 (the engine accepts the degenerate
+        # trade silently as "pay 2-4 of r1, get 1 of r1 back" — a
+        # strictly losing action the policy should never sample). YOP
+        # is unaffected since picking two of the same resource is a
+        # legitimate strategic choice there.
+        mask = masks["resource2_default"].clone()
+        is_trade = type_idx == ActionType.BANK_TRADE
+        if is_trade.any():
+            rows = torch.nonzero(is_trade, as_tuple=True)[0]
+            mask[rows, res1_idx[rows]] = False
+        return mask
+
     # ------------------------------------------------------------------
     # Sampling
     # ------------------------------------------------------------------
@@ -268,7 +286,7 @@ class CatanActionHeads(nn.Module):
 
         res2_ctx = self._resource2_context(type_idx, res1_idx)
         res2_logits = self.resource2_head(trunk, res2_ctx)
-        res2_logp = masked_log_softmax(res2_logits, masks["resource2_default"])
+        res2_logp = masked_log_softmax(res2_logits, self._resource2_mask(type_idx, res1_idx, masks))
         res2_idx = Categorical(probs=res2_logp.exp()).sample()
 
         action = torch.stack([type_idx, corner_idx, edge_idx, tile_idx, res1_idx, res2_idx], dim=-1)
@@ -336,7 +354,7 @@ class CatanActionHeads(nn.Module):
         res1_logits = self.resource1_head(trunk, self._resource1_context(type_idx))
         res1_logp = masked_log_softmax(res1_logits, self._resource1_mask(type_idx, masks))
         res2_logits = self.resource2_head(trunk, self._resource2_context(type_idx, res1_idx))
-        res2_logp = masked_log_softmax(res2_logits, masks["resource2_default"])
+        res2_logp = masked_log_softmax(res2_logits, self._resource2_mask(type_idx, res1_idx, masks))
 
         per_head_logp = torch.stack(
             [

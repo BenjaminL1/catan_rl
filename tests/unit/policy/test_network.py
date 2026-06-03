@@ -153,6 +153,29 @@ def test_sample_respects_type_mask(forced_type: int) -> None:
     assert torch.isfinite(out["log_prob"]).all()
 
 
+def test_bank_trade_r2_excludes_r1_choice() -> None:
+    """Regression for review fix #12, 2026-06-03.
+
+    BANK_TRADE actions where r1 == r2 are "degenerate but legal" in the
+    engine (pay 2-4 of resource X, get 1 of X back — strictly losing).
+    The policy must never sample r2 == r1 on a BANK_TRADE action.
+    """
+    policy = CatanPolicy().eval()
+    masks = _make_masks(64, force_type=ActionType.BANK_TRADE)
+    # Force r1 head to a specific resource via the trade-mask
+    forced_r1 = 2  # arbitrary, in range [0, 5)
+    masks["resource1_trade"] = torch.zeros(64, N_RESOURCES, dtype=torch.bool)
+    masks["resource1_trade"][:, forced_r1] = True
+
+    torch.manual_seed(7)
+    for _ in range(5):  # multiple draws to clear any low-prob fluke
+        out = policy.sample(obs=_make_obs(batch_size=64), masks=masks)
+        r1s = out["action"][:, 4]
+        r2s = out["action"][:, 5]
+        assert (r1s == forced_r1).all(), "r1 mask not respected"
+        assert (r2s != r1s).all(), f"BANK_TRADE sampled r1==r2: r1={r1s.tolist()} r2={r2s.tolist()}"
+
+
 def test_sample_respects_per_head_mask_specific() -> None:
     """When only some corner indices are legal, the sample must land there."""
     policy = CatanPolicy().eval()
