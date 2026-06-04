@@ -235,6 +235,13 @@ class CatanEnv(gym.Env):
         self._turn_count = 0
         self._game_over = False
         self.last_dice_roll = 0
+        # ``agent_seat`` is the agent's position in the snake draft:
+        # 0 = first (default), 1 = second. Set via reset(options=...).
+        # When seat=1, the opponent makes the first setup placement before
+        # the agent's first action and takes the first main turn after
+        # setup completes. Used by the eval harness to symmetrise away
+        # first-mover advantage.
+        self._agent_seat: int = 0
 
     # ------------------------------------------------------------------
     # Gym API
@@ -263,6 +270,12 @@ class CatanEnv(gym.Env):
         if not 0 <= self._opp_policy_id < N_OPP_POLICY_SLOTS:
             self._opp_policy_id = N_OPP_POLICY_SLOTS - 1
         self._opp_id_mask_prob = float(options.get("opp_id_mask_prob", 0.0))
+        # Snake-draft seat. 0 = agent goes first (current default
+        # behaviour); 1 = opponent goes first. Anything else raises.
+        agent_seat = int(options.get("agent_seat", 0))
+        if agent_seat not in (0, 1):
+            raise ValueError(f"agent_seat must be 0 or 1; got {agent_seat}")
+        self._agent_seat = agent_seat
 
         self.game = catanGame(render_mode=None)
         board = self.game.board
@@ -280,10 +293,15 @@ class CatanEnv(gym.Env):
         opp.isAI = True
         self.opponent_player = opp
 
-        # 1v1 only: agent goes first.
+        # 1v1 only. Queue order matches snake draft: position 0 acts
+        # first. ``_agent_seat`` decides which player sits there.
         self.game.playerQueue = queue.Queue(2)
-        self.game.playerQueue.put(self.agent_player)
-        self.game.playerQueue.put(self.opponent_player)
+        if self._agent_seat == 0:
+            self.game.playerQueue.put(self.agent_player)
+            self.game.playerQueue.put(self.opponent_player)
+        else:
+            self.game.playerQueue.put(self.opponent_player)
+            self.game.playerQueue.put(self.agent_player)
         self.game.resource_tracker = ResourceTracker([self.agent_player.name, opp.name])
 
         # Obs encoder + hand tracker. Both built after the engine so the
@@ -309,6 +327,14 @@ class CatanEnv(gym.Env):
         self._turn_count = 0
         self._game_over = False
         self.last_dice_roll = 0
+
+        # Snake draft P1→P2→P2→P1. If agent is seat 1 (P2), opponent
+        # places their FIRST settle+road before the agent acts. The
+        # opponent's second placement and starting resources are deferred
+        # until after the agent's second setup (handled in
+        # _handle_setup_step at step 3).
+        if self._agent_seat == 1:
+            self.opponent_player.initial_setup(board)
 
         return self._get_obs(), {}
 
@@ -503,10 +529,13 @@ class CatanEnv(gym.Env):
             v1, v2 = self._idx_to_edge[edge_idx]
             agent.build_road(v1, v2, board, is_free=True)
             self._setup_step = 2
-            # Opponent does both their setups in one shot (settle1+road1+settle2+road2).
-            opponent.initial_setup(board)
-            opponent.initial_setup(board)
-            self._grant_setup_resources(opponent)
+            if self._agent_seat == 0:
+                # Snake middle: P2 places BOTH (settle+road)x2 in a row.
+                # Resources are granted from P2's second settlement.
+                opponent.initial_setup(board)
+                opponent.initial_setup(board)
+                self._grant_setup_resources(opponent)
+            # agent_seat=1: opponent's second setup is deferred to step 3.
         elif self._setup_step == 2:  # agent settle 2
             v_pixel = self._idx_to_vertex[corner_idx]
             agent.build_settlement(v_pixel, board, is_free=True)
@@ -515,10 +544,33 @@ class CatanEnv(gym.Env):
             v1, v2 = self._idx_to_edge[edge_idx]
             agent.build_road(v1, v2, board, is_free=True)
             self._grant_setup_resources(agent)
+            if self._agent_seat == 1:
+                # Snake tail: opponent (P1) now places their second
+                # settle+road. Resources are granted from this second
+                # settlement.
+                opponent.initial_setup(board)
+                self._grant_setup_resources(opponent)
             self.initial_placement_phase = False
             self.game.gameSetup = False
-            self.roll_pending = True
             self._setup_step = 4
+            if self._agent_seat == 1:
+                # Opponent is snake-P1; they take the first main turn.
+                self._run_opponent_turn()
+                terminated, truncated = self._check_terminal()
+                if terminated or truncated:
+                    info = self._terminal_info(terminated)
+                    return (
+                        self._get_obs(),
+                        self._terminal_reward(),
+                        terminated,
+                        truncated,
+                        info,
+                    )
+                if not self.discard_pending:
+                    self.roll_pending = True
+                    self._turn_count += 1
+            else:
+                self.roll_pending = True
         return self._get_obs(), 0.0, False, False, {}
 
     def _grant_setup_resources(self, p: PlainPlayer) -> None:
