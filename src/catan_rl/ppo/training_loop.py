@@ -39,8 +39,11 @@ update loop). The script entry point in ``scripts/train.py`` calls
 
 from __future__ import annotations
 
+import io
+import json
 import logging
 import math
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -115,6 +118,13 @@ class TrainingState:
 
     # TB writer is created lazily and closed by the loop on exit.
     tb_writer: Any = None
+
+    # Metrics JSONL writer — append-only file handle under
+    # ``run_dir/metrics.jsonl``. One line per PPO update with
+    # ``kind="train"``, plus one line per opponent per eval round with
+    # ``kind="eval"``. Open lazily and closed by the loop on exit.
+    metrics_fh: io.TextIOBase | None = None
+    metrics_path: Path | None = None
 
     # Resume-attribution metadata.
     resumed_from: Path | None = None
@@ -391,6 +401,116 @@ def _log_eval_report(writer: Any, report: Any, *, global_step: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Metrics JSONL (run_dir/metrics.jsonl)
+# ---------------------------------------------------------------------------
+
+#: Path component relative to ``run_dir``. Kept as a constant so
+#: downstream tooling (notebooks, the dashboard) can import it.
+METRICS_FILENAME = "metrics.jsonl"
+
+
+def _open_metrics_writer(run_dir: Path) -> tuple[io.TextIOBase, Path]:
+    """Open ``run_dir/metrics.jsonl`` in append mode and return
+    ``(file_handle, path)``.
+
+    Append-only so a resumed run extends the same log instead of
+    clobbering it. The operator can ``cat metrics.jsonl | jq`` or
+    ``pandas.read_json(..., lines=True)`` to inspect training progress
+    live without waiting on TB to load.
+    """
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path = run_dir / METRICS_FILENAME
+    # ``"a"`` keeps prior lines when a run resumes. Line-buffered
+    # writes (``buffering=1``) flush after every line so a kill -9
+    # never loses a finalised line. The handle has a multi-call
+    # lifetime (one open at loop entry, close in the ``finally``
+    # block of ``run_training``); a context manager would scope it
+    # too tightly. Suppress SIM115.
+    fh = open(path, "a", buffering=1, encoding="utf-8")  # noqa: SIM115
+    return fh, path
+
+
+def _write_jsonl(fh: io.TextIOBase | None, record: dict[str, Any]) -> None:
+    """Serialise ``record`` to JSON and append one line to ``fh``.
+
+    Numpy scalar types are silently cast to Python primitives so
+    ``json.dumps`` doesn't choke. Missing-handle is a no-op (callers
+    that disabled the writer just pass ``None``).
+    """
+    if fh is None:
+        return
+    coerced: dict[str, Any] = {}
+    for k, v in record.items():
+        if hasattr(v, "item") and not isinstance(v, str | bytes):
+            # numpy scalar / 0-dim tensor → Python primitive.
+            try:
+                coerced[k] = v.item()
+                continue
+            except (ValueError, TypeError):
+                pass
+        coerced[k] = v
+    fh.write(json.dumps(coerced, separators=(",", ":")) + "\n")
+
+
+def _wall_time_iso() -> str:
+    """UTC timestamp as ISO-8601 with second precision. Cheap to call
+    and stable enough to correlate metrics with external systems."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _log_update_metrics_jsonl(
+    fh: io.TextIOBase | None,
+    metrics: Any,
+    *,
+    update_idx: int,
+    global_step: int,
+) -> None:
+    """Append one ``kind=train`` line per PPO update."""
+    if fh is None:
+        return
+    record: dict[str, Any] = {
+        "kind": "train",
+        "wall_time": _wall_time_iso(),
+        "update_idx": int(update_idx),
+        "global_step": int(global_step),
+    }
+    for k, v in vars(metrics).items():
+        if isinstance(v, int | float):
+            record[k] = float(v)
+    _write_jsonl(fh, record)
+
+
+def _log_eval_report_jsonl(
+    fh: io.TextIOBase | None,
+    report: Any,
+    *,
+    update_idx: int,
+    global_step: int,
+) -> None:
+    """Append one ``kind=eval`` line per (opponent, eval round)."""
+    if fh is None:
+        return
+    when = _wall_time_iso()
+    for res in report.results:
+        record = {
+            "kind": "eval",
+            "wall_time": when,
+            "update_idx": int(update_idx),
+            "global_step": int(global_step),
+            "opponent_type": str(res.opponent_type),
+            "wr": float(res.wr),
+            "ci_low": float(res.ci.lower),
+            "ci_high": float(res.ci.upper),
+            "n_games": int(res.n),
+            "n_wins": int(res.wins),
+            "n_truncated": int(res.n_truncated),
+            "wr_seat0": float(res.wr_seat0),
+            "wr_seat1": float(res.wr_seat1),
+        }
+        _write_jsonl(fh, record)
+
+
+# ---------------------------------------------------------------------------
 # Loop
 # ---------------------------------------------------------------------------
 
@@ -402,6 +522,7 @@ def run_training_loop(
     max_updates: int | None = None,
     logger: logging.Logger | None = None,
     open_tb: bool = True,
+    open_metrics_jsonl: bool = True,
 ) -> TrainingState:
     """Drive the PPO loop from ``state.update_idx`` to ``n_updates_total``.
 
@@ -424,6 +545,12 @@ def run_training_loop(
         logger: defaults to ``catan_rl.train`` logger.
         open_tb: ``True`` opens a TB ``SummaryWriter``. The smoke tests
             pass ``False`` to avoid the dependency.
+        open_metrics_jsonl: ``True`` (default) opens
+            ``run_dir/metrics.jsonl`` and appends a line per PPO update
+            (``kind=train``) plus a line per opponent per eval round
+            (``kind=eval``). The file is the operator's primary
+            non-TB inspection surface — ``pandas.read_json(p,
+            lines=True)`` loads the whole training history.
 
     Returns the same ``state`` object (mutated in place) so callers
     can introspect after the loop exits.
@@ -444,6 +571,9 @@ def run_training_loop(
 
     if open_tb and state.tb_writer is None:
         state.tb_writer = _open_tb_writer(run_dir)
+
+    if open_metrics_jsonl and state.metrics_fh is None:
+        state.metrics_fh, state.metrics_path = _open_metrics_writer(run_dir)
 
     end_update = state.n_updates_total
     if max_updates is not None:
@@ -500,6 +630,12 @@ def run_training_loop(
                 metrics.lr,
             )
             _log_update_metrics(state.tb_writer, metrics, global_step=state.global_step)
+            _log_update_metrics_jsonl(
+                state.metrics_fh,
+                metrics,
+                update_idx=update_idx,
+                global_step=state.global_step,
+            )
 
             # ---- league snapshot ------------------------------------
             if state.league.should_snapshot_this_update(update_idx):
@@ -520,6 +656,12 @@ def run_training_loop(
             ):
                 report = state.eval_harness.run(state.policy)
                 _log_eval_report(state.tb_writer, report, global_step=state.global_step)
+                _log_eval_report_jsonl(
+                    state.metrics_fh,
+                    report,
+                    update_idx=update_idx,
+                    global_step=state.global_step,
+                )
                 for res in report.results:
                     log.info(
                         "eval %s WR %.3f (CI %.3f-%.3f) n=%d",
@@ -553,6 +695,11 @@ def run_training_loop(
 
             with contextlib.suppress(Exception):  # pragma: no cover
                 state.tb_writer.flush()
+        if state.metrics_fh is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                state.metrics_fh.flush()
 
     return state
 
@@ -565,6 +712,7 @@ def run_training(
     logger: logging.Logger | None = None,
     max_updates: int | None = None,
     open_tb: bool = True,
+    open_metrics_jsonl: bool = True,
 ) -> TrainingState:
     """Compose :func:`build_training_state`, the optional resume, and
     :func:`run_training_loop` into a single call.
@@ -583,6 +731,7 @@ def run_training(
             max_updates=max_updates,
             logger=log,
             open_tb=open_tb,
+            open_metrics_jsonl=open_metrics_jsonl,
         )
     finally:
         state.vec_env.close()
@@ -591,4 +740,9 @@ def run_training(
 
             with contextlib.suppress(Exception):  # pragma: no cover
                 state.tb_writer.close()
+        if state.metrics_fh is not None:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                state.metrics_fh.close()
     return state

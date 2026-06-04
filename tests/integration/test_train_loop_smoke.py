@@ -315,6 +315,157 @@ class TestNonFiniteLossGuard:
             state.vec_env.close()
 
 
+class TestMetricsJSONL:
+    def _eval_cfg(self, total_updates: int = 2) -> TrainConfig:
+        # Override the base tiny cfg's disabled eval so we exercise
+        # both train and eval lines.
+        cfg = _tiny_cfg(total_updates=total_updates)
+        return replace(cfg, eval=replace(cfg.eval, eval_every_updates=1))
+
+    def test_file_appears_with_expected_schema(
+        self, tmp_path: Path, silent_logger: logging.Logger
+    ) -> None:
+        import json
+
+        from catan_rl.ppo.training_loop import METRICS_FILENAME
+
+        cfg = self._eval_cfg(total_updates=2)
+        run_training(
+            cfg,
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=2,
+            open_tb=False,
+        )
+        path = tmp_path / METRICS_FILENAME
+        assert path.exists()
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+
+        train = [r for r in records if r["kind"] == "train"]
+        evals = [r for r in records if r["kind"] == "eval"]
+        # 2 PPO updates → 2 train lines.
+        assert len(train) == 2
+        # 2 updates × 2 opponents (random, heuristic) × eval_every=1 → 4 eval lines.
+        assert len(evals) == 4
+
+        # Train schema.
+        required_train = {
+            "kind",
+            "wall_time",
+            "update_idx",
+            "global_step",
+            "policy_loss",
+            "value_loss",
+            "entropy_bonus",
+            "total_loss",
+            "approx_kl",
+            "clip_frac",
+            "grad_norm",
+            "lr",
+        }
+        assert required_train.issubset(train[0].keys())
+        # Eval schema.
+        required_eval = {
+            "kind",
+            "wall_time",
+            "update_idx",
+            "global_step",
+            "opponent_type",
+            "wr",
+            "ci_low",
+            "ci_high",
+            "n_games",
+            "n_wins",
+            "n_truncated",
+            "wr_seat0",
+            "wr_seat1",
+        }
+        assert required_eval.issubset(evals[0].keys())
+        # CI is well-formed.
+        for e in evals:
+            assert 0.0 <= e["ci_low"] <= e["ci_high"] <= 1.0
+            assert e["opponent_type"] in ("random", "heuristic")
+
+    def test_resume_appends_does_not_clobber(
+        self, tmp_path: Path, silent_logger: logging.Logger
+    ) -> None:
+        # First run writes 2 lines, second run resumes and appends 2 more.
+        from catan_rl.ppo.training_loop import METRICS_FILENAME
+
+        cfg = _tiny_cfg(total_updates=4)
+        run_training(
+            cfg,
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=2,
+            open_tb=False,
+        )
+        first_lines = (tmp_path / METRICS_FILENAME).read_text().splitlines()
+        assert len(first_lines) == 2  # 2 train, no eval (eval disabled in _tiny_cfg)
+
+        run_training(
+            cfg,
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=2,
+            open_tb=False,
+        )
+        all_lines = (tmp_path / METRICS_FILENAME).read_text().splitlines()
+        # The first 2 lines are unchanged; resume only appended.
+        assert all_lines[:2] == first_lines
+        assert len(all_lines) == 4
+
+    def test_disabled_via_flag(self, tmp_path: Path, silent_logger: logging.Logger) -> None:
+        from catan_rl.ppo.training_loop import METRICS_FILENAME
+
+        cfg = _tiny_cfg(total_updates=1)
+        run_training(
+            cfg,
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=1,
+            open_tb=False,
+            open_metrics_jsonl=False,
+        )
+        assert not (tmp_path / METRICS_FILENAME).exists()
+
+    def test_numpy_scalar_serialisation(
+        self, tmp_path: Path, silent_logger: logging.Logger
+    ) -> None:
+        # The writer must cope with numpy scalars (np.float32 etc.) that
+        # ``json.dumps`` would otherwise reject. _write_jsonl unit-tests
+        # cover this directly without the full loop overhead.
+        import io
+        import json
+
+        import numpy as np
+
+        from catan_rl.ppo.training_loop import _write_jsonl
+
+        buf = io.StringIO()
+        _write_jsonl(
+            buf,
+            {
+                "kind": "train",
+                "wall_time": "2026-06-03T22:00:00Z",
+                "update_idx": np.int64(5),
+                "global_step": np.int32(80),
+                "policy_loss": np.float32(-0.04),
+                "value_loss": np.float64(0.5),
+            },
+        )
+        line = buf.getvalue().strip()
+        rec = json.loads(line)
+        assert rec["update_idx"] == 5
+        assert rec["global_step"] == 80
+        assert rec["policy_loss"] == pytest.approx(-0.04, abs=1e-6)
+        assert rec["value_loss"] == pytest.approx(0.5, abs=1e-12)
+
+
 class TestResumeConfigDiff:
     def test_diff_emitted_on_critical_field_mismatch(
         self, tmp_path: Path, silent_logger: logging.Logger, caplog
