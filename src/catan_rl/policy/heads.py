@@ -249,15 +249,19 @@ class CatanActionHeads(nn.Module):
 
     def sample(
         self, trunk: torch.Tensor, masks: dict[str, torch.Tensor]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Autoregressive sample.
 
         Args:
             trunk: (B, trunk_dim).
             masks: dict of bool tensors per :data:`MASK_KEYS` schema.
         Returns:
-            ``(action, joint_log_prob, joint_entropy)`` where
-            ``action`` is (B, 6) int64 and the other two are (B,) floats.
+            ``(action, joint_log_prob, joint_entropy, per_head_log_prob)``
+            where ``action`` is (B, 6) int64, ``joint_log_prob`` /
+            ``joint_entropy`` are (B,) floats, and
+            ``per_head_log_prob`` is (B, 6) — the relevance-aware PPO
+            ratio + Phase 5 per-head diagnostics need this stored in
+            the rollout buffer.
         """
         type_logits = self.type_head(trunk)
         type_logp = masked_log_softmax(type_logits, masks["type"])
@@ -319,7 +323,7 @@ class CatanActionHeads(nn.Module):
         )
         joint_entropy = (per_head_ent * relevance).sum(dim=-1)
 
-        return action, joint_logp, joint_entropy
+        return action, joint_logp, joint_entropy, per_head_logp
 
     # ------------------------------------------------------------------
     # Off-policy evaluation (PPO / BC)

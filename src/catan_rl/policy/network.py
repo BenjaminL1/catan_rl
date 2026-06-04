@@ -185,8 +185,15 @@ class CatanPolicy(nn.Module):
     ) -> dict[str, torch.Tensor]:
         """Sample an action from the masked policy + return value + belief."""
         out = self.forward(obs)
-        action, log_prob, entropy = self.action_heads.sample(out["trunk"], masks)
-        out.update({"action": action, "log_prob": log_prob, "entropy": entropy})
+        action, log_prob, entropy, per_head_log_prob = self.action_heads.sample(out["trunk"], masks)
+        out.update(
+            {
+                "action": action,
+                "log_prob": log_prob,
+                "entropy": entropy,
+                "per_head_log_prob": per_head_log_prob,
+            }
+        )
         return out
 
     def evaluate_actions(

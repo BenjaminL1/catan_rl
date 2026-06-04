@@ -122,6 +122,14 @@ def build_parser() -> argparse.ArgumentParser:
         "without actually training.",
     )
     p.add_argument(
+        "--max-updates",
+        type=int,
+        default=None,
+        help="Hard cap on the number of PPO updates to execute (independent "
+        "of total_steps). Used by the smoke tests; production runs leave "
+        "this unset so the loop runs until total_steps is exhausted.",
+    )
+    p.add_argument(
         "--verbose",
         action="store_true",
         help="Enable DEBUG-level logging.",
@@ -350,26 +358,37 @@ def setup_logging(run_dir: Path, *, verbose: bool) -> logging.Logger:
     return logger
 
 
-def construct_trainer(cfg: TrainConfig, run_dir: Path) -> None:
-    """Hook for Phase 4: build the policy, vec env, rollout buffer, and
-    trainer, then call ``trainer.learn()``.
+def construct_trainer(
+    cfg: TrainConfig,
+    run_dir: Path,
+    *,
+    device_label: str,
+    logger: logging.Logger,
+    max_updates: int | None = None,
+) -> None:
+    """Drive the Phase 10 end-to-end training loop.
 
-    Today's stub raises with a pointer to the planned wire-up so a
-    misconfigured run fails loudly rather than silently exiting early.
+    Delegates to
+    :func:`catan_rl.ppo.training_loop.run_training` which composes
+    Phases 0-8 into a single resumable loop. piKL (Phase 9) is
+    parked at the primitive layer and is not consumed here yet —
+    the trainer doesn't accept an anchor argument and ``PiKLConfig``
+    is not a field on ``TrainConfig``.
     """
-    _ = (cfg, run_dir)  # silence unused warnings until Phase 4 lands
-    raise NotImplementedError(
-        "trainer construction is Phase 4 of the v2 training-infra build-out — "
-        "see docs/templates/phase_review_prompt.md. Re-run with --dry-run "
-        "until Phase 4 lands."
+    from catan_rl.ppo.training_loop import run_training
+
+    run_training(
+        cfg,
+        run_dir=run_dir,
+        device_label=device_label,
+        logger=logger,
+        max_updates=max_updates,
     )
 
 
-#: Exit code used when the trainer construction step is intentionally
-#: not wired yet (Phase 4 pending). Equal to ``os.EX_USAGE`` on POSIX —
-#: the conventional "misuse / non-retriable" exit code. Cloud schedulers
-#: (Modal, SkyPilot, RunPod) treat 1 and 2 as retriable; 64 is the
-#: documented "do not retry" signal.
+#: Retained for back-compat with any prior caller that ran a Phase 2
+#: dry-run and expected the placeholder exit code. The new loop never
+#: emits it (success → 0, failure → raised exception).
 EXIT_TRAINER_NOT_WIRED = 64
 
 
@@ -415,7 +434,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        construct_trainer(cfg, run_dir)
+        construct_trainer(
+            cfg,
+            run_dir,
+            device_label=resolved_device,
+            logger=logger,
+            max_updates=args.max_updates,
+        )
     except NotImplementedError as e:
         logger.error("trainer not yet wired: %s", e)
         return EXIT_TRAINER_NOT_WIRED
