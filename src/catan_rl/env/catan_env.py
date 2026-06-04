@@ -145,9 +145,23 @@ class CatanEnv(gym.Env):
                 signal. ``0.0`` reduces to a pure +/-1 outcome reward.
         """
         super().__init__()
-        if opponent_type not in {"random", "heuristic"}:
+        # Whitelist includes ``"snapshot"`` so the
+        # :mod:`catan_rl.selfplay.league` sentinel can reach env
+        # construction without triggering a misleading "unsupported
+        # opponent_type" error from this file. The actual snapshot
+        # opponent inference path lands in Phase 8 of the training-
+        # infra build-out; until then constructing a snapshot env
+        # raises ``NotImplementedError`` with a clear pointer.
+        if opponent_type not in {"random", "heuristic", "snapshot"}:
             raise ValueError(
-                f"opponent_type={opponent_type!r}; supported in Step 1: 'random' or 'heuristic'"
+                f"opponent_type={opponent_type!r}; supported: "
+                "'random', 'heuristic', 'snapshot' (snapshot path Phase 8+)"
+            )
+        if opponent_type == "snapshot":
+            raise NotImplementedError(
+                "opponent_type='snapshot' is reserved by "
+                "catan_rl.selfplay.league but not yet wired; Phase 8 "
+                "checkpoint loading lands the snapshot opponent inference path."
             )
         self.opponent_type = opponent_type
         self.max_turns = int(max_turns)

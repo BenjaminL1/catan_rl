@@ -305,6 +305,41 @@ class EvalConfig:
 
 
 @dataclass(frozen=True)
+class LeagueConfig:
+    """Opponent-mix weights + snapshot retention for self-play.
+
+    See :class:`catan_rl.selfplay.league.League` for semantics.
+    """
+
+    random_weight: float = 0.0
+    """Weight on the uniformly-random opponent (default 0 — heuristic
+    is the v2 baseline opponent)."""
+
+    heuristic_weight: float = 1.0
+    """Weight on the heuristic opponent."""
+
+    snapshot_weight: float = 0.0
+    """Weight on past-policy snapshots. Setting >0 with an empty
+    pool falls back to the remaining kinds. Phase 6 raises
+    NotImplementedError if a snapshot is actually sampled — the
+    snapshot opponent path lands in Phase 8+."""
+
+    add_snapshot_every_n_updates: int = 4
+    """Append a fresh snapshot to the pool every N PPO updates."""
+
+    maxlen: int = 100
+    """Maximum snapshot pool size; oldest entries are evicted FIFO."""
+
+    def __post_init__(self) -> None:
+        for name in ("random_weight", "heuristic_weight", "snapshot_weight"):
+            _check_non_negative(name, getattr(self, name))
+        if self.random_weight + self.heuristic_weight + self.snapshot_weight == 0:
+            raise ValueError("at least one league weight must be > 0; got all zeros")
+        _check_positive("add_snapshot_every_n_updates", self.add_snapshot_every_n_updates)
+        _check_positive("maxlen", self.maxlen)
+
+
+@dataclass(frozen=True)
 class TrainConfig:
     """Top-level training configuration. The full set of knobs needed to
     reproduce a training run from scratch.
@@ -322,6 +357,7 @@ class TrainConfig:
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
+    league: LeagueConfig = field(default_factory=LeagueConfig)
 
     total_steps: int = 50_003_968
     """Total env steps to train for. Must be a multiple of
@@ -493,6 +529,7 @@ class TrainConfig:
             "optimizer": OptimizerConfig,
             "checkpoint": CheckpointConfig,
             "eval": EvalConfig,
+            "league": LeagueConfig,
         }
         kwargs: dict[str, Any] = {}
         for section_name, section_cls in sections.items():

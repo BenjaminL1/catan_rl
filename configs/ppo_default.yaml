@@ -58,6 +58,13 @@ eval:
   eval_seeds: [0, 1, 2, 3, 4]
   eval_opponents: [random, heuristic]
 
+league:
+  random_weight: 0.0             # heuristic-only baseline; flip in Phase 8+
+  heuristic_weight: 1.0
+  snapshot_weight: 0.0           # raises NotImplementedError when sampled
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+
 total_steps: 50003968            # 1526 rollouts * 128 envs * 256 steps ~= 50.0M; must be a multiple of n_envs * n_steps
 seed: 42
 device: auto                     # CUDA -> MPS -> CPU at runtime
