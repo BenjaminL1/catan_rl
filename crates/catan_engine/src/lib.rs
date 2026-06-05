@@ -14,6 +14,7 @@ pub mod board;
 pub mod dice;
 pub mod rng;
 pub mod spiral;
+pub mod state;
 
 /// Smoke-test entry point. Returns a fixed string so the R0
 /// acceptance gate can assert the wheel was built + loaded
