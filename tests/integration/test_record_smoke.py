@@ -1,18 +1,10 @@
-"""Phase 2d smoke test — record_game produces a valid Replay end-to-end.
+"""Phase 2d smoke — recorder-specific regression tests.
 
-Coverage matrix (Phase 2d's 6 supported matchups; Phase 4 will extend):
-
-* ``(random, random)`` seat=0
-* ``(random, heuristic)`` seat=0 (heuristic in opp slot)
-
-The two policy-required matchups are gated on a checkpoint that may
-not be present in CI; they're covered by a separate Phase 4 smoke
-suite. The two heuristic-as-agent matchups raise NotImplementedError
-in Phase 2d and are asserted in :mod:`tests.unit.replay.test_record_cli`.
-
-The test loads the produced JSON via :func:`load_replay` to confirm
-the schema contract is satisfied end-to-end — round-trip is the
-load-bearing assertion.
+Matchup-matrix coverage moved to ``tests/integration/test_record_matchups.py``
+(Phase 4). This file keeps regression tests that are tied to specific
+Phase 2d code paths (actor attribution, heuristic-as-agent raise,
+winner/truncation XOR) and that aren't duplicated by the parametrized
+matrix sweep.
 """
 
 from __future__ import annotations
@@ -21,66 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from catan_rl.replay import load_replay, record_game, save_replay
+from catan_rl.replay import record_game, save_replay
 from catan_rl.replay.player_factory import PlayerSpec as RecorderPlayerSpec
-
-
-@pytest.mark.parametrize(
-    "kind_a,kind_b",
-    [
-        ("random", "random"),
-        ("random", "heuristic"),
-    ],
-)
-def test_record_game_supported_matchups(kind_a: str, kind_b: str, tmp_path: Path) -> None:
-    spec_a = RecorderPlayerSpec(kind=kind_a, ckpt_path=None)  # type: ignore[arg-type]
-    spec_b = RecorderPlayerSpec(kind=kind_b, ckpt_path=None)  # type: ignore[arg-type]
-
-    replay = record_game(
-        spec_a,
-        spec_b,
-        seed=42,
-        max_turns=80,  # short cap so the test finishes quickly even on truncation
-    )
-
-    # ----- structural assertions -----
-    assert replay.schema_version >= 1
-    assert replay.metadata.player_a.kind == kind_a
-    assert replay.metadata.player_b.kind == kind_b
-    assert replay.metadata.seed == 42
-    assert replay.metadata.partial is False
-    assert replay.metadata.total_steps == len(replay.steps)
-
-    # Setup phase MUST emit exactly 4 setup steps regardless of seat.
-    setup_steps = [s for s in replay.steps if s.kind == "setup"]
-    assert len(setup_steps) == 4
-
-    # Snake-draft actor sequence: seat 0 → [a, b, b, a]; seat 1 →
-    # [b, a, a, b]. The recorder uses agent_seat=0 for (random, *)
-    # matchups (per ``_resolve_seat_and_opp``).
-    actors = [s.actor for s in setup_steps]
-    if replay.metadata.player_a.seat_index == 0:
-        assert actors == ["player_a", "player_b", "player_b", "player_a"]
-    else:
-        assert actors == ["player_b", "player_a", "player_a", "player_b"]
-
-    # Each setup step has exactly 2 sub-actions: settle + road.
-    for step in setup_steps:
-        assert len(step.actions) == 2
-        assert step.actions[0].kind == "BuildSettlement"
-        assert step.actions[1].kind == "BuildRoad"
-
-    # Main phase has at least 1 step (the game runs SOME turns).
-    main_steps = [s for s in replay.steps if s.kind == "main"]
-    assert len(main_steps) >= 1
-
-    # ----- round-trip through save/load -----
-    out_path = tmp_path / "replay.json"
-    save_replay(replay, out_path)
-    loaded = load_replay(out_path, strict=True)
-    assert loaded.metadata.total_steps == replay.metadata.total_steps
-    assert loaded.schema_version == replay.schema_version
-    assert len(loaded.steps) == len(replay.steps)
 
 
 def test_record_game_winner_or_truncation(tmp_path: Path) -> None:

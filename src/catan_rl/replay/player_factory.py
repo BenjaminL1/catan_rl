@@ -158,11 +158,22 @@ class _PolicyActor:
             # debug harnesses / future BC pipelines. Explicit casts
             # protect against silent ``mat1/mat2 dtype mismatch``
             # errors inside the trunk's ``nn.Linear`` layers.
-            if k in _DISCRETE_OBS_KEYS:
-                arr = np.ascontiguousarray(v, dtype=np.int64)
-            else:
-                arr = np.ascontiguousarray(v, dtype=np.float32)
-            obs_t[k] = torch.as_tensor(arr, device=self.device).unsqueeze(0)
+            #
+            # NB: ``np.ascontiguousarray`` on a 0-d array expands it to
+            # shape ``(1,)``; combined with the ``unsqueeze(0)`` below
+            # that produces shape ``(1, 1)`` which mismatches the
+            # policy's 2D-trunk expectation (embedding lookup yields
+            # ``(1, 1, dim)`` → torch.cat dim mismatch in
+            # ``_encode``). The eval harness (``eval/harness.py:263``)
+            # uses ``torch.as_tensor(v, device=...).unsqueeze(0)`` with
+            # no dtype arg and no ascontiguousarray, inheriting the
+            # source numpy dtype. Here we add an explicit ``dtype=``
+            # to defend the trunk against BC/debug callers that may
+            # feed wrong dtypes — the as_tensor call still returns a
+            # fresh contiguous tensor when the source is contiguous
+            # (which env obs always are).
+            target_dtype = torch.int64 if k in _DISCRETE_OBS_KEYS else torch.float32
+            obs_t[k] = torch.as_tensor(v, dtype=target_dtype, device=self.device).unsqueeze(0)
         masks_t = {
             k: torch.as_tensor(
                 np.ascontiguousarray(v, dtype=bool),
