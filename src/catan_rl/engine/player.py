@@ -76,6 +76,14 @@ class player:
                 # update the overall boardGraph
                 board.updateBoardGraph_road(v1, v2, self)
 
+                # Phase 0.5: structural-side build event so the replay
+                # recorder can attribute the road to a specific edge.
+                # The edge's integer index is resolved by the env (the
+                # engine itself keys edges by pixel-coord tuples); the
+                # recorder bridges to env-side edge_to_idx when consuming.
+                if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                    self.game.broadcast.build(self.name, kind="ROAD", location=-1)
+
                 # Calculate current max road length and update
                 maxRoads = self.get_road_length(board)
                 self.maxRoadLength = maxRoads
@@ -127,6 +135,14 @@ class player:
                 # update the overall boardGraph
                 board.updateBoardGraph_settlement(vCoord, self)
 
+                # Phase 0.5: structural-side build event. ``location``
+                # is set to ``-1`` because vertex keys are pixel-tuples
+                # at engine level; the env's ``_vertex_to_idx`` map
+                # bridges to integer indices and the recorder back-fills
+                # the location at observe time.
+                if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                    self.game.broadcast.build(self.name, kind="SETTLEMENT", location=-1)
+
                 # print('{} Built a Settlement'.format(self.name))
 
                 # Add port to players port list if it is a new port
@@ -170,6 +186,12 @@ class player:
 
                 # update the overall boardGraph
                 board.updateBoardGraph_city(vCoord, self)
+
+                # Phase 0.5: structural-side build event for the city
+                # upgrade. ``location`` follows the same convention as
+                # settle/road (env's vertex_to_idx bridges).
+                if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                    self.game.broadcast.build(self.name, kind="CITY", location=-1)
                 # print('{} Built a City'.format(self.name))
 
             else:
@@ -184,6 +206,12 @@ class player:
     def move_robber(self, hexIndex, board, player_robbed):
         "Update boardGraph with Robber and steal resource"
         board.updateBoardGraph_robber(hexIndex)
+
+        # Phase 0.5: fire the structural MOVE_ROBBER event BEFORE
+        # the steal attempt so subscribers see the move + any
+        # resulting STEAL in order.
+        if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+            self.game.broadcast.move_robber(self.name, int(hexIndex))
 
         # Steal a random resource from other players
         self.steal_resource(player_robbed)
@@ -226,6 +254,14 @@ class player:
                 self.name,
                 delta={resourceStolen: +1},
                 source="STEAL",
+            )
+            # Phase 0.5: structural STEAL event carrying the actual
+            # resource (omniscient — the replay system records
+            # perfect-information state, so a "?" is unnecessary here).
+            self.game.broadcast.steal(
+                robber_name=self.name,
+                victim_name=player_2.name,
+                resource=str(resourceStolen),
             )
         # print("Stole 1 {} from Player {}".format(
         #     resourceStolen, player_2.name))

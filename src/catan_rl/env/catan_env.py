@@ -470,18 +470,33 @@ class CatanEnv(gym.Env):
                 agent.monopolyPlayed += 1
                 agent.devCardPlayedThisTurn = True
                 r = RESOURCES_CW[res1_idx]
+                total_stolen = 0
                 for other in list(self.game.playerQueue.queue):
                     if other is not agent:
                         stolen = other.resources.get(r, 0)
                         if stolen > 0:
                             other.resources[r] = 0
                             agent.resources[r] += stolen
+                            total_stolen += stolen
                             self.game.broadcast.resource_change(
                                 other.name, {r: -stolen}, "MONOPOLY"
                             )
                             self.game.broadcast.resource_change(
                                 agent.name, {r: +stolen}, "MONOPOLY"
                             )
+                # Phase 0.5: emit a single structural MONOPOLY event
+                # carrying the total resources transferred. The
+                # per-victim ``RESOURCE_CHANGE`` events above (one
+                # ``-stolen`` from each victim, one ``+stolen`` into
+                # the agent) fire BEFORE this structural event. A
+                # consumer that needs to group RESOURCE_CHANGE +
+                # MONOPOLY into a single transaction should buffer
+                # the RESOURCE_CHANGEs until MONOPOLY arrives, then
+                # treat the buffered set as the monopoly play.
+                # Fires even when ``total_stolen == 0`` so the viewer
+                # renders the play as a step-bar marker rather than
+                # swallowing the action silently.
+                self.game.broadcast.monopoly(agent.name, r, total_stolen)
         elif action_type == ActionType.PLAY_ROAD_BUILDER:
             if agent.devCards.get("ROADBUILDER", 0) > 0 and not agent.devCardPlayedThisTurn:
                 agent.devCards["ROADBUILDER"] -= 1
@@ -674,6 +689,24 @@ class CatanEnv(gym.Env):
             self.agent_player.victoryPoints >= self.game.maxPoints
             or self.opponent_player.victoryPoints >= self.game.maxPoints
         ):
+            # Fire GAME_END exactly once even if _check_terminal is
+            # called repeatedly — the env returns ``True, False`` and
+            # the rollout loop short-circuits, so this branch only
+            # executes once per game in practice. The ``_game_over``
+            # guard pins that contract.
+            if not self._game_over:
+                winner = (
+                    self.agent_player
+                    if self.agent_player.victoryPoints >= self.game.maxPoints
+                    else self.opponent_player
+                )
+                self.game.broadcast.game_end(
+                    winner.name,
+                    vp_breakdown={
+                        self.agent_player.name: int(self.agent_player.victoryPoints),
+                        self.opponent_player.name: int(self.opponent_player.victoryPoints),
+                    },
+                )
             self._game_over = True
             return True, False
         if self._turn_count >= self.max_turns:

@@ -383,18 +383,35 @@ class catanGame:
             # if player_i takes longest road and didn't already have longest road
             if longestRoad and player_i.longestRoadFlag == False:
                 # Set previous players flag to false and give player_i the longest road points
-                prevPlayer = ""
+                prev_owner_name: str | None = None
                 for p in list(self.playerQueue.queue):
                     if p.longestRoadFlag:
                         p.longestRoadFlag = False
                         p.victoryPoints -= 2
-                        prevPlayer = "from Player " + p.name
+                        prev_owner_name = p.name
 
                 player_i.longestRoadFlag = True
                 player_i.victoryPoints += 2
 
+                # Phase 0.5: emit ONLY on actual holder change.
+                # ``prev_owner_name`` is None on the first-ever award;
+                # any subsequent transfer carries the previous holder.
+                # NOTE for any future engine port that models
+                # road-breaking (e.g., an opponent settlement that
+                # splits a long road): a "lost, no new winner" path
+                # would have no emit hook here. A separate
+                # ``longest_road_change(prev, None, length)`` emit
+                # site would be needed at the road-break trigger; the
+                # current engine doesn't model road-breaking so the
+                # check is purely acquisition-driven.
+                self.broadcast.longest_road_change(
+                    prev_owner=prev_owner_name,
+                    new_owner=player_i.name,
+                    length=int(player_i.maxRoadLength),
+                )
+
                 # print("Player {} takes Longest Road {}".format(
-                #     player_i.name, prevPlayer))
+                #     player_i.name, prev_owner_name))
 
     # function to check if a player has the largest army - after playing latest knight
     def check_largest_army(self, player_i):
@@ -408,15 +425,22 @@ class catanGame:
             # if player_i takes largest army and didn't already have it
             if largestArmy and player_i.largestArmyFlag == False:
                 # Set previous players flag to false and give player_i the largest points
-                prevPlayer = ""
+                prev_owner_name: str | None = None
                 for p in list(self.playerQueue.queue):
                     if p.largestArmyFlag:
                         p.largestArmyFlag = False
                         p.victoryPoints -= 2
-                        prevPlayer = "from Player " + p.name
+                        prev_owner_name = p.name
 
                 player_i.largestArmyFlag = True
                 player_i.victoryPoints += 2
+
+                # Phase 0.5: emit only on actual holder change.
+                self.broadcast.largest_army_change(
+                    prev_owner=prev_owner_name,
+                    new_owner=player_i.name,
+                    knights=int(player_i.knightsPlayed),
+                )
 
                 # print("Player {} takes Largest Army {}".format(
                 #     player_i.name, prevPlayer))
@@ -600,6 +624,182 @@ class catanGame:
                         runTime = pygame.time.get_ticks() - startTime
 
                     break
+
+    # ------------------------------------------------------------------
+    # Replay-system accessor (Phase 0.5)
+    # ------------------------------------------------------------------
+
+    def snapshot_state(
+        self,
+        seat_to_actor: dict,
+        vertex_pixel_to_idx: dict,
+        edge_key_to_idx: dict,
+    ) -> dict:
+        """Return a JSON-safe state snapshot mirroring
+        ``replay.schema.StepStateSnapshot``.
+
+        Args:
+            seat_to_actor: maps engine player name → JSON actor name
+                (``"player_a"`` or ``"player_b"``). The recorder
+                builds this once at reset based on ``agent_seat``.
+            vertex_pixel_to_idx: maps engine pixel-coord vertex keys
+                to the JSON integer ``vertex_idx``. Owned by the env
+                in ``catan_env._vertex_to_idx``.
+            edge_key_to_idx: maps engine's lex-sorted edge-key tuples
+                (the ``(s1, s2)`` shape used in
+                ``catan_env._edge_key``) to integer edge_idx.
+
+        The deep-copy contract from Phase 0 (every leaf must be a
+        primitive int/str/None, never an engine object reference) is
+        upheld here so subsequent engine mutations cannot retroactively
+        alter the snapshot.
+
+        A future Rust/C++ engine port only has to reimplement this
+        method (and ``board_static`` on the board) — the replay
+        recorder calls these accessors and never reaches into engine
+        internals.
+        """
+        import copy
+
+        def _edge_key(v1, v2):
+            s1, s2 = str(v1), str(v2)
+            return (s1, s2) if s1 < s2 else (s2, s1)
+
+        # Validate ``seat_to_actor`` covers every player in the queue
+        # — a silent miss would produce an empty ``players`` dict and
+        # the resulting replay would render an empty board in the
+        # viewer (per Phase 0.5 review).
+        live_names = {p.name for p in list(self.playerQueue.queue)}
+        missing = live_names - set(seat_to_actor.keys())
+        if missing:
+            raise ValueError(
+                f"snapshot_state: seat_to_actor missing engine player(s) "
+                f"{sorted(missing)}; received keys {sorted(seat_to_actor.keys())}"
+            )
+
+        # Per-player state.
+        settlements: dict[str, list[int]] = {}
+        cities: dict[str, list[int]] = {}
+        roads: dict[str, list[int]] = {}
+        players_snap: dict[str, dict] = {}
+        lr_holder: str | None = None
+        la_holder: str | None = None
+        for p in list(self.playerQueue.queue):
+            actor = seat_to_actor.get(p.name)
+            if actor is None:
+                continue
+            # Settlements + cities — vertex pixel → idx.
+            settle_indices: list[int] = []
+            for v_px in p.buildGraph.get("SETTLEMENTS", []):
+                if v_px in vertex_pixel_to_idx:
+                    settle_indices.append(int(vertex_pixel_to_idx[v_px]))
+            city_indices: list[int] = []
+            for v_px in p.buildGraph.get("CITIES", []):
+                if v_px in vertex_pixel_to_idx:
+                    city_indices.append(int(vertex_pixel_to_idx[v_px]))
+            # A vertex with a city has had its settlement upgraded —
+            # the engine keeps the original entry in SETTLEMENTS, so
+            # we de-dup here for the JSON convention "settlements and
+            # cities are disjoint sets".
+            settle_indices = [i for i in settle_indices if i not in city_indices]
+            # Roads — edge pixel-pair → idx.
+            road_indices: list[int] = []
+            for v1, v2 in p.buildGraph.get("ROADS", []):
+                key = _edge_key(v1, v2)
+                if key in edge_key_to_idx:
+                    road_indices.append(int(edge_key_to_idx[key]))
+            settlements[actor] = settle_indices
+            cities[actor] = city_indices
+            roads[actor] = road_indices
+
+            # Resources — deep copy to immutable dict of primitives.
+            resources = copy.deepcopy(dict(p.resources))
+            # Omniscient dev hand — merge ``devCards`` (dict) +
+            # ``newDevCards`` (list[str] of cards drawn this turn) at
+            # capture time per Phase 0 review (H2). The engine uses
+            # slightly different key shapes for VP cards across
+            # vintages; normalise here.
+            dev_hand_raw = dict(getattr(p, "devCards", {}) or {})
+            raw_new = getattr(p, "newDevCards", []) or []
+            if isinstance(raw_new, dict):
+                # Future-proof: if a port reshapes newDevCards into a
+                # dict, accept that too.
+                new_devs_counts: dict[str, int] = dict(raw_new)
+            else:
+                new_devs_counts = {}
+                for card_name in raw_new:
+                    key_name = str(card_name)
+                    new_devs_counts[key_name] = new_devs_counts.get(key_name, 0) + 1
+            legacy_keys = {
+                "ROAD_BUILDER": "ROADBUILDER",
+                "YEAR_OF_PLENTY": "YEAROFPLENTY",
+            }
+            # VP cards live in ``dev_cards_played`` ONLY (per the
+            # schema's ``PlayerStateSnapshot.dev_cards_played``
+            # docstring: "VP here is the count of VP cards the
+            # player owns — treated as 'played' since they're
+            # permanent points"). The engine keeps them in
+            # ``player.devCards["VP"]`` permanently, so we report
+            # ``dev_cards_hand["VP"] = 0`` to avoid double-counting.
+            dev_hand: dict[str, int] = {"VP": 0}
+            for key in (
+                "KNIGHT",
+                "ROAD_BUILDER",
+                "YEAR_OF_PLENTY",
+                "MONOPOLY",
+            ):
+                lookup = legacy_keys.get(key, key)
+                dev_hand[key] = int(dev_hand_raw.get(lookup, dev_hand_raw.get(key, 0))) + int(
+                    new_devs_counts.get(lookup, new_devs_counts.get(key, 0))
+                )
+            dev_played = {
+                "KNIGHT": int(getattr(p, "knightsPlayed", 0)),
+                "VP": int(dev_hand_raw.get("VP", 0)),
+                "ROAD_BUILDER": int(getattr(p, "roadBuilderPlayed", 0)),
+                "YEAR_OF_PLENTY": int(getattr(p, "yopPlayed", 0)),
+                "MONOPOLY": int(getattr(p, "monopolyPlayed", 0)),
+            }
+
+            players_snap[actor] = {
+                "name": str(p.name),
+                "vp": int(p.victoryPoints),
+                "resources": resources,
+                "dev_cards_hand": dev_hand,
+                "dev_cards_played": dev_played,
+            }
+
+            if getattr(p, "longestRoadFlag", False):
+                lr_holder = actor
+            if getattr(p, "largestArmyFlag", False):
+                la_holder = actor
+
+        # Robber location — scan board.hexTileDict for has_robber.
+        robber_hex = -1
+        for hex_idx, tile in self.board.hexTileDict.items():
+            if getattr(tile, "has_robber", False):
+                robber_hex = int(hex_idx)
+                break
+
+        # Karma armed-against-whom: persistent ``last_player_to_roll_7``
+        # is the OTHER player's identity for Karma purposes. Map it
+        # through ``seat_to_actor`` to keep the snapshot
+        # engine-implementation-free.
+        last_seven = (
+            seat_to_actor.get(self.last_player_to_roll_7.name)
+            if getattr(self.last_player_to_roll_7, "name", None) is not None
+            else None
+        )
+
+        return {
+            "settlements": settlements,
+            "cities": cities,
+            "roads": roads,
+            "robber_hex": robber_hex,
+            "players": players_snap,
+            "longest_road_holder": lr_holder,
+            "largest_army_holder": la_holder,
+            "last_seven_roller": last_seven,
+        }
 
 
 # Initialize new game and run
