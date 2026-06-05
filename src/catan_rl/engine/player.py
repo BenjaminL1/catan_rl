@@ -11,6 +11,12 @@ from catan_rl.engine.board import *
 class player:
     "Class Definition for Game Player"
 
+    # R1 INVARIANT: do not add ``__eq__`` / ``__hash__`` to this class.
+    # ``engine/dice.py`` shim relies on identity-based ``!=`` to
+    # decide whether Karma fires (``last_7_roller_obj is not current``).
+    # If a future PR adds value-equality, the Rust StackedDice
+    # shim must be updated in lockstep.
+
     # Initialize a game player, we use A, B and C to identify
     def __init__(self, playerName, playerColor):
         self.name = playerName

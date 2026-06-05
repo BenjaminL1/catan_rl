@@ -1,0 +1,73 @@
+# Catan engine crate — native Rust implementation of the 1v1 Catan
+# game state machine, board layout, dice, broadcast events, hand
+# tracker, obs encoder, and action mask builder. Exposed to Python
+# via PyO3 + maturin and imported as ``catan_engine`` from Python.
+#
+# See ``docs/plans/rust_engine_migration.md`` for the phase plan.
+# This Cargo.toml ships the deps required for the full R0-R13 plan,
+# even though early phases (R0-R2) only exercise a subset — pinning
+# them now avoids version-drift surprises mid-migration.
+
+[package]
+name = "catan_engine"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+publish = false
+description = "1v1 Catan game engine for the catan-rl training pipeline"
+license = "MIT"
+
+[lib]
+# ``cdylib`` produces the Python-importable ``.so``/``.dylib``;
+# ``rlib`` lets cargo bench / cargo test consume the same crate
+# without rebuilding everything.
+name = "catan_engine"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# ``extension-module`` is the cdylib build feature for
+# ``import catan_engine`` from Python. It's gated behind a feature
+# flag (not always-on) because PyO3's ``extension-module`` skips
+# linking libpython at build time — fine for a Python extension,
+# but breaks ``cargo test`` which links the test binary directly.
+# Maturin opts in via ``[tool.maturin] features = ["extension-module"]``
+# below; ``cargo test`` runs without it.
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+# PyO3 = Rust → Python bindings. Per the Q4 decision (plan doc),
+# we ship a version-specific build, NOT abi3 — the ~5-15ns per-call
+# dispatch saving compounds with ``&PyAny`` extraction in hot paths.
+pyo3 = { version = "0.22" }
+
+# numpy: ``PyArray2<f32>`` zero-copy returns for the obs encoder
+# + mask builder (lands in R6/R7). Wired now so future phases don't
+# need a dep churn.
+numpy = "0.22"
+
+# ChaCha8 RNG — the single RNG used across the engine (state shuffle,
+# dice bag, dev card deck, port assignment, heuristic AI action choice).
+# Seeded per-env from the trainer's master seed via
+# ``Seed::from_u64(master ^ env_idx)`` per the Q3 decision.
+rand_chacha = "0.3"
+rand_core = "0.6"
+
+# Rayon: data-parallel ``VectorizedEnv.step_batch`` lands in R9.
+# Pinned now to lock the version.
+rayon = "1.10"
+
+# thiserror: ergonomic ``#[derive(Error)]`` for ``EngineError`` once
+# action validation lands in R3.
+thiserror = "1.0"
+
+# serde: snapshot serialization for the replay-tape parity harness.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+# Criterion benchmarks — used from R3 onward.
+criterion = "0.5"
+
+# Per-crate release profile overrides (none for now — the workspace
+# root's [profile.release] handles everything).

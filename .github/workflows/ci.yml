@@ -38,3 +38,40 @@ jobs:
       - run: make test-unit
       - name: Smoke integration test
         run: pytest tests/integration -v -m integration --tb=short || true
+
+  rust-build:
+    # Build + test the catan_engine Rust crate on the platforms the
+    # training pipeline actually runs on. macOS arm64 is the dev box
+    # (M1 Pro CPU); ubuntu-latest stands in for cloud Linux x86_64.
+    # See docs/plans/rust_engine_migration.md for the rollout plan.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --release -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace --release
+      - name: Install maturin
+        run: python -m pip install maturin
+      - name: maturin develop --release
+        run: maturin develop --release
+      - name: Verify import + hello world
+        run: |
+          python -c "import catan_engine; assert catan_engine.hello() == 'hello from rust'"
+          python -c "import catan_engine; print('catan_engine', catan_engine.version())"

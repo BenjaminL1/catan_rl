@@ -58,3 +58,9 @@ models/hof/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Rust build artifacts (workspace target + maturin-built .so)
+target/
+src/catan_rl/_native/*.so
+src/catan_rl/_native/*.dylib
+src/catan_rl/_native/*.pyd

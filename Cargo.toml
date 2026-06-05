@@ -1,0 +1,25 @@
+# Cargo workspace root. The Catan engine crate lives under
+# ``crates/catan_engine`` per the migration plan in
+# ``docs/plans/rust_engine_migration.md``. Future Rust crates (e.g.,
+# an ISMCTS kernel) join here as additional workspace members.
+
+[workspace]
+resolver = "2"
+members = ["crates/catan_engine"]
+
+# Shared profile settings — applied to every workspace member's
+# ``cargo build --release``. The training pipeline never ships a debug
+# build, so we lean hard on link-time optimization + single-codegen
+# for the cleanest hot-path codegen. ``panic = "abort"`` saves the
+# unwinder cost on every Result-propagating function.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = 3
+
+# Inherit release optimizations for benchmarks but keep debug symbols
+# so flamegraphs are readable.
+[profile.bench]
+inherits = "release"
+debug = true

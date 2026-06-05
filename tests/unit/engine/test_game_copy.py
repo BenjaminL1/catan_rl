@@ -57,10 +57,28 @@ def test_copy_shares_stateless_headless_view(headless_game: catanGame) -> None:
 
 
 def test_mutation_isolation_dice_bag(headless_game: catanGame) -> None:
+    """After R1, ``dice.bag`` is a ``@property`` materializing a fresh
+    list per call (the canonical state lives in the Rust extension),
+    so the pre-shim "append to bag, check copy is untouched" test
+    silently passed regardless of whether ``__deepcopy__`` worked.
+
+    Reviewer-fix (M2): drive the original's dice forward and assert
+    the copy's bag size is unchanged. Bag size is an observable Rust
+    state — if ``__deepcopy__`` aliased the Rust handle, rolling on
+    the original would shrink the copy's bag too.
+    """
     cp = headless_game.copy()
-    before = len(cp.dice.bag)
-    headless_game.dice.bag.append(99)
-    assert len(cp.dice.bag) == before, "dice bag must not be aliased"
+    cp_bag_before = len(cp.dice.bag)
+    # Consume 5 rolls from the ORIGINAL dice.
+    for _ in range(5):
+        headless_game.dice.roll(None, None)
+    cp_bag_after = len(cp.dice.bag)
+    # The copy's bag must not have shifted by the 5 rolls.
+    assert cp_bag_after == cp_bag_before, (
+        f"cp.dice.bag size changed under original mutation "
+        f"(before={cp_bag_before}, after={cp_bag_after}) — "
+        "__deepcopy__ failed to isolate Rust state"
+    )
 
 
 def test_mutation_isolation_player_resources(headless_game: catanGame) -> None:

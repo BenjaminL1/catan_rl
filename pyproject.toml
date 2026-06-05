@@ -46,6 +46,30 @@ Homepage = "https://github.com/benjaminli/catan_rl"
 [tool.hatch.build.targets.wheel]
 packages = ["src/catan_rl"]
 
+# Maturin builds the native ``catan_engine`` Rust crate (under
+# ``crates/catan_engine``) into a Python extension module. The hatchling
+# build above ships the pure-Python ``catan_rl`` package; maturin ships
+# the compiled ``catan_engine.<abi>.so`` separately via
+# ``maturin develop --release`` (local dev) or
+# ``maturin build --release`` (CI wheel matrix). See
+# ``docs/plans/rust_engine_migration.md`` for the build contract.
+#
+# We deliberately do NOT swap the build-backend to maturin — hatchling
+# still owns the Python wheel. Maturin runs side-by-side.
+[tool.maturin]
+manifest-path = "crates/catan_engine/Cargo.toml"
+module-name = "catan_engine"
+strip = true
+# Opt into the ``extension-module`` cargo feature so PyO3 skips
+# libpython linking (correct for a Python ext); ``cargo test``
+# runs without this feature and links normally.
+features = ["extension-module"]
+# We intentionally omit ``python-source`` — maturin installs the
+# compiled ``catan_engine`` extension module directly into the active
+# venv's site-packages (top-level module). The Python ``catan_rl``
+# package is built separately by hatchling and consumes the Rust
+# extension via a plain ``import catan_engine``.
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

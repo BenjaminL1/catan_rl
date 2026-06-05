@@ -1,4 +1,4 @@
-.PHONY: install install-gui install-all test test-unit test-integration test-all lint format typecheck train eval bench clean smoke-train smoke-eval
+.PHONY: install install-gui install-all test test-unit test-integration test-all lint format typecheck train eval bench clean smoke-train smoke-eval rust-build rust-test rust-bench rust-clean
 
 PYTHON ?= python
 
@@ -54,3 +54,23 @@ clean:
 	find . -type d -name .mypy_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .ruff_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name '*.egg-info' -exec rm -rf {} + 2>/dev/null || true
+
+# Rust extension build targets (see docs/plans/rust_engine_migration.md).
+# ``rust-build`` runs maturin in --release mode and installs the
+# compiled .so into the active virtualenv's site-packages.
+rust-build:
+	maturin develop --release
+
+# ``cargo test --release`` runs the pure-Rust unit tests under
+# crates/catan_engine/src/**. Use this for fast iteration on game
+# rules without crossing the Python boundary.
+rust-test:
+	cargo test --workspace --release
+
+# Criterion benchmarks land from R3 onward.
+rust-bench:
+	cargo bench --workspace
+
+# Wipe the cargo target dir; forces a full rebuild on next ``make rust-build``.
+rust-clean:
+	cargo clean
