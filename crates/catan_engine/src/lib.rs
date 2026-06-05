@@ -12,11 +12,15 @@ use pyo3::prelude::*;
 
 pub mod board;
 pub mod dice;
+pub mod env;
 pub mod events;
 pub mod hand_tracker;
+pub mod masks;
+pub mod obs;
 pub mod rng;
 pub mod spiral;
 pub mod state;
+pub mod vec_env;
 
 /// Smoke-test entry point. Returns a fixed string so the R0
 /// acceptance gate can assert the wheel was built + loaded
@@ -45,5 +49,9 @@ fn catan_engine(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rng::chacha8_keystream, m)?)?;
     // R2 surfaces: BoardStatic with the JSON-safe board_static() dict.
     m.add_class::<board::PyBoardStatic>()?;
+    // R8 surfaces: RustCatanEnv single-env Gymnasium-style wrapper.
+    m.add_class::<env::PyRustEnv>()?;
+    // R9 surfaces: RustVectorizedEnv batch-step wrapper.
+    m.add_class::<vec_env::PyRustVecEnv>()?;
     Ok(())
 }
