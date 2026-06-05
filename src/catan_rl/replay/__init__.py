@@ -31,7 +31,12 @@ from catan_rl.replay.player_factory import (
 from catan_rl.replay.player_factory import (
     PlayerSpec as RecorderPlayerSpec,
 )
-from catan_rl.replay.recorder import snapshot_step_state
+from catan_rl.replay.recorder import (
+    EventCollector,
+    classify_step_events,
+    extract_sub_actions,
+    snapshot_step_state,
+)
 from catan_rl.replay.schema import (
     EVENT_REGISTRY,
     REPLAY_SCHEMA_VERSION,
@@ -70,6 +75,7 @@ __all__ = [
     "Actor",
     "BoardStatic",
     "EdgeStatic",
+    "EventCollector",
     "GameEnd",
     "HexStatic",
     "LargestArmyChange",
@@ -94,8 +100,10 @@ __all__ = [
     "VertexStatic",
     "apply_migrations",
     "build_actor",
+    "classify_step_events",
     "event_from_dict",
     "event_to_dict",
+    "extract_sub_actions",
     "load_replay",
     "register_migration",
     "registered_versions",
