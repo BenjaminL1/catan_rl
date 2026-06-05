@@ -47,7 +47,7 @@ because the env's state machine expects external actions but here we
 have two heuristic agents making decisions inline. The trade-off: we
 lose the env's mask-validation safety net, but gain the ability to
 observe every individual heuristic decision.
-"""  # noqa: RUF002
+"""
 
 from __future__ import annotations
 

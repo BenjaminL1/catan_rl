@@ -24,7 +24,7 @@ If the observed rate exceeds the expected by ≥ 1.5x, that's evidence of a
 deterministic tiebreaker.
 
 Output: ``runs/preflight/e03/determinism.json``.
-"""  # noqa: RUF002
+"""
 
 from __future__ import annotations
 

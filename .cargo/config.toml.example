@@ -1,0 +1,32 @@
+# Cargo workspace config — TEMPLATE.
+#
+# This file is the dev-box-specific cargo config. On macOS arm64 +
+# x86_64, ``cargo test`` links against libpython (unlike ``maturin
+# develop --features extension-module`` which skips libpython
+# linking). Without an embedded rpath, ``cargo test`` produces a
+# binary that aborts at startup with:
+#
+#     dyld[...]: Library not loaded: @rpath/libpython3.12.dylib
+#
+# To activate this config on your dev box:
+#
+#     make rust-setup
+#
+# which copies this file to ``.cargo/config.toml`` with your local
+# CONDA_PREFIX or homebrew-python ``LIBDIR`` substituted in.
+#
+# The rpath is set per-target so Linux x86_64 (CI runners) follow
+# their own discovery — the dynamic linker on Linux finds libpython
+# via the conda env's LD_LIBRARY_PATH or the wheel's auditwheel
+# RUNPATH, not via this file.
+
+[target.aarch64-apple-darwin]
+# The placeholder below is substituted by ``make rust-setup``. If
+# you're editing this file directly, replace ``__PYTHON_LIBDIR__``
+# with the output of:
+#
+#     python -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))"
+rustflags = ["-C", "link-arg=-Wl,-rpath,__PYTHON_LIBDIR__"]
+
+[target.x86_64-apple-darwin]
+rustflags = ["-C", "link-arg=-Wl,-rpath,__PYTHON_LIBDIR__"]

@@ -43,7 +43,7 @@ This is the simpler "invariance" check — the full equivariance check
 for the spatial action heads (corner/edge/tile) is a follow-up.
 
 Output: ``runs/preflight/e04/equivariance.json``.
-"""  # noqa: RUF002
+"""
 
 from __future__ import annotations
 
@@ -213,7 +213,7 @@ def _equivariance_loss(
     The type / value / belief heads are spatially *invariant* under D6
     (they don't index a spatial axis), so the correct test is
     ``|| h(s) − h(T_g(s)) ||_1 / || h(s) ||_1``.
-    """  # noqa: RUF002
+    """
     with torch.no_grad():
         base = _get_head_outputs(model, obs)
         # Build neutral actions + masks for apply_symmetry (it expects them).

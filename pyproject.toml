@@ -43,6 +43,18 @@ notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 [project.urls]
 Homepage = "https://github.com/benjaminli/catan_rl"
 
+# NOTE: ``[project.scripts]`` is intentionally NOT defined here.
+# Adding console-script entry points requires installing the
+# ``catan_rl`` Python package to site-packages, which conflicts
+# with the maturin/hatchling editable-install ordering for this
+# repo (``maturin develop`` uninstalls the hatchling-installed
+# ``catan-rl`` wheel and lays down a Rust-only wheel; subsequent
+# ``pip install -e .`` removes the maturin .so). Switching to
+# maturin as the sole build backend is the right long-term fix
+# — tracked in ``docs/plans/file_layout_restructure.md``. For now
+# users invoke CLIs as ``python scripts/<name>.py`` with
+# ``PYTHONPATH=src``.
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/catan_rl"]
 
@@ -64,11 +76,14 @@ strip = true
 # libpython linking (correct for a Python ext); ``cargo test``
 # runs without this feature and links normally.
 features = ["extension-module"]
-# We intentionally omit ``python-source`` — maturin installs the
-# compiled ``catan_engine`` extension module directly into the active
-# venv's site-packages (top-level module). The Python ``catan_rl``
-# package is built separately by hatchling and consumes the Rust
-# extension via a plain ``import catan_engine``.
+# Maturin and hatchling both manage an editable install of the
+# ``catan-rl`` distribution name. Running ``maturin develop`` uninstalls
+# hatchling's editable wheel and lays down a Rust-only wheel that
+# excludes ``src/catan_rl/`` — which is why ``make rust-build``
+# re-runs ``pip install -e .`` afterwards to restore the Python
+# package. The two coexist at runtime: ``catan_engine`` lives at
+# site-packages top-level, ``catan_rl`` lives at ``src/`` via the
+# hatchling .pth.
 
 [tool.ruff]
 line-length = 100
@@ -82,7 +97,7 @@ ignore = ["E741", "RUF012"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "RUF001", "RUF002", "RUF003"]
-"scripts/**" = ["E402", "F841", "RUF059", "SIM102"]
+"scripts/**" = ["E402", "F841", "RUF002", "RUF059", "SIM102"]
 # Legacy modules: not restructure-scope. Lint will be addressed alongside the
 # Phase 0+ refactors that touch each file. The blanket ignores below mute the
 # pre-existing violations so the new tooling pipeline can land green.
