@@ -13,6 +13,7 @@ use pyo3::prelude::*;
 pub mod board;
 pub mod dice;
 pub mod events;
+pub mod hand_tracker;
 pub mod rng;
 pub mod spiral;
 pub mod state;
