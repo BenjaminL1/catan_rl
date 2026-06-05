@@ -95,7 +95,9 @@ def run_viewer(
         # Compute the board layout ONCE — the static board doesn't
         # change across steps, so vertex pixels / hex centers are
         # stable. Centered + sized to fit the window with margin.
-        layout = _compute_layout_for_window(replay, window_size)
+        # TODO(viewer-v2): handle pygame.VIDEORESIZE → recompute
+        # layout when the window is made resizable.
+        layout, hex_size = _compute_layout_for_window(replay, window_size)
 
         frame_idx = 0
         running = True
@@ -112,6 +114,7 @@ def run_viewer(
                 small_font,
                 replay,
                 layout,
+                hex_size=hex_size,
                 step_idx=replay.metadata.total_steps - 1,
             )
             pygame.display.flip()
@@ -125,26 +128,34 @@ def run_viewer(
         pygame.quit()
 
 
-def _compute_layout_for_window(replay: Replay, window_size: tuple[int, int]) -> BoardLayout:
+def _compute_layout_for_window(
+    replay: Replay, window_size: tuple[int, int]
+) -> tuple[BoardLayout, float]:
     """Pick a hex_size + origin that fits the standard 19-hex layout
-    into ``window_size`` with a reasonable margin. The board spans
-    5 hex widths horizontally and 5 hex heights vertically (at the
-    pointy-top hex aspect ratio). We choose hex_size so that the
-    longer dimension fits with a 10% margin."""
+    into ``window_size`` with a reasonable margin, returning the
+    layout and the chosen ``hex_size`` (the renderer scales marker
+    sizes proportionally).
+
+    The board spans 5 hex widths horizontally and 5 hex heights
+    vertically (at the pointy-top hex aspect ratio); we choose
+    ``hex_size`` to fit the smaller dimension."""
     w, h = window_size
     # Board occupies ~5 hex_widths horizontally and ~5.5 hex_heights
-    # vertically (counting from outermost corner to outermost corner).
-    # hex_width = hex_size * sqrt(3); hex_height = hex_size * 2.
-    # We solve for hex_size that fits the smaller dimension.
+    # vertically. hex_width = hex_size * sqrt(3); hex_height =
+    # hex_size * 2. Solve for hex_size that fits the smaller dim.
     margin_frac = 0.10
     available_w = w * (1 - 2 * margin_frac)
     available_h = h * (1 - 2 * margin_frac)
     # Board fits in roughly 5 * sqrt(3) hex_size wide by 6 hex_size tall.
     hex_size_w = available_w / (5 * 1.732)
     hex_size_h = available_h / 6.0
-    hex_size = min(hex_size_w, hex_size_h)
+    # Floor at hex_size=8 so the layout tolerance + marker scaling
+    # don't underflow into floating-point noise for absurd
+    # window sizes.
+    hex_size = max(8.0, min(hex_size_w, hex_size_h))
     origin = (w / 2.0, h / 2.0)
-    return compute_board_layout(replay.board_static, hex_size=hex_size, origin=origin)
+    layout = compute_board_layout(replay.board_static, hex_size=hex_size, origin=origin)
+    return layout, hex_size
 
 
 def _render_frame(
@@ -154,6 +165,7 @@ def _render_frame(
     replay: Replay,
     layout: BoardLayout,
     *,
+    hex_size: float,
     step_idx: int,
 ) -> None:
     """Single-frame draw. V1 renders the metadata header + the board
@@ -190,6 +202,7 @@ def _render_frame(
             state,
             font=font,
             small_font=small_font,
+            hex_size=hex_size,
         )
 
 

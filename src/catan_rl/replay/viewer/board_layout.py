@@ -73,8 +73,9 @@ def compute_board_layout(
     # Tolerance for "same corner across hexes" comparison. The hex
     # corner radius is ``hex_size``, so a tolerance of ~5% of that is
     # tight enough to avoid false matches and loose enough to absorb
-    # floating-point noise.
-    tol = hex_size * 0.05
+    # floating-point noise. Floor at 0.5 px so absurdly small windows
+    # don't collapse the tolerance to zero and break the merge.
+    tol = max(hex_size * 0.05, 0.5)
 
     vertex_pixels = tuple(
         _resolve_vertex_pixel(

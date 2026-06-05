@@ -70,6 +70,7 @@ def test_v1_board_renders_nonempty_surface(short_replay_path: Path) -> None:
             state,
             font=font,
             small_font=small_font,
+            hex_size=70.0,
         )
 
         # Surface should now contain pixels OTHER than the background

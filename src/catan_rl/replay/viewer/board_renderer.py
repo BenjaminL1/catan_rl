@@ -56,6 +56,17 @@ _PORT_BG = (50, 78, 110)
 _PORT_FG = (228, 234, 244)
 _HEX_OUTLINE = (220, 224, 232)
 
+#: Unique single-char glyphs for the 5 resources. WOOD and WHEAT both
+#: start with 'W' so we use L for Lumber and G for Grain — the
+#: standard Catan shorthand. Used on port badges.
+_RESOURCE_GLYPHS: dict[str, str] = {
+    "WOOD": "L",
+    "BRICK": "B",
+    "WHEAT": "G",
+    "ORE": "O",
+    "SHEEP": "S",
+}
+
 
 def render_board(
     screen: Any,
@@ -65,17 +76,23 @@ def render_board(
     *,
     font: Any,
     small_font: Any,
+    hex_size: float,
 ) -> None:
     """Draw the board state into ``screen``. Called once per frame.
 
     ``state`` is the snapshot at the current step's end (i.e.,
     ``ReplayStep.state_after``); ownership maps + resources + the
     robber position come from there.
+
+    ``hex_size`` is the pixel radius used to lay out the board (see
+    :func:`compute_board_layout`). The renderer scales token / robber /
+    port / settlement marker sizes proportionally so the board reads
+    correctly at any window size.
     """
-    _draw_hex_tiles(screen, board_static, layout, state.robber_hex, font)
-    _draw_ports(screen, board_static, layout, small_font)
-    _draw_roads(screen, board_static, layout, state)
-    _draw_settlements_and_cities(screen, layout, state)
+    _draw_hex_tiles(screen, board_static, layout, state.robber_hex, font, hex_size)
+    _draw_ports(screen, board_static, layout, small_font, hex_size)
+    _draw_roads(screen, board_static, layout, state, hex_size)
+    _draw_settlements_and_cities(screen, layout, state, hex_size)
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +106,7 @@ def _draw_hex_tiles(
     layout: BoardLayout,
     robber_hex: int,
     font: Any,
+    hex_size: float,
 ) -> None:
     for hex_obj, center, corners in zip(
         board_static.hexes,
@@ -101,15 +119,18 @@ def _draw_hex_tiles(
         pygame.draw.polygon(screen, _HEX_OUTLINE, corners, width=2)
 
         if hex_obj.number_token is not None:
-            _draw_number_token(screen, center, hex_obj.number_token, font)
+            _draw_number_token(screen, center, hex_obj.number_token, font, hex_size)
 
         if hex_obj.hex_idx == robber_hex:
-            _draw_robber(screen, center)
+            _draw_robber(screen, center, hex_size)
 
 
-def _draw_number_token(screen: Any, center: tuple[float, float], token: int, font: Any) -> None:
+def _draw_number_token(
+    screen: Any, center: tuple[float, float], token: int, font: Any, hex_size: float
+) -> None:
     cx, cy = int(center[0]), int(center[1])
-    radius = 16
+    # Token radius scales with hex_size, clamped to a readable floor.
+    radius = max(10, int(hex_size * 0.22))
     pygame.draw.circle(screen, _NUMBER_TOKEN_BG, (cx, cy), radius)
     pygame.draw.circle(screen, _NUMBER_TOKEN_FG, (cx, cy), radius, width=2)
     fg = _HIGH_PROB_TOKEN_FG if token in (6, 8) else _NUMBER_TOKEN_FG
@@ -118,10 +139,15 @@ def _draw_number_token(screen: Any, center: tuple[float, float], token: int, fon
     screen.blit(surf, rect)
 
 
-def _draw_robber(screen: Any, center: tuple[float, float]) -> None:
-    cx, cy = int(center[0]), int(center[1] - 26)  # offset above number token
-    pygame.draw.circle(screen, _ROBBER_COLOR, (cx, cy), 8)
-    pygame.draw.circle(screen, _HEX_OUTLINE, (cx, cy), 8, width=1)
+def _draw_robber(screen: Any, center: tuple[float, float], hex_size: float) -> None:
+    # Robber sits above the number token, offset proportional to
+    # hex_size so it doesn't overlap at small windows or float off at
+    # large ones.
+    offset = max(16, int(hex_size * 0.38))
+    radius = max(5, int(hex_size * 0.12))
+    cx, cy = int(center[0]), int(center[1] - offset)
+    pygame.draw.circle(screen, _ROBBER_COLOR, (cx, cy), radius)
+    pygame.draw.circle(screen, _HEX_OUTLINE, (cx, cy), radius, width=1)
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +160,7 @@ def _draw_roads(
     board_static: BoardStatic,
     layout: BoardLayout,
     state: StepStateSnapshot,
+    hex_size: float,
 ) -> None:
     # Map edge_idx → owning actor (absent if no road on this edge).
     owner: dict[int, str] = {}
@@ -141,6 +168,7 @@ def _draw_roads(
         for edge_idx in road_indices:
             owner[int(edge_idx)] = actor_name
 
+    width = max(3, int(hex_size * 0.07))
     for edge in board_static.edges:
         owning = owner.get(edge.edge_idx)
         if owning is None:
@@ -148,7 +176,7 @@ def _draw_roads(
         v1 = layout.vertex_pixels[edge.v1_idx]
         v2 = layout.vertex_pixels[edge.v2_idx]
         color = _ACTOR_COLORS.get(owning, (200, 200, 200))
-        pygame.draw.line(screen, color, v1, v2, width=5)
+        pygame.draw.line(screen, color, v1, v2, width=width)
 
 
 # ---------------------------------------------------------------------------
@@ -157,7 +185,7 @@ def _draw_roads(
 
 
 def _draw_settlements_and_cities(
-    screen: Any, layout: BoardLayout, state: StepStateSnapshot
+    screen: Any, layout: BoardLayout, state: StepStateSnapshot, hex_size: float
 ) -> None:
     # Maps vertex_idx → (kind, actor). Cities overwrite settlements
     # because a city upgrade can replace the original settlement at
@@ -170,20 +198,21 @@ def _draw_settlements_and_cities(
         for v_idx in v_indices:
             placements[int(v_idx)] = ("city", actor)
 
+    settle_size = max(6, int(hex_size * 0.13))
+    city_size = max(8, int(hex_size * 0.17))
     for v_idx, (kind, actor) in placements.items():
         cx, cy = layout.vertex_pixels[v_idx]
         color = _ACTOR_COLORS.get(actor, (200, 200, 200))
         if kind == "settlement":
-            _draw_settlement_polygon(screen, (cx, cy), color)
+            _draw_settlement_polygon(screen, (cx, cy), color, settle_size)
         else:
-            _draw_city_polygon(screen, (cx, cy), color)
+            _draw_city_polygon(screen, (cx, cy), color, city_size)
 
 
 def _draw_settlement_polygon(
-    screen: Any, center: tuple[float, float], color: tuple[int, int, int]
+    screen: Any, center: tuple[float, float], color: tuple[int, int, int], s: int
 ) -> None:
     cx, cy = center
-    s = 9
     # Pentagon "house" shape.
     points = [
         (cx - s, cy + s),
@@ -197,10 +226,9 @@ def _draw_settlement_polygon(
 
 
 def _draw_city_polygon(
-    screen: Any, center: tuple[float, float], color: tuple[int, int, int]
+    screen: Any, center: tuple[float, float], color: tuple[int, int, int], s: int
 ) -> None:
     cx, cy = center
-    s = 11
     # Stepped "city" shape: a taller right block + a shorter left block.
     points = [
         (cx - s, cy + s),
@@ -219,15 +247,20 @@ def _draw_city_polygon(
 # ---------------------------------------------------------------------------
 
 
-def _draw_ports(screen: Any, board_static: BoardStatic, layout: BoardLayout, font: Any) -> None:
+def _draw_ports(
+    screen: Any, board_static: BoardStatic, layout: BoardLayout, font: Any, hex_size: float
+) -> None:
+    radius = max(10, int(hex_size * 0.20))
     for port, anchor in zip(board_static.ports, layout.port_anchors, strict=True):
         cx, cy = int(anchor[0]), int(anchor[1])
-        pygame.draw.circle(screen, _PORT_BG, (cx, cy), 14)
-        pygame.draw.circle(screen, _HEX_OUTLINE, (cx, cy), 14, width=2)
+        pygame.draw.circle(screen, _PORT_BG, (cx, cy), radius)
+        pygame.draw.circle(screen, _HEX_OUTLINE, (cx, cy), radius, width=2)
         if port.resource is None:
             label: str = port.ratio
         else:
-            label = f"{port.ratio[0]}/{port.resource[0]}"
+            # Resource first-letter glyph table avoids the WOOD/WHEAT
+            # 'W' collision. See ``_RESOURCE_GLYPHS``.
+            label = f"{port.ratio[0]}/{_RESOURCE_GLYPHS.get(port.resource, '?')}"
         surf = font.render(label, True, _PORT_FG)
         rect = surf.get_rect(center=(cx, cy))
         screen.blit(surf, rect)
