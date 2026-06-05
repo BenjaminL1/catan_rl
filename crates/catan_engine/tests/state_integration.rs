@@ -153,6 +153,103 @@ fn cannot_apply_action_after_game_over() {
 }
 
 #[test]
+fn event_stream_from_setup_phase_contains_expected_events() {
+    use catan_engine::events::{BuildKind, Event};
+    let mut state = GameState::new(42);
+    for _ in 0..4 {
+        let v = pick_any_empty_vertex_with_road_targets(&state);
+        state
+            .apply_action([ActionType::BuildSettlement as u8, v, 0, 0, 0, 0])
+            .unwrap();
+        let e = pick_edge_adjacent_to_vertex(&state, v);
+        state
+            .apply_action([ActionType::BuildRoad as u8, 0, e, 0, 0, 0])
+            .unwrap();
+        state
+            .apply_action([ActionType::EndTurn as u8, 0, 0, 0, 0, 0])
+            .unwrap();
+    }
+    let events = state.drain_events();
+    // Count event types.
+    let settle_builds = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::Build {
+                    kind: BuildKind::Settlement,
+                    ..
+                }
+            )
+        })
+        .count();
+    let road_builds = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::Build {
+                    kind: BuildKind::Road,
+                    ..
+                }
+            )
+        })
+        .count();
+    let setup_complete = events
+        .iter()
+        .filter(|e| matches!(e, Event::SetupComplete))
+        .count();
+    assert_eq!(settle_builds, 4, "expected 4 BUILD(SETTLEMENT) events");
+    assert_eq!(road_builds, 4, "expected 4 BUILD(ROAD) events");
+    assert_eq!(setup_complete, 1, "expected exactly 1 SETUP_COMPLETE");
+    // SETUP_COMPLETE must be the LAST event in the setup-phase stream.
+    assert!(matches!(events.last(), Some(Event::SetupComplete)));
+}
+
+#[test]
+fn dice_roll_emits_event() {
+    use catan_engine::events::Event;
+    let mut state = GameState::new(7);
+    // Run setup.
+    for _ in 0..4 {
+        let v = pick_any_empty_vertex_with_road_targets(&state);
+        state
+            .apply_action([ActionType::BuildSettlement as u8, v, 0, 0, 0, 0])
+            .unwrap();
+        let e = pick_edge_adjacent_to_vertex(&state, v);
+        state
+            .apply_action([ActionType::BuildRoad as u8, 0, e, 0, 0, 0])
+            .unwrap();
+        state
+            .apply_action([ActionType::EndTurn as u8, 0, 0, 0, 0, 0])
+            .unwrap();
+    }
+    // Drain setup events to isolate roll events.
+    let _ = state.drain_events();
+    state
+        .apply_action([ActionType::RollDice as u8, 0, 0, 0, 0, 0])
+        .unwrap();
+    let events = state.drain_events();
+    let dice_rolls = events
+        .iter()
+        .filter(|e| matches!(e, Event::DiceRoll { .. }))
+        .count();
+    assert_eq!(dice_rolls, 1, "expected 1 DICE_ROLL event");
+}
+
+#[test]
+fn drain_events_is_destructive() {
+    use catan_engine::events::Event;
+    let mut state = GameState::new(1);
+    state.events.push(Event::SetupComplete);
+    let drained = state.drain_events();
+    assert_eq!(drained.len(), 1);
+    assert!(state.events.is_empty());
+    let drained_again = state.drain_events();
+    assert_eq!(drained_again.len(), 0);
+}
+
+#[test]
 fn build_road_in_setup_must_be_adjacent_to_just_placed_settlement() {
     let mut state = GameState::new(42);
     let v = pick_any_empty_vertex_with_road_targets(&state);

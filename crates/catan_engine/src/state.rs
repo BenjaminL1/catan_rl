@@ -13,8 +13,41 @@
 
 use crate::board::{BoardStatic, Resource};
 use crate::dice::StackedDice;
+use crate::events::{BuildKind, Event, ResourceChangeSource};
 use crate::rng::EngineRng;
 use thiserror::Error;
+
+// ---------------------------------------------------------------------------
+// Charlesworth ↔ engine-alpha resource ordering helpers. These appear
+// in PlayYoP / PlayMonopoly / BankTrade / Discard at the FFI boundary
+// and are now centralized.
+// ---------------------------------------------------------------------------
+
+/// Convert a Charlesworth-order index (WOOD=0, BRICK=1, WHEAT=2,
+/// ORE=3, SHEEP=4) into the engine-alpha index (BRICK=0, ORE=1,
+/// SHEEP=2, WHEAT=3, WOOD=4). Used at every action-input boundary.
+pub fn cw_to_engine(cw: u8) -> Option<usize> {
+    Some(match cw {
+        0 => IDX_WOOD,
+        1 => IDX_BRICK,
+        2 => IDX_WHEAT,
+        3 => IDX_ORE,
+        4 => IDX_SHEEP,
+        _ => return None,
+    })
+}
+
+/// Reverse map: engine-alpha index → Charlesworth-order index.
+pub fn engine_to_cw(eng: usize) -> u8 {
+    match eng {
+        IDX_WOOD => 0,
+        IDX_BRICK => 1,
+        IDX_WHEAT => 2,
+        IDX_ORE => 3,
+        IDX_SHEEP => 4,
+        _ => 0,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Resource indexing (engine = alphabetical: BRICK, ORE, SHEEP, WHEAT, WOOD)
@@ -279,6 +312,15 @@ pub struct GameState {
     pub last_dice_roll: u8,
     pub turn_count: u16,
     pub winner: Option<u8>,
+    /// Vertex index of the most-recently-placed settlement (any
+    /// player). Used by `grant_starting_resources` during setup so we
+    /// grant from the actual 2nd placement, not whichever vertex
+    /// happens to be highest-indexed.
+    pub just_placed_vertex: Option<u8>,
+    /// Broadcast event buffer — drained per env.step boundary by the
+    /// Python adapter. Per the senior R0 review, events are batched
+    /// per step (not emitted per-event) to avoid the GIL-hop tax.
+    pub events: Vec<Event>,
 }
 
 impl GameState {
@@ -322,7 +364,15 @@ impl GameState {
             last_dice_roll: 0,
             turn_count: 0,
             winner: None,
+            just_placed_vertex: None,
+            events: Vec::with_capacity(16),
         }
+    }
+
+    /// Drain the buffered events. Called by the Python adapter once
+    /// per `env.step` boundary.
+    pub fn drain_events(&mut self) -> Vec<Event> {
+        std::mem::take(&mut self.events)
     }
 
     pub fn opponent(&self) -> u8 {
@@ -415,6 +465,7 @@ impl GameState {
 
         // Apply.
         self.vertex_owner[vertex_idx as usize] = p as u8 + 1; // 1 or 2
+        self.just_placed_vertex = Some(vertex_idx);
         self.players[p].settlements_left -= 1;
         self.players[p].victory_points += 1;
         if !is_setup {
@@ -422,7 +473,25 @@ impl GameState {
             self.players[p].resources[IDX_WOOD] -= 1;
             self.players[p].resources[IDX_SHEEP] -= 1;
             self.players[p].resources[IDX_WHEAT] -= 1;
+            // Emit the resource debit. Python emits one
+            // RESOURCE_CHANGE per build (player.py:133).
+            let mut delta = [0i8; N_RESOURCES];
+            delta[IDX_BRICK] = -1;
+            delta[IDX_WOOD] = -1;
+            delta[IDX_SHEEP] = -1;
+            delta[IDX_WHEAT] = -1;
+            self.events.push(Event::ResourceChange {
+                player: p as u8,
+                delta_alpha: delta,
+                source: ResourceChangeSource::BuildSettlement,
+            });
         }
+        // Emit structural BUILD event (Phase 0.5 contract).
+        self.events.push(Event::Build {
+            player: p as u8,
+            kind: BuildKind::Settlement,
+            location: vertex_idx,
+        });
         // Port acquisition.
         for port in &self.board.ports {
             if port.vertex_idx_pair[0] == vertex_idx || port.vertex_idx_pair[1] == vertex_idx {
@@ -466,6 +535,19 @@ impl GameState {
         self.players[p].resources[IDX_WHEAT] -= 2;
         self.players[p].resources[IDX_ORE] -= 3;
         self.players[p].victory_points += 1;
+        let mut delta = [0i8; N_RESOURCES];
+        delta[IDX_WHEAT] = -2;
+        delta[IDX_ORE] = -3;
+        self.events.push(Event::ResourceChange {
+            player: p as u8,
+            delta_alpha: delta,
+            source: ResourceChangeSource::BuildCity,
+        });
+        self.events.push(Event::Build {
+            player: p as u8,
+            kind: BuildKind::City,
+            location: vertex_idx,
+        });
         self.check_terminal();
         Ok(())
     }
@@ -542,7 +624,20 @@ impl GameState {
         if !is_free {
             self.players[p].resources[IDX_BRICK] -= 1;
             self.players[p].resources[IDX_WOOD] -= 1;
+            let mut delta = [0i8; N_RESOURCES];
+            delta[IDX_BRICK] = -1;
+            delta[IDX_WOOD] = -1;
+            self.events.push(Event::ResourceChange {
+                player: p as u8,
+                delta_alpha: delta,
+                source: ResourceChangeSource::BuildRoad,
+            });
         }
+        self.events.push(Event::Build {
+            player: p as u8,
+            kind: BuildKind::Road,
+            location: edge_idx,
+        });
         if is_road_builder {
             self.road_builder_left = self.road_builder_left.saturating_sub(1);
             if self.road_builder_left == 0 {
@@ -594,6 +689,9 @@ impl GameState {
                     self.setup_step = 255;
                     self.current_player = 0;
                     self.turn_count = 1;
+                    // Phase 0.5 contract — fire once, before any
+                    // main-phase action.
+                    self.events.push(Event::SetupComplete);
                 }
                 _ => {}
             }
@@ -620,24 +718,18 @@ impl GameState {
     }
 
     fn grant_starting_resources(&mut self, player: u8) {
-        // Find this player's latest settlement (their 2nd setup placement)
-        // and grant resources from each adjacent hex.
+        // Grant starting resources from the player's 2nd setup
+        // settlement — tracked by ``just_placed_vertex`` which is
+        // populated by BuildSettlement and consumed here at the
+        // setup-step boundary. Matches Python's
+        // ``_grant_setup_resources`` which reads
+        // ``p.buildGraph['SETTLEMENTS'][-1]``.
         let owner_marker = player + 1;
-        // The latest settlement: walk vertex_owner backward, or just
-        // grant from BOTH settlements? Per Python: only from the
-        // last placed. We track this by emitting a "setup_just_placed"
-        // marker.
-        //
-        // Simplification: the caller has just placed the 2nd settle
-        // immediately before EndTurn. We grant from every owned
-        // settlement; the convention "only from the 2nd" is implemented
-        // by the env, not the engine, in the Python flow. For the
-        // Rust port, we apply the same simplification at the engine
-        // boundary: grant from the LAST owned settlement only.
-        let mut last_settle_v: Option<u8> = None;
-        for (v_idx, &owner) in self.vertex_owner.iter().enumerate() {
-            if owner == owner_marker {
-                last_settle_v = Some(v_idx as u8);
+        let last_settle_v = self.just_placed_vertex;
+        // Sanity: the just-placed vertex must belong to this player.
+        if let Some(v_idx) = last_settle_v {
+            if self.vertex_owner[v_idx as usize] != owner_marker {
+                return;
             }
         }
         if let Some(v_idx) = last_settle_v {
@@ -696,6 +788,10 @@ impl GameState {
         }
         // Move the robber.
         self.robber_hex = hex_idx;
+        self.events.push(Event::MoveRobber {
+            player: self.current_player,
+            hex_idx,
+        });
         // Steal one random resource from a player adjacent to the new hex
         // (other than the current player). Pick a random VICTIM among
         // the ones with resources > 0.
@@ -724,6 +820,28 @@ impl GameState {
                 if pick < acc {
                     self.players[v as usize].resources[r_idx] -= 1;
                     self.players[me as usize].resources[r_idx] += 1;
+                    // Two RESOURCE_CHANGE events (victim -1, robber +1)
+                    // then a STEAL marker — matches Python ordering
+                    // (player.py:253-265).
+                    let mut victim_delta = [0i8; N_RESOURCES];
+                    victim_delta[r_idx] = -1;
+                    self.events.push(Event::ResourceChange {
+                        player: v,
+                        delta_alpha: victim_delta,
+                        source: ResourceChangeSource::Steal,
+                    });
+                    let mut robber_delta = [0i8; N_RESOURCES];
+                    robber_delta[r_idx] = 1;
+                    self.events.push(Event::ResourceChange {
+                        player: me,
+                        delta_alpha: robber_delta,
+                        source: ResourceChangeSource::Steal,
+                    });
+                    self.events.push(Event::Steal {
+                        robber: me,
+                        victim: v,
+                        resource_cw: engine_to_cw(r_idx),
+                    });
                     break;
                 }
             }
@@ -839,6 +957,10 @@ impl GameState {
         };
         self.players[p].resources[mapped(res1)] += 1;
         self.players[p].resources[mapped(res2)] += 1;
+        self.events.push(Event::YearOfPlenty {
+            player: p as u8,
+            resources: [res1, res2],
+        });
         Ok(())
     }
 
@@ -875,6 +997,32 @@ impl GameState {
         let stolen = self.players[opp].resources[mapped];
         self.players[opp].resources[mapped] = 0;
         self.players[p].resources[mapped] += stolen;
+        // Python emits per-victim RESOURCE_CHANGE FIRST then the
+        // structural MONOPOLY event (catan_env.py:481-499). Mirror
+        // that ordering exactly so the replay recorder's classifier
+        // (which expects RESOURCE_CHANGE before MONOPOLY) sees the
+        // canonical stream.
+        if stolen > 0 {
+            let mut victim_delta = [0i8; N_RESOURCES];
+            victim_delta[mapped] = -(stolen as i8);
+            self.events.push(Event::ResourceChange {
+                player: opp as u8,
+                delta_alpha: victim_delta,
+                source: ResourceChangeSource::Monopoly,
+            });
+            let mut taker_delta = [0i8; N_RESOURCES];
+            taker_delta[mapped] = stolen as i8;
+            self.events.push(Event::ResourceChange {
+                player: p as u8,
+                delta_alpha: taker_delta,
+                source: ResourceChangeSource::Monopoly,
+            });
+        }
+        self.events.push(Event::Monopoly {
+            player: p as u8,
+            resource_cw: res1,
+            count: stolen,
+        });
         Ok(())
     }
 
@@ -982,6 +1130,10 @@ impl GameState {
             return Err(EngineError::InsufficientResources);
         }
         self.players[p].resources[mapped] -= 1;
+        self.events.push(Event::Discard {
+            player: p as u8,
+            resources: vec![res_cw],
+        });
         self.discard_cards_remaining = self.discard_cards_remaining.saturating_sub(1);
         if self.discard_cards_remaining == 0 {
             self.phase = GamePhase::Robber;
@@ -1000,6 +1152,7 @@ impl GameState {
         let me = self.current_player;
         let value = self.dice.roll(me, self.last_seven_roller);
         self.last_dice_roll = value;
+        self.events.push(Event::DiceRoll { player: me, value });
         if value == 7 {
             self.last_seven_roller = Some(me);
             // Discard threshold: if current player has > 9 cards, they
@@ -1023,7 +1176,9 @@ impl GameState {
 
     fn distribute_resources(&mut self, roll: u8) {
         // For each hex matching the roll AND not blocked by the robber,
-        // grant resources to each adjacent owner.
+        // grant resources to each adjacent owner. Emit one
+        // RESOURCE_CHANGE per (player, hex) tuple — the Python engine
+        // emits per resource grant.
         for hex in &self.board.hexes {
             if hex.number_token != Some(roll) {
                 continue;
@@ -1047,6 +1202,13 @@ impl GameState {
                 let amount = if owner <= 2 { 1 } else { 2 };
                 let owner_player = if owner == 1 || owner == 3 { 0 } else { 1 };
                 self.players[owner_player as usize].resources[res_idx] += amount;
+                let mut delta = [0i8; N_RESOURCES];
+                delta[res_idx] = amount as i8;
+                self.events.push(Event::ResourceChange {
+                    player: owner_player,
+                    delta_alpha: delta,
+                    source: ResourceChangeSource::Roll,
+                });
             }
         }
     }
@@ -1103,6 +1265,11 @@ impl GameState {
                 None => {
                     self.players[p].has_longest_road = true;
                     self.players[p].victory_points += 2;
+                    self.events.push(Event::LongestRoadChange {
+                        prev_owner: None,
+                        new_owner: Some(p as u8),
+                        length: max_len,
+                    });
                 }
                 Some(h) if h != p as u8 && max_len > other_len => {
                     self.players[h as usize].has_longest_road = false;
@@ -1110,6 +1277,11 @@ impl GameState {
                         self.players[h as usize].victory_points.saturating_sub(2);
                     self.players[p].has_longest_road = true;
                     self.players[p].victory_points += 2;
+                    self.events.push(Event::LongestRoadChange {
+                        prev_owner: Some(h),
+                        new_owner: Some(p as u8),
+                        length: max_len,
+                    });
                 }
                 _ => {}
             }
@@ -1174,6 +1346,11 @@ impl GameState {
                 if l_k >= LARGEST_ARMY_THRESHOLD {
                     self.players[l as usize].has_largest_army = true;
                     self.players[l as usize].victory_points += 2;
+                    self.events.push(Event::LargestArmyChange {
+                        prev_owner: None,
+                        new_owner: Some(l),
+                        knights: l_k,
+                    });
                 }
             }
             (Some(l), Some(h)) if l != h => {
@@ -1184,6 +1361,11 @@ impl GameState {
                         self.players[h as usize].victory_points.saturating_sub(2);
                     self.players[l as usize].has_largest_army = true;
                     self.players[l as usize].victory_points += 2;
+                    self.events.push(Event::LargestArmyChange {
+                        prev_owner: Some(h),
+                        new_owner: Some(l),
+                        knights: l_k,
+                    });
                 }
             }
             _ => {}
@@ -1195,6 +1377,11 @@ impl GameState {
             if self.players[p].victory_points >= MAX_VP {
                 self.winner = Some(p as u8);
                 self.phase = GamePhase::GameOver;
+                self.events.push(Event::GameEnd {
+                    winner: p as u8,
+                    vp_p0: self.players[0].victory_points,
+                    vp_p1: self.players[1].victory_points,
+                });
                 return;
             }
         }
