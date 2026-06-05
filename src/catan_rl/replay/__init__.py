@@ -23,6 +23,14 @@ from catan_rl.replay.migrations import (
     registered_versions,
     unregister_migration,
 )
+from catan_rl.replay.player_factory import (
+    Actor,
+    PlayerKind,
+    build_actor,
+)
+from catan_rl.replay.player_factory import (
+    PlayerSpec as RecorderPlayerSpec,
+)
 from catan_rl.replay.schema import (
     EVENT_REGISTRY,
     REPLAY_SCHEMA_VERSION,
@@ -58,6 +66,7 @@ __all__ = [
     "REPLAY_SCHEMA_VERSION",
     "STATE_DEV_CARD_ORDER",
     "STATE_RESOURCE_ORDER",
+    "Actor",
     "BoardStatic",
     "EdgeStatic",
     "GameEnd",
@@ -67,9 +76,11 @@ __all__ = [
     "Metadata",
     "MigrationError",
     "Monopoly",
+    "PlayerKind",
     "PlayerSpec",
     "PlayerStateSnapshot",
     "PortStatic",
+    "RecorderPlayerSpec",
     "Replay",
     "ReplaySchemaError",
     "ReplayStep",
@@ -81,6 +92,7 @@ __all__ = [
     "UnknownEvent",
     "VertexStatic",
     "apply_migrations",
+    "build_actor",
     "event_from_dict",
     "event_to_dict",
     "load_replay",
