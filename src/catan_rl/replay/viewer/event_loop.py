@@ -44,6 +44,14 @@ from catan_rl.replay.viewer.panel_renderer import (
     compute_panel_geometry,
     render_panels,
 )
+from catan_rl.replay.viewer.step_bar import (
+    StepBarGeometry,
+    ViewerControl,
+    compute_step_bar_geometry,
+    handle_event,
+    render_event_log,
+    render_step_bar,
+)
 
 _LOG = logging.getLogger("catan_rl.replay.viewer")
 
@@ -105,6 +113,14 @@ def run_viewer(
         # both panel geometry and board layout when resizable.
         panel_geom = compute_panel_geometry(window_size)
         layout, hex_size = _compute_layout_for_window(replay, panel_geom.board_rect)
+        # V3: step-bar at the bottom + event log on the right edge.
+        step_bar_geom = compute_step_bar_geometry(
+            window_size, panel_right_edge=panel_geom.panel_b_rect.right
+        )
+        control = ViewerControl(
+            total_steps=max(1, replay.metadata.total_steps),
+            step_idx=max(0, replay.metadata.total_steps - 1),
+        )
 
         frame_idx = 0
         running = True
@@ -114,7 +130,10 @@ def run_viewer(
                     event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE
                 ):
                     running = False
+                else:
+                    handle_event(control, event, step_bar_geom.bar_rect)
 
+            control.tick()
             _render_frame(
                 screen,
                 font,
@@ -122,8 +141,9 @@ def run_viewer(
                 replay,
                 layout,
                 panel_geom=panel_geom,
+                step_bar_geom=step_bar_geom,
+                control=control,
                 hex_size=hex_size,
-                step_idx=replay.metadata.total_steps - 1,
             )
             pygame.display.flip()
             clock.tick(30)  # cap at 30 FPS — the replay is static
@@ -170,11 +190,13 @@ def _render_frame(
     layout: BoardLayout,
     *,
     panel_geom: PanelGeometry,
+    step_bar_geom: StepBarGeometry,
+    control: ViewerControl,
     hex_size: float,
-    step_idx: int,
 ) -> None:
-    """Single-frame draw. V1 board + V2 panels + metadata header;
-    V3 will add the step-bar + event log."""
+    """Single-frame draw. V1 board + V2 panels + V3 step-bar/log +
+    metadata header. ``control.step_idx`` drives which step's
+    state_after is shown across all sub-renderers."""
     screen.fill(_BG_COLOR)
 
     md = replay.metadata
@@ -195,8 +217,7 @@ def _render_frame(
     screen.blit(summary_surf, (16, 38))
 
     if md.total_steps > 0:
-        clamped = max(0, min(md.total_steps - 1, step_idx))
-        state = replay.steps[clamped].state_after
+        state = replay.steps[control.step_idx].state_after
         render_board(
             screen,
             replay.board_static,
@@ -213,6 +234,21 @@ def _render_frame(
             panel_geom,
             font=font,
             small_font=small_font,
+        )
+        render_event_log(
+            screen,
+            replay,
+            control.step_idx,
+            step_bar_geom,
+            font=font,
+            small_font=small_font,
+        )
+        render_step_bar(
+            screen,
+            replay,
+            control,
+            step_bar_geom,
+            font=small_font,
         )
 
 
