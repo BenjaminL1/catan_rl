@@ -31,6 +31,7 @@ from catan_rl.replay.player_factory import (
 from catan_rl.replay.player_factory import (
     PlayerSpec as RecorderPlayerSpec,
 )
+from catan_rl.replay.recorder import snapshot_step_state
 from catan_rl.replay.schema import (
     EVENT_REGISTRY,
     REPLAY_SCHEMA_VERSION,
@@ -99,5 +100,6 @@ __all__ = [
     "register_migration",
     "registered_versions",
     "save_replay",
+    "snapshot_step_state",
     "unregister_migration",
 ]
