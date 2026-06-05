@@ -23,6 +23,11 @@ from typing import Any
 # (CI logs, future thumbnail-batch jobs) without any user benefit.
 os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "hide")
 
+# Top-level pygame import so type hints (``pygame.Rect``) resolve
+# without a stub. The heavy SDL setup doesn't happen until
+# ``pygame.init()`` inside ``run_viewer``.
+import pygame
+
 # Import DIRECTLY from io + schema rather than the top-level
 # ``catan_rl.replay`` package, because the package's ``__init__.py``
 # re-exports the recorder symbols which transitively pull in the
@@ -34,6 +39,11 @@ from catan_rl.replay.io import load_replay
 from catan_rl.replay.schema import Replay, ReplaySchemaError
 from catan_rl.replay.viewer.board_layout import BoardLayout, compute_board_layout
 from catan_rl.replay.viewer.board_renderer import render_board
+from catan_rl.replay.viewer.panel_renderer import (
+    PanelGeometry,
+    compute_panel_geometry,
+    render_panels,
+)
 
 _LOG = logging.getLogger("catan_rl.replay.viewer")
 
@@ -80,10 +90,6 @@ def run_viewer(
         replay.metadata.final_vp,
     )
 
-    # Heavy pygame import is local so the schema/IO surface stays
-    # importable without pygame on the path (tests, recorder).
-    import pygame
-
     pygame.init()
     try:
         screen = pygame.display.set_mode(window_size)
@@ -92,12 +98,13 @@ def run_viewer(
         small_font = pygame.font.SysFont(None, 16)
         clock = pygame.time.Clock()
 
-        # Compute the board layout ONCE — the static board doesn't
-        # change across steps, so vertex pixels / hex centers are
-        # stable. Centered + sized to fit the window with margin.
+        # Carve the window into [panel_a | board | panel_b] strips
+        # so the V2 player panels and the V1 board don't overlap.
+        # The board layout is then sized to the central strip.
         # TODO(viewer-v2): handle pygame.VIDEORESIZE → recompute
-        # layout when the window is made resizable.
-        layout, hex_size = _compute_layout_for_window(replay, window_size)
+        # both panel geometry and board layout when resizable.
+        panel_geom = compute_panel_geometry(window_size)
+        layout, hex_size = _compute_layout_for_window(replay, panel_geom.board_rect)
 
         frame_idx = 0
         running = True
@@ -114,6 +121,7 @@ def run_viewer(
                 small_font,
                 replay,
                 layout,
+                panel_geom=panel_geom,
                 hex_size=hex_size,
                 step_idx=replay.metadata.total_steps - 1,
             )
@@ -129,31 +137,27 @@ def run_viewer(
 
 
 def _compute_layout_for_window(
-    replay: Replay, window_size: tuple[int, int]
+    replay: Replay,
+    board_rect: pygame.Rect,
 ) -> tuple[BoardLayout, float]:
     """Pick a hex_size + origin that fits the standard 19-hex layout
-    into ``window_size`` with a reasonable margin, returning the
+    into ``board_rect`` with a reasonable margin, returning the
     layout and the chosen ``hex_size`` (the renderer scales marker
     sizes proportionally).
 
     The board spans 5 hex widths horizontally and 5 hex heights
     vertically (at the pointy-top hex aspect ratio); we choose
     ``hex_size`` to fit the smaller dimension."""
-    w, h = window_size
-    # Board occupies ~5 hex_widths horizontally and ~5.5 hex_heights
-    # vertically. hex_width = hex_size * sqrt(3); hex_height =
-    # hex_size * 2. Solve for hex_size that fits the smaller dim.
-    margin_frac = 0.10
+    w, h = board_rect.width, board_rect.height
+    margin_frac = 0.08
     available_w = w * (1 - 2 * margin_frac)
     available_h = h * (1 - 2 * margin_frac)
-    # Board fits in roughly 5 * sqrt(3) hex_size wide by 6 hex_size tall.
     hex_size_w = available_w / (5 * 1.732)
     hex_size_h = available_h / 6.0
     # Floor at hex_size=8 so the layout tolerance + marker scaling
-    # don't underflow into floating-point noise for absurd
-    # window sizes.
+    # don't underflow into floating-point noise for absurd sizes.
     hex_size = max(8.0, min(hex_size_w, hex_size_h))
-    origin = (w / 2.0, h / 2.0)
+    origin = (board_rect.centerx, board_rect.centery)
     layout = compute_board_layout(replay.board_static, hex_size=hex_size, origin=origin)
     return layout, hex_size
 
@@ -165,12 +169,12 @@ def _render_frame(
     replay: Replay,
     layout: BoardLayout,
     *,
+    panel_geom: PanelGeometry,
     hex_size: float,
     step_idx: int,
 ) -> None:
-    """Single-frame draw. V1 renders the metadata header + the board
-    at the requested step. V2 will add player panels; V3 adds the
-    step-bar + event log."""
+    """Single-frame draw. V1 board + V2 panels + metadata header;
+    V3 will add the step-bar + event log."""
     screen.fill(_BG_COLOR)
 
     md = replay.metadata
@@ -190,8 +194,6 @@ def _render_frame(
     summary_surf = font.render(summary, True, _DIM_COLOR)
     screen.blit(summary_surf, (16, 38))
 
-    # Render the board at the current step's state_after. ``step_idx``
-    # is clamped defensively to [0, total_steps - 1].
     if md.total_steps > 0:
         clamped = max(0, min(md.total_steps - 1, step_idx))
         state = replay.steps[clamped].state_after
@@ -203,6 +205,14 @@ def _render_frame(
             font=font,
             small_font=small_font,
             hex_size=hex_size,
+        )
+        render_panels(
+            screen,
+            md,
+            state,
+            panel_geom,
+            font=font,
+            small_font=small_font,
         )
 
 
