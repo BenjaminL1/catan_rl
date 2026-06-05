@@ -36,6 +36,9 @@ from catan_rl.replay.recorder import (
     classify_step_events,
     extract_sub_actions,
     snapshot_step_state,
+    split_burst_one_placement,
+    split_burst_two_placements,
+    synthesize_intermediate_setup_snapshot,
 )
 from catan_rl.replay.schema import (
     EVENT_REGISTRY,
@@ -109,5 +112,8 @@ __all__ = [
     "registered_versions",
     "save_replay",
     "snapshot_step_state",
+    "split_burst_one_placement",
+    "split_burst_two_placements",
+    "synthesize_intermediate_setup_snapshot",
     "unregister_migration",
 ]

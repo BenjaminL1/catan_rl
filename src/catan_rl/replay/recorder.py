@@ -527,3 +527,226 @@ def _events_after(raw_events: list[GameEvent], anchor: GameEvent) -> list[GameEv
     except StopIteration:
         return []
     return raw_events[idx + 1 :]
+
+
+# ---------------------------------------------------------------------------
+# Phase 2c: setup-burst splitter
+# ---------------------------------------------------------------------------
+#
+# The 1v1 Colonist setup is a snake-draft: P1 places settle+road, P2 places
+# settle+road TWICE consecutively (the "middle" of the snake), then P1
+# places settle+road again. The user-facing replay contract is "exactly 4
+# setup steps regardless of agent_seat".
+#
+# The env handles this differently per seat:
+#
+# * Seat 0: agent places settle1 + road1, then the env runs the opponent's
+#   FOUR setup actions (settle+road+settle+road) in one atomic env.step
+#   call, then agent places settle2 + road2.
+# * Seat 1: the env runs the opponent's first settle+road BEFORE the
+#   agent's first env.step, then the agent places all four of their
+#   actions, then the env runs the opponent's second settle+road inside
+#   the agent's last env.step.
+#
+# Either way there's ONE opponent burst (either 4 actions for seat 0 or 2
+# bursts of 2 actions for seat 1) that the recorder cannot observe at
+# action-level granularity. The splitter functions below synthesize the
+# intermediate snapshots so the recorder can produce 4 ReplayStep instances.
+
+
+def split_burst_two_placements(
+    *,
+    actor: str,
+    prev_snapshot: StepStateSnapshot,
+    post_snapshot: StepStateSnapshot,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Identify two settle+road placements from an opponent's setup
+    burst by diffing engine snapshots in temporal order.
+
+    Args:
+        actor: ``"player_a"`` or ``"player_b"`` — whose placements
+            we're splitting out.
+        prev_snapshot: state BEFORE the burst (the actor has some
+            number of pre-existing settles + roads — possibly 0 for
+            the first burst).
+        post_snapshot: state AFTER the burst — the actor has 2 more
+            settles and 2 more roads than prev.
+
+    Returns ``((settle1_idx, road1_idx), (settle2_idx, road2_idx))``.
+    The engine appends to ``buildGraph["SETTLEMENTS"]`` and
+    ``buildGraph["ROADS"]`` in temporal play order; ``snapshot_state``
+    preserves that order. The first new pair is the FIRST temporal
+    placement; the second new pair is the SECOND.
+
+    Raises:
+        ValueError: if the diff doesn't reveal exactly 2 new settles
+            or exactly 2 new roads (engine state drift; surface
+            loudly rather than write a malformed setup).
+    """
+    settle_new = _diff_new_builds(prev_snapshot, post_snapshot, actor, "SETTLEMENT")
+    road_new = _diff_new_builds(prev_snapshot, post_snapshot, actor, "ROAD")
+    if len(settle_new) != 2:
+        raise ValueError(
+            f"setup burst for {actor}: expected 2 new settlements, "
+            f"got {len(settle_new)} ({settle_new})"
+        )
+    if len(road_new) != 2:
+        raise ValueError(
+            f"setup burst for {actor}: expected 2 new roads, got {len(road_new)} ({road_new})"
+        )
+    return (
+        (settle_new[0], road_new[0]),
+        (settle_new[1], road_new[1]),
+    )
+
+
+def split_burst_one_placement(
+    *,
+    actor: str,
+    prev_snapshot: StepStateSnapshot,
+    post_snapshot: StepStateSnapshot,
+) -> tuple[int, int]:
+    """Identify a single settle+road pair from a 2-action burst.
+
+    Used for seat 1's pre-agent and post-agent bursts — each is just
+    one (settle, road) pair rather than the seat-0 "two pairs at
+    once" burst handled by :func:`split_burst_two_placements`.
+
+    Raises ``ValueError`` if the diff doesn't reveal exactly 1 new
+    settlement + 1 new road.
+    """
+    settle_new = _diff_new_builds(prev_snapshot, post_snapshot, actor, "SETTLEMENT")
+    road_new = _diff_new_builds(prev_snapshot, post_snapshot, actor, "ROAD")
+    if len(settle_new) != 1:
+        raise ValueError(
+            f"setup placement for {actor}: expected 1 new settlement, "
+            f"got {len(settle_new)} ({settle_new})"
+        )
+    if len(road_new) != 1:
+        raise ValueError(
+            f"setup placement for {actor}: expected 1 new road, got {len(road_new)} ({road_new})"
+        )
+    return (settle_new[0], road_new[0])
+
+
+def synthesize_intermediate_setup_snapshot(
+    *,
+    actor: str,
+    post_snapshot: StepStateSnapshot,
+    first_settle_idx: int,
+    first_road_idx: int,
+) -> StepStateSnapshot:
+    """Reconstruct the state after the first of two atomic placements
+    in an opponent's seat-0 setup burst.
+
+    The engine processes seat 0's opponent burst (P2's both setups)
+    atomically inside one env.step call. The recorder can only
+    snapshot BEFORE the call and AFTER. This function synthesises the
+    middle by:
+
+    * Trimming the actor's settlements + roads to drop the SECOND
+      placement (keeping only ``first_settle_idx`` / ``first_road_idx``).
+    * Resources: zero for the actor — only the SECOND settlement
+      grants starting resources (per the 1v1 Colonist rule), so the
+      mid-burst snapshot has no resources yet.
+    * VP: 1 (one settlement placed).
+    * dev_cards_hand / dev_cards_played: zero (no devs in setup).
+    * The other actor's state is taken unchanged from
+      ``post_snapshot``.
+    * Robber, LR/LA holders, last_seven_roller: same as post (none
+      change during setup).
+
+    This is a synthetic snapshot — it doesn't come from
+    ``game.snapshot_state``. It is consumed only by the recorder's
+    setup-phase ReplayStep construction.
+
+    Raises
+    ------
+    ValueError
+        If ``first_settle_idx`` is not present in
+        ``post_snapshot.settlements[actor]``, or ``first_road_idx`` is
+        not in ``post_snapshot.roads[actor]``, or the actor has any
+        cities in ``post_snapshot`` (engine drift — setup never builds
+        cities).
+    """
+    other_actor = "player_b" if actor == "player_a" else "player_a"
+
+    # Fail-fast validation: driver bugs are caught here, not papered
+    # over into a silently-wrong snapshot.
+    if first_settle_idx not in post_snapshot.settlements.get(actor, ()):
+        raise ValueError(
+            f"first_settle_idx={first_settle_idx} not in "
+            f"post_snapshot.settlements[{actor!r}]="
+            f"{post_snapshot.settlements.get(actor)}"
+        )
+    if first_road_idx not in post_snapshot.roads.get(actor, ()):
+        raise ValueError(
+            f"first_road_idx={first_road_idx} not in "
+            f"post_snapshot.roads[{actor!r}]="
+            f"{post_snapshot.roads.get(actor)}"
+        )
+    if post_snapshot.cities.get(actor):
+        raise ValueError(
+            f"actor {actor!r} has cities {post_snapshot.cities[actor]} "
+            "in post_snapshot — setup phase never builds cities. "
+            "Engine drift suspected."
+        )
+
+    # Settlements and roads: trim the actor's tuple to just the first
+    # placement (the second one was placed atomically after this
+    # synthetic mid-state).
+    settlements = dict(post_snapshot.settlements)
+    settlements[actor] = (first_settle_idx,)
+    roads = dict(post_snapshot.roads)
+    roads[actor] = (first_road_idx,)
+    # Cities don't change in setup — the engine starts every player
+    # at zero cities and the setup phase only places settles + roads.
+    cities = dict(post_snapshot.cities)
+
+    # Per-player snapshots.
+    new_actor_snap = PlayerStateSnapshot(
+        name=post_snapshot.players[actor].name,
+        vp=1,  # exactly one settlement placed
+        resources={"WOOD": 0, "BRICK": 0, "WHEAT": 0, "ORE": 0, "SHEEP": 0},
+        dev_cards_hand={
+            "KNIGHT": 0,
+            "VP": 0,
+            "ROAD_BUILDER": 0,
+            "YEAR_OF_PLENTY": 0,
+            "MONOPOLY": 0,
+        },
+        dev_cards_played={
+            "KNIGHT": 0,
+            "VP": 0,
+            "ROAD_BUILDER": 0,
+            "YEAR_OF_PLENTY": 0,
+            "MONOPOLY": 0,
+        },
+    )
+    # Deep-copy the other actor's snapshot so downstream code that
+    # mutates ``mid.players[other].resources`` cannot leak into
+    # ``post_snapshot``. PlayerStateSnapshot is frozen but holds
+    # mutable dict fields (resources, dev_cards_hand, dev_cards_played).
+    other_src = post_snapshot.players[other_actor]
+    other_snap = PlayerStateSnapshot(
+        name=other_src.name,
+        vp=other_src.vp,
+        resources=dict(other_src.resources),
+        dev_cards_hand=dict(other_src.dev_cards_hand),
+        dev_cards_played=dict(other_src.dev_cards_played),
+    )
+    players = {
+        actor: new_actor_snap,
+        other_actor: other_snap,
+    }
+
+    return StepStateSnapshot(
+        settlements=settlements,
+        cities=cities,
+        roads=roads,
+        robber_hex=post_snapshot.robber_hex,
+        players=players,
+        longest_road_holder=None,
+        largest_army_holder=None,
+        last_seven_roller=None,
+    )
