@@ -32,6 +32,8 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "hide")
 # routing through ``catan_rl.replay`` would silently fail that gate.
 from catan_rl.replay.io import load_replay
 from catan_rl.replay.schema import Replay, ReplaySchemaError
+from catan_rl.replay.viewer.board_layout import BoardLayout, compute_board_layout
+from catan_rl.replay.viewer.board_renderer import render_board
 
 _LOG = logging.getLogger("catan_rl.replay.viewer")
 
@@ -85,9 +87,15 @@ def run_viewer(
     pygame.init()
     try:
         screen = pygame.display.set_mode(window_size)
-        pygame.display.set_caption(f"Catan Replay — {replay_path.name}")
+        pygame.display.set_caption(f"Catan Replay - {replay_path.name}")
         font = pygame.font.SysFont(None, 22)
+        small_font = pygame.font.SysFont(None, 16)
         clock = pygame.time.Clock()
+
+        # Compute the board layout ONCE — the static board doesn't
+        # change across steps, so vertex pixels / hex centers are
+        # stable. Centered + sized to fit the window with margin.
+        layout = _compute_layout_for_window(replay, window_size)
 
         frame_idx = 0
         running = True
@@ -98,7 +106,14 @@ def run_viewer(
                 ):
                     running = False
 
-            _render_frame(screen, font, replay)
+            _render_frame(
+                screen,
+                font,
+                small_font,
+                replay,
+                layout,
+                step_idx=replay.metadata.total_steps - 1,
+            )
             pygame.display.flip()
             clock.tick(30)  # cap at 30 FPS — the replay is static
 
@@ -110,10 +125,40 @@ def run_viewer(
         pygame.quit()
 
 
-def _render_frame(screen: Any, font: Any, replay: Replay) -> None:
-    """Single-frame draw. V0 just renders a metadata header — future
-    versions composite the board (V1), player panels (V2), and
-    step-bar (V3) into this hook."""
+def _compute_layout_for_window(replay: Replay, window_size: tuple[int, int]) -> BoardLayout:
+    """Pick a hex_size + origin that fits the standard 19-hex layout
+    into ``window_size`` with a reasonable margin. The board spans
+    5 hex widths horizontally and 5 hex heights vertically (at the
+    pointy-top hex aspect ratio). We choose hex_size so that the
+    longer dimension fits with a 10% margin."""
+    w, h = window_size
+    # Board occupies ~5 hex_widths horizontally and ~5.5 hex_heights
+    # vertically (counting from outermost corner to outermost corner).
+    # hex_width = hex_size * sqrt(3); hex_height = hex_size * 2.
+    # We solve for hex_size that fits the smaller dimension.
+    margin_frac = 0.10
+    available_w = w * (1 - 2 * margin_frac)
+    available_h = h * (1 - 2 * margin_frac)
+    # Board fits in roughly 5 * sqrt(3) hex_size wide by 6 hex_size tall.
+    hex_size_w = available_w / (5 * 1.732)
+    hex_size_h = available_h / 6.0
+    hex_size = min(hex_size_w, hex_size_h)
+    origin = (w / 2.0, h / 2.0)
+    return compute_board_layout(replay.board_static, hex_size=hex_size, origin=origin)
+
+
+def _render_frame(
+    screen: Any,
+    font: Any,
+    small_font: Any,
+    replay: Replay,
+    layout: BoardLayout,
+    *,
+    step_idx: int,
+) -> None:
+    """Single-frame draw. V1 renders the metadata header + the board
+    at the requested step. V2 will add player panels; V3 adds the
+    step-bar + event log."""
     screen.fill(_BG_COLOR)
 
     md = replay.metadata
@@ -126,23 +171,26 @@ def _render_frame(screen: Any, font: Any, replay: Replay) -> None:
 
     summary = (
         f"steps={md.total_steps}    "
-        f"winner={md.winner or '—'}    "
-        f"winner_seat={md.winner_seat if md.winner_seat is not None else '—'}    "
+        f"winner={md.winner or '-'}    "
+        f"winner_seat={md.winner_seat if md.winner_seat is not None else '-'}    "
         f"final_vp={md.final_vp}"
     )
     summary_surf = font.render(summary, True, _DIM_COLOR)
     screen.blit(summary_surf, (16, 38))
 
-    # Placeholder for future panels — V0 is intentionally minimal.
-    placeholder = font.render(
-        "(V0 skeleton — board + panels + step-bar land in V1-V3)",
-        True,
-        _DIM_COLOR,
-    )
-    placeholder_rect = placeholder.get_rect(
-        center=(screen.get_width() // 2, screen.get_height() // 2)
-    )
-    screen.blit(placeholder, placeholder_rect)
+    # Render the board at the current step's state_after. ``step_idx``
+    # is clamped defensively to [0, total_steps - 1].
+    if md.total_steps > 0:
+        clamped = max(0, min(md.total_steps - 1, step_idx))
+        state = replay.steps[clamped].state_after
+        render_board(
+            screen,
+            replay.board_static,
+            layout,
+            state,
+            font=font,
+            small_font=small_font,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
