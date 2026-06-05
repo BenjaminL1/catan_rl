@@ -568,6 +568,11 @@ class CatanEnv(gym.Env):
             self.initial_placement_phase = False
             self.game.gameSetup = False
             self._setup_step = 4
+            # Boundary marker for the replay recorder. Fires once per
+            # game, after all setup placements + grants, BEFORE any
+            # main-phase logic (seat=1 then runs opp's first main
+            # turn inside this same env.step).
+            self.game.broadcast.setup_complete()
             if self._agent_seat == 1:
                 # Opponent is snake-P1; they take the first main turn.
                 self._run_opponent_turn()

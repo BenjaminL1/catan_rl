@@ -303,6 +303,11 @@ def classify_step_events(
                 f"Largest Army → {new} ({knights} knights)"
                 + (f" from {prev}" if prev is not None else "")
             )
+        elif type_str == BroadcastEventType.SETUP_COMPLETE.value:
+            # Internal marker: the recorder driver loop consumes this
+            # via a separate snapshot callback. Not a viewer-visible
+            # event, so suppress narration and step-event emission.
+            pass
         elif type_str == BroadcastEventType.GAME_END.value:
             winner = _actor_for(event.get("winner"), seat_to_actor) or "?"
             raw_vp = event.get("vp_breakdown", {}) or {}

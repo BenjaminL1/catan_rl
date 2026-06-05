@@ -94,18 +94,21 @@ class TestCLIValidation:
                 ]
             )
 
-    def test_valid_args_reach_not_implemented_loop(self, tmp_path: Path) -> None:
-        # Args parse + validation succeed, but the recorder loop
-        # is not wired (Phases 2a-2d). The script returns the
-        # documented "not wired" exit code.
-        rc = record_cli.main(
-            [
-                "--player-a",
-                "heuristic",
-                "--player-b",
-                "heuristic",
-                "--out",
-                str(tmp_path / "r.json"),
-            ]
-        )
-        assert rc == record_cli.EXIT_RECORDER_NOT_WIRED
+    def test_heuristic_heuristic_currently_unsupported(self, tmp_path: Path) -> None:
+        # ``(heuristic, heuristic)`` requires heuristic-as-agent in the
+        # recorder driver loop, which is deferred to a follow-up phase.
+        # The CLI args parse cleanly and validation passes, but
+        # ``record_game`` raises :class:`NotImplementedError` from
+        # :func:`_resolve_seat_and_opp`. Tracks Phase 2d's known
+        # limitation; remove this test when heuristic-as-agent lands.
+        with pytest.raises(NotImplementedError, match="heuristic"):
+            record_cli.main(
+                [
+                    "--player-a",
+                    "heuristic",
+                    "--player-b",
+                    "heuristic",
+                    "--out",
+                    str(tmp_path / "r.json"),
+                ]
+            )

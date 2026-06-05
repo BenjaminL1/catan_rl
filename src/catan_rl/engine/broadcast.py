@@ -59,6 +59,13 @@ class BroadcastEventType(str, Enum):
     LONGEST_ROAD_CHANGE = "LONGEST_ROAD_CHANGE"
     LARGEST_ARMY_CHANGE = "LARGEST_ARMY_CHANGE"
     GAME_END = "GAME_END"
+    # Phase 2d addition — fires exactly once per game at the moment
+    # the setup phase ends, after the last grant_setup_resources but
+    # BEFORE any main-phase action (dice roll, opp first turn, etc.).
+    # Used by the replay recorder to capture a clean "end of setup,
+    # main phase not started" snapshot — necessary for seat=1 where
+    # env.step #3 atomically runs opp's first main turn.
+    SETUP_COMPLETE = "SETUP_COMPLETE"
 
 
 class GameBroadcast:
@@ -243,3 +250,13 @@ class GameBroadcast:
             winner=winner_name,
             vp_breakdown=dict(vp_breakdown),
         )
+
+    def setup_complete(self) -> GameEvent:
+        """The 4-placement snake-draft setup phase finished — all
+        settlements + roads placed, all starting resources granted, no
+        main-phase action has run yet. The recorder snapshots on this
+        marker to capture the "end of setup, pre-main" board state,
+        which env.step alone cannot deliver in the seat=1 case (the
+        opp's first main turn runs inside the same env.step that
+        finalises setup)."""
+        return self.emit(BroadcastEventType.SETUP_COMPLETE)

@@ -38,11 +38,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from catan_rl.replay import record_game, save_replay
 from catan_rl.replay.player_factory import PlayerSpec
 
 #: Exit code used when the recorder simulation logic is not yet
 #: implemented (Phases 2a-2d). 64 = "do not retry" per the POSIX
 #: convention used elsewhere in this codebase (see scripts/train.py).
+#: Kept for back-compat; the recorder is now wired so this code path
+#: is unreachable in the main flow.
 EXIT_RECORDER_NOT_WIRED = 64
 
 
@@ -172,13 +175,23 @@ def main(argv: list[str] | None = None) -> int:
         args.out,
     )
 
-    log.error(
-        "recorder simulation loop is Phases 2a-2d of the replay system "
-        "build-out; this script currently validates args + player specs "
-        "only. Wait for the recorder loop to land before invoking with "
-        "a real --out path."
+    replay = record_game(
+        spec_a,
+        spec_b,
+        seed=args.seed,
+        max_turns=args.max_turns,
+        device=args.device,
+        log=log,
     )
-    return EXIT_RECORDER_NOT_WIRED
+    out_path = args.out.expanduser().resolve()
+    save_replay(replay, out_path)
+    log.info(
+        "wrote replay: %d steps, winner=%s, final_vp=%s",
+        replay.metadata.total_steps,
+        replay.metadata.winner,
+        replay.metadata.final_vp,
+    )
+    return 0
 
 
 if __name__ == "__main__":

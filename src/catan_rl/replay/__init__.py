@@ -40,6 +40,7 @@ from catan_rl.replay.recorder import (
     split_burst_two_placements,
     synthesize_intermediate_setup_snapshot,
 )
+from catan_rl.replay.recorder_loop import record_game
 from catan_rl.replay.schema import (
     EVENT_REGISTRY,
     REPLAY_SCHEMA_VERSION,
@@ -108,6 +109,7 @@ __all__ = [
     "event_to_dict",
     "extract_sub_actions",
     "load_replay",
+    "record_game",
     "register_migration",
     "registered_versions",
     "save_replay",
