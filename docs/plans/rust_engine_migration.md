@@ -248,11 +248,50 @@ Plus 12 others (event ordering, GIL+Rayon deadlock, Charlesworth/engine resource
 
 ## Implementation notes
 
-This section is updated as each PR lands. Per CLAUDE.md rule #14:
-"Re-open any plan doc under `docs/plans/` that matches the task and
-confirm it reflects what actually shipped (or append a terse
-'Implementation notes' paragraph if the final design diverged from
-the plan)."
+Updated as each PR lands per CLAUDE.md rule #14.
 
-### PR1 (R0-R2) — landed: [pending]
-- (notes will be appended on PR1 merge)
+### PR1 (R0-R2) — landed
+- R0: cargo workspace + maturin develop --release round-trip on
+  macOS arm64 + linux x86_64 CI.
+- R1: StackedDice + ChaCha8 native; byte-parity with Python ref
+  ChaCha8 across 14 cases (RSK-3 closed). 9 dice behavioral tests.
+- R2: BoardStatic precomputed via OnceLock. CW corner enumeration
+  fixed in reviewer pass (CCW would have placed 6/9 ports on
+  inner-ring edges).
+
+### PR2 (R3-R5) — landed
+- R3: GameState with all 13 action types + Friendly Robber + 9-card
+  discard + snake-draft setup + LR/LA.
+- R4: Event enum mirroring 12 Python BroadcastEventType variants,
+  drained via drain_events() at env.step boundary.
+- R5: HandTracker as thin Charlesworth-order getter on engine state.
+
+### PR3 (R6-R9) — landed
+- R6: Native obs encoder. 10-key dict, zero-copy PyArray.
+- R7: Native mask builder. 9 mask dict.
+- R8: RustCatanEnv (Gymnasium API).
+- R9: RustVectorizedEnv with py.allow_threads + Rayon.
+
+**Measured throughput (M1 Pro CPU):**
+
+| n_envs | env-steps/sec | x baseline |
+|---|---|---|
+| 8 | 114,201 | 20.8x |
+| 64 | **241,266** | **43.9x** |
+| 128 | 272,075 | 49.5x |
+
+PR3 exceeds the R9 gate (44k at n_envs=64) by 5.4x. The 8x engine
+and 6x end-to-end targets are achieved.
+
+### PR4 (R10-R13) — partially landed
+- R10: CATAN_ENGINE_BACKEND env var switch + backend helper module.
+- R11, R12 **DEFERRED** as follow-up — Python engine remains canonical
+  for the heuristic AI + BC + replay recorder pipelines.
+- R13: profile.release already at lto=fat, codegen-units=1,
+  panic=abort. No additional polish needed.
+
+### Outstanding (post-PR4 follow-up)
+- Wire CatanEnv to dispatch to RustCatanEnv when backend==rust.
+  Requires porting opponent injection + opp-id obs masking + seat=1.
+- Port heuristic AI + RandomAI to Rust (R11) with shared ChaCha8.
+- Archive Python engine to python_reference/ after 1-2 week soak.
