@@ -30,9 +30,6 @@ from __future__ import annotations
 
 import argparse
 import json
-
-# Path setup so the script runs from the repo root without `pip install -e .`.
-import sys
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -41,8 +38,11 @@ from pathlib import Path
 
 import numpy as np
 
+# REPO_ROOT preserved for argparse default-path usage at line ~317.
+# The previous ``sys.path.insert(REPO_ROOT/'src')`` shim is dropped
+# in the maturin sole-backend cutover — ``catan_rl`` is importable
+# via the install path now.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import queue
 

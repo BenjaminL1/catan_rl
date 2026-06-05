@@ -49,7 +49,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -58,8 +57,11 @@ import numpy as np
 import torch
 from torch import nn
 
+# REPO_ROOT preserved for argparse default-path usage at line ~266.
+# The previous ``sys.path.insert(REPO_ROOT/'src')`` shim is dropped
+# in the maturin sole-backend cutover — ``catan_rl`` is importable
+# via the install path now.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from catan_rl.augmentation import D6_GROUP_SIZE, apply_symmetry
 from catan_rl.engine.game import catanGame

@@ -18,6 +18,14 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
+      # ``pip install -e ".[dev]"`` invokes maturin (sole backend
+      # post-cutover) to compile the ``catan_engine`` Rust crate
+      # in-tree. Both lint and typecheck need the .so present so
+      # ruff/mypy can resolve ``import catan_engine`` cleanly.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
       - run: python -m pip install -e ".[dev]"
       - run: make lint
       - run: make typecheck
@@ -34,6 +42,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
+      # Same maturin-backed editable install as ``lint-and-typecheck``;
+      # required because the pytest suite imports ``catan_engine``
+      # directly (RNG-parity tests, engine snapshot fixtures, etc.).
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo registry + target
+        uses: Swatinem/rust-cache@v2
       - run: python -m pip install -e ".[dev]"
       - run: make test-unit
       - name: Smoke integration test
@@ -67,11 +82,16 @@ jobs:
         run: cargo clippy --workspace --release -- -D warnings
       - name: cargo test
         run: cargo test --workspace --release
-      - name: Install maturin
-        run: python -m pip install maturin
-      - name: maturin develop --release
-        run: maturin develop --release
-      - name: Verify import + hello world
+      # ``pip install -e .`` is equivalent to ``maturin develop``
+      # now that maturin is the sole build backend — and it also
+      # wires the ``[project.scripts]`` console-script entries
+      # (``catan-rl-train`` etc.) so the smoke step below can
+      # exercise them. See docs/plans/rust_engine_migration.md.
+      - name: pip install -e . (maturin-backed)
+        run: python -m pip install -e .
+      - name: Verify dual import + console script
         run: |
           python -c "import catan_engine; assert catan_engine.hello() == 'hello from rust'"
           python -c "import catan_engine; print('catan_engine', catan_engine.version())"
+          python -c "import catan_rl; print('catan_rl', catan_rl.__file__)"
+          catan-rl-train --help > /dev/null

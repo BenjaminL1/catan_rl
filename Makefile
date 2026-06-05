@@ -69,11 +69,14 @@ rust-setup:
 
 # ``rust-build`` runs maturin in --release mode and installs the
 # compiled ``catan_engine`` .so into the active virtualenv's
-# site-packages. NB: maturin uninstalls the hatchling-installed
-# ``catan-rl`` wheel as a side effect — for the ``catan_rl`` Python
-# package, run development scripts with ``PYTHONPATH=src`` until
-# the maturin/hatchling editable-install conflict is resolved
-# (see ``docs/plans/file_layout_restructure.md``).
+# site-packages. With maturin as the sole build backend (see
+# ``pyproject.toml`` + ``docs/plans/rust_engine_migration.md``),
+# ``pip install -e .`` produces an equivalent editable install
+# AND wires the ``[project.scripts]`` console-script entries
+# (``catan-rl-train`` etc.). Use ``make install`` as the default
+# editable-install path; reach for ``rust-build`` only when you
+# want a fast inner loop on the Rust ``.so`` without re-running
+# the Python wheel build.
 rust-build:
 	maturin develop --release
 

@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["maturin>=1.5,<2"]
+build-backend = "maturin"
 
 [project]
 name = "catan-rl"
@@ -16,6 +16,7 @@ classifiers = [
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
@@ -43,47 +44,46 @@ notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 [project.urls]
 Homepage = "https://github.com/benjaminli/catan_rl"
 
-# NOTE: ``[project.scripts]`` is intentionally NOT defined here.
-# Adding console-script entry points requires installing the
-# ``catan_rl`` Python package to site-packages, which conflicts
-# with the maturin/hatchling editable-install ordering for this
-# repo (``maturin develop`` uninstalls the hatchling-installed
-# ``catan-rl`` wheel and lays down a Rust-only wheel; subsequent
-# ``pip install -e .`` removes the maturin .so). Switching to
-# maturin as the sole build backend is the right long-term fix
-# — tracked in ``docs/plans/file_layout_restructure.md``. For now
-# users invoke CLIs as ``python scripts/<name>.py`` with
-# ``PYTHONPATH=src``.
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/catan_rl"]
+# Console-script entry points. ``pip install -e .`` (or
+# ``maturin develop --release``) puts these on PATH. Per the
+# senior SWE's Q4 decision the ``catan-rl-`` prefix matches the
+# distribution name and avoids collisions with the popular
+# ``catanatron`` 4-player Catan package on PyPI.
+#
+# ``catan-rl-eval`` is intentionally absent — the underlying
+# ``EvaluationManager`` CLI scaffolding doesn't exist yet (only
+# the ``catan_rl.eval.harness.EvalHarness`` library). Wire it
+# once a ``catan_rl.cli.evaluate:main`` exists.
+[project.scripts]
+catan-rl-train         = "catan_rl.cli.train:main"
+catan-rl-record        = "catan_rl.cli.record_game:main"
+catan-rl-replay        = "catan_rl.replay.viewer.event_loop:main"
+catan-rl-migrate-ckpt  = "catan_rl.cli.migrate_checkpoint:main"
+catan-rl-bc-train      = "catan_rl.cli.train_bc:main"
+catan-rl-bc-generate   = "catan_rl.cli.generate_bc_dataset:main"
+catan-rl-label-setup   = "catan_rl.cli.label_setup:main"
 
 # Maturin builds the native ``catan_engine`` Rust crate (under
-# ``crates/catan_engine``) into a Python extension module. The hatchling
-# build above ships the pure-Python ``catan_rl`` package; maturin ships
-# the compiled ``catan_engine.<abi>.so`` separately via
-# ``maturin develop --release`` (local dev) or
-# ``maturin build --release`` (CI wheel matrix). See
-# ``docs/plans/rust_engine_migration.md`` for the build contract.
+# ``crates/catan_engine``) into a Python extension module AND ships
+# the ``catan_rl`` Python package from ``src/`` in the same wheel.
+# Pre-PR4 the project used hatchling + maturin side-by-side; they
+# fought over the ``catan-rl`` distribution name (each backend's
+# editable install uninstalled the other). Maturin as sole backend
+# resolves the conflict per the audit in
+# ``docs/plans/rust_engine_migration.md``.
 #
-# We deliberately do NOT swap the build-backend to maturin — hatchling
-# still owns the Python wheel. Maturin runs side-by-side.
+# ``python-source = "src"`` tells maturin to walk ``src/`` for
+# Python packages; both ``catan_rl`` and ``catan_engine`` (the
+# maturin-managed extension namespace) live under it.
 [tool.maturin]
 manifest-path = "crates/catan_engine/Cargo.toml"
 module-name = "catan_engine"
+python-source = "src"
 strip = true
 # Opt into the ``extension-module`` cargo feature so PyO3 skips
 # libpython linking (correct for a Python ext); ``cargo test``
 # runs without this feature and links normally.
 features = ["extension-module"]
-# Maturin and hatchling both manage an editable install of the
-# ``catan-rl`` distribution name. Running ``maturin develop`` uninstalls
-# hatchling's editable wheel and lays down a Rust-only wheel that
-# excludes ``src/catan_rl/`` — which is why ``make rust-build``
-# re-runs ``pip install -e .`` afterwards to restore the Python
-# package. The two coexist at runtime: ``catan_engine`` lives at
-# site-packages top-level, ``catan_rl`` lives at ``src/`` via the
-# hatchling .pth.
 
 [tool.ruff]
 line-length = 100
@@ -98,6 +98,12 @@ ignore = ["E741", "RUF012"]
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011", "RUF001", "RUF002", "RUF003"]
 "scripts/**" = ["E402", "F841", "RUF002", "RUF059", "SIM102"]
+# The ``catan_rl.cli.*`` modules define a module-level ``REPO_ROOT``
+# constant (used as argparse default for ``--data`` / ``--out`` /
+# ``--config`` paths) between the imports — the comment + assignment
+# can't be pushed below ``from catan_rl... import`` without making
+# the defaults a function call. ``E402`` is the noise this creates.
+"src/catan_rl/cli/**" = ["E402"]
 # Legacy modules: not restructure-scope. Lint will be addressed alongside the
 # Phase 0+ refactors that touch each file. The blanket ignores below mute the
 # pre-existing violations so the new tooling pipeline can land green.

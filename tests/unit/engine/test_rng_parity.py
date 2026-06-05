@@ -13,7 +13,7 @@ import pytest
 
 catan_engine = pytest.importorskip("catan_engine")
 
-from tests.refs.chacha8 import ChaCha8  # noqa: E402  importorskip gates above
+from tests.fixtures.python_refs.chacha8 import ChaCha8  # noqa: E402  importorskip gates above
 
 
 @pytest.mark.parametrize(

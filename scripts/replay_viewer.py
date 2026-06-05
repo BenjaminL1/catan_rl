@@ -16,13 +16,12 @@ is asserted in ``tests/unit/replay/test_viewer_import_isolation.py``.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(REPO_ROOT / "src") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "src"))
-
+# Back-compat shim. Canonical entry points are the console script
+# ``catan-rl-replay`` (installed by ``pip install -e .``) and
+# ``python -m catan_rl.replay.viewer.event_loop``. The
+# ``sys.path.insert(REPO_ROOT/'src')`` shim was dropped in the
+# maturin sole-backend cutover — ``catan_rl`` is importable from
+# the install path now.
 from catan_rl.replay.viewer.event_loop import main
 
 if __name__ == "__main__":

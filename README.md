@@ -180,15 +180,19 @@ pip install -e ".[dev,gui]"
 # Fresh run with defaults
 make train
 
-# Or directly:
-python scripts/train.py --verbose
+# Or via the console script (wired by ``pip install -e .``):
+catan-rl-train --verbose
 
 # With a phase-specific YAML config
-python scripts/train.py --config configs/phase0_baseline.yaml --verbose
+catan-rl-train --config configs/phase0_baseline.yaml --verbose
 
 # Resume from checkpoint
-python scripts/train.py --resume checkpoints/train/checkpoint_XXXXXXXX.pt --verbose
+catan-rl-train --resume checkpoints/train/checkpoint_XXXXXXXX.pt --verbose
 ```
+
+> ``python scripts/train.py …`` still works — it's a thin
+> back-compat shim that re-exports ``catan_rl.cli.train:main``.
+> The canonical entry point is the console script.
 
 ### Monitor
 

@@ -18,13 +18,16 @@ from __future__ import annotations
 import argparse
 import math
 import random
-import sys
 from pathlib import Path
 
 import numpy as np
 
+# REPO_ROOT preserved for any downstream default-path usage. The
+# previous ``sys.path.insert(REPO_ROOT/'src')`` shim was a no-op
+# (its target was ``scripts/src/`` due to ``parent.parent`` only
+# reaching ``scripts/``) and is dropped in the maturin sole-backend
+# cutover — ``catan_rl`` is importable via the install path now.
 REPO_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO_ROOT / "src"))
 
 import pygame
 

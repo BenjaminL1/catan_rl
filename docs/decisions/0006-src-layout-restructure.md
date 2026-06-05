@@ -12,7 +12,7 @@ The PR re-organized the project into the standard Python ML layout. See `docs/pl
 ## Decision
 
 - Top-level package: `src/catan_rl/` (PEP 517/518 src-layout).
-- Build system: `pyproject.toml` with hatchling backend.
+- Build system: `pyproject.toml` with hatchling backend. *(Superseded 2026-06-05 by ADR/migration: maturin became the sole backend after the Rust `catan_engine` crate landed and the hatchling+maturin dual-backend layout caused editable-install conflicts. See `docs/plans/rust_engine_migration.md`.)*
 - Test suite: `tests/{unit,integration}/` mirroring `src/`.
 - Configs: `configs/*.yaml` (phase-specific YAML, with `_base` inheritance).
 - CI: GitHub Actions running lint + typecheck + tests.

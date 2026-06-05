@@ -204,7 +204,7 @@ python-source = "src"
 strip = true
 ```
 
-Existing `[build-system]` stays on hatchling for the Python wheel; maturin invoked via `make rust-build` (= `maturin develop --release`).
+**Implementation note (2026-06-05):** the originally planned dual-backend layout (hatchling for the Python wheel + maturin for the Rust extension) shipped briefly but caused an editable-install conflict — both backends register under the same `catan-rl` distribution name, and `pip install -e .` against either one uninstalled the other. The final layout uses **maturin as the sole build backend** with `python-source = "src"`, which builds the Rust `.so` directly into `src/catan_engine/` and ships the `catan_rl` Python package from `src/` in the same wheel. `pip install -e .` and `maturin develop --release` are now equivalent paths; `[project.scripts]` entries (`catan-rl-train` etc.) are wired in the same install. See the project Q&A in the commit on `chore/maturin-sole-backend`.
 
 ### Dual-engine pytest fixture
 

@@ -6,7 +6,7 @@ One-page description of the training loop. For details, see the linked source fi
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│ scripts/train.py                                    │
+│ catan-rl-train (= src/catan_rl/cli/train.py)        │
 │   └─ resolve_config(yaml_path)                      │
 │      └─ CatanPPO(config).train()                    │
 └─────────────────────────────────────────────────────┘
@@ -70,12 +70,18 @@ One-page description of the training loop. For details, see the linked source fi
 
 | Concern | File |
 |---|---|
-| Train | `scripts/train.py` |
+| Train | `catan-rl-train` → `src/catan_rl/cli/train.py` |
 | Evaluate vs heuristic/random | `scripts/evaluate.py` |
 | Play vs trained model (GUI) | `scripts/play_vs_model.py` |
 | Setup-phase trainer | `scripts/train_setup.py` |
 | Eval harness (rules-invariant / champion-bench / exploitability / league-rating) | `scripts/eval_harness.py` |
-| Migrate pre-Phase-0 checkpoint | `scripts/migrate_checkpoint.py` |
+| Migrate pre-Phase-0 checkpoint | `catan-rl-migrate-ckpt` → `src/catan_rl/cli/migrate_checkpoint.py` |
+| Record a single 1v1 game to a JSON replay | `catan-rl-record` → `src/catan_rl/cli/record_game.py` |
+| Play back a replay in a pygame window | `catan-rl-replay` → `src/catan_rl/replay/viewer/event_loop.py` |
+| Behavioral-cloning data pipeline | `catan-rl-bc-generate`, `catan-rl-bc-train` → `src/catan_rl/cli/{generate_bc_dataset,train_bc}.py` |
+| Setup-phase labeling tool | `catan-rl-label-setup` → `src/catan_rl/cli/label_setup.py` |
+
+The `catan-rl-*` console scripts are wired by `[project.scripts]` in `pyproject.toml`. `python scripts/<name>.py` invocations still work via thin back-compat shims (see `scripts/`).
 
 ## Phase 1 sample-efficiency upgrades
 

@@ -62,6 +62,14 @@ htmlcov/
 # Rust build artifacts (workspace target + maturin-built .so)
 target/
 
+# Maturin compiles the Rust extension into src/catan_engine/ during
+# editable installs (``pip install -e .`` or ``maturin develop``).
+# The .so is the build artifact; the package marker __init__.py is
+# the tracked source.
+src/catan_engine/*.so
+src/catan_engine/*.dylib
+src/catan_engine/*.pyd
+
 # Per-dev-box cargo config — templated from .cargo/config.toml.example
 # by ``make rust-setup``. Each contributor's miniconda/homebrew
 # libpython path goes in here; never committed.

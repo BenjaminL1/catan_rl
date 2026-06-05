@@ -343,6 +343,15 @@ catan_rl/
 
 ### 4.1 `pyproject.toml` (replaces `requirements.txt`)
 
+> **Implementation note (2026-06-05):** the actual `pyproject.toml`
+> shipped with **maturin** as the sole build backend, not hatchling.
+> The dual-backend approach explored in this section caused a
+> long-running editable-install conflict (the two backends fought
+> over the `catan-rl` dist name). See
+> `docs/plans/rust_engine_migration.md` for the audit + cutover.
+> The hatchling snippet below is preserved verbatim as the planned
+> state; treat it as historical context, not current truth.
+
 ```toml
 [build-system]
 requires = ["hatchling"]
