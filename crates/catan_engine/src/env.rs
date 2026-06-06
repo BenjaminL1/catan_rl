@@ -31,6 +31,16 @@ pub(crate) struct PyRustEnv {
 
 #[pymethods]
 impl PyRustEnv {
+    /// Construct a fresh env at the given seed with an optional
+    /// per-episode turn cap.
+    ///
+    /// `max_turns=None` disables truncation (back-compat). Cap
+    /// semantics: truncation fires when `state.turn_count >= cap`.
+    /// **`max_turns=Some(0)` is permitted and immediately
+    /// truncates on the first `step`** — equivalent to "no turns
+    /// allowed." Phase 4 of the remediation plan plumbs this from
+    /// YAML; values `<= 0` should be rejected upstream rather
+    /// than relied on for the immediate-truncate behaviour.
     #[new]
     #[pyo3(signature = (seed=0, max_turns=None))]
     fn py_new(seed: u64, max_turns: Option<u16>) -> Self {
