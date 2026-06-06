@@ -155,12 +155,13 @@ class CatanEnv(gym.Env):
             raise ValueError(f"engine_backend={engine_backend!r}; supported: 'python', 'rust'")
         if engine_backend == "rust":
             raise NotImplementedError(
-                "CatanEnv(engine_backend='rust') is Phase-4 scaffolding only. "
-                "The RustCatanEnvAdapter exists at "
-                "catan_rl.env.rust_adapter.RustCatanEnvAdapter but does not "
-                "yet implement the catanGame attribute proxies the env reads. "
-                "Phase 5 / 6 of the remediation plan land the proxies; until "
-                "then the production training loop must use the Python engine. "
+                "CatanEnv(engine_backend='rust') is not wired into the "
+                "rollout loop. The Rust migration FROZE at Phase 4-pivot "
+                "on 2026-06-06 — the catanGame attribute proxies in "
+                "catan_rl.env.rust_adapter.RustCatanEnvAdapter are NOT "
+                "coming. Use engine_backend='python' for training; the "
+                "Rust path is available for inference / deterministic "
+                "eval / MCTS via catan_engine.RustCatanEnv directly. "
                 "See docs/plans/rust_engine_actual_state.md."
             )
         self.engine_backend = engine_backend

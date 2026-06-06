@@ -89,12 +89,16 @@ class TestPhase4SafetyNet:
             "update_playerResources",
         ],
     )
-    def test_unimplemented_attribute_raises_with_pointer(self, attr_name: str) -> None:
+    def test_unimplemented_attribute_raises_with_freeze_pointer(self, attr_name: str) -> None:
+        """Post Phase 4-pivot freeze (2026-06-06): the safety net
+        must say the catanGame proxies are not coming, not "Phase 5
+        will implement". A reader who hits this error must know the
+        wiring is permanently frozen."""
         pytest.importorskip("catan_engine")
         from catan_rl.env.rust_adapter import RustCatanEnvAdapter
 
         adapter = RustCatanEnvAdapter()
-        with pytest.raises(NotImplementedError, match="Phase 5 / 6"):
+        with pytest.raises(NotImplementedError, match="FROZE"):
             getattr(adapter, attr_name)
 
     def test_safety_net_points_at_actual_state_doc(self) -> None:
@@ -103,6 +107,20 @@ class TestPhase4SafetyNet:
 
         adapter = RustCatanEnvAdapter()
         with pytest.raises(NotImplementedError, match="rust_engine_actual_state"):
+            _ = adapter.board
+
+    def test_safety_net_points_at_direct_rust_env_access(self) -> None:
+        """The error message must point at ``self._engine: catan_engine.
+        RustCatanEnv`` as the recommended access path for the
+        inference / eval / MCTS use cases that the Rust path
+        REMAINS available for. Without this, a reader thinks the
+        Rust path is wholly gone instead of available-via-direct-
+        engine-access."""
+        pytest.importorskip("catan_engine")
+        from catan_rl.env.rust_adapter import RustCatanEnvAdapter
+
+        adapter = RustCatanEnvAdapter()
+        with pytest.raises(NotImplementedError, match=r"catan_engine\.RustCatanEnv"):
             _ = adapter.board
 
 
@@ -137,16 +155,30 @@ class TestCatanEnvDispatch:
         env = CatanEnv(opponent_type="random", engine_backend="python")
         assert env.engine_backend == "python"
 
-    def test_rust_backend_raises_not_implemented_with_pointer(self) -> None:
+    def test_rust_backend_raises_with_freeze_pointer(self) -> None:
+        """Post freeze (2026-06-06): the dispatch error must say
+        Phase 4-pivot FROZE the rollout-loop wiring; not "Phase 5
+        will land". A user who flipped engine_backend in YAML must
+        understand the wiring is intentional dead-on-arrival."""
         from catan_rl.env.catan_env import CatanEnv
 
-        with pytest.raises(NotImplementedError, match="RustCatanEnvAdapter"):
+        with pytest.raises(NotImplementedError, match="FROZE"):
             CatanEnv(opponent_type="random", engine_backend="rust")
 
     def test_rust_backend_error_points_at_remediation_plan(self) -> None:
         from catan_rl.env.catan_env import CatanEnv
 
         with pytest.raises(NotImplementedError, match="rust_engine_actual_state"):
+            CatanEnv(opponent_type="random", engine_backend="rust")
+
+    def test_rust_backend_error_points_at_direct_rust_env_access(self) -> None:
+        """The error must tell the user where the Rust path REMAINS
+        available — direct ``catan_engine.RustCatanEnv`` access for
+        inference / eval / MCTS — rather than implying the Rust
+        path is wholly gone."""
+        from catan_rl.env.catan_env import CatanEnv
+
+        with pytest.raises(NotImplementedError, match=r"catan_engine\.RustCatanEnv"):
             CatanEnv(opponent_type="random", engine_backend="rust")
 
     def test_unknown_backend_rejected(self) -> None:

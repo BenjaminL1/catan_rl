@@ -1,17 +1,29 @@
 """``RustCatanEnvAdapter`` — Python-side shim around
 ``catan_engine.RustCatanEnv``.
 
-Phase 4 of the Rust migration remediation plan. The shim's job is
-to expose the minimum ``catanGame``-style attribute surface that
-:class:`catan_rl.env.catan_env.CatanEnv` reads, so the env can
-dispatch on ``engine_backend="rust"`` without rewriting its own
-body.
+Phase 4 of the Rust migration remediation plan + the Phase 4
+PIVOT user decision (2026-06-06). The migration is **FROZEN** at
+Phase 4-pivot: the Rust path is available for inference /
+deterministic eval / future MCTS rollouts, but is NOT wired into
+the production training loop. Phases 5-10 of the remediation plan
+are explicitly not pursued. See
+``docs/plans/rust_engine_actual_state.md``.
 
-**Scope of Phase 4 (the scaffolding pass).** This module ships
-the constructor, the documented dispatch contract, and a
-``NotImplementedError`` safety net for every ``catanGame`` attribute
-the env reads. The Phase 4 audit found 13 distinct attribute reads
-on ``CatanEnv.game.*``:
+The shim's original purpose was to expose the minimum
+``catanGame``-style attribute surface that
+:class:`catan_rl.env.catan_env.CatanEnv` reads, so the env could
+dispatch on ``engine_backend="rust"`` without rewriting its own
+body. After the freeze, the shim's purpose is to provide a stable,
+loud-on-access boundary so anyone who tries to enable
+``engine_backend="rust"`` for training is stopped with a clear
+pointer to the freeze decision.
+
+**What ships.** This module's constructor wraps
+``catan_engine.RustCatanEnv``; ``__getattr__`` is a safety net
+that raises ``NotImplementedError`` with a pointer to the freeze
+decision for every ``catanGame``-style attribute the env reads.
+The Phase 4 audit found 13 distinct attribute reads on
+``CatanEnv.game.*``:
 
 * ``board`` — the ``catanBoard`` object (with ``boardGraph``,
   ``hexTileDict``, etc.).
@@ -28,25 +40,19 @@ on ``CatanEnv.game.*``:
 * ``rollDice()`` — rolls + applies + returns int.
 * ``update_playerResources(dice, player)`` — settle distribution.
 
-**Phase 5 / 6 (the wiring pass)** implements each proxy on top of
-the corresponding Rust state-machine call, OR moves the relevant
-state-machine ownership into Python with the adapter forwarding
-only the legal-action application to ``catan_engine.RustCatanEnv``.
-The right split depends on the opponent injection contract
-landing in Phase 5; until then this module raises clearly when
-any uninstrumented attribute is accessed.
-
-**Why scaffold today instead of wiring fully?** The Phase 1 bench
-+ architect review concluded that the end-to-end ceiling from
-rolling out is `~1.09×` (per Amdahl on the SGD-dominated update).
-The Phase 6 gate is `≥ 1.15× e2e`. The expected payoff of wiring
-the full adapter is bounded by that gate. The scaffolding pass
-makes the dispatch flag real and pins the *interface contract*
-(what the adapter must satisfy) so that if Phase 5 measures
-opponent-injection cost as small, Phase 6's full implementation
-is a mechanical fill-in. If the measurement shows the cost is
-prohibitive, the scaffolding is the maximally-honest record of
-why Phase 4 stopped here.
+**Phases 5/6 were FROZEN on 2026-06-06.** The Phase 1 bench +
+architect review concluded the end-to-end ceiling from rolling
+out is `~1.09×` (per Amdahl on the SGD-dominated update), below
+the revised Phase 6 gate of `≥ 1.15×`. The user accepted the
+architect's HALT recommendation for the rollout-loop wiring AND
+chose PIVOT for the obs encoder (Rust now byte-parities with
+Python on the populated `[0..19]` slots so
+``checkpoint_07390040.pt`` can theoretically load against the
+Rust path for inference / eval / MCTS). The catanGame attribute
+proxies in this module are **not coming**; any code that needs
+them must either (a) accept they will not land, (b) wire what it
+needs ad-hoc against ``self._engine: catan_engine.RustCatanEnv``,
+or (c) re-open the freeze decision with the user.
 """
 
 from __future__ import annotations
@@ -66,19 +72,14 @@ class RustCatanEnvAdapter:
     impls with a single dispatch line.
     """
 
-    #: Implemented-by-Phase-4 attribute names. Listed explicitly
-    #: (not derived) so a future contributor adding a real proxy
-    #: must intentionally update this set. Anything not in the
-    #: set raises :class:`NotImplementedError` from
-    #: :meth:`__getattr__`.
-    _IMPLEMENTED_ATTRS: frozenset[str] = frozenset(
-        {
-            # Phase 4 deliberately implements zero proxies — the
-            # adapter exists as a typed, importable scaffold so
-            # the engine_backend dispatch line in CatanEnv has a
-            # real target. Phase 5 will populate this set.
-        }
-    )
+    #: Implemented attribute names. Listed explicitly (not derived)
+    #: so a future contributor adding a real proxy must intentionally
+    #: update this set. Anything not in the set raises
+    #: :class:`NotImplementedError` from :meth:`__getattr__`. The
+    #: set is empty post-freeze (2026-06-06); adding entries
+    #: re-opens the migration scope and must be justified against
+    #: the freeze decision.
+    _IMPLEMENTED_ATTRS: frozenset[str] = frozenset()
 
     def __init__(self, *, render_mode: Any = None, seed: int | None = None) -> None:
         """Build the adapter. ``render_mode`` is accepted for
@@ -107,28 +108,27 @@ class RustCatanEnvAdapter:
         self._render_mode = render_mode
 
     def __getattr__(self, name: str) -> Any:
-        """Phase 4 safety net.
+        """Safety net (post-Phase-4-pivot freeze).
 
-        Any ``catanGame``-style attribute read that hasn't been
-        wired through to a real Rust proxy raises with a clear
-        pointer at the remediation plan. The Phase 5 / 6 work is
-        what closes this gap; until then the failure mode is
-        loud-and-early (at attribute access) rather than
-        silent-and-late (mysterious downstream behaviour).
+        Any ``catanGame``-style attribute read raises with a
+        pointer at the freeze decision. Phases 5/6 were FROZEN on
+        2026-06-06; the catanGame proxies are not coming. Code
+        that needs the Rust path for inference / eval / MCTS must
+        access ``self._engine: catan_engine.RustCatanEnv`` directly
+        rather than going through these proxies.
         """
         if name in self._IMPLEMENTED_ATTRS:
-            # Should never reach here — implemented attrs are
-            # defined as normal methods/properties on the class.
-            # Hitting this means an _IMPLEMENTED_ATTRS entry
-            # lacks a real impl, which is a programming error.
             raise AttributeError(
                 f"RustCatanEnvAdapter._IMPLEMENTED_ATTRS lists {name!r} "
                 f"but no real proxy is defined. This is a programming error."
             )
         raise NotImplementedError(
-            f"RustCatanEnvAdapter.{name} is not wired yet. "
-            f"Phase 5 / 6 of the Rust migration remediation plan will "
-            f"implement the catanGame attribute proxies; until then the "
-            f"production training loop must use engine_backend='python'. "
+            f"RustCatanEnvAdapter.{name} is not wired. The Rust migration "
+            f"FROZE at Phase 4-pivot on 2026-06-06 (HALT verdict on the "
+            f"rollout-loop wiring; PIVOT decision to fix the obs encoder "
+            f"so checkpoints can theoretically load against the Rust path). "
+            f"The catanGame proxies are not coming. For inference / eval / "
+            f"MCTS use cases, access self._engine: catan_engine.RustCatanEnv "
+            f"directly. For training, use engine_backend='python'. "
             f"See docs/plans/rust_engine_actual_state.md."
         )
