@@ -10,7 +10,9 @@ Pins:
 5. ``snapshot_config`` writes a YAML that round-trips back to the
    original ``TrainConfig`` (so the snapshot is a faithful reproducer).
 6. ``main(--dry-run)`` exits 0 without invoking the trainer.
-7. ``main()`` without ``--dry-run`` exits 2 (trainer not yet wired).
+7. ~~``main()`` without ``--dry-run`` exits 2 (trainer not yet wired).~~
+   *Obsolete since Phase 4 wired the trainer; corresponding test is
+   skipped — see ``test_no_dry_run_returns_non_retriable_exit_code``.*
 
 Implementation note: the entry point lived at ``scripts/train.py``
 pre-cutover and was loaded via importlib's spec loader because the
@@ -229,10 +231,19 @@ class TestMain:
         )
         assert rc == 0
 
+    @pytest.mark.skip(
+        reason=(
+            "Pin 7 is obsolete: trainer was wired in Phase 4, so "
+            "``main()`` without ``--dry-run`` no longer raises "
+            "``NotImplementedError`` — it kicks off a full PPO run "
+            "(50M steps at defaults). The ``EXIT_TRAINER_NOT_WIRED`` "
+            "code path is dead. Replace this test with a fast "
+            "``--max-updates 1`` smoke once a tiny-config fixture is "
+            "available; until then keep skipped so the suite stays "
+            "under 20s."
+        )
+    )
     def test_no_dry_run_returns_non_retriable_exit_code(self, train_mod, tmp_path: Path) -> None:
-        # Trainer raises NotImplementedError until Phase 4; main() catches
-        # and returns EXIT_TRAINER_NOT_WIRED = 64 (EX_USAGE), the
-        # non-retriable exit code so SkyPilot / Modal don't infinite-respawn.
         rc = train_mod.main(
             [
                 "--output-dir",
