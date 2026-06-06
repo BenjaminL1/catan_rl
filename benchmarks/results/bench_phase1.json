@@ -1,0 +1,90 @@
+{
+  "catan_engine_version": "0.1.0",
+  "cells": {
+    "py@n_envs=1": {
+      "max_sps": 420.85626379593964,
+      "median_sps": 396.6393530418889,
+      "median_wall_s": 2.58169037476182,
+      "min_sps": 389.14719491118325
+    },
+    "py@n_envs=128": {
+      "max_sps": 1849.302501746263,
+      "median_sps": 1802.5151991457199,
+      "median_wall_s": 72.71616908535361,
+      "min_sps": 1757.2075577528146
+    },
+    "py@n_envs=32": {
+      "max_sps": 1463.890656166673,
+      "median_sps": 1382.7546131067515,
+      "median_wall_s": 23.697624791413546,
+      "min_sps": 1331.4678033204952
+    },
+    "py@n_envs=8": {
+      "max_sps": 1018.5234735443718,
+      "median_sps": 1009.0236610102522,
+      "median_wall_s": 8.118739249184728,
+      "min_sps": 1003.2211631236253
+    },
+    "rust_no_op@n_envs=1": {
+      "max_sps": 473.42294423552374,
+      "median_sps": 444.5219640677537,
+      "median_wall_s": 2.3035982083529234,
+      "min_sps": 411.81374591536024
+    },
+    "rust_no_op@n_envs=128": {
+      "max_sps": 3435.672061323551,
+      "median_sps": 3204.1599125256985,
+      "median_wall_s": 40.90682224929333,
+      "min_sps": 2980.485804824497
+    },
+    "rust_no_op@n_envs=32": {
+      "max_sps": 2333.436993515187,
+      "median_sps": 1901.8400049853885,
+      "median_wall_s": 17.229630207642913,
+      "min_sps": 1577.9456731566363
+    },
+    "rust_no_op@n_envs=8": {
+      "max_sps": 1222.5554771201944,
+      "median_sps": 1195.4632594462682,
+      "median_wall_s": 6.852573623880744,
+      "min_sps": 1015.4423805892269
+    },
+    "rust_with_opp@n_envs=1": {
+      "error": "backend 'rust_with_opp' is reserved; opponent injection ships in Phase 5 of the Rust migration remediation plan. The CSV row is kept available so the schema is stable from day one. See docs/plans/rust_engine_actual_state.md."
+    },
+    "rust_with_opp@n_envs=128": {
+      "error": "backend 'rust_with_opp' is reserved; opponent injection ships in Phase 5 of the Rust migration remediation plan. The CSV row is kept available so the schema is stable from day one. See docs/plans/rust_engine_actual_state.md."
+    },
+    "rust_with_opp@n_envs=32": {
+      "error": "backend 'rust_with_opp' is reserved; opponent injection ships in Phase 5 of the Rust migration remediation plan. The CSV row is kept available so the schema is stable from day one. See docs/plans/rust_engine_actual_state.md."
+    },
+    "rust_with_opp@n_envs=8": {
+      "error": "backend 'rust_with_opp' is reserved; opponent injection ships in Phase 5 of the Rust migration remediation plan. The CSV row is kept available so the schema is stable from day one. See docs/plans/rust_engine_actual_state.md."
+    }
+  },
+  "git_sha": "58c914d-dirty",
+  "hardware": {
+    "machine": "arm64",
+    "release": "23.5.0",
+    "system": "Darwin"
+  },
+  "include_policy": true,
+  "invocation": [
+    "bench_engine.py",
+    "--all",
+    "--n-steps",
+    "1024",
+    "--repeat",
+    "3",
+    "--out-dir",
+    "benchmarks/results",
+    "--csv-name",
+    "bench_phase1.csv"
+  ],
+  "n_steps": 1024,
+  "python_version": "3.12.8",
+  "repeat": 3,
+  "seed": 42,
+  "timestamp_utc": "20260606T201732Z",
+  "torch_version": "2.9.1"
+}
