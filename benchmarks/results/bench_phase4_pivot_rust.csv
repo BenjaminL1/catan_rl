@@ -1,0 +1,4 @@
+timestamp_utc,git_sha,hardware,backend,n_envs,n_steps,include_policy,env_steps_per_sec,wall_s,repeat_idx
+20260606T215321Z,501aee9-dirty,arm64-Darwin,rust_no_op,128,1024,True,3929.7386226869517,33.35387225076556,0
+20260606T215353Z,501aee9-dirty,arm64-Darwin,rust_no_op,128,1024,True,4020.4302546764234,32.6014858353883,1
+20260606T215426Z,501aee9-dirty,arm64-Darwin,rust_no_op,128,1024,True,4046.0422674032666,32.395113876089454,2

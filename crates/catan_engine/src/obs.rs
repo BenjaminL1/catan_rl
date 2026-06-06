@@ -3,23 +3,43 @@
 //! (`policy/obs_encoder.py`) is replicated structurally — same
 //! dims and dtype.
 //!
-//! ## Fresh-train-required badge (Phase 3 of the remediation plan)
+//! ## Cross-impl byte-parity (Phase 4 pivot, 2026-06-06)
 //!
-//! Per-feature byte-identity with the Python obs encoder is NOT
-//! pursued. The `tile_representations` slots `[19..79]` are zero-filled
-//! placeholders (see `TILE_PLACEHOLDER_SLOTS` below) and the
-//! `vertex_features[6..14]` port-adjacency slots use a deterministic
-//! but not Python-equivalent ordering. Consequence: a policy
-//! checkpoint trained against the Python obs cannot be loaded
-//! against the Rust obs and expect equivalent value/policy outputs
-//! — the Rust path is **fresh-train-required**.
+//! The user's PIVOT decision on the Phase 4 review: rewrite the
+//! Rust encoder so the populated slots of `tile_representations`
+//! and `hex_features` are **byte-identical** with the Python
+//! encoder output for the same board layout. This preserves the
+//! option to load `checkpoint_07390040.pt` against the Rust path
+//! (e.g. for inference benchmarks, deterministic eval, or future
+//! MCTS rollouts) without requiring a full retrain.
 //!
-//! The populated slots (`tile_representations[0..19]` and the
-//! one-hot resource / number-token / robber bits across all tensors)
-//! ARE byte-identical and are pinned by `tests/unit/engine/
-//! test_obs_byte_parity.py`. Any byte-level diff on those slots is
-//! a Phase 3 regression and the parity test will catch it at PR
-//! review.
+//! Byte-parity slots (asserted in
+//! `tests/unit/engine/test_obs_cross_impl_byte_parity.py`):
+//!
+//! * `tile_representations[h, 0..6]` — resource one-hot in the
+//!   Python order (BRICK, ORE, SHEEP, WHEAT, WOOD, DESERT).
+//! * `tile_representations[h, 6..17]` — number-token one-hot in
+//!   the Python order (None, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12).
+//! * `tile_representations[h, 17]` — current-robber bit
+//!   (`hex.hex_idx == state.robber_hex`).
+//! * `tile_representations[h, 18]` — dot count / 5.0.
+//! * `hex_features[h, 0..19]` — same as tile representations
+//!   `[0..19]` (Python's `_tile_static` is reused for the GNN's
+//!   per-hex input).
+//!
+//! ## Fresh-train-required slots (Phase 3 badge, still in effect)
+//!
+//! The vertex / edge content slots in `tile_representations[19..79]`
+//! remain zero-filled placeholders. Phase 3's "fresh-train-required"
+//! badge covers these. The pivot intentionally does not fill them
+//! because (a) they require board-graph translation which the
+//! adapter does not yet plumb, and (b) the Python checkpoint was
+//! trained against those slots being populated, so loading the
+//! ckpt against zero-filled vertex slots will still lose
+//! performance even with the [0..19] byte-parity fix. The pivot
+//! is a "ckpt-can-load" gate, not a "ckpt-plays-as-well" gate.
+//! See `docs/plans/rust_engine_actual_state.md` and the Phase 4
+//! reviewer notes.
 //!
 //! Tensors returned:
 //! * `tile_representations`: (19, 79) f32
@@ -65,6 +85,79 @@ pub const NEXT_PLAYER_DIM: usize = 61;
 /// robber bits) ARE byte-parity-tested against the Python obs.
 pub const TILE_PLACEHOLDER_SLOTS: std::ops::Range<usize> = 19..TILE_FEATURE_DIM;
 
+/// Resource one-hot slot in the **Python-encoder** ordering:
+/// BRICK=0, ORE=1, SHEEP=2, WHEAT=3, WOOD=4, DESERT=5. The Rust
+/// `Resource` enum uses a different internal numbering for
+/// gameplay convenience (DESERT=0 so default-zero matches "no
+/// resource"); the obs encoder permutes through this helper to
+/// preserve byte-parity with the Python encoder and keep
+/// `checkpoint_07390040.pt` loadable. Phase 4 pivot
+/// (`docs/plans/rust_engine_actual_state.md`).
+#[inline]
+fn resource_to_python_slot(r: crate::board::Resource) -> usize {
+    use crate::board::Resource;
+    match r {
+        Resource::Brick => 0,
+        Resource::Ore => 1,
+        Resource::Sheep => 2,
+        Resource::Wheat => 3,
+        Resource::Wood => 4,
+        Resource::Desert => 5,
+    }
+}
+
+/// Number-token one-hot slot in the **Python-encoder** ordering:
+/// the slot relative to the start of the token block. Python orders
+/// `(None, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12)` — desert (None) at
+/// slot 0, no slot for the impossible-on-a-hex token 7.
+///
+/// Returns the relative slot index, NOT the absolute index in the
+/// per-tile feature vector. Caller adds 6 (the resource block
+/// width) to get the absolute slot.
+#[inline]
+fn token_to_python_slot(token: Option<u8>) -> Option<usize> {
+    match token {
+        None => Some(0),
+        Some(2) => Some(1),
+        Some(3) => Some(2),
+        Some(4) => Some(3),
+        Some(5) => Some(4),
+        Some(6) => Some(5),
+        // Token 7 is reserved for dice rolls and never appears on
+        // a hex; the Python encoder skips it. The Rust encoder
+        // matches: None here means "do not set a one-hot bit."
+        Some(7) => None,
+        Some(8) => Some(6),
+        Some(9) => Some(7),
+        Some(10) => Some(8),
+        Some(11) => Some(9),
+        Some(12) => Some(10),
+        _ => None,
+    }
+}
+
+/// Number of standard 2d6 outcomes that roll each token. Used to
+/// produce the normalised dot-count feature at slot 18 of each
+/// per-hex block: ``arr[h, 18] = dots(token) / MAX_DOTS``.
+/// Matches Python's ``_DOTS_BY_TOKEN`` at
+/// `src/catan_rl/policy/obs_encoder.py:106-118`.
+#[inline]
+fn dots_by_token(token: Option<u8>) -> u8 {
+    match token {
+        Some(2) | Some(12) => 1,
+        Some(3) | Some(11) => 2,
+        Some(4) | Some(10) => 3,
+        Some(5) | Some(9) => 4,
+        Some(6) | Some(8) => 5,
+        // None (desert) and 7 (never on a hex) both have 0 dots.
+        _ => 0,
+    }
+}
+
+/// Maximum dot count, used as the denominator in the per-hex
+/// dot-count feature at slot 18. Matches Python's `_MAX_DOTS`.
+const MAX_DOTS: f32 = 5.0;
+
 /// Build the obs dict. Allocates 8 numpy arrays per call (one per
 /// obs key). Future R13 polish: preallocate scratch buffers per env
 /// and write in place.
@@ -73,30 +166,41 @@ pub fn build_obs<'py>(py: Python<'py>, state: &GameState) -> PyResult<Bound<'py,
 
     // -------------------------------------------------------------
     // tile_representations: (19, 79) f32
+    //
+    // Slot layout (Phase 4 pivot — byte-parity with the Python
+    // encoder on the populated `[0..19]` range so
+    // `checkpoint_07390040.pt` can load):
+    //
+    // [0..6]  one-hot resource (Python order: BRICK, ORE, SHEEP,
+    //         WHEAT, WOOD, DESERT)
+    // [6..17] one-hot number-token (Python order: None, 2, 3, 4,
+    //         5, 6, 8, 9, 10, 11, 12). Desert lights up slot 6
+    //         (None). Token 7 has no slot because it never
+    //         appears on a hex.
+    // [17]    has_robber (CURRENT robber bit, not initial).
+    //         Matches Python `board.hexTileDict[h].has_robber`.
+    // [18]    dot count / 5.0 (normalised). Matches Python
+    //         `_DOTS_BY_TOKEN[token] / _MAX_DOTS`. Desert is 0.
+    // [19..]  zero-fill placeholders. Fresh-train-required slot
+    //         range — see `TILE_PLACEHOLDER_SLOTS` and the Phase
+    //         3 badge in the module docstring.
     // -------------------------------------------------------------
     let tiles = PyArray2::<f32>::zeros_bound(py, [N_TILES, TILE_FEATURE_DIM], false);
     {
         let mut arr = unsafe { tiles.as_array_mut() };
         for (h_idx, hex) in state.board.hexes.iter().enumerate() {
-            // Per-hex feature slots:
-            // [0..6]  one-hot resource (DESERT, WOOD, BRICK, WHEAT, ORE, SHEEP)
-            // [6..17] one-hot number_token (2..12)
-            // [17]    has_robber
-            // [18]    is_currently_blocked_by_robber (==robber_hex flag)
-            // [19..]  filler — placeholder for vertex/edge ownership flags
-            //         and port adjacency. Filled by future R13 polish.
-            arr[(h_idx, hex.resource as usize)] = 1.0;
-            if let Some(tok) = hex.number_token {
-                if tok >= 2 && tok <= 12 {
-                    arr[(h_idx, 6 + (tok as usize - 2))] = 1.0;
-                }
+            arr[(h_idx, resource_to_python_slot(hex.resource))] = 1.0;
+            if let Some(slot) = token_to_python_slot(hex.number_token) {
+                arr[(h_idx, 6 + slot)] = 1.0;
             }
-            arr[(h_idx, 17)] = if hex.has_robber_initial { 1.0 } else { 0.0 };
-            arr[(h_idx, 18)] = if hex.hex_idx == state.robber_hex {
+            // Slot 17: current-robber flag.
+            arr[(h_idx, 17)] = if hex.hex_idx == state.robber_hex {
                 1.0
             } else {
                 0.0
             };
+            // Slot 18: normalised dot count.
+            arr[(h_idx, 18)] = (dots_by_token(hex.number_token) as f32) / MAX_DOTS;
         }
     }
     out.set_item("tile_representations", tiles)?;
@@ -178,27 +282,28 @@ pub fn build_obs<'py>(py: Python<'py>, state: &GameState) -> PyResult<Bound<'py,
 
     // -------------------------------------------------------------
     // hex_features: (19, 19) f32 — GNN per-hex input
+    //
+    // Phase 4 pivot: byte-identical with the first 19 columns of
+    // `tile_representations` above. Python builds `hex_features`
+    // as `_tile_static.copy()` then overwrites slot 17 with the
+    // dynamic robber bit; the Rust encoder follows the same
+    // recipe so `checkpoint_07390040.pt`-lineage policies can
+    // load. See `src/catan_rl/policy/obs_encoder.py:382-387`.
     // -------------------------------------------------------------
     let hex_feat = PyArray2::<f32>::zeros_bound(py, [N_TILES, HEX_FEATURE_DIM], false);
     {
         let mut arr = unsafe { hex_feat.as_array_mut() };
         for (h_idx, hex) in state.board.hexes.iter().enumerate() {
-            // [0..6]  one-hot resource
-            // [6..17] one-hot number_token (2..12)
-            // [17]    robber_here
-            // [18]    constant 1.0 bias
-            arr[(h_idx, hex.resource as usize)] = 1.0;
-            if let Some(tok) = hex.number_token {
-                if tok >= 2 && tok <= 12 {
-                    arr[(h_idx, 6 + (tok as usize - 2))] = 1.0;
-                }
+            arr[(h_idx, resource_to_python_slot(hex.resource))] = 1.0;
+            if let Some(slot) = token_to_python_slot(hex.number_token) {
+                arr[(h_idx, 6 + slot)] = 1.0;
             }
             arr[(h_idx, 17)] = if hex.hex_idx == state.robber_hex {
                 1.0
             } else {
                 0.0
             };
-            arr[(h_idx, 18)] = 1.0;
+            arr[(h_idx, 18)] = (dots_by_token(hex.number_token) as f32) / MAX_DOTS;
         }
     }
     out.set_item("hex_features", hex_feat)?;

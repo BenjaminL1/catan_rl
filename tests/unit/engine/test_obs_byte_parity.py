@@ -40,16 +40,19 @@ catan_engine = pytest.importorskip("catan_engine")
 # added to the source-of-truth doc.
 _TILE_PLACEHOLDER_RANGE = (19, 79)
 
-# Standard 1v1 Catan: 19 hexes (5 wood, 4 sheep, 4 wheat, 3 brick,
-# 3 ore, 1 desert per CLAUDE.md). The Rust resource enum values:
-# 0=Desert, 1=Wood, 2=Brick, 3=Wheat, 4=Ore, 5=Sheep — derived
-# from `crates/catan_engine/src/board.rs` and consumed at
-# `obs.rs:60`. Slots `[0..6]` are the resource one-hot.
+# Standard 1v1 Catan: 19 hexes (4 wood, 4 sheep, 4 wheat, 3 brick,
+# 3 ore, 1 desert per CLAUDE.md).
+#
+# Slot ordering (Phase 4 pivot, 2026-06-06): the Rust encoder was
+# rewritten to MATCH the Python encoder, so both encoders use:
+# resource one-hot order = BRICK, ORE, SHEEP, WHEAT, WOOD, DESERT.
+# See `crates/catan_engine/src/obs.rs:resource_to_python_slot` and
+# `src/catan_rl/policy/obs_encoder.py:_RESOURCE_TYPES_FOR_ONEHOT`.
 _N_RESOURCES_INCLUDING_DESERT = 6
 _RESOURCE_SLOTS = slice(0, _N_RESOURCES_INCLUDING_DESERT)
-_NUMBER_TOKEN_SLOTS = slice(6, 17)  # 11 possible tokens (2..12)
-_ROBBER_INITIAL_SLOT = 17
-_ROBBER_CURRENT_SLOT = 18
+_NUMBER_TOKEN_SLOTS = slice(6, 17)  # 11 slots: None (desert) + 2..6, 8..12
+_ROBBER_CURRENT_SLOT = 17  # Phase 4 pivot: was 18 pre-pivot
+_DOTS_SLOT = 18  # Phase 4 pivot: was robber-current pre-pivot
 
 
 def _rust_obs_for_seed(seed: int) -> dict:
@@ -138,73 +141,92 @@ class TestPopulatedSlotStructure:
         )
 
     @pytest.mark.parametrize("seed", list(range(32)))
-    def test_number_token_block_is_zero_or_onehot(self, seed: int) -> None:
-        """Desert has no number token → its block is all zero.
-        Every other tile has exactly one token → exactly one bit
-        set in the block."""
+    def test_number_token_block_is_onehot_for_every_tile(self, seed: int) -> None:
+        """Phase 4 pivot: every tile's token block sums to exactly 1.
+        Desert lights up the None slot (relative slot 0); every
+        other tile lights up the slot for its number token. The
+        pre-pivot "0 or 1" rule was a Rust-only artefact —
+        Python always wrote a one-hot in the None slot for desert.
+        """
         obs = _rust_obs_for_seed(seed)
         tile = np.asarray(obs["tile_representations"])
         token_block = tile[:, _NUMBER_TOKEN_SLOTS]
         sums = token_block.sum(axis=1)
-        # Every entry must be either 0 (desert) or 1 (one token).
-        assert np.all((sums == 0.0) | (sums == 1.0)), (
-            f"number-token block must be all-zero or one-hot per tile; "
-            f"seed={seed}, got sums={sums.tolist()}"
+        assert np.all(sums == 1.0), (
+            f"number-token block must be one-hot per tile (post Phase 4 "
+            f"pivot); seed={seed}, got sums={sums.tolist()}"
         )
-        # Standard 1v1 board: exactly one desert.
-        n_desert = int((sums == 0.0).sum())
+        # Standard 1v1 board: exactly one desert, which is the
+        # only hex with the None token slot (slot 0 of the block)
+        # active.
+        n_desert = int(token_block[:, 0].sum())
         assert n_desert == 1, (
-            f"standard 1v1 board has exactly 1 desert; seed={seed}, got {n_desert}"
+            f"standard 1v1 board has exactly 1 desert (token-slot 0 active); "
+            f"seed={seed}, got {n_desert}"
         )
 
     @pytest.mark.parametrize("seed", list(range(32)))
-    def test_robber_bits_are_boolean(self, seed: int) -> None:
+    def test_current_robber_slot_is_boolean(self, seed: int) -> None:
+        """Post Phase 4 pivot: slot 17 is the **current** robber
+        bit (0 or 1). Slot 18 is no longer a robber flag — it's
+        the normalised dot count and has its own test."""
         obs = _rust_obs_for_seed(seed)
         tile = np.asarray(obs["tile_representations"])
-        for slot in (_ROBBER_INITIAL_SLOT, _ROBBER_CURRENT_SLOT):
-            col = tile[:, slot]
-            assert np.all((col == 0.0) | (col == 1.0)), (
-                f"robber slot {slot} must be boolean per tile; seed={seed}, "
-                f"got values={col.tolist()}"
+        col = tile[:, _ROBBER_CURRENT_SLOT]
+        assert np.all((col == 0.0) | (col == 1.0)), (
+            f"current-robber slot {_ROBBER_CURRENT_SLOT} must be boolean per "
+            f"tile; seed={seed}, got values={col.tolist()}"
+        )
+
+    @pytest.mark.parametrize("seed", list(range(32)))
+    def test_dot_count_slot_is_normalised(self, seed: int) -> None:
+        """Phase 4 pivot: slot 18 is ``dots(token) / 5`` so it
+        takes values in ``{0.0, 0.2, 0.4, 0.6, 0.8, 1.0}``.
+        Desert (no token) is 0.0. Tokens 2 and 12 are 0.2, etc."""
+        obs = _rust_obs_for_seed(seed)
+        tile = np.asarray(obs["tile_representations"])
+        col = tile[:, _DOTS_SLOT]
+        allowed = {0.0, 0.2, 0.4, 0.6, 0.8, 1.0}
+        for h_idx, v in enumerate(col.tolist()):
+            assert round(v, 6) in {round(a, 6) for a in allowed}, (
+                f"dots/5 slot {_DOTS_SLOT} hex {h_idx} = {v}; "
+                f"expected one of {allowed}; seed={seed}"
             )
 
     @pytest.mark.parametrize("seed", list(range(32)))
-    def test_robber_initial_and_current_match_at_reset(self, seed: int) -> None:
-        """At a freshly-reset env, the robber hasn't moved — the
-        ``has_robber_initial`` and ``is_currently_blocked_by_robber``
-        flags must agree (the robber is on the desert hex at index
-        derived from the board)."""
+    def test_current_robber_active_for_exactly_one_hex_at_reset(self, seed: int) -> None:
+        """At reset the robber sits on the desert hex; the current
+        robber bit (slot 17 post-pivot) lights up only for that hex."""
         obs = _rust_obs_for_seed(seed)
         tile = np.asarray(obs["tile_representations"])
-        initial = tile[:, _ROBBER_INITIAL_SLOT]
-        current = tile[:, _ROBBER_CURRENT_SLOT]
-        assert np.array_equal(initial, current), (
-            f"at reset, has_robber_initial must equal is_currently_blocked_by_robber; seed={seed}"
+        active = tile[:, _ROBBER_CURRENT_SLOT]
+        assert active.sum() == 1.0, (
+            f"exactly one tile has the robber at reset; seed={seed}, got sum={active.sum()}"
         )
-        assert initial.sum() == 1.0, f"exactly one tile has the robber at reset; seed={seed}"
 
     @pytest.mark.parametrize("seed", list(range(32)))
     def test_resource_count_distribution_matches_1v1_spec(self, seed: int) -> None:
         """Per CLAUDE.md: 1v1 Catan uses the standard 19-tile board
         with 1 desert + 4 wood + 4 sheep + 4 wheat + 3 brick +
         3 ore. The resource one-hot must therefore have exact
-        per-resource counts across the 19 tiles. This is the
-        single best invariant for catching silent board-shuffle
-        bugs in the Rust encoder."""
+        per-resource counts across the 19 tiles.
+
+        Phase 4 pivot: the Rust encoder was rewritten to use the
+        Python ordering BRICK, ORE, SHEEP, WHEAT, WOOD, DESERT.
+        Expected count vector is therefore `[3, 3, 4, 4, 4, 1]`.
+        """
         obs = _rust_obs_for_seed(seed)
         tile = np.asarray(obs["tile_representations"])
         resource_block = tile[:, _RESOURCE_SLOTS]
         counts = resource_block.sum(axis=0).astype(int).tolist()
-        # Indices: 0=Desert, 1=Wood, 2=Brick, 3=Wheat, 4=Ore, 5=Sheep
-        # Standard 19-tile distribution per CLAUDE.md.
-        # NOTE: counts[1] = wood, counts[2] = brick, counts[3] = wheat,
-        # counts[4] = ore, counts[5] = sheep — matches the Rust
-        # ``Resource`` enum order at ``crates/catan_engine/src/board.rs``.
-        expected = [1, 4, 3, 4, 3, 4]
+        # Slot order (post-pivot): BRICK=0, ORE=1, SHEEP=2, WHEAT=3,
+        # WOOD=4, DESERT=5. See `crates/catan_engine/src/obs.rs:
+        # resource_to_python_slot`.
+        expected = [3, 3, 4, 4, 4, 1]
         assert counts == expected, (
             f"resource distribution mismatch; seed={seed}, expected={expected}, "
-            f"got={counts}. Standard 19-tile 1v1 board has 1 desert + "
-            f"4 wood + 3 brick + 4 wheat + 3 ore + 4 sheep."
+            f"got={counts}. Phase 4 pivot requires Python ordering "
+            f"BRICK, ORE, SHEEP, WHEAT, WOOD, DESERT."
         )
 
 
@@ -220,7 +242,12 @@ class TestRustSideRegressionPins:
         """Pin every populated slot of ``tile_representations[0]``
         for ``seed=42``. The 19 leading bytes of tile 0 form a
         compact fingerprint of the Rust encoder's output at this
-        seed."""
+        seed.
+
+        Phase 4 pivot: slot 17 is the current-robber bit (boolean),
+        slot 18 is dots(token)/5 (one of {0, 0.2, 0.4, 0.6, 0.8,
+        1.0}). The structural pin below allows the dot-count slot
+        to take any of those values."""
         obs = _rust_obs_for_seed(42)
         tile = np.asarray(obs["tile_representations"])
         tile_zero_populated = tile[0, :19].astype(np.float32)
@@ -229,11 +256,20 @@ class TestRustSideRegressionPins:
         # by the current Rust encoder.
         # Resource is at exactly one of indices 0..6, sum is 1.0.
         assert tile_zero_populated[:6].sum() == 1.0
-        # Number-token block (6..17) sums to 0 (desert) or 1.
-        assert tile_zero_populated[6:17].sum() in (0.0, 1.0)
-        # Both robber bits are boolean.
+        # Number-token block (6..17) sums to exactly 1 — the desert
+        # hex's None slot is slot 6 of the absolute index, AND
+        # every non-desert hex lights up exactly one token slot.
+        # (Phase 4 pivot collapses the pre-pivot "0 or 1" rule:
+        # desert is now represented by the None slot active, not
+        # by an all-zero block.)
+        assert tile_zero_populated[6:17].sum() == 1.0
+        # Slot 17: current-robber bit (boolean).
         assert tile_zero_populated[17] in (0.0, 1.0)
-        assert tile_zero_populated[18] in (0.0, 1.0)
+        # Slot 18: dots(token)/5; one of {0.0, 0.2, 0.4, 0.6, 0.8, 1.0}.
+        # Cast to Python float first — np.float32 != float64 even when
+        # both round to the same display value.
+        slot18 = round(float(tile_zero_populated[18]), 6)
+        assert slot18 in {round(v, 6) for v in (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)}
         # And the placeholder block is exactly zero — already
         # checked elsewhere, but pinning it here too means a
         # regression on seed=42 fails this test specifically.

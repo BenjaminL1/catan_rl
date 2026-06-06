@@ -125,13 +125,14 @@ plan") — the 10-phase sequence the user confirmed on 2026-06-06.
 | 1 | Benchmark harness with policy forward in the loop | **Landed 2026-06-06** (results: see "Phase 1 measured" below) |
 | 2 | Dual-engine `engine_backend` pytest fixture | **Landed 2026-06-06** |
 | 3 | Truncation wiring + obs honesty + `PyHandTracker` pyclass + byte-parity test | **Landed 2026-06-06** (bench within noise of baseline — gate passes; +3.1% delta is run-to-run variance, not a real reduction) |
-| 4 | `RustCatanEnvAdapter` scaffolding + `engine_backend` dispatch flag + cross-impl obs parity audit (Phase 3 follow-up) | **Landed 2026-06-06 — scaffolding only**. The carved-in cross-impl byte-parity gate is **BLOCKED**: the Phase 4 audit discovered the Python and Rust encoders use different one-hot orderings (resource: BRICK/ORE/SHEEP/WHEAT/WOOD/DESERT vs DESERT/WOOD/BRICK/WHEAT/ORE/SHEEP; token: None/2/3/.../12 vs 2/3/4/.../12 with token-7 reserved slot). The mismatch is **structural**, not per-byte drift. See `tests/unit/engine/test_obs_cross_impl_parity.py` — it ships honest tests that *pin the mismatch* and a skipped placeholder gate. **Decision point**: unblocking the gate requires either (a) rewriting the Rust encoder to match the Python ordering, (b) rewriting the Python encoder to match the Rust ordering (and migrating `checkpoint_07390040.pt`), or (c) accepting fresh-train-required permanently. |
-| 5 | Opponent injection contract (`needs_opponent_action` mask) | Pending |
-| 6 | Vec env wiring (`PyRustVecEnv` → training loop) | Pending |
-| 7 | End-to-end PPO smoke run | Pending |
-| 8 | Eval & checkpoint compatibility audit | Pending |
-| 9 | Go / no-go decision gate (≥ 3× e2e → proceed; else archive) | Pending |
-| 10 | Python engine deletion (PROCEED branch only, after 10-day or 1M-game soak) | Pending |
+| 4 | `RustCatanEnvAdapter` scaffolding + `engine_backend` dispatch flag + cross-impl obs parity audit (Phase 3 follow-up) | **Landed 2026-06-06 — scaffolding only**. The architect's HALT verdict (Amdahl ceiling of `1.09×` e2e + structural encoder mismatch) was overruled by the user with a **PIVOT** decision: fix the Rust encoder so `checkpoint_07390040.pt` can at least theoretically load, then freeze. See Phase 4 pivot row below. |
+| 4-pivot | Rust obs encoder rewritten to match Python ordering | **Landed 2026-06-06**. `crates/catan_engine/src/obs.rs` now uses Python's BRICK/ORE/SHEEP/WHEAT/WOOD/DESERT resource order and None/2/3/4/5/6/8/9/10/11/12 token order; slot 17 is the current-robber bit; slot 18 is `dots(token) / 5`. `tests/unit/engine/test_obs_cross_impl_byte_parity.py` asserts byte-parity on `tile_representations[:, 0..19]` AND `hex_features[:, 0..19]` across 6 seeds. The placeholder slots `[19..79]` remain zero-filled (Phase 3 badge); loading the ckpt against the Rust path still loses the vertex / edge contribution. Bench `rust_no_op @ n_envs=128`: 4020 sps median (vs Phase 1 baseline 3204; +25%). |
+| 5 | Opponent injection contract (`needs_opponent_action` mask) | **FROZEN per user 2026-06-06**. Not pursued — Phase 1 measured 1.09× e2e ceiling; the engine isn't the bottleneck. |
+| 6 | Vec env wiring (`PyRustVecEnv` → training loop) | **FROZEN per user 2026-06-06**. |
+| 7 | End-to-end PPO smoke run | **FROZEN per user 2026-06-06**. |
+| 8 | Eval & checkpoint compatibility audit | **FROZEN per user 2026-06-06**. |
+| 9 | Go / no-go decision gate (≥ 3× e2e → proceed; else archive) | **Resolved 2026-06-06 by PIVOT**. The remediation plan terminates at Phase 4-pivot. The Rust path stays *available* for future inference / deterministic eval / MCTS rollouts; training continues on the Python path. |
+| 10 | Python engine deletion (PROCEED branch only, after 10-day or 1M-game soak) | **NEVER RUN per user 2026-06-06**. The Python engine is the production engine and stays. |
 
 ## Phase 1 measured
 
