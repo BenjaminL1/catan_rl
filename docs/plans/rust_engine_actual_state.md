@@ -123,7 +123,7 @@ plan") — the 10-phase sequence the user confirmed on 2026-06-06.
 |---|---|---|
 | 0 | Documentation truth-up (this doc) + `vec_env_mode` default fix | **Landed 2026-06-06** |
 | 1 | Benchmark harness with policy forward in the loop | **Landed 2026-06-06** (results: see "Phase 1 measured" below) |
-| 2 | Dual-engine `engine_backend` pytest fixture | Pending |
+| 2 | Dual-engine `engine_backend` pytest fixture | **Landed 2026-06-06** |
 | 3 | Truncation wiring + obs honesty + `PyHandTracker` pyclass + byte-parity test | Pending |
 | 4 | `RustCatanEnvAdapter` single-env path | Pending |
 | 5 | Opponent injection contract (`needs_opponent_action` mask) | Pending |
