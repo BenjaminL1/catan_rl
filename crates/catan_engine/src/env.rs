@@ -20,23 +20,38 @@ use pyo3::types::{PyDict, PyList};
 
 #[pyclass(name = "RustCatanEnv", module = "catan_engine")]
 pub(crate) struct PyRustEnv {
-    state: GameState,
+    pub(crate) state: GameState,
+    /// Optional per-episode turn cap. When `Some(n)`, `step` returns
+    /// `truncated=true` as soon as `state.turn_count >= n`. Plumbed
+    /// from Python at construction (`RustCatanEnv(seed, max_turns)`).
+    /// Phase 3 of the Rust migration remediation plan; previously
+    /// hardcoded `false` on every step.
+    pub(crate) max_turns: Option<u16>,
 }
 
 #[pymethods]
 impl PyRustEnv {
     #[new]
-    #[pyo3(signature = (seed=0))]
-    fn py_new(seed: u64) -> Self {
+    #[pyo3(signature = (seed=0, max_turns=None))]
+    fn py_new(seed: u64, max_turns: Option<u16>) -> Self {
         Self {
             state: GameState::new(seed),
+            max_turns,
         }
     }
 
     /// Reset the env with a new seed. Returns the initial obs dict.
+    /// Does NOT reset `max_turns` — it's an env-level config, not a
+    /// per-episode parameter.
     fn reset<'py>(&mut self, py: Python<'py>, seed: u64) -> PyResult<Bound<'py, PyDict>> {
         self.state = GameState::new(seed);
         build_obs(py, &self.state)
+    }
+
+    /// Read the current per-episode turn cap. ``None`` means no cap.
+    #[getter]
+    fn max_turns(&self) -> Option<u16> {
+        self.max_turns
     }
 
     /// Apply an action vector and return (obs, reward, terminated,
@@ -58,7 +73,15 @@ impl PyRustEnv {
         }
         let obs = build_obs(py, &self.state)?;
         let terminated = matches!(self.state.phase, GamePhase::GameOver);
-        let truncated = false; // R9 wires per-episode truncation
+        // Truncation: fires when ``state.turn_count`` reaches the
+        // configured cap. GAE in PPO consumes ``terminated`` and
+        // ``truncated`` separately; the previous hardcoded ``false``
+        // was a structural bug that broke bootstrapping (see
+        // ``docs/plans/rust_engine_actual_state.md``).
+        let truncated = !terminated
+            && self
+                .max_turns
+                .is_some_and(|cap| self.state.turn_count >= cap);
         let reward = if terminated {
             match self.state.winner {
                 Some(w) if w == self.state.current_player => 1.0_f32,

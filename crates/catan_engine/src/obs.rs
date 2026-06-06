@@ -1,8 +1,25 @@
 //! Native obs encoder — builds the 9-key obs dict from `GameState`
 //! and returns zero-copy `PyArray*` views. The Python encoder
 //! (`policy/obs_encoder.py`) is replicated structurally — same
-//! dims and dtype — but per-feature byte-identity is deferred to
-//! R10 (the cutover will either re-train or wire FFI passthrough).
+//! dims and dtype.
+//!
+//! ## Fresh-train-required badge (Phase 3 of the remediation plan)
+//!
+//! Per-feature byte-identity with the Python obs encoder is NOT
+//! pursued. The `tile_representations` slots `[19..79]` are zero-filled
+//! placeholders (see `TILE_PLACEHOLDER_SLOTS` below) and the
+//! `vertex_features[6..14]` port-adjacency slots use a deterministic
+//! but not Python-equivalent ordering. Consequence: a policy
+//! checkpoint trained against the Python obs cannot be loaded
+//! against the Rust obs and expect equivalent value/policy outputs
+//! — the Rust path is **fresh-train-required**.
+//!
+//! The populated slots (`tile_representations[0..19]` and the
+//! one-hot resource / number-token / robber bits across all tensors)
+//! ARE byte-identical and are pinned by `tests/unit/engine/
+//! test_obs_byte_parity.py`. Any byte-level diff on those slots is
+//! a Phase 3 regression and the parity test will catch it at PR
+//! review.
 //!
 //! Tensors returned:
 //! * `tile_representations`: (19, 79) f32
@@ -36,6 +53,17 @@ pub const VERTEX_FEATURE_DIM: usize = 16;
 pub const EDGE_FEATURE_DIM: usize = 16;
 pub const CURR_PLAYER_DIM: usize = 54;
 pub const NEXT_PLAYER_DIM: usize = 61;
+
+/// `tile_representations` slot range that the Rust encoder leaves
+/// at zero. Phase 3 of the remediation plan opted to surface this
+/// honestly via the "fresh-train-required" badge rather than fill
+/// the slots without byte-parity against the Python encoder. The
+/// parity test at `tests/unit/engine/test_obs_byte_parity.py`
+/// asserts these slots are always zero across 1000 random states
+/// — any non-zero write here is a Phase 3 regression. The
+/// populated slots `[0..19]` (one-hot resource, number token,
+/// robber bits) ARE byte-parity-tested against the Python obs.
+pub const TILE_PLACEHOLDER_SLOTS: std::ops::Range<usize> = 19..TILE_FEATURE_DIM;
 
 /// Build the obs dict. Allocates 8 numpy arrays per call (one per
 /// obs key). Future R13 polish: preallocate scratch buffers per env

@@ -1,0 +1,39 @@
+{
+  "catan_engine_version": "0.1.0",
+  "cells": {
+    "rust_no_op@n_envs=128": {
+      "max_sps": 3382.690554241039,
+      "median_sps": 3304.66759395087,
+      "median_wall_s": 39.662688083946705,
+      "min_sps": 3027.0693310640486
+    }
+  },
+  "git_sha": "286556f-dirty",
+  "hardware": {
+    "machine": "arm64",
+    "release": "23.5.0",
+    "system": "Darwin"
+  },
+  "include_policy": true,
+  "invocation": [
+    "bench_engine.py",
+    "--backend",
+    "rust_no_op",
+    "--n-envs",
+    "128",
+    "--n-steps",
+    "1024",
+    "--repeat",
+    "3",
+    "--out-dir",
+    "benchmarks/results",
+    "--csv-name",
+    "bench_phase3_rust.csv"
+  ],
+  "n_steps": 1024,
+  "python_version": "3.12.8",
+  "repeat": 3,
+  "seed": 42,
+  "timestamp_utc": "20260606T204807Z",
+  "torch_version": "2.9.1"
+}

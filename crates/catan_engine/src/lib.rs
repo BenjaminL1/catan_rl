@@ -53,5 +53,10 @@ fn catan_engine(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<env::PyRustEnv>()?;
     // R9 surfaces: RustVectorizedEnv batch-step wrapper.
     m.add_class::<vec_env::PyRustVecEnv>()?;
+    // Phase 3 (remediation plan): HandTracker stateless pyclass.
+    // The `hand_tracker::get_hand_*` free functions existed pre-Phase-3
+    // but were not exposed to Python — this registration closes the
+    // gap so the Python adapter (Phase 4) can consume the Rust hands.
+    m.add_class::<hand_tracker::PyHandTracker>()?;
     Ok(())
 }

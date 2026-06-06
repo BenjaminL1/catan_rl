@@ -10,8 +10,20 @@
 //! * **Charlesworth wire** = WOOD, BRICK, WHEAT, ORE, SHEEP.
 //!
 //! The permutation matrix is fixed at compile time.
+//!
+//! ## PyO3 surface
+//!
+//! Phase 3 of the Rust migration remediation plan registers the
+//! `HandTracker` pyclass below. It is **stateless** and takes the
+//! `RustCatanEnv` as a per-call argument — the architect review of
+//! the remediation plan flagged that holding a `PyRef<PyRustEnv>`
+//! across a mutating `step` call would borrow-conflict at runtime.
+//! Pass the env in per call instead so the borrow only outlives one
+//! method invocation.
 
+use crate::env::PyRustEnv;
 use crate::state::{GameState, IDX_BRICK, IDX_ORE, IDX_SHEEP, IDX_WHEAT, IDX_WOOD, N_RESOURCES};
+use pyo3::prelude::*;
 
 /// Charlesworth-order indexing → engine-alpha indexing.
 /// CW[0] = WOOD → engine 4 = IDX_WOOD
@@ -44,6 +56,44 @@ pub fn get_hand_engine(state: &GameState, player_idx: u8) -> [u8; N_RESOURCES] {
         return [0; N_RESOURCES];
     }
     state.players[player_idx as usize].resources
+}
+
+/// Stateless hand-tracker wrapper exposed to Python.
+///
+/// The Python `BroadcastHandTracker` subscribes to the engine's
+/// broadcast bus to maintain its own integer counts; the Rust
+/// engine already owns the canonical state, so this wrapper is a
+/// thin permutation getter. Phase 3 of the Rust migration
+/// remediation plan: before this, the `get_hand_*` free functions
+/// existed but were not registered as a `#[pyclass]` and therefore
+/// inaccessible from Python.
+///
+/// The class is stateless on purpose — taking a `PyRef<PyRustEnv>`
+/// at construction time would borrow-conflict with the env's
+/// `&mut self` step call. Pass the env in per call instead.
+#[pyclass(name = "HandTracker", module = "catan_engine")]
+pub(crate) struct PyHandTracker;
+
+#[pymethods]
+impl PyHandTracker {
+    #[new]
+    fn py_new() -> Self {
+        Self
+    }
+
+    /// Read player `player_idx`'s resource hand from `env` in
+    /// Charlesworth order (WOOD, BRICK, WHEAT, ORE, SHEEP). Returns
+    /// a length-5 tuple of `u8`. Out-of-range player index yields
+    /// all zeros (defensive — matches the free function).
+    fn get_hand_cw(&self, env: PyRef<'_, PyRustEnv>, player_idx: u8) -> [u8; N_RESOURCES] {
+        get_hand_cw(&env.state, player_idx)
+    }
+
+    /// Read player `player_idx`'s resource hand in engine-internal
+    /// alphabetical order (BRICK, ORE, SHEEP, WHEAT, WOOD).
+    fn get_hand_engine(&self, env: PyRef<'_, PyRustEnv>, player_idx: u8) -> [u8; N_RESOURCES] {
+        get_hand_engine(&env.state, player_idx)
+    }
 }
 
 #[cfg(test)]

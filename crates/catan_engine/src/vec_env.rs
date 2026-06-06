@@ -25,24 +25,37 @@ use rayon::prelude::*;
 #[pyclass(name = "RustVectorizedEnv", module = "catan_engine")]
 pub(crate) struct PyRustVecEnv {
     envs: Vec<GameState>,
+    /// Optional per-episode truncation cap, applied uniformly across
+    /// envs. Phase 3 of the Rust migration remediation plan;
+    /// previously hardcoded ``truncs_local = vec![false; n]``.
+    max_turns: Option<u16>,
 }
 
 #[pymethods]
 impl PyRustVecEnv {
     /// Construct N envs. `base_seed` + env index produces each per-env
     /// seed via `base_seed ^ env_idx` (the Q3 per-env seeding contract).
+    /// `max_turns=None` disables truncation (back-compat with pre-Phase-3
+    /// callers).
     #[new]
-    fn py_new(n_envs: usize, base_seed: u64) -> Self {
+    #[pyo3(signature = (n_envs, base_seed=0, max_turns=None))]
+    fn py_new(n_envs: usize, base_seed: u64, max_turns: Option<u16>) -> Self {
         let envs = (0..n_envs)
             .map(|i| GameState::new(base_seed ^ (i as u64)))
             .collect();
-        Self { envs }
+        Self { envs, max_turns }
     }
 
     /// Number of envs in the batch.
     #[getter]
     fn n_envs(&self) -> usize {
         self.envs.len()
+    }
+
+    /// Read the per-episode truncation cap (uniform across envs).
+    #[getter]
+    fn max_turns(&self) -> Option<u16> {
+        self.max_turns
     }
 
     /// Reset all envs to fresh seeds derived from `base_seed`.
@@ -94,17 +107,25 @@ impl PyRustVecEnv {
         // Gameplay phase: GIL-released + parallel.
         let mut rewards_local = vec![0.0_f32; n];
         let mut terms_local = vec![false; n];
-        let truncs_local = vec![false; n]; // R13 wires per-episode truncation
+        // Truncation: was hardcoded ``vec![false; n]`` pre-Phase-3,
+        // breaking GAE bootstrapping. Now computed per-env from the
+        // engine's ``turn_count`` against the optional uniform cap
+        // passed at construction. See
+        // ``docs/plans/rust_engine_actual_state.md``.
+        let mut truncs_local = vec![false; n];
+        let max_turns = self.max_turns;
         py.allow_threads(|| {
             self.envs
                 .par_iter_mut()
                 .zip(actions_vec.par_iter())
                 .zip(rewards_local.par_iter_mut())
                 .zip(terms_local.par_iter_mut())
-                .for_each(|(((env, action), reward), term)| {
+                .zip(truncs_local.par_iter_mut())
+                .for_each(|((((env, action), reward), term), trunc)| {
                     let _ = env.apply_action(*action);
                     let terminated = matches!(env.phase, crate::state::GamePhase::GameOver);
                     *term = terminated;
+                    *trunc = !terminated && max_turns.is_some_and(|cap| env.turn_count >= cap);
                     *reward = if terminated {
                         match env.winner {
                             Some(w) if w == env.current_player => 1.0,
