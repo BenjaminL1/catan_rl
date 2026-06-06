@@ -40,7 +40,12 @@ You are reviewing Phase {PHASE_NUMBER}: {PHASE_NAME} of a 1v1 Settlers of Catan 
    - **Resumability:** RNG state at checkpoint, schedule state, league state, opp-pool deserialization, optimizer-state shape mismatch when policy arch changes.
 4. **Verify the audit-driven defaults are respected:**
    - `n_envs` default = **128** (not 4/16)
-   - `vec_env_mode` = **"subproc"** when `n_envs >= 8`
+   - `vec_env_mode` = **"serial"**. (Pre-2026-06-06 this template
+     recommended `"subproc"` — that recommendation was forensically
+     refuted: no ``SubprocVecEnv`` class exists in ``src/catan_rl/``.
+     Recheck against ``docs/plans/rust_engine_actual_state.md`` before
+     restoring the subproc recommendation; the Rust migration's Phase 6
+     either implements it or removes the literal.)
    - `torch_compile` = **False**
    - `batch_size` for SGD = **512+**
    - Code is **device-agnostic** (MPS for SGD, CPU for small-batch rollout, CUDA-ready for cloud)

@@ -1,11 +1,13 @@
 """Vectorised wrapper around N ``CatanEnv`` instances.
 
-Phase 5 ships the **serial** variant (all envs in-process). The audit
-measured serial as competitive with subproc up to ``n_envs=32`` on M1,
-so serial is the right default for local development and small-scale
-sanity runs. Subproc is a follow-up sub-phase that will hand off to
-``multiprocessing.get_context("fork")`` workers when cloud throughput
-demands it.
+Phase 5 ships the **serial** variant (all envs in-process) and that
+remains the only implementation. The 2026-06-06 forensic audit
+confirmed no ``SubprocVecEnv`` class exists anywhere in
+``src/catan_rl/``; the "subproc is a follow-up sub-phase" framing
+that previously lived in this docstring stayed aspirational. See
+``docs/plans/rust_engine_actual_state.md`` for the audit. The Rust
+migration's Phase 6 either implements ``"subproc"`` or removes the
+literal from ``RolloutConfig.vec_env_mode``.
 
 Contract:
 

@@ -1,4 +1,12 @@
-"""Tests for the CATAN_ENGINE_BACKEND switch added in R10."""
+"""Tests for the CATAN_ENGINE_BACKEND switch added in R10.
+
+The switch itself is dead code in the production rollout loop as of
+2026-06-06 (see ``docs/plans/rust_engine_actual_state.md``); these
+tests verify the selector's *resolution* logic (env-var aliases,
+explicit-arg override, fallback) without asserting anything about
+which engine the training loop actually instantiates. Phase 4 of
+the remediation plan ships the actual dispatch.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +21,13 @@ from catan_rl.engine.backend import (
 
 
 class TestCurrentBackend:
-    def test_defaults_to_rust(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_defaults_to_python(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Phase 0 forensic audit: default reverted from "rust" to
+        # "python" because no code under ``src/catan_rl/`` actually
+        # dispatches on this value, and a default of "rust" was
+        # misrepresenting which engine the training loop used.
         monkeypatch.delenv("CATAN_ENGINE_BACKEND", raising=False)
-        assert current_backend() == DEFAULT_BACKEND == "rust"
+        assert current_backend() == DEFAULT_BACKEND == "python"
 
     @pytest.mark.parametrize("val", ["rust", "RUST", "r", "ru"])
     def test_rust_aliases(self, val: str, monkeypatch: pytest.MonkeyPatch) -> None:

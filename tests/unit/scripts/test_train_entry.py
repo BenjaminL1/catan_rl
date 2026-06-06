@@ -1,4 +1,4 @@
-"""Tests for `scripts/train.py` — the PPO entry point.
+"""Tests for the PPO training entry point.
 
 Pins:
 1. CLI parses every flag with the documented type + default behavior.
@@ -11,33 +11,37 @@ Pins:
    original ``TrainConfig`` (so the snapshot is a faithful reproducer).
 6. ``main(--dry-run)`` exits 0 without invoking the trainer.
 7. ``main()`` without ``--dry-run`` exits 2 (trainer not yet wired).
+
+Implementation note: the entry point lived at ``scripts/train.py``
+pre-cutover and was loaded via importlib's spec loader because the
+script lived outside the package tree. Post maturin-sole-backend
+cutover the body moved to :mod:`catan_rl.cli.train` (with
+``scripts/train.py`` retained as a thin back-compat shim wired to
+the canonical module), so the fixture now does a normal package
+import.
 """
 
 from __future__ import annotations
 
-import importlib.util
 import random
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
 import yaml
 
-# Load the script as a module so we can call its helpers without spawning
-# a subprocess. ``scripts/train.py`` lives outside the package tree so we
-# import it via the spec loader.
-
-_SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "train.py"
-
 
 @pytest.fixture(scope="module")
 def train_mod():
-    spec = importlib.util.spec_from_file_location("train_entry", _SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["train_entry"] = mod
-    spec.loader.exec_module(mod)
+    """Import the canonical entry-point module.
+
+    Returns :mod:`catan_rl.cli.train`. Tests below access its
+    module-level helpers (``build_parser``, ``resolve_config``,
+    ``setup_seeding``, ``build_run_directory``, ``snapshot_config``,
+    ``main``).
+    """
+    import catan_rl.cli.train as mod
+
     return mod
 
 

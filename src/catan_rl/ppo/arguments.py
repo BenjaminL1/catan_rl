@@ -7,9 +7,15 @@ from the v2 hardware audit measured on this codebase on an M1 Pro
 
 * ``n_envs=128`` — pushes rollout batch above the MPS crossover (~256)
   on the SGD side and amortises Python orchestration overhead.
-* ``vec_env_mode="subproc"`` — sub-processes parallelise env stepping
-  across the M1's 6 perf cores. Audit measured neutral at ``n_envs=8``,
-  meaningful win at ``n_envs≥32``.
+* ``vec_env_mode="serial"`` — all envs in-process. ``"subproc"`` is a
+  config-recognized literal **with no implementation**: no
+  ``SubprocVecEnv`` class exists anywhere in ``src/catan_rl/``. The
+  previous default ``"subproc"`` was a documentation lie expressed as
+  a config value (2026-06-06 forensic audit, see
+  ``docs/plans/rust_engine_actual_state.md``). Passing ``"subproc"``
+  explicitly logs a ``DeprecationWarning``; behaviour is identical to
+  ``"serial"``. The Rust migration's Phase 6 will either implement
+  ``"subproc"`` properly or remove the literal from the union.
 * ``torch_compile=False`` — explicitly off. The MPS / Inductor backend
   on macOS silently recompiles every input shape and adds overhead
   without producing a CUDA-graph speedup.
@@ -74,10 +80,15 @@ class RolloutConfig:
     """Steps per env per rollout. Total transitions per rollout =
     ``n_envs * n_steps`` (default: 32,768)."""
 
-    vec_env_mode: Literal["serial", "subproc"] = "subproc"
-    """``serial`` runs all envs in the main process; ``subproc`` forks one
-    worker per env. Auto-falls back to serial when ``n_envs < 8`` is set
-    explicitly (so smoke tests aren't paying fork cost)."""
+    vec_env_mode: Literal["serial", "subproc"] = "serial"
+    """``serial`` runs all envs in the main process. ``subproc`` is
+    config-recognized but has no implementation — passing it logs a
+    ``DeprecationWarning`` and falls through to ``"serial"``. The
+    forensic audit on 2026-06-06 confirmed no ``SubprocVecEnv`` class
+    exists anywhere in ``src/catan_rl/``; the previous default
+    ``"subproc"`` was a documentation lie. The Rust migration's Phase 6
+    will either implement the literal properly or remove it from the
+    union — until then, only ``"serial"`` is meaningful."""
 
     max_turns: int = 400
     """Per-game truncation cap (Catan games normally end well before this;
@@ -93,6 +104,20 @@ class RolloutConfig:
         _check_positive("max_turns", self.max_turns)
         _check_in("vec_env_mode", self.vec_env_mode, _VEC_ENV_MODES)
         _check_in("opponent_type", self.opponent_type, _OPPONENT_TYPES)
+        if self.vec_env_mode == "subproc":
+            import warnings
+
+            warnings.warn(
+                "RolloutConfig(vec_env_mode='subproc') is config-recognized "
+                "but has no implementation — no SubprocVecEnv class exists "
+                "in src/catan_rl/. The Rust migration's Phase 6 will either "
+                "implement it or remove the literal. Behaviour is identical "
+                "to vec_env_mode='serial'; please update YAML configs to "
+                "'serial' to silence this warning. See "
+                "docs/plans/rust_engine_actual_state.md.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
 
 @dataclass(frozen=True)

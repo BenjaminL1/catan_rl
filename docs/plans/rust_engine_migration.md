@@ -266,32 +266,46 @@ Updated as each PR lands per CLAUDE.md rule #14.
   drained via drain_events() at env.step boundary.
 - R5: HandTracker as thin Charlesworth-order getter on engine state.
 
-### PR3 (R6-R9) — landed
-- R6: Native obs encoder. 10-key dict, zero-copy PyArray.
-- R7: Native mask builder. 9 mask dict.
-- R8: RustCatanEnv (Gymnasium API).
-- R9: RustVectorizedEnv with py.allow_threads + Rayon.
+### PR3 (R6-R9) — landed in isolation, NOT wired
 
-**Measured throughput (M1 Pro CPU):**
+> **Forensic note (2026-06-06):** the throughput table previously
+> in this section claimed 114k–272k env-steps/sec at
+> `n_envs∈{8,64,128}` and concluded "The 8x engine and 6x
+> end-to-end targets are achieved." Both claims were false. No
+> Python production code under `src/catan_rl/` calls any of R6–R9.
+> The headline numbers cannot be reproduced from any artifact in
+> the repository (no `benchmarks/` directory, no `scripts/bench_*`,
+> no `crates/catan_engine/benches/`). The only Rust code reached
+> from `make train` is `catan_engine.StackedDice`. See
+> [`rust_engine_actual_state.md`](rust_engine_actual_state.md) for
+> the audit and the corrected ledger.
 
-| n_envs | env-steps/sec | x baseline |
-|---|---|---|
-| 8 | 114,201 | 20.8x |
-| 64 | **241,266** | **43.9x** |
-| 128 | 272,075 | 49.5x |
+- R6: Native obs encoder shipped at `crates/catan_engine/src/obs.rs`. **Content-incomplete** — `obs.rs:58-59` zero-fills the `[19..]` slots for vertex/edge ownership flags and port adjacency. No Python caller in `src/catan_rl/`.
+- R7: Native mask builder shipped at `crates/catan_engine/src/masks.rs`. Reachable only via `PyRustEnv.get_action_masks`; production uses `src/catan_rl/env/masks.py`.
+- R8: `PyRustEnv` (`#[pyclass(name = "RustCatanEnv")]`) shipped at `crates/catan_engine/src/env.rs`. **Has no opponent hook** (no `opponent/heuristic/callback` references in the file); `truncated` hardcoded `false` at line 61.
+- R9: `PyRustVecEnv` (`#[pyclass(name = "RustVectorizedEnv")]`) shipped at `crates/catan_engine/src/vec_env.rs`. **`truncs_local` hardcoded `vec![false; n]`** at line 97. `training_loop.py:207` unconditionally instantiates the Python `SerialVecEnv`; nothing calls `PyRustVecEnv` from `src/`.
 
-PR3 exceeds the R9 gate (44k at n_envs=64) by 5.4x. The 8x engine
-and 6x end-to-end targets are achieved.
+### PR4 (R10-R13) — only R10 partially landed; R10's switch is dead code
 
-### PR4 (R10-R13) — partially landed
-- R10: CATAN_ENGINE_BACKEND env var switch + backend helper module.
-- R11, R12 **DEFERRED** as follow-up — Python engine remains canonical
-  for the heuristic AI + BC + replay recorder pipelines.
-- R13: profile.release already at lto=fat, codegen-units=1,
-  panic=abort. No additional polish needed.
+> **Forensic note (2026-06-06):** the switch `CATAN_ENGINE_BACKEND`
+> resolved by `src/catan_rl/engine/backend.py:resolve_backend` is
+> read only by `analysis/diag_phase_timing.py` and
+> `tests/unit/engine/test_backend_switch.py`. No code under
+> `src/catan_rl/env/`, `policy/`, `ppo/`, `selfplay/`, `eval/`
+> branches on it. The Python engine remains the production engine
+> regardless of `CATAN_ENGINE_BACKEND`.
+
+- R10: backend helper module shipped (`backend.py`); dispatch into `CatanEnv` / `SerialVecEnv` never landed.
+- R11, R12 **DEFERRED** as follow-up — Python engine remains canonical for the heuristic AI + BC + replay recorder pipelines (and for the rollout loop, per the note above).
+- R13: profile.release at lto=fat, codegen-units=1, panic=abort. The "n_envs=64 ≥ 6× Python baseline end-to-end" gate this phase was supposed to verify was never measured against the wired code.
 
 ### Outstanding (post-PR4 follow-up)
-- Wire CatanEnv to dispatch to RustCatanEnv when backend==rust.
-  Requires porting opponent injection + opp-id obs masking + seat=1.
-- Port heuristic AI + RandomAI to Rust (R11) with shared ChaCha8.
-- Archive Python engine to python_reference/ after 1-2 week soak.
+
+Tracked in the 10-phase remediation plan dated 2026-06-06 (Phases
+0-10 listed in [`rust_engine_actual_state.md`](rust_engine_actual_state.md#remediation-status)).
+
+- Phase 0 (in progress): documentation truth-up + `vec_env_mode` default repair.
+- Phase 1: actually write `scripts/bench_engine.py` and produce the first reproducible numbers.
+- Phases 3–6: wire `PyRustEnv` / `PyRustVecEnv` through `CatanEnv` and `training_loop.py:207`.
+- Phase 9 go/no-go: if end-to-end speedup at `n_envs=128` is `< 3×`, the Rust path is archived honestly via `docs/plans/rust_engine_archive.md` and the crate is marked `publish = false`.
+- R11 (Rust heuristic + RandomAI port) remains deferred and is **forbidden** until Phase 5 / 6 benchmarks justify it.

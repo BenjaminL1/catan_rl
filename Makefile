@@ -45,8 +45,19 @@ smoke-train:
 smoke-eval:
 	$(PYTHON) scripts/evaluate.py checkpoints/train/checkpoint_07390040.pt --opponent random --n-games 5
 
+# ``bench`` runs the engine throughput harness (Rust migration plan
+# Phase 1) and writes CSV + JSON to ``benchmarks/results/``. The
+# harness must run a frozen ``CatanPolicy.forward()`` inside the
+# timing loop so the numbers reflect actual training-loop conditions,
+# not env-step throughput in isolation — env stepping is not the
+# bottleneck per ``analysis/diag_*.log`` (SGD = ~80% of wall-time).
+# See ``docs/plans/rust_engine_actual_state.md``.
 bench:
-	@echo "Benchmarks not yet implemented. See benchmarks/ once added in Phase 1."
+	@if [ ! -f scripts/bench_engine.py ]; then \
+	    echo "scripts/bench_engine.py not yet implemented (Phase 1 of the Rust migration remediation plan). See docs/plans/rust_engine_actual_state.md."; \
+	    exit 1; \
+	fi
+	$(PYTHON) scripts/bench_engine.py --all --n-steps 1024
 
 clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true

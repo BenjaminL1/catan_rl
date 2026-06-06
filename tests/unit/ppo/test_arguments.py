@@ -1,8 +1,11 @@
 """Tests for the PPO training config (`ppo/arguments.py`).
 
 Pins:
-1. Defaults match the audit-derived recipe (n_envs=128, subproc,
-   torch_compile=False, batch_size=512, etc.).
+1. Defaults match the audit-derived recipe (n_envs=128, serial,
+   torch_compile=False, batch_size=512, etc.). ``vec_env_mode``
+   reverted from "subproc" → "serial" on 2026-06-06 because no
+   SubprocVecEnv class exists; passing "subproc" emits a
+   DeprecationWarning (covered by ``test_subproc_emits_deprecation``).
 2. Field validators reject invalid values (negative LR, unknown enums,
    batch_size not dividing rollout buffer).
 3. YAML round-trip preserves the config.
@@ -40,7 +43,11 @@ class TestDefaultsMatchAudit:
         r = RolloutConfig()
         assert r.n_envs == 128, "audit baseline"
         assert r.n_steps == 256
-        assert r.vec_env_mode == "subproc"
+        # 2026-06-06 forensic audit: vec_env_mode default reverted
+        # from "subproc" to "serial" because no SubprocVecEnv class
+        # exists anywhere in src/catan_rl/. Tracked in
+        # docs/plans/rust_engine_actual_state.md.
+        assert r.vec_env_mode == "serial"
         assert r.max_turns == 400
         assert r.opponent_type == "heuristic"
 
@@ -120,6 +127,24 @@ class TestValidators:
     def test_unknown_vec_env_mode_rejected(self) -> None:
         with pytest.raises(ValueError, match="vec_env_mode"):
             RolloutConfig(vec_env_mode="ray")  # type: ignore[arg-type]
+
+    def test_subproc_emits_deprecation_warning(self) -> None:
+        # 2026-06-06 forensic audit: ``vec_env_mode='subproc'`` is
+        # config-recognized but has no implementation — no
+        # SubprocVecEnv class exists in src/catan_rl/. The default
+        # was reverted to 'serial' and 'subproc' now logs a
+        # DeprecationWarning so existing YAML configs that pinned
+        # 'subproc' surface the lie loudly. See
+        # docs/plans/rust_engine_actual_state.md.
+        with pytest.warns(DeprecationWarning, match="SubprocVecEnv"):
+            RolloutConfig(vec_env_mode="subproc")
+
+    def test_subproc_warning_points_at_actual_state_doc(self) -> None:
+        # The warning must point readers at the source-of-truth doc
+        # so they can find the remediation plan. Future refactors
+        # that drop the doc reference should fail this assertion.
+        with pytest.warns(DeprecationWarning, match="rust_engine_actual_state"):
+            RolloutConfig(vec_env_mode="subproc")
 
     def test_unknown_kl_approx_rejected(self) -> None:
         with pytest.raises(ValueError, match="kl_approx"):
@@ -272,8 +297,10 @@ class TestEnvVarOverrides:
             env={"CATAN_PPO__ROLLOUT__N_ENVS": "256"},
         )
         assert cfg.rollout.n_envs == 256
-        # Other rollout fields unchanged
-        assert cfg.rollout.vec_env_mode == "subproc"
+        # Other rollout fields unchanged. (Default reverted from
+        # "subproc" → "serial" on 2026-06-06; see
+        # docs/plans/rust_engine_actual_state.md.)
+        assert cfg.rollout.vec_env_mode == "serial"
 
     def test_root_override(self) -> None:
         cfg = TrainConfig.from_env(
