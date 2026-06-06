@@ -14,6 +14,7 @@ rollout:
   vec_env_mode: serial           # only serial is implemented; see docs/plans/rust_engine_actual_state.md (forensic audit 2026-06-06)
   max_turns: 400                 # truncation cap
   opponent_type: heuristic       # default for Phase 1-7 sanity training; league later
+  engine_backend: python         # Phase 4 explicit default. Rust path is scaffolding-only; see docs/plans/rust_engine_actual_state.md
 
 ppo:
   n_epochs: 4                    # passes over the rollout buffer per update
