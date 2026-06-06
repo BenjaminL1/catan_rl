@@ -134,6 +134,7 @@ class CatanEnv(gym.Env):
         opponent_type: str = "random",
         max_turns: int = 500,
         vp_margin_bonus: float = 1.0 / 15.0,
+        engine_backend: str = "python",
     ) -> None:
         """
         Args:
@@ -143,8 +144,26 @@ class CatanEnv(gym.Env):
                 empirically saw 99th-percentile game lengths around 250.
             vp_margin_bonus: per-VP terminal bonus on top of the +/-1 win
                 signal. ``0.0`` reduces to a pure +/-1 outcome reward.
+            engine_backend: ``"python"`` (production) or ``"rust"``
+                (Phase 4 scaffolding of the Rust migration remediation
+                plan). The Rust path raises ``NotImplementedError``
+                with a pointer to the plan until Phase 5 / 6 land the
+                adapter proxies.
         """
         super().__init__()
+        if engine_backend not in {"python", "rust"}:
+            raise ValueError(f"engine_backend={engine_backend!r}; supported: 'python', 'rust'")
+        if engine_backend == "rust":
+            raise NotImplementedError(
+                "CatanEnv(engine_backend='rust') is Phase-4 scaffolding only. "
+                "The RustCatanEnvAdapter exists at "
+                "catan_rl.env.rust_adapter.RustCatanEnvAdapter but does not "
+                "yet implement the catanGame attribute proxies the env reads. "
+                "Phase 5 / 6 of the remediation plan land the proxies; until "
+                "then the production training loop must use the Python engine. "
+                "See docs/plans/rust_engine_actual_state.md."
+            )
+        self.engine_backend = engine_backend
         # Whitelist includes ``"snapshot"`` so the
         # :mod:`catan_rl.selfplay.league` sentinel can reach env
         # construction without triggering a misleading "unsupported

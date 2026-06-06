@@ -48,6 +48,7 @@ import yaml
 # ---------------------------------------------------------------------------
 
 _VEC_ENV_MODES: Final[tuple[str, ...]] = ("serial", "subproc")
+_ENGINE_BACKENDS: Final[tuple[str, ...]] = ("python", "rust")
 _KL_APPROXIMATIONS: Final[tuple[str, ...]] = ("k1", "k2", "k3")
 _ADVANTAGE_NORM_MODES: Final[tuple[str, ...]] = ("rollout", "batch", "none")
 _DEVICE_VALUES: Final[tuple[str, ...]] = ("auto", "cpu", "mps", "cuda")
@@ -98,12 +99,23 @@ class RolloutConfig:
     """Default opponent at rollout time. ``league`` requires the league
     selfplay phase to be wired in."""
 
+    engine_backend: Literal["python", "rust"] = "python"
+    """Catan engine backend. ``python`` is the production default
+    (``catanGame`` + ``catanBoard``). ``rust`` selects the
+    ``RustCatanEnvAdapter`` introduced in Phase 4 of the Rust
+    migration remediation plan — currently scaffolding only;
+    Phase 5 / 6 wire the adapter into the rollout loop. Setting
+    this to ``rust`` today raises a clear ``NotImplementedError``
+    pointing at the remediation plan. See
+    ``docs/plans/rust_engine_actual_state.md`` for the gate."""
+
     def __post_init__(self) -> None:
         _check_positive("n_envs", self.n_envs)
         _check_positive("n_steps", self.n_steps)
         _check_positive("max_turns", self.max_turns)
         _check_in("vec_env_mode", self.vec_env_mode, _VEC_ENV_MODES)
         _check_in("opponent_type", self.opponent_type, _OPPONENT_TYPES)
+        _check_in("engine_backend", self.engine_backend, _ENGINE_BACKENDS)
         if self.vec_env_mode == "subproc":
             import warnings
 
