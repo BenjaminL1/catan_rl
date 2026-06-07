@@ -7,14 +7,13 @@ name = "catan-rl"
 version = "0.2.0"
 description = "1v1 Settlers of Catan RL agent (Colonist.io ruleset) trained with custom PPO + League self-play"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Benjamin Li", email = "bbl35@cornell.edu" }]
 keywords = ["reinforcement-learning", "ppo", "self-play", "catan"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Topic :: Scientific/Engineering :: Artificial Intelligence",

@@ -49,6 +49,11 @@ class _AxialPositionalEmbedding(nn.Module):
     derived from the board geometry.
     """
 
+    # Declared for mypy: register_buffer attributes are otherwise typed
+    # ``Tensor | Module`` via nn.Module.__getattr__ (mypy 2.x strictness).
+    q_idx: torch.Tensor
+    r_idx: torch.Tensor
+
     def __init__(self, q_range: int = 5, r_range: int = 5, dim: int = 24) -> None:
         super().__init__()
         if dim % 2 != 0:
@@ -143,6 +148,15 @@ class GraphEncoder(nn.Module):
     wires the real values in at construction time; Step 2 uses zero
     placeholders so the network is testable on synthetic data.
     """
+
+    # Declared for mypy: register_buffer attributes are otherwise typed
+    # ``Tensor | Module`` via nn.Module.__getattr__ (mypy 2.x strictness).
+    hex_to_vertex: torch.Tensor
+    vertex_to_hex: torch.Tensor
+    vertex_to_hex_mask: torch.Tensor
+    edge_to_vertex: torch.Tensor
+    vertex_to_edge: torch.Tensor
+    vertex_to_edge_mask: torch.Tensor
 
     def __init__(
         self,

@@ -129,6 +129,11 @@ class _FiLMHead(nn.Module):
 class CatanActionHeads(nn.Module):
     """Six autoregressive action heads with masking + FiLM context."""
 
+    # Declared for mypy: register_buffer attributes are otherwise typed
+    # ``Tensor | Module`` via nn.Module.__getattr__ (mypy 2.x strictness).
+    head_relevance: torch.Tensor
+    resource_context_idx: torch.Tensor
+
     def __init__(self, trunk_dim: int = 512, hidden_dim: int = 128) -> None:
         super().__init__()
         self.type_head = _SimpleHead(trunk_dim, N_ACTION_TYPES, hidden_dim)
@@ -436,13 +441,16 @@ class BeliefHead(nn.Module):
 
     def __init__(self, trunk_dim: int = 512, hidden_dim: int = 128) -> None:
         super().__init__()
+        # Name the final layer so its .weight/.bias are typed nn.Linear
+        # (mypy 2.x types nn.Sequential.__getitem__ as bare Module).
+        final = nn.Linear(hidden_dim, N_DEV_TYPES)
         self.net = nn.Sequential(
             nn.Linear(trunk_dim, hidden_dim),
             nn.GELU(),
-            nn.Linear(hidden_dim, N_DEV_TYPES),
+            final,
         )
-        nn.init.normal_(self.net[-1].weight, std=0.01)
-        nn.init.zeros_(self.net[-1].bias)
+        nn.init.normal_(final.weight, std=0.01)
+        nn.init.zeros_(final.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x)
