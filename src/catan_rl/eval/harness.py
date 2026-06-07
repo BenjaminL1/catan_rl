@@ -175,18 +175,64 @@ class EvalHarness:
     # ------------------------------------------------------------------
 
     def run(self, policy: Any) -> EvalReport:
-        """Run all configured matchups and return the aggregated report."""
-        results: list[EvalResult] = []
-        n_total = 0
-        for opp in self.opponent_types:
-            result = self._evaluate_matchup(policy=policy, opponent_type=opp)
-            results.append(result)
-            n_total += result.n
-        return EvalReport(results=tuple(results), n_games_total=n_total)
+        """Run all configured matchups and return the aggregated report.
+
+        The policy is moved to ``self.device`` for the duration of the
+        eval and restored to its original device afterwards. Eval runs
+        the policy at **batch=1** (one env, sequential games) — the
+        single regime where MPS is ~7-8x *slower* than CPU, because
+        per-kernel launch overhead dominates a 1.4M-param forward and
+        there is no batch dimension to amortise it. Pinning eval to CPU
+        (``self.device``) while the learner trains on MPS/CUDA keeps the
+        batched SGD update fast without paying the batch=1 device tax.
+        The move is a no-op when the policy already lives on
+        ``self.device`` (so existing CPU-only callers are unaffected),
+        and is skipped entirely for parameter-less policy stubs.
+
+        The policy is also switched to ``eval()`` mode for the round and
+        restored to its prior mode afterwards. During training the policy
+        is in ``train()`` mode, and the encoder carries dropout
+        (``encoders.py`` ``dropout=0.05``); without this toggle eval WR
+        would be measured on a stochastically perturbed policy. Restored
+        in the ``finally`` so the next SGD update resumes with dropout on.
+        """
+        orig_device = self._policy_device(policy)
+        moved = orig_device is not None and orig_device != self.device
+        was_training = bool(getattr(policy, "training", False))
+        if moved:
+            policy.to(self.device)
+        if was_training:
+            policy.eval()
+        try:
+            results: list[EvalResult] = []
+            n_total = 0
+            for opp in self.opponent_types:
+                result = self._evaluate_matchup(policy=policy, opponent_type=opp)
+                results.append(result)
+                n_total += result.n
+            return EvalReport(results=tuple(results), n_games_total=n_total)
+        finally:
+            if moved:
+                policy.to(orig_device)
+            if was_training:
+                policy.train()
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _policy_device(policy: Any) -> torch.device | None:
+        """Best-effort current device of the policy's parameters.
+
+        Returns ``None`` for a parameter-less stub (test doubles) or any
+        object without a ``parameters()`` iterator, in which case
+        :meth:`run` skips the device move entirely.
+        """
+        try:
+            return next(policy.parameters()).device
+        except (StopIteration, AttributeError):
+            return None
 
     def _evaluate_matchup(self, *, policy: Any, opponent_type: str) -> EvalResult:
         """Play ``2 * n_games_per_seat`` games for one opponent kind."""
