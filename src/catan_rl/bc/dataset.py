@@ -48,7 +48,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -227,8 +227,15 @@ def _record_decision(
         elif act_type == ActionType.BUILD_ROAD:
             n_existing = len(ctx.agent_player.buildGraph["ROADS"])
             ctx.env_state.setup_step = 1 if n_existing == 0 else 3
-    obs = ctx.encoder.build_obs(
-        ctx.game, ctx.agent_player, ctx.opp_player, ctx.env_state, hand_tracker=ctx.hand_tracker
+    # build_obs returns ``dict[str, np.ndarray | np.int64]`` (opp_kind /
+    # opp_policy_id are int64 scalars); BC stores them as-is and
+    # ``_flatten_records`` np.stacks them into arrays, so treat the dict
+    # as ndarray-valued at this boundary.
+    obs = cast(
+        dict[str, np.ndarray],
+        ctx.encoder.build_obs(
+            ctx.game, ctx.agent_player, ctx.opp_player, ctx.env_state, hand_tracker=ctx.hand_tracker
+        ),
     )
     mask = compute_action_masks(
         ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
@@ -671,7 +678,12 @@ def generate_dataset(
             return
         shard_path = out_dir / f"shard_{next_shard_idx:04d}.npz"
         flat = _flatten_records(pending_games, include_forced=include_forced)
-        np.savez_compressed(shard_path, **flat)
+        # numpy stub mis-binds **dict[str, ndarray] to a positional bool
+        # param of savez_compressed; the call is correct at runtime. Cast
+        # through Any so it typechecks under both mypy 2.x (full numpy
+        # stubs) and the pre-commit hook (numpy unresolved -> Any), which
+        # would otherwise flag a `# type: ignore` here as unused.
+        cast(Any, np.savez_compressed)(shard_path, **flat)
         n_pairs = int(flat["action"].shape[0])
         shards.append(
             {
