@@ -54,10 +54,10 @@ checkpoint:
   save_optimizer_state: true     # required for clean resume
 
 eval:
-  eval_every_updates: 20
-  eval_games: 200                # binomial SE ~0.035 at p=0.5
+  eval_every_updates: 40         # audit: eval is serial batch=1 & can rival train cost; 20->40 ~halves eval wall-clock
+  eval_games: 100                # audit: binomial SE ~0.05 at p=0.5 (was 200/~0.035); keep >=200 for promotion/ablation gates
   eval_seeds: [0, 1, 2, 3, 4]
-  eval_opponents: [random, heuristic]
+  eval_opponents: [heuristic]    # audit: dropped 'random' from periodic eval (saturated signal, ~80% of eval time); re-add at milestones
 
 league:
   random_weight: 0.0             # heuristic-only baseline; flip in Phase 8+
@@ -68,7 +68,7 @@ league:
 
 total_steps: 50003968            # 1526 rollouts * 128 envs * 256 steps ~= 50.0M; must be a multiple of n_envs * n_steps
 seed: 42
-device: auto                     # CUDA -> MPS -> CPU at runtime
+device: auto                     # CUDA -> MPS -> CPU at runtime. Do NOT pass --device cpu on M1: batched SGD is ~2.6-3.3x faster on MPS (audit)
 torch_compile: false             # audit: harmful on MPS, only useful for CUDA reduce-overhead
 run_name: ppo
 output_dir: runs/train
