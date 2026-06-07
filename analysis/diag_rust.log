@@ -1,0 +1,24 @@
+=== phase-timing diagnostic ===
+backend=rust device=cpu n_envs=128 n_steps=256 transitions/rollout=32768
+warmup=1 timed=3 eval=on eval_games=10 n_epochs=4 batch=512 (=> 64 mb/epoch, 256 sgd steps)
+/Users/benjaminli/.local/lib/python3.12/site-packages/torch/nn/modules/transformer.py:392: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  warnings.warn(
+policy params: 1,375,851
+
+  [warmup] upd 0: rollout=  32.1s  gae= 0.01s  sgd= 160.8s  total= 193.0s
+  [timed ] upd 1: rollout=  40.5s  gae= 0.00s  sgd= 153.4s  total= 194.0s
+  [timed ] upd 2: rollout=  53.2s  gae= 0.00s  sgd= 193.3s  total= 246.5s
+  [timed ] upd 3: rollout=  36.1s  gae= 0.00s  sgd= 147.9s  total= 184.0s
+  eval:  150.2s for 10 games x 2 opp
+
+=== medians (s) ===
+  rollout (engine + policy/opp inference):   40.54
+  gae:                                       0.002
+  sgd (4 epochs x 64 mb):                 153.41
+  per-update (no eval):                     193.95
+  -> rollout share 21%   sgd share 79%
+
+=== full-run extrapolation (n_envs=128, 1526 updates) ===
+  train: 194.0s x 1526 = 82.2h
+  eval:  ~3004s/round (scaled 10->200 games) x 76 rounds = 63.4h  [fresh-policy upper bound]
+  TOTAL: 145.6h  (6.07 days)
