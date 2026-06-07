@@ -42,14 +42,16 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      # Same maturin-backed editable install as ``lint-and-typecheck``;
-      # required because the pytest suite imports ``catan_engine``
-      # directly (RNG-parity tests, engine snapshot fixtures, etc.).
+      # Maturin-backed editable install (same as lint-and-typecheck) plus
+      # the ``gui`` extra: the pytest suite imports ``catan_engine``
+      # directly (RNG-parity tests, engine snapshot fixtures), and the
+      # GUI / replay-viewer / labeling test modules import ``pygame`` at
+      # collection time — without it pytest errors out before running.
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
       - name: Cache cargo registry + target
         uses: Swatinem/rust-cache@v2
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install -e ".[dev,gui]"
       - run: make test-unit
       - name: Smoke integration test
         run: pytest tests/integration -v -m integration --tb=short || true
