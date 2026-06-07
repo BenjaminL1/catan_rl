@@ -430,8 +430,12 @@ class TestCheckpointEvalDefaults:
         assert c.save_optimizer_state is True
 
     def test_eval_defaults(self) -> None:
+        # Eval defaults trimmed by the wall-clock audit (2026-06): eval is
+        # serial batch=1 and can rival training cost. Cadence 20->40,
+        # games 200->100, and 'random' dropped from periodic eval (kept
+        # for milestone/gate evals only).
         e = EvalConfig()
-        assert e.eval_every_updates == 20
-        assert e.eval_games == 200
+        assert e.eval_every_updates == 40
+        assert e.eval_games == 100
         assert e.eval_seeds == (0, 1, 2, 3, 4)
-        assert e.eval_opponents == ("random", "heuristic")
+        assert e.eval_opponents == ("heuristic",)

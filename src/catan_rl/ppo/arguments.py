@@ -314,18 +314,28 @@ class CheckpointConfig:
 class EvalConfig:
     """Eval harness cadence + per-eval game budget."""
 
-    eval_every_updates: int = 20
-    """Run the eval harness every N PPO updates."""
+    eval_every_updates: int = 40
+    """Run the eval harness every N PPO updates. Raised 20->40 by the
+    wall-clock audit (2026-06): eval is serial batch=1 and can rival
+    training cost, so halving the cadence ~halves eval wall-clock. Use a
+    denser cadence + full ``eval_games`` for promotion / ablation gates."""
 
-    eval_games: int = 200
-    """Games per eval matchup. Binomial SE at p=0.5 is ~0.035 at N=200."""
+    eval_games: int = 100
+    """Games per eval matchup. Binomial SE at p=0.5 is ~0.05 at N=100
+    (was 200 -> ~0.035). Lowered by the wall-clock audit: a ~5pp SE is
+    fine for *monitoring*; restore N>=200 for the promotion/ablation gate."""
 
     eval_seeds: tuple[int, ...] = (0, 1, 2, 3, 4)
     """Seeds to run; each seed plays both seats (so N games per matchup
     = ``eval_games * len(eval_seeds) * 2``)."""
 
-    eval_opponents: tuple[str, ...] = ("random", "heuristic")
-    """Opponent labels evaluated each eval round."""
+    eval_opponents: tuple[str, ...] = ("heuristic",)
+    """Opponent labels evaluated each eval round. The ``random`` opponent
+    was dropped from periodic eval by the wall-clock audit: a trained
+    policy saturates it, and random play drags games to ~max_turns (3-4x
+    longer), making it ~80% of eval wall-clock for a near-constant signal.
+    Re-add ``random`` at a coarse milestone cadence as an early-collapse
+    tripwire."""
 
     def __post_init__(self) -> None:
         _check_positive("eval_every_updates", self.eval_every_updates)

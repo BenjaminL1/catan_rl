@@ -249,7 +249,12 @@ def build_training_state(
         opponent_types=cfg.eval.eval_opponents,
         n_games_per_seat=n_per_seat,
         seed=cfg.seed,
-        device=device,
+        # Pin eval to CPU even when the learner trains on MPS/CUDA. Eval
+        # runs the policy at batch=1 (sequential games), the one regime
+        # where MPS is ~7-8x SLOWER than CPU. EvalHarness.run() moves the
+        # policy to this device for the eval round and restores it after,
+        # so training resumes on `device` untouched. (wall-clock audit)
+        device=torch.device("cpu"),
         max_turns=cfg.rollout.max_turns,
     )
 
