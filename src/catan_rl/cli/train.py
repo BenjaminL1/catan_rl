@@ -419,6 +419,17 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("config snapshot at %s", snapshot_path)
     logger.info("run metadata at %s", metadata_path)
     logger.info("resolved device: %s (requested: %s)", resolved_device, cfg.device)
+    if resolved_device == "cpu":
+        import torch  # local import — keeps script-import cheap
+
+        if torch.backends.mps.is_available():
+            logger.warning(
+                "running on CPU while MPS is available. The batched SGD update "
+                "is ~80%% of each PPO update and runs ~2.6-3.3x faster on MPS "
+                "at batch=512 (see the device docstring in arguments.py). Drop "
+                "any explicit '--device cpu' / keep device:auto to use MPS. "
+                "Eval is pinned to CPU regardless (batch=1 is faster on CPU)."
+            )
     logger.info("seeded numpy + torch + stdlib random with seed=%d", cfg.seed)
 
     transitions_per_rollout = cfg.rollout.n_envs * cfg.rollout.n_steps
