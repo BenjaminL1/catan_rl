@@ -125,6 +125,7 @@ Phase 1 YAML configs: `configs/phase1_full.yaml` plus 5 leave-one-outs (`phase1_
 - One PR per phase; no big-bang merges that span multiple roadmap phases.
 
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current plan
+Active Spec Kit feature: **self-play snapshot opponent** — see
+`specs/001-selfplay-snapshot-opponent/plan.md` (plus `spec.md`, `research.md`,
+`data-model.md`, `contracts/`, `quickstart.md`) for the current plan.
 <!-- SPECKIT END -->
