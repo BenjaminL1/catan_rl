@@ -166,7 +166,9 @@ Listed only so planning does not pull them into scope.
 - **PG-1**: Over a self-play run, the agent's win rate against its own recent
   snapshots stays within 40–60% (healthy zero-sum equilibrium) while its win
   rate against a frozen early baseline rises by ≥10 percentage points.
-- **PG-2**: Symmetrized win rate ≥ 0.70 vs the heuristic, and a fresh 1M-step
+- **PG-2**: Symmetrized win rate ≥ 0.90 vs the heuristic (the bootstrap /
+  graduate-to-self-play bar — v1 only ever reached ~0.55, so this also subsumes
+  "stronger than v1" with no v1 policy loaded), and a fresh 1M-step
   best-response adversary cannot exceed 0.65 win rate against the champion.
 
 ## Assumptions

@@ -164,7 +164,7 @@ The belief head is trained with soft cross-entropy on the env's ground-truth nor
 Per `docs/plans/v2_step4_ppo.md:116-130` and `v2_step5_mcts.md:26-37`:
 
 - **Heuristic bench**: 100 games every 100k steps, symmetrised WR (P1 / P2 / sym) with N≥3 seeds
-- **Champion bench**: 5 historic checkpoints (incl. v1 preserved `checkpoint_16162816.pt` at 0.56 WR), 200 games at milestones
+- **Champion bench**: frozen **v2** checkpoints from the run's own lineage (bootstrap + earlier self-play snapshots), 200 games at milestones. No v1 checkpoints.
 - **AlphaBeta bench**: d=2 every 500k steps, d=4 every 5M steps
 - **PPO-BR-gap** (exploitability proxy): 1M-step and 5M-step best-response adversaries; sensitivity probe Δ_BR = b_5M − b_1M as suboptimality lower bound
 - **TrueSkill within league**: continuous; Nash-weighted checkpoint pruning (planned Phase 3.5 but CPU-prohibitive, using FIFO instead)

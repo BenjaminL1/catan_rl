@@ -59,6 +59,6 @@ Used by all sub-agents. Pins terminology + the 1v1-vs-4-player asymmetries that 
 ## Strength benchmarks (where they live)
 
 - **Catanatron leaderboard**: AlphaBeta(n=2) is the published top.
-- **v2 preserved v1 champion**: `/Users/benjaminli/my_projects/catan_rl/checkpoints/train/checkpoint_16162816.pt` — v1 peak ≈ 0.56 symmetrised WR vs heuristic at step 16,109,568. Used for the Step-4 Gate-3 regression check.
+- **Self-regression baseline (v2-only)**: a frozen *earlier v2* checkpoint from the run's own lineage (bootstrap / early self-play snapshot), used for the Step-4 Gate-3 self-regression check. **No v1 champion is loaded** — "stronger than v1" is captured by the WR-vs-heuristic bar (v1 peaked ≈ 0.55), not by running a v1 policy.
 - **v2 heuristic**: `src/catan_rl/agents/heuristic.py` — greedy 1-step. The BC target distribution and the eval anchor.
 - **QSettlers**: no transferable benchmark.

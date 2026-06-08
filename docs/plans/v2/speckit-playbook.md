@@ -235,7 +235,7 @@ Run it. While it works:
 ## Phase gate — when the keystone is "done enough" to advance
 
 From `docs/plans/v2/step4_ppo.md §6` (seat-symmetrized, N≥3 seeds):
-- **G1:** WR ≥ 0.70 vs heuristic @ ~10M steps.
+- **G1:** WR ≥ 0.90 vs heuristic — the bootstrap / graduate-to-self-play bar (equivalently, once the WR-vs-heuristic curve flattens). Subsumes "beat v1" (v1 peaked ~0.55) with no v1 policy loaded.
 - **G2:** PPO best-response gap ≤ 0.65 (a fresh 1M-step adversary can't exceed
   this WR against the champion).
 - **G3:** WR ≥ 0.60 vs a frozen early-**v2** baseline (the bootstrap checkpoint or an early self-play snapshot — **no v1 champions**).

@@ -102,8 +102,13 @@ shaping decision.
 **Method (faculty re-review correction)**: the original draft of this
 experiment flipped two variables at once, which would have left the
 panel diagnosis unfalsifiable in the same way the prior plan was. The
-corrected design is a **2×2 factorial** from the latest v1 checkpoint
-(`catan_rl/checkpoints/train/checkpoint_07390040.pt`):
+corrected design was a **2×2 factorial** plateau-diagnosis experiment.
+
+> **SUPERSEDED — no v1 usage.** This experiment diagnosed why the *v1*
+> checkpoint plateaued (~47%). It is obsolete under the current plan: v2
+> trains a **fresh** heuristic bootstrap (no v1 checkpoint is loaded) and
+> graduates to self-play once WR-vs-heuristic flattens. Retained for
+> historical context only.
 
 | Run | `heuristic_opp_weight` | `vp_shaping` | Hypothesis tested |
 |---|---|---|---|

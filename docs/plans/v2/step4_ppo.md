@@ -199,8 +199,11 @@ Per `v2_design.md` §5 Step 4 + faculty-corrected §6:
 1. **Gate 1 — convergence**:
    - At 10M PPO steps OR 3-day wall-clock (whichever first), report
      symmetrised heuristic WR with N=3 seeds.
-   - **Pass**: symmetrised WR ≥ **0.70** vs heuristic at 200-game eval.
-   - **Soft-fail (≥0.55 but <0.70)**: investigate per the §8 risk
+   - **Pass**: symmetrised WR ≥ **0.90** vs heuristic at 200-game eval (the
+     heuristic-beating / graduate-to-self-play bar; equivalently, pass once the
+     WR-vs-heuristic curve has flattened — the weak heuristic has nothing left
+     to teach).
+   - **Soft-fail (≥0.70 but <0.90)**: investigate per the §8 risk
      register; consider one of:
        - Re-enable BC value loss if `v_drift_l1` indicated divergence.
        - Reduce piKL `λ_initial` if anchor is over-constraining.
@@ -258,7 +261,7 @@ Per `v2_design.md` §5 Step 4 + faculty-corrected §6:
 | **Pre-Step-4** (after Step 3 + this plan) | BC Gates 1+2+3 green, BC checkpoint saved, E0.1 result interpreted, ablation Tier-1 configs reviewed | Approve PPO kickoff; commit budget |
 | **First 1M PPO steps** | `v_drift_l1` probe trending down; entropy floor not engaged; KL early-stop not firing every update | Approve continuation OR adjust BC-value weight + piKL λ for next seed |
 | **First eval at 100k steps** | Heuristic-WR ≥ BC-anchor WR within ±0.05 (PPO shouldn't immediately regress) | OK if within band; STOP if WR collapses |
-| **Soft-fail at Gate 1** (WR 0.55–0.69 at 10M) | Per §8 risk register | Pick a mitigation, run another seed |
+| **Soft-fail at Gate 1** (WR 0.70–0.89 at 10M) | Per §8 risk register | Pick a mitigation, run another seed |
 | **Hard-fail at Gate 1 or 3** | Stop. Audit. | Open follow-up investigation; do not proceed to Step 5 |
 | **Tier-1 ablation results** | Compare to full Step 4 result; any feature that doesn't lose ≥ 0.05 WR is a candidate for removal in v2.1 | Document; decide whether to drop |
 
