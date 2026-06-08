@@ -51,6 +51,29 @@ return ``"snapshot"`` unless explicitly opted in."""
 _KNOWN_KINDS = (OPPONENT_KIND_RANDOM, OPPONENT_KIND_HEURISTIC, OPPONENT_KIND_SNAPSHOT)
 
 
+@dataclass(frozen=True)
+class OpponentAssignment:
+    """Per-environment opponent assignment for one rollout (T007).
+
+    ``kind`` is one of ``_KNOWN_KINDS``. ``snapshot_id`` is set iff
+    ``kind == OPPONENT_KIND_SNAPSHOT`` — the stable league id (NOT a deque
+    index; resolve via :meth:`League.peek_by_id`). The vec env threads this
+    into each env's next ``reset`` for self-play.
+    """
+
+    kind: str
+    snapshot_id: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind not in _KNOWN_KINDS:
+            raise ValueError(f"unknown opponent kind: {self.kind!r}")
+        if (self.kind == OPPONENT_KIND_SNAPSHOT) != (self.snapshot_id is not None):
+            raise ValueError(
+                "snapshot_id must be set iff kind == 'snapshot' "
+                f"(kind={self.kind!r}, snapshot_id={self.snapshot_id!r})"
+            )
+
+
 # ---------------------------------------------------------------------------
 # Snapshot entry
 # ---------------------------------------------------------------------------
