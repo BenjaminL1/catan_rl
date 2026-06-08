@@ -1,50 +1,115 @@
-# [PROJECT_NAME] Constitution
-<!-- Example: Spec Constitution, TaskFlow Constitution, etc. -->
+<!--
+Sync Impact Report
+- Version change: (none) → 1.0.0  (initial ratification)
+- Modified principles: n/a (first ratification)
+- Added sections: Core Principles (I–V), Additional Constraints, Development
+  Workflow, Governance
+- Removed sections: none
+- Templates reviewed (no structural change required — generic "Constitution
+  Check" gates remain compatible):
+  - .specify/templates/plan-template.md   ✅
+  - .specify/templates/spec-template.md    ✅
+  - .specify/templates/tasks-template.md   ✅ (test-first categorization aligns
+    with Principle IV)
+- Runtime guidance file: CLAUDE.md (referenced in Governance)
+- Deferred TODOs: none
+-->
+
+# Catan RL (1v1 Superhuman Agent) Constitution
 
 ## Core Principles
 
-### [PRINCIPLE_1_NAME]
-<!-- Example: I. Library-First -->
-[PRINCIPLE_1_DESCRIPTION]
-<!-- Example: Every feature starts as a standalone library; Libraries must be self-contained, independently testable, documented; Clear purpose required - no organizational-only libraries -->
+### I. The 1v1 Ruleset Is Sacred (NON-NEGOTIABLE)
 
-### [PRINCIPLE_2_NAME]
-<!-- Example: II. CLI Interface -->
-[PRINCIPLE_2_DESCRIPTION]
-<!-- Example: Every library exposes functionality via CLI; Text in/out protocol: stdin/args → stdout, errors → stderr; Support JSON + human-readable formats -->
+The agent targets 1v1 Settlers of Catan under the Colonist.io ruleset and MUST
+NOT be generalized to 4-player. These invariants MUST hold in every change:
+15 VP win condition; exactly 2 players; player-to-player trading DISABLED
+(bank/port only); 9-card discard threshold on a 7; Friendly Robber (no robber
+on a hex adjacent to a player with `< 3` visible VP); StackedDice (shuffled bag
+of 36 outcomes + 1 noise swap + 20% Karma forced-7). Any PR touching game-rule
+constants, the action space, the observation schema, or the trading API MUST
+explicitly state how it preserves this ruleset, or be rejected.
 
-### [PRINCIPLE_3_NAME]
-<!-- Example: III. Test-First (NON-NEGOTIABLE) -->
-[PRINCIPLE_3_DESCRIPTION]
-<!-- Example: TDD mandatory: Tests written → User approved → Tests fail → Then implement; Red-Green-Refactor cycle strictly enforced -->
+**Rationale**: Core design choices — perfect hand-tracking, single-opponent
+obs, the 13-type action space — only hold under 1v1; silent 4-player
+assumptions break correctness and evaluation comparability.
 
-### [PRINCIPLE_4_NAME]
-<!-- Example: IV. Integration Testing -->
-[PRINCIPLE_4_DESCRIPTION]
-<!-- Example: Focus areas requiring integration tests: New library contract tests, Contract changes, Inter-service communication, Shared schemas -->
+### II. Engine Integrity
 
-### [PRINCIPLE_5_NAME]
-<!-- Example: V. Observability, VI. Versioning & Breaking Changes, VII. Simplicity -->
-[PRINCIPLE_5_DESCRIPTION]
-<!-- Example: Text I/O ensures debuggability; Structured logging required; Or: MAJOR.MINOR.BUILD format; Or: Start simple, YAGNI principles -->
+The game engine MUST match Colonist.io exactly. No change may alter game rules
+without explicit, surfaced justification in the PR.
 
-## [SECTION_2_NAME]
-<!-- Example: Additional Constraints, Security Requirements, Performance Standards, etc. -->
+**Rationale**: Engine drift silently invalidates all historical evaluation and
+league comparisons.
 
-[SECTION_2_CONTENT]
-<!-- Example: Technology stack requirements, compliance standards, deployment policies, etc. -->
+### III. Backward-Compatible, Additive Artifacts
 
-## [SECTION_3_NAME]
-<!-- Example: Development Workflow, Review Process, Quality Gates, etc. -->
+Policy state-dict shape changes MUST ship a one-shot migration script with a
+documented checkpoint lineage, and SHOULD prefer keeping existing checkpoints
+loadable. TensorBoard scalar names are append-only — new diagnostics are new
+scalars, never renames.
 
-[SECTION_3_CONTENT]
-<!-- Example: Code review requirements, testing gates, deployment approval process, etc. -->
+**Rationale**: In-flight and archived checkpoints, and the dashboards reading
+them, are long-lived assets; breaking them discards real compute and history.
+
+### IV. Test-First & Green CI (NON-NEGOTIABLE)
+
+Every behavioral change MUST ship with tests, written before or alongside the
+implementation. CI MUST be green on the exact merge SHA — ruff, mypy (strict),
+and pytest on Python 3.11+ (GUI pixel-rendering tests skip off-darwin).
+`gh pr checks` conclusions MUST be verified line-by-line before merging; a
+passing watch exit code is NOT sufficient evidence of green CI.
+
+**Rationale**: RL correctness bugs are subtle and silent; the test + CI gate is
+the only reliable signal, and a masked exit code has already caused a bad merge.
+
+### V. Self-Play Is 2-Player Zero-Sum
+
+All self-play machinery — PFSP, league rating, Nash pruning, exploitability, and
+the perfect 1v1 hand-tracker — is defined ONLY for the symmetric 2-player
+zero-sum game and MUST NOT assume more players or hidden-trade dynamics.
+
+**Rationale**: These methods' guarantees and the hand-tracker's observability
+assumption break outside 1v1.
+
+## Additional Constraints
+
+- `arguments.py` is the single source of truth for hyperparameters; README and
+  MEMORY may lag and MUST be verified against it before being quoted.
+- Device policy: training resolves auto→MPS on Apple Silicon (batched SGD is
+  ~3× faster at batch 512); evaluation is pinned to CPU (batch=1 inference is
+  faster there); CUDA is opt-in.
+- Observation and action-head shapes are stable by default: a change that
+  resizes them MUST be justified against Principle III and account for every
+  in-flight and archived checkpoint.
+- Two resource orderings exist (engine `RESOURCES` vs RL `RESOURCES_CW`); code
+  MUST import the correct one.
+- Long-running training jobs MUST be launched detached from the editor session
+  (e.g. `nohup`) so a session restart cannot kill them; rely on periodic
+  checkpoints for crash recovery.
+
+## Development Workflow
+
+- Commits follow Conventional Commits: lowercase, type-prefixed, under 72 chars.
+- Branches: `<type>/<kebab-slug>` (feat / fix / refactor / chore / docs / test).
+- **One PR per phase** — no big-bang merges spanning multiple roadmap phases.
+- Commits and PRs MUST NOT include `Co-Authored-By` trailers referencing any AI
+  account.
+- A PR merges only when CI is green on its merge SHA and — where it touches game
+  rules, the action space, the obs schema, or trading — it states how it
+  preserves the 1v1 ruleset.
+- Documentation describing touched code (README, `docs/`, `CLAUDE.md`,
+  migrations) MUST be updated in the same PR.
 
 ## Governance
-<!-- Example: Constitution supersedes all other practices; Amendments require documentation, approval, migration plan -->
 
-[GOVERNANCE_RULES]
-<!-- Example: All PRs/reviews must verify compliance; Complexity must be justified; Use [GUIDANCE_FILE] for runtime development guidance -->
+This constitution supersedes ad-hoc practice. Amendments MUST be versioned
+(semantic versioning: MAJOR for principle removals/redefinitions, MINOR for
+added/expanded principles, PATCH for clarifications), dated, and — where they
+change shapes or rules — accompanied by a migration plan. All PRs and reviews
+MUST verify compliance with these principles; added complexity MUST be
+justified. `CLAUDE.md` provides runtime, project-specific guidance that
+operationalizes this constitution; where the two conflict, this constitution
+governs.
 
-**Version**: [CONSTITUTION_VERSION] | **Ratified**: [RATIFICATION_DATE] | **Last Amended**: [LAST_AMENDED_DATE]
-<!-- Example: Version: 2.1.1 | Ratified: 2025-06-13 | Last Amended: 2025-07-16 -->
+**Version**: 1.0.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
