@@ -47,7 +47,7 @@ Four checks. **All four pass or Step 5 does not start.** This is the analogue of
 Per `v2_step4_ppo.md` §6:
 - Symmetrised WR ≥ 0.70 vs heuristic at 200-game eval (Gate 1).
 - 1M-step PPO-BR-gap ≤ 0.65 (Gate 2).
-- Symmetrised WR ≥ 0.60 vs v1 champion `checkpoint_16162816.pt` (Gate 3).
+- Symmetrised WR ≥ 0.60 vs a frozen earlier **v2** checkpoint (Gate 3 self-regression — **no v1 champions**).
 
 If any of these failed at Step 4, the Step-4 risk register + diagnosis ladder applies; Step 5 does not start.
 
@@ -512,7 +512,7 @@ Decisions inherited from `v2_design.md` round-2 (commit `9d34138`) and `v2_step4
 - BC plan that Phase B is downstream of: `docs/plans/v2_step3_bc.md`.
 - PPO plan that Phase B is directly downstream of: `docs/plans/v2_step4_ppo.md`. Gates 1-3 of that plan are the preflight 0.1 gate for this plan.
 - v1 search prototype (informational, not load-bearing for v2): `/Users/benjaminli/my_projects/catan_rl/src/catan_rl/algorithms/search/ismcts.py` shipped in v1 Phase 4.1 as a 1v1-only single-step PUCT module. The v2 Phase B design supersedes it (chance nodes + belief determinization + AZ-style training were never wired in v1).
-- Preserved v1 champion for the Gate 4 regression check: `/Users/benjaminli/my_projects/catan_rl/checkpoints/train/checkpoint_16162816.pt` (only v1 checkpoint preserved; all other v1 checkpoints deleted per user direction).
+- Gate 4 regression baseline: a frozen earlier **v2** checkpoint from this run's own lineage (bootstrap checkpoint / early self-play snapshot). **No v1 checkpoints or champions are used.**
 
 ---
 
