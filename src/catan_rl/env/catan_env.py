@@ -840,27 +840,33 @@ class CatanEnv(gym.Env):
     def get_action_masks(self) -> dict[str, np.ndarray]:
         return self._compute_masks(self.agent_player)
 
-    def _compute_masks(self, acting_player: PlainPlayer | None) -> dict[str, np.ndarray]:
+    def _compute_masks(
+        self,
+        acting_player: PlainPlayer | None,
+        env_state: EnvObsState | None = None,
+    ) -> dict[str, np.ndarray]:
         """Thin wrapper around :func:`catan_rl.env.masks.compute_action_masks`.
 
-        Builds an ``EnvObsState`` from the env's current state-machine flags
-        and delegates. The standalone function lives in ``masks.py`` so the
-        BC dataset generator (Step 3) can produce the same masks without
-        instantiating an env.
+        When ``env_state`` is None, builds one from the env's current
+        (agent-centric) state-machine flags — the agent path. The snapshot
+        opponent's turn-driver passes an opponent-local ``env_state`` (T005)
+        so the opponent's masks reflect ITS sub-turn phase, not the agent's.
+        The standalone function lives in ``masks.py`` so the BC dataset
+        generator can produce the same masks without instantiating an env.
         """
         from catan_rl.env.masks import compute_action_masks
-        from catan_rl.policy.obs_encoder import EnvObsState
 
         assert acting_player is not None and self.game is not None
-        env_state = EnvObsState(
-            initial_placement_phase=self.initial_placement_phase,
-            setup_step=self._setup_step,
-            roll_pending=self.roll_pending,
-            discard_pending=self.discard_pending,
-            robber_placement_pending=self.robber_placement_pending,
-            road_building_roads_left=self.road_building_roads_left,
-            last_dice_roll=self.last_dice_roll,
-        )
+        if env_state is None:
+            env_state = EnvObsState(
+                initial_placement_phase=self.initial_placement_phase,
+                setup_step=self._setup_step,
+                roll_pending=self.roll_pending,
+                discard_pending=self.discard_pending,
+                robber_placement_pending=self.robber_placement_pending,
+                road_building_roads_left=self.road_building_roads_left,
+                last_dice_roll=self.last_dice_roll,
+            )
         return compute_action_masks(
             self.game,
             acting_player,
@@ -892,10 +898,30 @@ class CatanEnv(gym.Env):
                 self._opp_id_mask_prob > 0.0 and bool(np.random.random() < self._opp_id_mask_prob)
             ),
         )
+        return self._build_obs_for(self.agent_player, self.opponent_player, env_state)
+
+    def _build_obs_for(
+        self,
+        acting_player: Any,
+        other_player: Any,
+        env_state: EnvObsState,
+    ) -> dict[str, np.ndarray]:
+        """Build the obs dict from ``acting_player``'s point of view (T005).
+
+        ``build_obs`` derives the entire POV from its (agent_player,
+        opponent_player) argument order: the first player sees its OWN hidden
+        dev cards (``current_dev_counts``) and own resources; the second
+        contributes only observable info (played dev cards only, tracker-
+        visible resources). The agent path passes (agent, opponent); the
+        snapshot opponent's turn-driver passes (opponent, agent) with an
+        opponent-local ``env_state`` — so the opponent sees its own hand and
+        NONE of the agent's hidden information (FR-012, no leak).
+        """
+        assert self._obs_encoder is not None and self.game is not None
         return self._obs_encoder.build_obs(
             self.game,
-            self.agent_player,
-            self.opponent_player,
+            acting_player,
+            other_player,
             env_state,
             hand_tracker=self._hand_tracker,
         )
