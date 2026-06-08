@@ -9,10 +9,11 @@ the design choices the implementation must commit to.
 rollout envs in the main process**, inference-only (`torch.no_grad`, `eval()`),
 on the learner device.
 
-**Rationale**: The measured training bottleneck is the small-batch policy forward
-pass; a per-env batch-of-one snapshot forward would multiply that cost by N. The
-v1 "deferred opponent" design already established main-process batched opponent
-inference as the right pattern.
+**Rationale**: The measured v2 training bottleneck is the small-batch policy
+forward pass; a per-env batch-of-one snapshot forward would multiply that cost by
+N. Batching the opponent forward across envs in the main process amortizes it.
+(This is a version-independent performance pattern — the implementation is new
+v2 code, not a v1 dependency.)
 
 **Alternatives rejected**: per-env in-env inference (batch=1 → slow); subprocess
 opponents (IPC pickling of obs dicts erases the win, per the vec-env memory note).

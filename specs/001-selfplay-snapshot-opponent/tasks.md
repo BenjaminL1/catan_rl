@@ -23,7 +23,7 @@ write the listed tests FIRST, watch them fail, then implement to green.
 **Independent test**: stub-EndTurn snapshot → opponent only ends turns; rollout completes.
 
 - [ ] T006 [P] [US1] Test: `build_env_opponent_mix` returns `kind="snapshot"`+id for a non-empty pool and falls back (no snapshot) when empty, in `tests/unit/selfplay/test_opponent_mix.py`
-- [ ] T007 [P] [US1] Test: an env assigned a stub-EndTurn snapshot opponent takes only `EndTurn` actions and raises no `NotImplementedError`, in `tests/unit/env/test_snapshot_opponent.py`
+- [ ] T007 [P] [US1] Test: an env assigned a stub-EndTurn snapshot opponent takes only `EndTurn` actions, raises no `NotImplementedError`, AND produces an identical opponent action sequence across two runs at the same seed + device (FR-006 rollout determinism), in `tests/unit/env/test_snapshot_opponent.py`
 - [ ] T008 [US1] Wire snapshot sampling into `build_env_opponent_mix`; remove the `NotImplementedError` at `src/catan_rl/selfplay/league.py:245`
 - [ ] T009 [US1] Add the snapshot branch to `_run_opponent_main_turn` (encode opponent POV obs+masks → frozen-opponent act fn instead of `opp.move()`); remove the `NotImplementedError` at `src/catan_rl/env/catan_env.py:181`
 - [ ] T010 [US1] Construct + batch the frozen-policy opponent across snapshot-assigned envs in the rollout, in `src/catan_rl/ppo/game_manager.py`
@@ -52,7 +52,7 @@ write the listed tests FIRST, watch them fail, then implement to green.
 ## Phase 6: Polish & cross-cutting
 
 - [ ] T019 [P] Checkpoint-compat guard test: load a `bootstrap_v1` checkpoint after the change → no shape mismatch (Constitution III), in `tests/unit/policy/test_checkpoint_compat.py`
-- [ ] T020 [P] Integration smoke: `snapshot_weight=0.5` + a seeded league → ~3 PPO updates with no `NotImplementedError`/device errors, in `tests/integration/test_selfplay_smoke.py`
+- [ ] T020 [P] Integration smoke: `snapshot_weight=0.5` + a seeded league → ~3 PPO updates with no `NotImplementedError`/device errors, AND run the `eval/rules_invariants` gate to assert the 1v1 ruleset / reward / action space is unchanged (FR-009), in `tests/integration/test_selfplay_smoke.py`
 - [ ] T021 [P] Update `MEMORY.md` / `README.md` to record that the self-play snapshot opponent is wired (remove "unwired" claims)
 - [ ] T022 Run full `pytest` + `mypy` + `ruff`; confirm green; open ONE PR (`feat/selfplay-snapshot-opponent`)
 
