@@ -1,0 +1,171 @@
+# Feature Specification: Frozen-policy self-play opponent + policy-vs-policy evaluation
+
+**Feature Branch**: `001-selfplay-snapshot-opponent`
+
+**Created**: 2026-06-07
+
+**Status**: Draft
+
+**Input**: User description: "Frozen-policy self-play opponent + policy-vs-policy evaluation — wire the single primitive that lets the agent play against frozen snapshots of its own past selves (unblocking self-play) and lets the champion be measured head-to-head against any loaded policy."
+
+## User Scenarios & Testing *(mandatory)*
+
+### User Story 1 - Train against a frozen past self (Priority: P1)
+
+A frozen snapshot of a previously-trained policy can act as the in-env
+opponent. When the league assigns an environment a snapshot opponent, that
+environment's opponent moves are produced by the loaded frozen policy — not the
+fixed heuristic — and a self-play rollout runs end to end without error.
+
+**Why this priority**: This is the keystone. Without a learning opponent, the
+agent cannot improve past "beats a weak heuristic." This single capability also
+underpins best-response probing and human-vs-policy play. It is the MVP — if
+only this ships, self-play becomes possible.
+
+**Independent Test**: With `snapshot_weight = 0.5` and a one-entry league whose
+snapshot is a deterministic stub policy that always ends its turn, run a short
+rollout; confirm it completes and the opponent's observed actions come from the
+stub (the heuristic is bypassed).
+
+**Acceptance Scenarios**:
+
+1. **Given** a non-empty league and `snapshot_weight > 0`, **When** a rollout
+   runs, **Then** it completes with no `NotImplementedError`.
+2. **Given** an env assigned a known stub snapshot, **When** the opponent takes
+   its turn, **Then** the action taken matches the stub policy's output, not the
+   heuristic's.
+3. **Given** the same seed and the same snapshot id, **When** the rollout is
+   repeated, **Then** the opponent's behavior is identical.
+
+---
+
+### User Story 2 - Measure the champion against any policy (Priority: P2)
+
+The champion can be evaluated head-to-head against any loaded opponent policy —
+a league snapshot or a saved checkpoint — over a set of seat-symmetrized games,
+returning a win rate with a confidence interval. This is the only way to tell
+whether the agent is improving once it has saturated the heuristic.
+
+**Why this priority**: Self-play without a strength signal is flying blind.
+Policy-vs-policy eval turns the league into a measurable strength ladder and
+provides the best-response / champion-gate machinery later phases depend on.
+
+**Independent Test**: Evaluate the champion against a frozen checkpoint over
+N≥100 symmetrized games; confirm a finite win rate + Wilson 95% CI is returned
+and is reproducible at the same seed.
+
+**Acceptance Scenarios**:
+
+1. **Given** two loaded policies, **When** policy-vs-policy eval runs, **Then**
+   it returns a win rate and a Wilson 95% CI over N symmetrized games.
+2. **Given** the same seed, **When** the eval is repeated, **Then** the result
+   is bit-for-bit identical.
+
+---
+
+### User Story 3 - Bring fresh snapshots into play (Priority: P3)
+
+As training proceeds and new snapshots are added to the league, subsequent
+rollouts can be told the new opponent assignment so freshly-added snapshots
+actually enter play, under a configurable heuristic-vs-snapshot opponent mix.
+
+**Why this priority**: Today the opponent mix is frozen when the run is
+constructed, so new snapshots can never be played. Without this, the league
+pool grows but the agent keeps training against the same opponents.
+
+**Independent Test**: Add a snapshot mid-run, refresh the opponent assignment,
+and confirm the next rollout's opponent is the newly added snapshot.
+
+**Acceptance Scenarios**:
+
+1. **Given** a snapshot added after construction, **When** the opponent
+   assignment is refreshed, **Then** the next rollout uses the new snapshot.
+2. **Given** a configured heuristic:snapshot mix, **When** opponents are
+   assigned, **Then** the observed mix matches the configured ratio in
+   expectation.
+
+---
+
+### Edge Cases
+
+- **Empty league but `snapshot_weight > 0`**: the system MUST fall back to a
+  non-snapshot opponent (heuristic/random) rather than erroring — no snapshot
+  exists to load yet (true at the very start of self-play).
+- **Requested snapshot id evicted from the pool**: the assignment MUST be
+  resolved against the current pool (skip/replace) rather than loading a stale
+  or missing snapshot.
+- **Snapshot from an incompatible policy shape**: MUST be rejected with a clear
+  error referencing checkpoint back-compat, never silently mis-loaded.
+- **Opponent inference device differs from the learner**: opponent inference
+  follows the learner device; eval inference runs on CPU.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+- **FR-001**: A league snapshot MUST be usable as an in-env opponent; when
+  selected, the opponent's moves are produced by a frozen policy loaded from the
+  league pool, not by the heuristic.
+- **FR-002**: With a non-empty league and `snapshot_weight > 0`, a rollout MUST
+  complete without raising `NotImplementedError` (both existing guards removed).
+- **FR-003**: Snapshot-opponent inference MUST be batched across environments in
+  the main process (not per-environment, batch-of-one).
+- **FR-004**: The opponent assignment for each environment MUST be refreshable
+  between rollouts so newly-added snapshots can enter play.
+- **FR-005**: The system MUST provide policy-vs-policy evaluation: a champion
+  policy vs any loaded opponent policy (snapshot or checkpoint) over N
+  seat-symmetrized games, returning a win rate and a Wilson confidence interval.
+- **FR-006**: Snapshot-opponent behavior MUST be deterministic given the same
+  seed and snapshot id.
+- **FR-007**: The opponent mix MUST be configurable as a static heuristic:snapshot
+  ratio (a scheduled/annealed mix is out of scope).
+- **FR-008**: The feature MUST NOT change observation or action-head shapes; the
+  existing opponent-id embedding MUST be fed real values without being resized.
+- **FR-009**: The 1v1 ruleset, reward function, and action space MUST be
+  unchanged.
+- **FR-010**: Existing policy checkpoints MUST remain loadable (back-compat).
+- **FR-011**: When the league is empty or a requested snapshot is unavailable,
+  the system MUST gracefully fall back to a non-snapshot opponent.
+
+### Key Entities
+
+- **League snapshot**: a frozen past policy — its parameters, a stable id, and
+  the training step at which it was captured.
+- **Opponent assignment**: a per-environment mapping to an opponent kind
+  (heuristic / random / snapshot) and, for snapshots, a concrete snapshot id.
+- **Frozen opponent policy**: a policy instantiated from a snapshot and run
+  inference-only (never trained) to produce opponent moves.
+- **Eval matchup result**: the win rate and Wilson confidence interval for a
+  champion vs a loaded opponent over a set of symmetrized games.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A self-play run (`snapshot_weight = 0.5`, non-empty league) trains
+  for ≥1M steps with zero `NotImplementedError` or device errors.
+- **SC-002**: In a controlled stub-opponent test, 100% of the snapshot
+  opponent's actions originate from the loaded snapshot policy (the heuristic is
+  never invoked for a snapshot opponent).
+- **SC-003**: Over a self-play run, the agent's win rate against its own recent
+  snapshots stays within 40–60% (healthy zero-sum equilibrium), while its win
+  rate against a frozen early baseline rises by ≥10 percentage points.
+- **SC-004**: Policy-vs-policy eval returns a finite win rate with a Wilson 95%
+  CI for any two loaded policies over N≥100 symmetrized games, reproducible
+  bit-for-bit at a fixed seed.
+- **SC-005 (phase gate)**: Symmetrized win rate ≥ 0.70 vs the heuristic, and a
+  fresh 1M-step best-response adversary cannot exceed 0.65 win rate against the
+  champion.
+
+## Assumptions
+
+- The in-flight `bootstrap_v1` checkpoint seeds the first league snapshot; the
+  no-shape-change constraint exists precisely so that checkpoint stays loadable.
+- When the league pool holds more than one snapshot, selection is
+  uniform-random (priority-based selection / PFSP is a separate later phase).
+- The opponent mix is a single static heuristic:snapshot ratio (e.g. 60:40);
+  any schedule/annealing is deferred.
+- Opponent inference during rollout runs on the learner device, batched;
+  evaluation inference runs on CPU (consistent with the existing eval policy).
+- The existing perfect 1v1 hand-tracker and observation encoder are reused
+  unchanged — no new observation surface is introduced.
