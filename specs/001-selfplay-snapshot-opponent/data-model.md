@@ -36,9 +36,10 @@ moves.
 - Never added to an optimizer; only invoked under `torch.no_grad`.
 - Interface used: `sample(obs, masks) -> action` (the existing policy surface).
 
-## EvalMatchupResult (new — policy-vs-policy eval output)
+## EvalMatchupResult (EXTENDS the existing `EvalResult` — policy-vs-policy output)
 
-Outcome of champion vs a loaded opponent over N seat-symmetrized games.
+Outcome of champion vs a loaded opponent over N seat-symmetrized games. Extends
+`eval/harness.py:EvalResult` (adds `opponent_ref`); does NOT fork a parallel type.
 
 - `opponent_ref: str` — checkpoint path or `snapshot_id`.
 - `wins: int`, `n: int`

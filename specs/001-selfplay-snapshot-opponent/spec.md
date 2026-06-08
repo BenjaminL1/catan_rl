@@ -8,6 +8,28 @@
 
 **Input**: User description: "Frozen-policy self-play opponent + policy-vs-policy evaluation — wire the single primitive that lets the agent play against frozen snapshots of its own past selves (unblocking self-play) and lets the champion be measured head-to-head against any loaded policy."
 
+## Clarifications
+
+### Session 2026-06-08 (after senior-RL review)
+
+- **Opponent turn-driver scope**: build the **full opponent sub-turn state
+  machine** — the snapshot opponent plays a complete Catan turn (roll → knight/
+  robber → road-builder → dev-card plays → bank trades → build → EndTurn),
+  identical to the agent. No constrained subset (a crippled opponent voids the
+  self-play signal).
+- **Engine-apply path**: extract a **shared `_apply_action(player, action)`**
+  helper from `step()`, used by both agent and opponent — one code path, no
+  rules drift (Constitution II). Behavior-identical regression test on the
+  agent path required.
+- **Opponent action sampling (rollout)**: **stochastic with an isolated
+  `torch.Generator`** seeded from the env/league seed — faithful to the policy's
+  distribution AND does not perturb the learner's rollout RNG (so before/after
+  reproducibility holds; satisfies FR-006).
+- **Turn completion contract**: the opponent's main turn **runs to completion
+  inside one `env.step`** with a **hard per-turn action cap** that force-ends the
+  turn on exceed (logged as an anomaly). The 7-roll / agent-discard interleave
+  continues to use the existing `_opp_pending` suspension mechanism.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Train against a frozen past self (Priority: P1)
@@ -117,11 +139,13 @@ and confirm the next rollout's opponent is the newly added snapshot.
 - **FR-005**: The system MUST provide policy-vs-policy evaluation: a champion
   policy vs any loaded opponent policy (snapshot or checkpoint) over N
   seat-symmetrized games, returning a win rate and a Wilson confidence interval.
-- **FR-006**: Snapshot-opponent behavior MUST be reproducible given the same
-  seed, snapshot id, AND device — the same action *sequence* is produced.
-  (Bit-for-bit numerical identity is only guaranteed on CPU; batched inference
-  on MPS/GPU may differ in low-order bits across batch groupings without
-  changing the sampled actions at a fixed seed.)
+- **FR-006**: The snapshot opponent MUST sample actions stochastically using an
+  **isolated `torch.Generator`** (seeded from the env/league seed), so it does
+  NOT advance the learner's rollout RNG stream. Behavior MUST be reproducible
+  given the same seed, snapshot id, and device — the same action *sequence* is
+  produced. (Bit-for-bit numerical identity is only guaranteed on CPU; batched
+  MPS/GPU inference may differ in low-order bits across batch groupings without
+  changing the sampled actions.)
 - **FR-007**: The opponent mix MUST be configurable as a static heuristic:snapshot
   ratio (a scheduled/annealed mix is out of scope).
 - **FR-008**: The feature MUST NOT change observation or action-head shapes; the
@@ -131,6 +155,14 @@ and confirm the next rollout's opponent is the newly added snapshot.
 - **FR-010**: Existing policy checkpoints MUST remain loadable (back-compat).
 - **FR-011**: When the league is empty or a requested snapshot is unavailable,
   the system MUST gracefully fall back to a non-snapshot opponent.
+- **FR-012** (correctness-critical): The opponent's policy input MUST be built
+  from the **opponent's** point of view — it sees its OWN hidden dev cards and
+  only the agent's *played* cards, and the hand-tracker perspective is the
+  opponent's. The agent's hidden information (hidden dev cards, exact hand)
+  MUST NOT appear in the opponent's observation. A test MUST assert no leakage.
+- **FR-013**: The opponent's main turn MUST terminate — a hard per-turn action
+  cap force-ends the turn if exceeded (logged as an anomaly), preventing
+  livelock from a policy that never samples EndTurn.
 
 ### Key Entities
 

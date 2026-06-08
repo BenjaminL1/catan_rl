@@ -85,3 +85,34 @@ bits may vary across MPS batch groupings).
 **Rationale**: Batched MPS reductions are not bit-reproducible across batch
 groupings; over-claiming would make acceptance tests flaky for reasons unrelated
 to the feature (per spec review).
+
+## 2026-06-08 revisions (senior-RL review + clarify pass)
+
+## D8 — Shared `_apply_action(player, action)`
+**Decision**: Extract the agent's inlined apply logic from `step()` into one
+player-parameterized helper used by both seats; no duplicate opponent path.
+**Rationale**: one code path = no rules drift (Constitution II). Gated by a
+behavior-identical regression test.
+
+## D9 — Opponent-POV obs/masks (no info leak)
+**Decision**: Build the opponent's obs from the OPPONENT's perspective (its own
+hidden dev cards visible, only the agent's *played* cards, hand-tracker from the
+opponent's view) with an opponent-local `EnvObsState` — do NOT reuse the env's
+agent-centric `roll_pending`/`discard_pending` flags. **Rationale**: the obs
+encoder hardcodes agent-POV dev-card visibility (`obs_encoder.py:317`); naive
+reuse leaks the learner's hidden hand → self-play-voiding bug. Gated by a no-leak
+assertion test (FR-012).
+
+## D10 — Opponent sampling: stochastic, isolated RNG (refines D7)
+**Decision**: Sample stochastically with a dedicated `torch.Generator` seeded
+from the env/league seed. **Rationale**: faithful to the policy's distribution
+AND does not advance the learner's rollout RNG (greedy = less faithful/more
+exploitable; shared RNG = breaks learner reproducibility).
+
+## D11 — Turn completion + US2 seating
+**Decision**: Opponent main turn runs to completion within one `env.step` + a
+hard action cap (force EndTurn + log on exceed); the 7-roll/agent-discard
+interleave keeps the existing `_opp_pending` suspension. Policy-vs-policy eval
+seats the opponent via THIS driver — `build_actor` only *loads* a checkpoint into
+a frozen `CatanPolicy`, it does NOT drive the opponent seat. So **US2 depends on
+US1**, and `EvalMatchupResult` extends `EvalResult` (review SHOULD-FIX 5).

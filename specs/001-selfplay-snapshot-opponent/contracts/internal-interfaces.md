@@ -51,11 +51,30 @@ OpponentActFn = Callable[[ObsDict, MaskDict], np.ndarray]  # (obs, masks) -> act
 #     n_games: int,
 #     seed: int,
 #     device="cpu",
-# ) -> EvalMatchupResult
-#   - Builds the opponent via replay/player_factory.build_actor (strict load).
+# ) -> EvalMatchupResult   # EXTENDS EvalResult (no parallel type)
+#   - build_actor ONLY loads the opponent checkpoint into a frozen CatanPolicy;
+#     the opponent is SEATED via the US1 in-env snapshot-opponent driver (NOT the
+#     recorder's _PolicyActor, which drives the agent seat). => DEPENDS ON US1.
 #   - Plays N seat-symmetrized games; returns WR + Wilson CI.
 #   - Bit-for-bit reproducible at fixed seed on CPU.
 #   - Emits TB scalar eval/wr_vs_<opp> (additive; never renames existing scalars).
+```
+
+## 6. Shared apply + opponent-POV (foundational; added 2026-06-08)
+
+```python
+# catan_env.py
+# _apply_action(player, action, ...) -> None
+#   - Single player-parameterized apply path extracted from step(); agent AND
+#     opponent use it (no duplicate rules path — Constitution II).
+# get_action_masks(player=...) / _get_obs(player=...)  -> opponent-POV obs/masks
+#   - Opponent sees its OWN hidden dev cards + only the agent's PLAYED cards;
+#     hand-tracker from the opponent's view; opponent-local EnvObsState.
+#   - INVARIANT (FR-012): the agent's hidden info never appears in opponent obs.
+# snapshot_opponent.sample(obs, masks) -> action
+#   - Frozen CatanPolicy, eval(), no_grad, dedicated torch.Generator (FR-006).
+#   - Driven by an opponent turn-driver state machine with a hard per-turn
+#     action cap (FR-013): force EndTurn + log on exceed.
 ```
 
 ## 5. Config (configs/ppo_default.yaml)

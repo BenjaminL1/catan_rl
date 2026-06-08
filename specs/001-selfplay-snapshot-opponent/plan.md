@@ -11,16 +11,19 @@ own past selves (and measure itself against any loaded policy). Today both the
 league consumer (`league.py:245`) and the env (`catan_env.py:181`) raise
 `NotImplementedError` when a snapshot opponent is requested, the opponent mix is
 locked at construction (`training_loop.py:201`), and there is no policy-vs-policy
-eval. The approach delivers four small, independently-testable increments:
-(1) a **frozen in-env opponent** that drives the opponent turn by encoding its
-POV obs + masks and sampling a loaded `CatanPolicy` (replacing the `opp.move()`
-call), (2) the **league consumer** that maps `'snapshot'` → a concrete snapshot
-id and deletes the two guards, (3) **mid-rollout opponent swap** via a new
-`vec_env.set_opponents()`, and (4) **policy-vs-policy eval** reusing
-`replay/player_factory.build_actor` + a `eval/wr_vs_<opp>` champion TB scalar.
-Opponent inference is batched in the main process across envs. No obs/action
-shape change — the existing `_OppIdEmbedding` is fed real values, keeping the
-in-flight `bootstrap_v1` checkpoint loadable as the first snapshot.
+eval. The approach (re-scoped after the senior-RL review): **Foundational** — extract
+a shared `_apply_action(player, action)` from `step()` and an opponent-POV
+obs/mask builder with a no-leak guarantee. **US1 (MVP)** — a full opponent
+sub-turn **state machine** (roll → knight/robber → road-builder → dev-card →
+bank trade → build → EndTurn) driving a frozen `CatanPolicy` (stochastic,
+isolated `torch.Generator`; hard per-turn action cap), replacing `opp.move()`,
+plus the league consumer + deleting the two `NotImplementedError`s. **US2** —
+policy-vs-policy eval that seats the opponent via the US1 driver (`build_actor`
+only *loads* the checkpoint) → `eval/wr_vs_<opp>`; **depends on US1**. **US3** —
+mid-rollout `vec_env.set_opponents()` + a static heuristic:snapshot mix.
+Opponent inference batched main-process. No obs/action shape change — the
+existing `_OppIdEmbedding` is fed real values, keeping the `bootstrap_v1` u799
+checkpoint loadable as the first snapshot.
 
 ## Technical Context
 
