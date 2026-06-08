@@ -1,5 +1,8 @@
 <!--
 Sync Impact Report
+- Version change: 1.0.0 → 1.1.0 (2026-06-08): Development Workflow + Principle IV
+  amended for a SOLO project — no pull requests; commit/push directly to
+  origin/main; CI on push is a safety net, not a merge gate.
 - Version change: (none) → 1.0.0  (initial ratification)
 - Modified principles: n/a (first ratification)
 - Added sections: Core Principles (I–V), Additional Constraints, Development
@@ -55,9 +58,9 @@ them, are long-lived assets; breaking them discards real compute and history.
 ### IV. Test-First & Green CI (NON-NEGOTIABLE)
 
 Every behavioral change MUST ship with tests, written before or alongside the
-implementation. CI MUST be green on the exact merge SHA — ruff, mypy (strict),
-and pytest on Python 3.11+ (GUI pixel-rendering tests skip off-darwin).
-`gh pr checks` conclusions MUST be verified line-by-line before merging; a
+implementation. CI runs on push to main — ruff, mypy (strict), and pytest on
+Python 3.11+ (GUI pixel-rendering tests skip off-darwin) — and MUST be kept
+green. When checking CI status, verify the per-check conclusions explicitly; a
 passing watch exit code is NOT sufficient evidence of green CI.
 
 **Rationale**: RL correctness bugs are subtle and silent; the test + CI gate is
@@ -91,15 +94,16 @@ assumption break outside 1v1.
 ## Development Workflow
 
 - Commits follow Conventional Commits: lowercase, type-prefixed, under 72 chars.
-- Branches: `<type>/<kebab-slug>` (feat / fix / refactor / chore / docs / test).
-- **One PR per phase** — no big-bang merges spanning multiple roadmap phases.
-- Commits and PRs MUST NOT include `Co-Authored-By` trailers referencing any AI
-  account.
-- A PR merges only when CI is green on its merge SHA and — where it touches game
-  rules, the action space, the obs schema, or trading — it states how it
-  preserves the 1v1 ruleset.
+- **Solo project — NO pull requests.** Commit and push directly to
+  `origin/main`. Short-lived *local* branches are allowed for keeping
+  risky/in-progress work off main until green, then merge to main and push.
+- Commits MUST NOT include `Co-Authored-By` trailers referencing any AI account.
+- CI runs on push to main (ruff + mypy + pytest) as a safety net — keep it
+  green, but it is not a merge gate. A change touching game rules, the action
+  space, the obs schema, or trading MUST still state how it preserves the 1v1
+  ruleset in its commit message.
 - Documentation describing touched code (README, `docs/`, `CLAUDE.md`,
-  migrations) MUST be updated in the same PR.
+  migrations) MUST be updated in the same commit/push.
 
 ## Governance
 
@@ -112,4 +116,4 @@ justified. `CLAUDE.md` provides runtime, project-specific guidance that
 operationalizes this constitution; where the two conflict, this constitution
 governs.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-07
+**Version**: 1.1.0 | **Ratified**: 2026-06-07 | **Last Amended**: 2026-06-08

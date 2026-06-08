@@ -115,13 +115,16 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
   TrueSkill, Nash pruning, exploiters, MCTS, piKL). **Verify actual feature
   state against `src/catan_rl/`**, not against feature-claim lists.
 
-## Branch & commit conventions
+## Commit & workflow conventions
 
-- Branches: `<type>/<kebab-slug>` (`feat`/`fix`/`refactor`/`chore`/`docs`/`test`).
+- **Solo project — NO pull requests.** Commit and push directly to
+  `origin/main` (`git push origin main`). Short-lived *local* branches are fine
+  for keeping risky/in-progress work off main until it's green, then merge to
+  main and push — but no PR review gate.
 - Conventional commits, lowercase, under 72 chars.
 - No `Co-Authored-By` AI trailers.
-- One PR per phase; no big-bang merges spanning phases. Verify `gh pr checks`
-  conclusions line-by-line before merging.
+- CI still runs on push to main (ruff + mypy + pytest, Python 3.11+); keep it
+  green, but it's a safety net, not a merge gate.
 
 <!-- SPECKIT START -->
 Active Spec Kit feature: **self-play snapshot opponent** — see
