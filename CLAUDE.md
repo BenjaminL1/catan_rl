@@ -123,3 +123,8 @@ Phase 1 YAML configs: `configs/phase1_full.yaml` plus 5 leave-one-outs (`phase1_
 - Conventional commits, lowercase, under 72 chars.
 - No `Co-Authored-By` AI trailers (per global rules).
 - One PR per phase; no big-bang merges that span multiple roadmap phases.
+
+<!-- SPECKIT START -->
+For additional context about technologies to be used, project structure,
+shell commands, and other important information, read the current plan
+<!-- SPECKIT END -->

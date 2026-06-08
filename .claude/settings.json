@@ -21,5 +21,6 @@
       "Bash(git push --force:*)",
       "Bash(git reset --hard:*)"
     ]
-  }
+  },
+  "plansDirectory": "docs/plans/claude"
 }
