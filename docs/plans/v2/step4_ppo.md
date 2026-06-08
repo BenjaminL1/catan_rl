@@ -98,9 +98,9 @@ weight to 0); see §3.2 of `v2_step3_bc.md` for the full safeguard.
 
 - **Heuristic bench**: 100 games every 100k steps, eval_games=100,
   **N=3 seeds**, **report P1 / P2 / symmetrised**.
-- **Champion bench**: 5 historic checkpoints (including the preserved
-  v1 `checkpoint_16162816.pt` at 0.56 WR) + 200 games each at major
-  milestones.
+- **Champion bench**: frozen **v2** checkpoints from this run's own lineage
+  (the bootstrap checkpoint + earlier self-play snapshots) + 200 games each at
+  major milestones. **No v1 checkpoints.**
 - **AlphaBeta bench**:
   - **d=2** every 500k steps (CI-friendly).
   - **d=4** at milestones every 5M steps.
@@ -216,12 +216,12 @@ Per `v2_design.md` §5 Step 4 + faculty-corrected §6:
      — `Δ_BR = b_5M − b_1M` sensitivity probe quantifies the gap to
      true BR.
 
-3. **Gate 3 — champion regression** (sanity):
-   - Symmetrised WR vs the preserved v1 champion
-     (`/Users/benjaminli/my_projects/catan_rl/checkpoints/train/checkpoint_16162816.pt`,
-     v1 peak 0.56 WR) over 200 games per seat.
-   - **Pass**: WR ≥ **0.60** — Step-4 policy is at least as strong as
-     v1's peak.
+3. **Gate 3 — self-regression** (sanity):
+   - Symmetrised WR vs a frozen **earlier v2 checkpoint** from this run's own
+     lineage (the bootstrap checkpoint, or an early self-play snapshot) over
+     200 games per seat. **No v1 champions.**
+   - **Pass**: WR ≥ **0.60** — the policy is strictly stronger than its own
+     earlier self.
 
 ## 7. Compute budget
 
@@ -288,6 +288,6 @@ Decisions inherited from the round-3 design (commit `9d34138`):
 - BC plan that this hands off from: `docs/plans/v2_step3_bc.md`.
 - v1 ablation experiment (may inform reward shaping): `scripts/run_e01_ablation.sh`
   (in the v1 worktree at `/Users/benjaminli/my_projects/catan_rl/scripts/`).
-- Preserved v1 champion for the Gate-3 regression check:
-  `/Users/benjaminli/my_projects/catan_rl/checkpoints/train/checkpoint_16162816.pt`
-  (0.56 symmetrised WR vs heuristic at v1 step 16,109,568).
+- Gate-3 regression baseline: a frozen earlier **v2** checkpoint from this run's
+  own lineage (bootstrap checkpoint / early self-play snapshot). **No v1
+  checkpoints or champions are used.**

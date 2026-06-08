@@ -238,7 +238,7 @@ From `docs/plans/v2/step4_ppo.md §6` (seat-symmetrized, N≥3 seeds):
 - **G1:** WR ≥ 0.70 vs heuristic @ ~10M steps.
 - **G2:** PPO best-response gap ≤ 0.65 (a fresh 1M-step adversary can't exceed
   this WR against the champion).
-- **G3:** WR ≥ 0.60 vs a frozen v1 champion checkpoint.
+- **G3:** WR ≥ 0.60 vs a frozen early-**v2** baseline (the bootstrap checkpoint or an early self-play snapshot — **no v1 champions**).
 
 G2/G3 use the *same* frozen-opponent primitive this keystone builds — which is
 why it unblocks measurement too.
