@@ -30,6 +30,7 @@ from __future__ import annotations
 import queue
 import random
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import gymnasium as gym
@@ -110,6 +111,27 @@ class ActionType:
     BANK_TRADE = 10
     DISCARD = 11
     ROLL_DICE = 12
+
+
+# ---------------------------------------------------------------------------
+# Per-turn transient state (player-local; T003)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _TurnState:
+    """Transient sub-turn state that a single main-phase action can set up.
+
+    Carried *per acting player* so the shared ``_apply_main_action`` does not
+    write the env's agent-centric ``self.robber_placement_pending`` /
+    ``self.road_building_roads_left`` when driving the opponent — otherwise a
+    snapshot opponent's knight/road-builder would clobber the agent's pending
+    state. The agent's ``step`` syncs these to ``self.*`` after each action;
+    the opponent turn-driver keeps its own instance.
+    """
+
+    robber_placement_pending: bool = False
+    road_building_roads_left: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -437,18 +459,10 @@ class CatanEnv(gym.Env):
             self.road_building_roads_left = 0
 
         # ---------------------- Main turn ----------------------
-        if action_type == ActionType.BUILD_SETTLEMENT:
-            v_pixel = self._idx_to_vertex[corner_idx]
-            agent.build_settlement(v_pixel, board)
-            self.game.check_longest_road(agent)
-        elif action_type == ActionType.BUILD_CITY:
-            v_pixel = self._idx_to_vertex[corner_idx]
-            agent.build_city(v_pixel, board)
-        elif action_type == ActionType.BUILD_ROAD:
-            v1, v2 = self._idx_to_edge[edge_idx]
-            agent.build_road(v1, v2, board)
-            self.game.check_longest_road(agent)
-        elif action_type == ActionType.END_TURN:
+        if action_type == ActionType.END_TURN:
+            # END_TURN carries turn-control side effects (run the opponent
+            # turn, advance the turn counter) that are NOT part of the shared
+            # apply path — they stay here in the agent's step loop.
             self.game.check_longest_road(agent)
             self.game.check_largest_army(agent)
             terminated, truncated = self._check_terminal()
@@ -464,83 +478,138 @@ class CatanEnv(gym.Env):
                 info = self._terminal_info(terminated)
                 reward = self._terminal_reward()
                 return self._get_obs(), reward, terminated, truncated, info
-        elif action_type == ActionType.MOVE_ROBBER:
-            self._apply_robber_placement(agent, tile_idx)
-        elif action_type == ActionType.BUY_DEV_CARD:
-            agent.draw_devCard(board)
-        elif action_type == ActionType.PLAY_KNIGHT:
-            if agent.devCards.get("KNIGHT", 0) > 0 and not agent.devCardPlayedThisTurn:
-                agent.devCards["KNIGHT"] -= 1
-                agent.knightsPlayed += 1
-                agent.devCardPlayedThisTurn = True
-                self.robber_placement_pending = True
-                self.game.check_largest_army(agent)
-        elif action_type == ActionType.PLAY_YOP:
-            if agent.devCards.get("YEAROFPLENTY", 0) > 0 and not agent.devCardPlayedThisTurn:
-                agent.devCards["YEAROFPLENTY"] -= 1
-                agent.yopPlayed += 1
-                agent.devCardPlayedThisTurn = True
-                r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
-                agent.resources[r1] += 1
-                agent.resources[r2] += 1
-                self.game.log_yop(agent, [r1, r2])
-        elif action_type == ActionType.PLAY_MONOPOLY:
-            if agent.devCards.get("MONOPOLY", 0) > 0 and not agent.devCardPlayedThisTurn:
-                agent.devCards["MONOPOLY"] -= 1
-                agent.monopolyPlayed += 1
-                agent.devCardPlayedThisTurn = True
-                r = RESOURCES_CW[res1_idx]
-                total_stolen = 0
-                for other in list(self.game.playerQueue.queue):
-                    if other is not agent:
-                        stolen = other.resources.get(r, 0)
-                        if stolen > 0:
-                            other.resources[r] = 0
-                            agent.resources[r] += stolen
-                            total_stolen += stolen
-                            self.game.broadcast.resource_change(
-                                other.name, {r: -stolen}, "MONOPOLY"
-                            )
-                            self.game.broadcast.resource_change(
-                                agent.name, {r: +stolen}, "MONOPOLY"
-                            )
-                # Phase 0.5: emit a single structural MONOPOLY event
-                # carrying the total resources transferred. The
-                # per-victim ``RESOURCE_CHANGE`` events above (one
-                # ``-stolen`` from each victim, one ``+stolen`` into
-                # the agent) fire BEFORE this structural event. A
-                # consumer that needs to group RESOURCE_CHANGE +
-                # MONOPOLY into a single transaction should buffer
-                # the RESOURCE_CHANGEs until MONOPOLY arrives, then
-                # treat the buffered set as the monopoly play.
-                # Fires even when ``total_stolen == 0`` so the viewer
-                # renders the play as a step-bar marker rather than
-                # swallowing the action silently.
-                self.game.broadcast.monopoly(agent.name, r, total_stolen)
-        elif action_type == ActionType.PLAY_ROAD_BUILDER:
-            if agent.devCards.get("ROADBUILDER", 0) > 0 and not agent.devCardPlayedThisTurn:
-                agent.devCards["ROADBUILDER"] -= 1
-                agent.roadBuilderPlayed += 1
-                agent.devCardPlayedThisTurn = True
-                self.road_building_roads_left = 2
-        elif action_type == ActionType.BANK_TRADE:
-            r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
-            agent.trade_with_bank(r1, r2)
-        elif action_type == ActionType.DISCARD:
-            # Fallback path (discard_pending branch above is normally taken).
-            res_name = RESOURCES_CW[res1_idx]
-            if agent.resources.get(res_name, 0) > 0:
-                agent.resources[res_name] -= 1
-                self.game.log_discard(agent, [res_name])
-        elif action_type == ActionType.ROLL_DICE:
-            # Outside roll_pending: no-op; mask should prevent this.
-            pass
+        else:
+            # All non-END_TURN main-phase actions go through the shared apply
+            # path (T003), used by both the agent here and the snapshot
+            # opponent's turn-driver. Follow-on sub-turn state (robber after a
+            # knight, free roads after road-builder) round-trips through a
+            # player-local _TurnState so it never clobbers the other seat.
+            ts = _TurnState(
+                robber_placement_pending=self.robber_placement_pending,
+                road_building_roads_left=self.road_building_roads_left,
+            )
+            self._apply_main_action(
+                agent,
+                action_type=action_type,
+                corner_idx=corner_idx,
+                edge_idx=edge_idx,
+                tile_idx=tile_idx,
+                res1_idx=res1_idx,
+                res2_idx=res2_idx,
+                ts=ts,
+            )
+            self.robber_placement_pending = ts.robber_placement_pending
+            self.road_building_roads_left = ts.road_building_roads_left
 
         obs = self._get_obs()
         if terminated or truncated:
             reward = self._terminal_reward()
             info = self._terminal_info(terminated)
         return obs, reward, terminated, truncated, info
+
+    # ------------------------------------------------------------------
+    # Shared main-phase action application (T003)
+    # ------------------------------------------------------------------
+
+    def _apply_main_action(
+        self,
+        player: Any,
+        *,
+        action_type: int,
+        corner_idx: int,
+        edge_idx: int,
+        tile_idx: int,
+        res1_idx: int,
+        res2_idx: int,
+        ts: _TurnState,
+    ) -> None:
+        """Apply ONE main-phase action's effects for ``player``.
+
+        The single shared rule-application path for both the agent (via
+        ``step``) and the snapshot opponent's turn-driver, so game-rule
+        application lives in exactly one place (Constitution II — no rules
+        drift). Follow-on sub-turn triggers (robber placement after a knight,
+        free roads after road-builder) are written into the player-local
+        ``ts`` rather than the env's agent-centric ``self.*`` flags.
+
+        Does NOT handle ROLL_DICE, discard resolution, robber-placement
+        *resolution*, or END_TURN's turn-control transition — those stay
+        caller-managed (the agent's ``step`` sub-phases / the opponent driver).
+        """
+        assert self.game is not None
+        board = self.game.board
+        if action_type == ActionType.BUILD_SETTLEMENT:
+            player.build_settlement(self._idx_to_vertex[corner_idx], board)
+            self.game.check_longest_road(player)
+        elif action_type == ActionType.BUILD_CITY:
+            player.build_city(self._idx_to_vertex[corner_idx], board)
+        elif action_type == ActionType.BUILD_ROAD:
+            v1, v2 = self._idx_to_edge[edge_idx]
+            player.build_road(v1, v2, board)
+            self.game.check_longest_road(player)
+        elif action_type == ActionType.MOVE_ROBBER:
+            self._apply_robber_placement(player, tile_idx)
+        elif action_type == ActionType.BUY_DEV_CARD:
+            player.draw_devCard(board)
+        elif action_type == ActionType.PLAY_KNIGHT:
+            if player.devCards.get("KNIGHT", 0) > 0 and not player.devCardPlayedThisTurn:
+                player.devCards["KNIGHT"] -= 1
+                player.knightsPlayed += 1
+                player.devCardPlayedThisTurn = True
+                ts.robber_placement_pending = True
+                self.game.check_largest_army(player)
+        elif action_type == ActionType.PLAY_YOP:
+            if player.devCards.get("YEAROFPLENTY", 0) > 0 and not player.devCardPlayedThisTurn:
+                player.devCards["YEAROFPLENTY"] -= 1
+                player.yopPlayed += 1
+                player.devCardPlayedThisTurn = True
+                r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
+                player.resources[r1] += 1
+                player.resources[r2] += 1
+                self.game.log_yop(player, [r1, r2])
+        elif action_type == ActionType.PLAY_MONOPOLY:
+            if player.devCards.get("MONOPOLY", 0) > 0 and not player.devCardPlayedThisTurn:
+                player.devCards["MONOPOLY"] -= 1
+                player.monopolyPlayed += 1
+                player.devCardPlayedThisTurn = True
+                r = RESOURCES_CW[res1_idx]
+                total_stolen = 0
+                for other in list(self.game.playerQueue.queue):
+                    if other is not player:
+                        stolen = other.resources.get(r, 0)
+                        if stolen > 0:
+                            other.resources[r] = 0
+                            player.resources[r] += stolen
+                            total_stolen += stolen
+                            self.game.broadcast.resource_change(
+                                other.name, {r: -stolen}, "MONOPOLY"
+                            )
+                            self.game.broadcast.resource_change(
+                                player.name, {r: +stolen}, "MONOPOLY"
+                            )
+                # Phase 0.5: emit a single structural MONOPOLY event carrying
+                # the total transferred. The per-victim RESOURCE_CHANGE events
+                # above fire BEFORE this structural event; a consumer that
+                # groups them should buffer RESOURCE_CHANGEs until MONOPOLY
+                # arrives. Fires even when total_stolen == 0 so the viewer
+                # renders a step-bar marker rather than swallowing the action.
+                self.game.broadcast.monopoly(player.name, r, total_stolen)
+        elif action_type == ActionType.PLAY_ROAD_BUILDER:
+            if player.devCards.get("ROADBUILDER", 0) > 0 and not player.devCardPlayedThisTurn:
+                player.devCards["ROADBUILDER"] -= 1
+                player.roadBuilderPlayed += 1
+                player.devCardPlayedThisTurn = True
+                ts.road_building_roads_left = 2
+        elif action_type == ActionType.BANK_TRADE:
+            r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
+            player.trade_with_bank(r1, r2)
+        elif action_type == ActionType.DISCARD:
+            # Fallback path (discard_pending branch is normally taken).
+            res_name = RESOURCES_CW[res1_idx]
+            if player.resources.get(res_name, 0) > 0:
+                player.resources[res_name] -= 1
+                self.game.log_discard(player, [res_name])
+        # ROLL_DICE outside roll_pending is a no-op (mask should prevent it).
 
     # ------------------------------------------------------------------
     # Setup-phase state machine
