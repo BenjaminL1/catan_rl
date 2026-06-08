@@ -35,7 +35,7 @@ Tests:
 - [ ] T014 [P] [US1] Test: **determinism** — same seed + snapshot id + isolated generator → identical opponent action sequence; AND the learner's rollout RNG is unperturbed vs a heuristic-opponent run, in `tests/unit/env/test_opponent_determinism.py`
 
 Impl:
-- [ ] T015 [US1] Build the opponent-side **turn-driver state machine** (roll → knight/robber → road-builder → dev-card plays → bank trades → build → EndTurn) driving `snapshot_opponent.sample` and applying via `_apply_action`, replacing `opp.move()` in `_run_opponent_main_turn` (`catan_env.py:699`)
+- [ ] T015 [US1] Build the opponent-side **turn-driver state machine** (roll → knight/robber → road-builder → dev-card plays → bank trades → build → EndTurn) driving `snapshot_opponent.sample` and applying via `_apply_action`, replacing `opp.move()` in `_run_opponent_main_turn` (`catan_env.py:699`). The **roll phase MUST hook the existing `_opp_pending` discard-suspension** so a 7-roll that makes the agent owe a discard suspends/resumes correctly across `env.step` (no new re-entrancy machinery — reuse the existing path)
 - [ ] T016 [US1] Hard per-turn action cap in the driver (FR-013) — force EndTurn + log anomaly on exceed
 - [ ] T017 [US1] Wire snapshot sampling into `build_env_opponent_mix`; remove the `NotImplementedError` at `selfplay/league.py:245`
 - [ ] T018 [US1] Remove the snapshot `NotImplementedError` at `env/catan_env.py:181`; inject the frozen-opponent helper when `opponent_type='snapshot'`
