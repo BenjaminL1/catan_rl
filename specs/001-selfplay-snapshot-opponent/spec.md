@@ -94,8 +94,10 @@ and confirm the next rollout's opponent is the newly added snapshot.
 - **Requested snapshot id evicted from the pool**: the assignment MUST be
   resolved against the current pool (skip/replace) rather than loading a stale
   or missing snapshot.
-- **Snapshot from an incompatible policy shape**: MUST be rejected with a clear
-  error referencing checkpoint back-compat, never silently mis-loaded.
+- **An incompatibly-shaped policy checkpoint loaded for eval (US2)**: MUST be
+  rejected with a clear error referencing checkpoint back-compat, never silently
+  mis-loaded. (In-league snapshots from US1 are shape-correct by construction;
+  this guard applies to externally-loaded checkpoints.)
 - **Opponent inference device differs from the learner**: opponent inference
   follows the learner device; eval inference runs on CPU.
 
@@ -115,8 +117,11 @@ and confirm the next rollout's opponent is the newly added snapshot.
 - **FR-005**: The system MUST provide policy-vs-policy evaluation: a champion
   policy vs any loaded opponent policy (snapshot or checkpoint) over N
   seat-symmetrized games, returning a win rate and a Wilson confidence interval.
-- **FR-006**: Snapshot-opponent behavior MUST be deterministic given the same
-  seed and snapshot id.
+- **FR-006**: Snapshot-opponent behavior MUST be reproducible given the same
+  seed, snapshot id, AND device — the same action *sequence* is produced.
+  (Bit-for-bit numerical identity is only guaranteed on CPU; batched inference
+  on MPS/GPU may differ in low-order bits across batch groupings without
+  changing the sampled actions at a fixed seed.)
 - **FR-007**: The opponent mix MUST be configurable as a static heuristic:snapshot
   ratio (a scheduled/annealed mix is out of scope).
 - **FR-008**: The feature MUST NOT change observation or action-head shapes; the
@@ -140,22 +145,29 @@ and confirm the next rollout's opponent is the newly added snapshot.
 
 ## Success Criteria *(mandatory)*
 
-### Measurable Outcomes
+### Measurable Outcomes (this feature)
 
 - **SC-001**: A self-play run (`snapshot_weight = 0.5`, non-empty league) trains
   for ≥1M steps with zero `NotImplementedError` or device errors.
 - **SC-002**: In a controlled stub-opponent test, 100% of the snapshot
   opponent's actions originate from the loaded snapshot policy (the heuristic is
   never invoked for a snapshot opponent).
-- **SC-003**: Over a self-play run, the agent's win rate against its own recent
-  snapshots stays within 40–60% (healthy zero-sum equilibrium), while its win
-  rate against a frozen early baseline rises by ≥10 percentage points.
 - **SC-004**: Policy-vs-policy eval returns a finite win rate with a Wilson 95%
-  CI for any two loaded policies over N≥100 symmetrized games, reproducible
-  bit-for-bit at a fixed seed.
-- **SC-005 (phase gate)**: Symmetrized win rate ≥ 0.70 vs the heuristic, and a
-  fresh 1M-step best-response adversary cannot exceed 0.65 win rate against the
-  champion.
+  CI for any two loaded policies over N≥100 seat-symmetrized games, and is
+  reproducible bit-for-bit at a fixed seed **when run on CPU** (the eval device).
+
+### Downstream phase gates (OUT OF SCOPE for this feature)
+
+These are validated by later phases and full training runs, NOT by this
+plumbing PR. They depend on machinery this feature explicitly defers (a complete
+self-play run, plus the PFSP / best-response / diversity work of a later phase).
+Listed only so planning does not pull them into scope.
+
+- **PG-1**: Over a self-play run, the agent's win rate against its own recent
+  snapshots stays within 40–60% (healthy zero-sum equilibrium) while its win
+  rate against a frozen early baseline rises by ≥10 percentage points.
+- **PG-2**: Symmetrized win rate ≥ 0.70 vs the heuristic, and a fresh 1M-step
+  best-response adversary cannot exceed 0.65 win rate against the champion.
 
 ## Assumptions
 
