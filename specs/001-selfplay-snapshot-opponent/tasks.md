@@ -50,7 +50,7 @@ Impl:
 
 - [ ] T021 [P] [US2] Test: `evaluate_policy_vs_policy` returns WR + Wilson CI, seat-symmetrized, bit-for-bit identical across two CPU runs at one seed, in `tests/unit/eval/test_policy_vs_policy.py`
 - [ ] T022 [US2] Implement `evaluate_policy_vs_policy(champion, opponent_ref, n_games, seed, device="cpu")` — load opponent via `replay/player_factory.build_actor`, seat it through the US1 snapshot-opponent driver, reuse `eval/wilson.py`; `EvalMatchupResult` EXTENDS the existing `EvalResult` (no parallel type), in `src/catan_rl/eval/harness.py`
-- [ ] T023 [US2] Emit additive TB scalar `eval/wr_vs_<opp>` (no renames), in `src/catan_rl/ppo/training_loop.py`
+- [ ] T023 [US2] **(DEFERRED to self-play-eval integration)** Emit additive TB scalar `eval/wr_vs_<opp>` (no renames) in `training_loop.py` when it runs policy-vs-policy eval. The eval fn + `EvalMatchupResult.wr`/`opponent_ref` already provide the data; the periodic-self-play-eval call site that invokes `evaluate_policy_vs_policy` is not wired until self-play *training* lands (a downstream phase), so emission is deferred to that call site. The scalar name is additive — Constitution IV preserved.
 
 ## Phase 5: User Story 3 — Fresh snapshots enter play (P3) — depends on US1
 

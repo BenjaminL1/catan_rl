@@ -44,6 +44,7 @@ import torch
 from catan_rl.env.catan_env import CatanEnv
 from catan_rl.eval.rules_invariants import run_all_invariants
 from catan_rl.eval.wilson import WilsonInterval, wilson_interval
+from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 
 # ---------------------------------------------------------------------------
 # Result schema
@@ -344,11 +345,8 @@ class EvalHarness:
         safety_cap = self.max_turns * 50
         hit_safety = False
         while not terminated and not truncated:
-            obs_t = {k: torch.as_tensor(v, device=self.device).unsqueeze(0) for k, v in obs.items()}
-            masks_t = {
-                k: torch.as_tensor(v, device=self.device, dtype=torch.bool).unsqueeze(0)
-                for k, v in masks.items()
-            }
+            obs_t = obs_to_torch(obs, self.device, add_batch=True)
+            masks_t = masks_to_torch(masks, self.device, add_batch=True)
             sample_out = policy.sample(obs_t, masks_t)
             action = sample_out["action"][0].cpu().numpy().astype(np.int64)
             obs, _, terminated, truncated, _ = env.step(action)
@@ -409,31 +407,37 @@ def evaluate_policy_vs_policy(
     ``replay/player_factory.build_actor`` (no new loader), wrapped as a
     ``FrozenSnapshotOpponent``, and seated via the in-env snapshot-opponent
     driver. Plays ``2 * (n_games // 2)`` seat-symmetrized games; returns WR +
-    Wilson CI. Bit-for-bit reproducible on CPU at a fixed seed (the opponent's
-    isolated RNG leaves the champion's sampling stream unperturbed).
+    Wilson CI. Bit-for-bit reproducible on CPU at a fixed seed.
+
+    Note: this seeds the global torch RNG for a reproducible champion sampling
+    stream, but **saves and restores** it around the call — so it is safe to
+    invoke from inside a training loop without clobbering the learner's RNG.
     """
     from typing import cast
 
-    import torch
-
-    from catan_rl.replay.player_factory import PlayerSpec, build_actor
+    from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
     from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
 
-    torch.manual_seed(seed)  # reproducible champion sampling stream
-    # kind="policy" always yields a _PolicyActor (exposes .policy / .device);
-    # cast past the Actor union for this load-only reuse.
-    actor = cast(
-        Any,
-        build_actor(
-            PlayerSpec(kind="policy", ckpt_path=str(opponent_ckpt)), seed=seed, device=device
-        ),
-    )
-    opponent = FrozenSnapshotOpponent(actor.policy, device=actor.device, seed=seed)
-    harness = EvalHarness(
-        opponent_types=("snapshot",),
-        n_games_per_seat=max(1, n_games // 2),
-        seed=seed,
-        device=torch.device(device),
-        max_turns=max_turns,
-    )
-    return harness.evaluate_vs_policy(champion, opponent, opponent_ref=str(opponent_ckpt))
+    rng_state = torch.random.get_rng_state()
+    try:
+        torch.manual_seed(seed)  # reproducible champion sampling stream
+        # kind="policy" always yields a _PolicyActor (.policy / .device typed).
+        actor = cast(
+            _PolicyActor,
+            build_actor(
+                PlayerSpec(kind="policy", ckpt_path=str(opponent_ckpt)),
+                seed=seed,
+                device=device,
+            ),
+        )
+        opponent = FrozenSnapshotOpponent(actor.policy, device=actor.device, seed=seed)
+        harness = EvalHarness(
+            opponent_types=("snapshot",),
+            n_games_per_seat=max(1, n_games // 2),
+            seed=seed,
+            device=torch.device(device),
+            max_turns=max_turns,
+        )
+        return harness.evaluate_vs_policy(champion, opponent, opponent_ref=str(opponent_ckpt))
+    finally:
+        torch.random.set_rng_state(rng_state)

@@ -60,6 +60,9 @@ def test_evaluate_policy_vs_policy_is_deterministic(tmp_path: Path) -> None:
     r1 = evaluate_policy_vs_policy(
         _policy(0), str(ckpt), n_games=4, seed=0, device="cpu", max_turns=50
     )
+    # Perturb the global torch RNG between runs — the eval saves/restores it, so
+    # this must NOT affect the second run (proves the containment, not just luck).
+    _ = torch.rand(1024)
     r2 = evaluate_policy_vs_policy(
         _policy(0), str(ckpt), n_games=4, seed=0, device="cpu", max_turns=50
     )
@@ -67,3 +70,19 @@ def test_evaluate_policy_vs_policy_is_deterministic(tmp_path: Path) -> None:
     assert [g.won for g in r1.games] == [g.won for g in r2.games]
     assert [g.final_vp_agent for g in r1.games] == [g.final_vp_agent for g in r2.games]
     assert [g.final_vp_opp for g in r1.games] == [g.final_vp_opp for g in r2.games]
+    # n_turns is the sensitive fingerprint: it diverges under ANY sampling-stream
+    # drift, unlike the saturated win/VP fields (untrained policies mostly truncate).
+    assert [g.n_turns for g in r1.games] == [g.n_turns for g in r2.games]
+
+
+def test_evaluate_policy_vs_policy_different_seed_differs(tmp_path: Path) -> None:
+    """Negative control: a different seed yields a different trajectory — proving
+    the determinism test can actually distinguish sampling streams."""
+    ckpt = _save_ckpt(tmp_path / "opp.pt", _policy(1))
+    a = evaluate_policy_vs_policy(
+        _policy(0), str(ckpt), n_games=4, seed=0, device="cpu", max_turns=50
+    )
+    b = evaluate_policy_vs_policy(
+        _policy(0), str(ckpt), n_games=4, seed=1, device="cpu", max_turns=50
+    )
+    assert [g.n_turns for g in a.games] != [g.n_turns for g in b.games]
