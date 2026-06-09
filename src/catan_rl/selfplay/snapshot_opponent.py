@@ -21,13 +21,32 @@ opponent forward across envs without this helper caring about batching.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import torch
 
 from catan_rl.policy.network import CatanPolicy
 
-__all__ = ["FrozenSnapshotOpponent", "build_snapshot_opponent"]
+__all__ = ["FrozenSnapshotOpponent", "SnapshotOpponent", "build_snapshot_opponent"]
+
+
+@runtime_checkable
+class SnapshotOpponent(Protocol):
+    """Structural interface the env's turn-driver depends on (typing seam).
+
+    ``FrozenSnapshotOpponent`` satisfies this, as do the test stubs — so the
+    driver type-checks against the surface (``device`` / ``reset_rng`` /
+    ``sample``) instead of ``Any``.
+    """
+
+    @property
+    def device(self) -> torch.device: ...
+
+    def reset_rng(self, seed: int | None = None) -> None: ...
+
+    def sample(
+        self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor]
+    ) -> torch.Tensor: ...
 
 
 class FrozenSnapshotOpponent:

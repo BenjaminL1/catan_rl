@@ -133,16 +133,17 @@ def test_action_cap_force_ends_runaway_opponent_turn(caplog: pytest.LogCaptureFi
     with caplog.at_level(logging.WARNING):
         done = False
         steps = 0
-        while not done and steps < 200:
+        while not done and steps < 3000:
             _, _, term, trunc, _ = env.step(_agent_action(env))
             done = term or trunc
             steps += 1
-            if any("action cap" in r.getMessage() for r in caplog.records):
-                break
+    # Cap fired AND the game still reached a clean terminal state — a force-end
+    # leaves valid engine state (longest-road/largest-army checks run after).
     assert any("action cap" in r.getMessage() for r in caplog.records), "cap anomaly not logged"
+    assert done, "game did not terminate after force-ended opponent turns"
 
 
-def _run_snapshot_game(seed: int, state: dict, geometry: dict) -> tuple[int, int, int]:
+def _run_snapshot_game(seed: int, state: dict, geometry: dict) -> tuple:
     env = CatanEnv(opponent_type="snapshot")
     env.set_snapshot_opponent(
         build_snapshot_opponent(state, geometry=geometry, device=torch.device("cpu"), seed=7)
@@ -154,10 +155,18 @@ def _run_snapshot_game(seed: int, state: dict, geometry: dict) -> tuple[int, int
         _, _, term, trunc, _ = env.step(_agent_action(env))
         done = term or trunc
         steps += 1
+
+    def _counts(p: object) -> tuple[int, int]:
+        return (len(p.buildGraph["SETTLEMENTS"]), len(p.buildGraph["CITIES"]))
+
+    # Structural fingerprint, not just VP totals — two different games could
+    # coincide on VP+steps but not on placement counts (review SWE-6).
     return (
         int(env.opponent_player.victoryPoints),
         int(env.agent_player.victoryPoints),
         steps,
+        _counts(env.opponent_player),
+        _counts(env.agent_player),
     )
 
 

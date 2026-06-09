@@ -32,7 +32,7 @@ import queue
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import gymnasium as gym
 import numpy as np
@@ -66,6 +66,9 @@ from catan_rl.policy.obs_schema import (
     TILE_DIM,
 )
 
+if TYPE_CHECKING:
+    from catan_rl.selfplay.snapshot_opponent import SnapshotOpponent
+
 __all__ = ["CatanEnv", "RESOURCES_CW", "DEV_CARD_ORDER", "ActionType"]
 
 # ---------------------------------------------------------------------------
@@ -84,6 +87,12 @@ N_EDGES = 72
 N_TILES = 19
 N_ACTION_TYPES = 13
 N_RESOURCES = 5
+
+#: Hard cap on actions in a single snapshot-opponent main turn (livelock guard,
+#: FR-013). A legal Catan turn has only a handful of distinct main actions; the
+#: cap is set well above any realistic turn (build spree + multiple bank trades
+#: + dev plays) so it only trips on a policy that never samples EndTurn.
+_DEFAULT_OPP_TURN_ACTION_CAP = 60
 
 # Map ``opponent_type`` string → Phase 3.6 ``opp_kind`` int. Used when a
 # caller doesn't pass ``opponent_kind`` explicitly via reset options.
@@ -206,10 +215,8 @@ class CatanEnv(gym.Env):
                 f"opponent_type={opponent_type!r}; supported: 'random', 'heuristic', 'snapshot'"
             )
         self.opponent_type = opponent_type
-        self._snapshot_opponent: Any | None = None
-        # Hard per-opponent-turn action cap — force-ends a turn whose policy
-        # never samples EndTurn (livelock guard, FR-013 / T016).
-        self._opp_turn_action_cap = 60
+        self._snapshot_opponent: SnapshotOpponent | None = None
+        self._opp_turn_action_cap = _DEFAULT_OPP_TURN_ACTION_CAP
         self.max_turns = int(max_turns)
         self.vp_margin_bonus = float(vp_margin_bonus)
 
@@ -758,6 +765,9 @@ class CatanEnv(gym.Env):
         opp.devCardPlayedThisTurn = False
 
         dice = self.game.rollDice()
+        # Keep the obs dice scalar faithful on the opponent's turn too (the
+        # snapshot's POV must see ITS roll, not the agent's stale one).
+        self.last_dice_roll = dice
         if dice != 7:
             self.game.update_playerResources(dice, opp)
         else:
@@ -790,7 +800,7 @@ class CatanEnv(gym.Env):
     # Snapshot-opponent driver (US1 / T015-T018, full-game scope)
     # ------------------------------------------------------------------
 
-    def set_snapshot_opponent(self, opponent: Any | None) -> None:
+    def set_snapshot_opponent(self, opponent: SnapshotOpponent | None) -> None:
         """Inject the frozen policy that drives the opponent seat.
 
         ``None`` (empty league / evicted snapshot) leaves the heuristic body in
@@ -833,18 +843,16 @@ class CatanEnv(gym.Env):
     def _sample_snapshot_action(self, env_state: EnvObsState) -> np.ndarray:
         """Build the opponent-POV obs + masks for ``env_state`` and sample the
         frozen snapshot. Returns a length-6 numpy action vector."""
-        import torch
+        # Lazy import keeps torch off the module-level engine path (headless).
+        from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 
         assert self._snapshot_opponent is not None
         assert self.opponent_player is not None and self.agent_player is not None
         masks = self._compute_masks(self.opponent_player, env_state)
         obs = self._build_obs_for(self.opponent_player, self.agent_player, env_state)
         device = self._snapshot_opponent.device
-        obs_t = {k: torch.as_tensor(np.expand_dims(v, 0), device=device) for k, v in obs.items()}
-        masks_t = {
-            k: torch.as_tensor(np.expand_dims(v, 0), device=device, dtype=torch.bool)
-            for k, v in masks.items()
-        }
+        obs_t = obs_to_torch(obs, device, add_batch=True)
+        masks_t = masks_to_torch(masks, device, add_batch=True)
         action_t = self._snapshot_opponent.sample(obs_t, masks_t)
         return action_t[0].detach().cpu().numpy().astype(np.int64)
 
@@ -898,10 +906,8 @@ class CatanEnv(gym.Env):
         ts = _TurnState()
         for _ in range(self._opp_turn_action_cap):
             if ts.robber_placement_pending:
-                action = self._sample_snapshot_action(
-                    self._opponent_env_state(robber_placement_pending=True)
-                )
-                self._apply_robber_placement(opp, int(action[3]))
+                # Single snapshot-robber path (also used by the 7-roll resume).
+                self._opponent_move_robber()
                 ts.robber_placement_pending = False
                 continue
             if ts.road_building_roads_left > 0:
@@ -913,10 +919,13 @@ class CatanEnv(gym.Env):
                     opp.build_road(v1, v2, board, is_free=True)
                     self.game.check_longest_road(opp)
                     ts.road_building_roads_left -= 1
-                else:
-                    ts.road_building_roads_left = 0
-                continue
-            action = self._sample_snapshot_action(self._opponent_env_state())
+                    continue
+                # Policy abandoned free roads early — mirror the agent's machine:
+                # drop the road-builder phase and apply this sampled action as a
+                # normal main action (do NOT discard it).
+                ts.road_building_roads_left = 0
+            else:
+                action = self._sample_snapshot_action(self._opponent_env_state())
             if int(action[0]) == ActionType.END_TURN:
                 break
             self._apply_main_action(

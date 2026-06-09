@@ -287,6 +287,11 @@ class League:
         out: list[OpponentAssignment] = []
         for kind in kinds:
             if kind == OPPONENT_KIND_SNAPSHOT:
+                # Invariant: build_env_opponent_mix only emits a snapshot kind
+                # when the pool is non-empty. Guard so a future refactor that
+                # breaks it fails loudly, not with an opaque rng.choice([]).
+                if not pool_ids:
+                    raise RuntimeError("snapshot kind emitted with an empty league pool")
                 out.append(OpponentAssignment(kind=kind, snapshot_id=int(rng.choice(pool_ids))))
             else:
                 out.append(OpponentAssignment(kind=kind))

@@ -215,3 +215,15 @@ Listed only so planning does not pull them into scope.
   evaluation inference runs on CPU (consistent with the existing eval policy).
 - The existing perfect 1v1 hand-tracker and observation encoder are reused
   unchanged — no new observation surface is introduced.
+
+## Known gaps (US1 MVP — tracked, not bugs)
+
+- **Opponent's own 7-roll discard stays heuristic** (`opp.discardResources`), not
+  policy-driven. In 1v1 with perfect hand-tracking this is a minor strength
+  asymmetry, not a correctness or info-leak issue — but Phase 4 eval must not
+  read it as a policy-strength signal. Low-leverage; revisit if discards matter.
+- **Opponent inference is per-env-sequential, not batched across envs** (T019).
+  The in-env run-to-completion driver (D11) plays the opponent's whole turn
+  inside one `env.step`, so the D1 "batch across envs" optimisation does not
+  apply as written — reframed as a **performance follow-up**, not a correctness
+  item. The MVP is correct; at n_envs=128 the per-env forward is the cost.

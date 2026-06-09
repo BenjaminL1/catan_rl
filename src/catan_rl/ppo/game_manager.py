@@ -35,6 +35,7 @@ from typing import Any
 import numpy as np
 import torch
 
+from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 from catan_rl.ppo.buffer import CompositeRolloutBuffer
 from catan_rl.ppo.vec_env import SerialVecEnv
 
@@ -193,9 +194,7 @@ class RolloutCollector:
     # ------------------------------------------------------------------
 
     def _to_torch(self, obs: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
-        return {k: torch.as_tensor(v, device=self.device) for k, v in obs.items()}
+        return obs_to_torch(obs, self.device)
 
     def _masks_to_torch(self, masks: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
-        return {
-            k: torch.as_tensor(v, device=self.device, dtype=torch.bool) for k, v in masks.items()
-        }
+        return masks_to_torch(masks, self.device)
