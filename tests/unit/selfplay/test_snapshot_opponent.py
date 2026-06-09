@@ -10,6 +10,7 @@ comparisons reproducible.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from catan_rl.env.catan_env import CatanEnv
@@ -92,3 +93,14 @@ def test_sample_returns_batched_action() -> None:
     action = opp.sample(obs_t, masks_t)
     # MultiDiscrete([13,54,72,19,5,5]) -> 6 head indices, batch of 1.
     assert action.shape == (1, 6)
+
+
+def test_strict_load_rejects_mismatched_state_dict() -> None:
+    """SWE-review CONSIDER: the strict load is the Constitution-III back-compat
+    guard — a truncated / shape-mismatched snapshot MUST raise, not load
+    silently."""
+    state = _snapshot_state()
+    weight_key = next(k for k in state if k.endswith(".weight"))
+    bad = {k: v for k, v in state.items() if k != weight_key}
+    with pytest.raises(RuntimeError):
+        build_snapshot_opponent(bad, geometry=_geometry(), device=_CPU, seed=0)

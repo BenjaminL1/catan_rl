@@ -14,6 +14,7 @@ import numpy as np
 
 from catan_rl.env.catan_env import CatanEnv
 from catan_rl.policy.obs_encoder import EnvObsState, _dev_counts
+from catan_rl.policy.obs_schema import OPP_KIND_SELF_LATEST
 
 
 def _env() -> CatanEnv:
@@ -83,3 +84,68 @@ def test_agent_and_opponent_pov_are_distinct() -> None:
     np.testing.assert_array_equal(agent_pov["current_dev_counts"], _dev_counts(agent, hidden=True))
     np.testing.assert_array_equal(opp_pov["current_dev_counts"], _dev_counts(opp, hidden=True))
     assert not np.array_equal(agent_pov["current_dev_counts"], opp_pov["current_dev_counts"])
+
+
+def test_resource_channel_follows_the_pov_swap() -> None:
+    """RL-review SHOULD-FIX 1: the resource channel (current/next_player_main)
+    must swap with POV, not stay agent-centric. With asymmetric hands the two
+    POVs must differ on both player-main vectors."""
+    env = _env()
+    agent = env.agent_player
+    opp = env.opponent_player
+    agent.resources = {"WOOD": 5, "BRICK": 4, "WHEAT": 0, "ORE": 0, "SHEEP": 0}
+    opp.resources = {"WOOD": 0, "BRICK": 0, "WHEAT": 3, "ORE": 2, "SHEEP": 1}
+    state = _main_phase_state(env)
+
+    agent_pov = env._build_obs_for(agent, opp, state)
+    opp_pov = env._build_obs_for(opp, agent, state)
+
+    # The acting player's OWN resources (current_player_main, read directly from
+    # ``acting_player.resources``) must follow the POV swap — the opponent sees
+    # its own hand here, never the agent's.
+    assert not np.array_equal(agent_pov["current_player_main"], opp_pov["current_player_main"])
+
+
+def test_opponent_pov_opp_id_comes_from_env_state() -> None:
+    """RL-review SHOULD-FIX 2: from the snapshot opponent's POV, ITS opponent is
+    the learner — the opp-id fields are whatever the opponent-LOCAL env_state
+    carries (Phase 3's driver MUST set these to the agent's kind/id, e.g.
+    OPP_KIND_SELF_LATEST), NOT reused from the agent's env_state."""
+    env = _env()
+    agent = env.agent_player
+    opp = env.opponent_player
+    opp_state = EnvObsState(
+        initial_placement_phase=False,
+        setup_step=0,
+        roll_pending=False,
+        discard_pending=False,
+        robber_placement_pending=False,
+        road_building_roads_left=0,
+        last_dice_roll=env.last_dice_roll,
+        opp_kind=OPP_KIND_SELF_LATEST,
+        opp_policy_id=7,
+    )
+    opp_pov = env._build_obs_for(opp, agent, opp_state)
+    assert int(opp_pov["opponent_kind"]) == OPP_KIND_SELF_LATEST
+    assert int(opp_pov["opponent_policy_id"]) == 7
+
+
+def test_compute_masks_honours_opponent_local_env_state() -> None:
+    """CONSIDER 3: the masks env_state param (the Phase-3 opponent path) must
+    reflect ITS sub-turn phase, not the agent's. An opponent-local state with
+    roll_pending=True yields a different mask than the agent default."""
+    env = _env()
+    opp = env.opponent_player
+    roll_state = EnvObsState(
+        initial_placement_phase=False,
+        setup_step=0,
+        roll_pending=True,
+        discard_pending=False,
+        robber_placement_pending=False,
+        road_building_roads_left=0,
+        last_dice_roll=env.last_dice_roll,
+    )
+    main_masks = env._compute_masks(opp, _main_phase_state(env))
+    roll_masks = env._compute_masks(opp, roll_state)
+    # roll_pending forces RollDice-only -> the type mask differs from main phase.
+    assert not np.array_equal(main_masks["type"], roll_masks["type"])
