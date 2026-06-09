@@ -186,3 +186,35 @@ class TestBeliefLoss:
         log_q = torch.nn.functional.log_softmax(logits, dim=-1)
         expected = -(target * log_q).sum().item()
         assert loss.item() == pytest.approx(expected, abs=1e-5)
+
+    def test_all_zero_target_rows_excluded_from_mean(self) -> None:
+        # The "useful, not noisy" guarantee: an all-zero target (opponent holds
+        # no hidden dev cards) is dropped from the mean, so the loss equals the
+        # mean over ONLY the valid rows — not diluted by the empty ones.
+        logits = torch.tensor([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5], [2.0, 1.0, 0.0]])
+        target = torch.tensor([[0.0, 1.0, 0.0], [0.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+        loss = compute_belief_loss(belief_logits=logits, belief_target=target)
+        # Manual: mean of rows 0 and 2 only (row 1 is empty -> excluded).
+        log_q = torch.nn.functional.log_softmax(logits, dim=-1)
+        per = -(target * log_q).sum(-1)
+        expected = (per[0] + per[2]) / 2
+        assert loss.item() == pytest.approx(expected.item(), abs=1e-6)
+
+    def test_all_empty_batch_is_exactly_zero(self) -> None:
+        # No valid rows -> loss is exactly 0 (no gradient injected), never NaN.
+        logits = torch.randn(4, 3, requires_grad=True)
+        target = torch.zeros(4, 3)
+        loss = compute_belief_loss(belief_logits=logits, belief_target=target)
+        assert loss.item() == 0.0
+        loss.backward()
+        assert torch.allclose(logits.grad, torch.zeros_like(logits.grad))
+
+    def test_empty_rows_inject_no_gradient(self) -> None:
+        # Empty-target rows must contribute zero gradient even when valid rows
+        # are present (so they neither dilute magnitude nor add noise).
+        logits = torch.tensor([[1.0, 2.0, 3.0], [0.5, 0.5, 0.5]], requires_grad=True)
+        target = torch.tensor([[0.0, 1.0, 0.0], [0.0, 0.0, 0.0]])
+        compute_belief_loss(belief_logits=logits, belief_target=target).backward()
+        assert logits.grad is not None
+        assert torch.allclose(logits.grad[1], torch.zeros(3))  # empty row -> no grad
+        assert not torch.allclose(logits.grad[0], torch.zeros(3))  # valid row -> grad

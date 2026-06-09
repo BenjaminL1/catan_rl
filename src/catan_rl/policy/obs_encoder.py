@@ -479,8 +479,16 @@ class ObsEncoder:
         for r in RESOURCES_CW:
             feats.append(min(1.0, float(resources.get(r, 0)) / 8.0))
 
-        # VP
-        feats.append(float(player.victoryPoints) / 15.0)
+        # VP / 15. POV split (no-leak): the AGENT sees its OWN true total
+        # (it knows its own hidden VP cards); the OPPONENT contributes only
+        # visibleVictoryPoints (= victoryPoints - hidden VP cards), so the
+        # opponent's hidden-VP count never leaks. A hidden VP only becomes
+        # visible when it wins the game (which ends the episode anyway).
+        if is_agent:
+            feats.append(float(player.victoryPoints) / 15.0)
+        else:
+            visible_vp = getattr(player, "visibleVictoryPoints", player.victoryPoints)
+            feats.append(float(visible_vp) / 15.0)
 
         # Income (resource production rate per resource).
         income = _compute_income(player, game.board)
@@ -520,9 +528,25 @@ class ObsEncoder:
 
         # Dev cards in DEV_CARD_ORDER (5 floats). Clipped: KNIGHT count in
         # hand can exceed 8 in long games (14 in the deck).
+        #
+        # POV split (no-leak): the AGENT sees its OWN currently-HELD (hidden)
+        # hand — it knows its own cards. The OPPONENT contributes only its
+        # PLAYED dev cards (observable); its hidden dev-card TYPES are the only
+        # remaining hidden state in 1v1 (ADR 0002) and MUST NOT appear here —
+        # they are the belief head's prediction target. The opponent's hidden
+        # *count* is still encoded (the 6-bin one-hot appended below for the
+        # opponent), so observable information is preserved.
         dev = getattr(player, "devCards", {}) or {}
-        for c in DEV_CARD_ORDER:
-            feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
+        if is_agent:
+            for c in DEV_CARD_ORDER:
+                feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
+        else:
+            # Opponent: hidden dev-card TYPES are secret (the belief head's
+            # target) and must NOT leak here. The opponent's observable dev
+            # info is already carried elsewhere — PLAYED composition in
+            # ``next_played_dev_counts`` and the hidden COUNT in the one-hot
+            # appended below — so this slice is zero (no leak, no duplication).
+            feats.extend([0.0] * N_DEV_TYPES)
 
         # Phase flags (5).
         in_setup = bool(env_state.initial_placement_phase)
@@ -650,6 +674,11 @@ def _dev_counts(player: Any, *, hidden: bool) -> np.ndarray:
     Note: this is the input for the v2 ``CountDevEncoder``, which expects
     a (5,) bincount-style vector. The encoder is permutation-invariant by
     construction so the in-array order is purely conventional.
+
+    Foot-gun: with ``hidden=True`` the returned vector INCLUDES VP cards. VP is
+    observable in 1v1 (the victoryPoints / visibleVictoryPoints gap), so any
+    caller wanting the genuinely-SECRET hidden split (e.g. the belief target)
+    must zero the VP index itself — see ``CatanEnv.belief_target``.
     """
     out = np.zeros(N_DEV_TYPES, dtype=np.float32)
     if hidden:

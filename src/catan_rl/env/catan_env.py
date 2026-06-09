@@ -51,6 +51,7 @@ from catan_rl.policy.obs_encoder import (
     VERTEX_FEATURE_DIM,
     EnvObsState,
     ObsEncoder,
+    _dev_counts,
 )
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
@@ -1099,6 +1100,35 @@ class CatanEnv(gym.Env):
             env_state,
             hand_tracker=self._hand_tracker,
         )
+
+    def belief_target(self) -> np.ndarray:
+        """Ground-truth target for the belief head (aux loss).
+
+        The OPPONENT's HIDDEN (bought-but-unplayed) dev-card composition over
+        the four SECRET buyable types (KNIGHT, ROADBUILDER, YEAROFPLENTY,
+        MONOPOLY) as a probability vector, or all-zeros when the opponent holds
+        none of them (the masked case — most of the early game).
+
+        VP is deliberately EXCLUDED: a VP card is observable in 1v1 because
+        drawing one raises ``victoryPoints`` while ``visibleVictoryPoints =
+        victoryPoints - devCards['VP']`` stays put, so the hidden-VP count is
+        recoverable (and the obs's hidden-dev-count one-hot likewise excludes
+        VP). Making the head predict an observable quantity would let it read
+        its own answer; we keep the target to the genuinely-hidden TYPE split.
+
+        This is a TRAINING-ONLY signal — the information the agent cannot
+        observe (the obs carries the opponent's non-VP hidden *count* and
+        *played* cards, never the hidden *types*). It must NEVER enter the obs.
+        The head still emits ``N_DEV_TYPES`` logits; the VP target is always 0,
+        so it learns to put no mass there.
+        """
+        assert self.opponent_player is not None
+        counts = _dev_counts(self.opponent_player, hidden=True)  # (N_DEV_TYPES,)
+        counts[DEV_CARD_ORDER.index("VP")] = 0.0  # VP is observable -> not a hidden target
+        total = float(counts.sum())
+        if total <= 0.0:
+            return np.zeros(N_DEV_TYPES, dtype=np.float32)  # masked out of the belief loss
+        return (counts / total).astype(np.float32)
 
     # ------------------------------------------------------------------
     # Vertex / edge index maps
