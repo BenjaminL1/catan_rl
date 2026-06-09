@@ -80,23 +80,29 @@ class FrozenSnapshotOpponent:
             self._seed = int(seed)
         self._call_count = 0
 
-    def _snapshot_rng(self) -> tuple[torch.Tensor, torch.Tensor | None]:
-        cpu_state = torch.random.get_rng_state()
-        dev_state: torch.Tensor | None = None
-        if self._device.type == "cuda":
-            dev_state = torch.cuda.get_rng_state(self._device)
-        elif self._device.type == "mps" and hasattr(torch.mps, "get_rng_state"):
-            dev_state = torch.mps.get_rng_state()
-        return cpu_state, dev_state
+    def _snapshot_rng(self) -> dict[str, Any]:
+        # ``torch.manual_seed`` (below) reseeds EVERY backend's generator, not
+        # just the opponent's own device. So we must snapshot+restore every
+        # backend that exists — otherwise, e.g., a CPU-pinned opponent silently
+        # advances the learner's MPS RNG stream, breaking RNG isolation (FR-006)
+        # and reproducibility. Capture is independent of ``self._device``.
+        state: dict[str, Any] = {"cpu": torch.random.get_rng_state()}
+        if torch.cuda.is_available():
+            state["cuda"] = torch.cuda.get_rng_state_all()
+        if (
+            hasattr(torch, "mps")
+            and torch.backends.mps.is_available()
+            and hasattr(torch.mps, "get_rng_state")
+        ):
+            state["mps"] = torch.mps.get_rng_state()
+        return state
 
-    def _restore_rng(self, state: tuple[torch.Tensor, torch.Tensor | None]) -> None:
-        cpu_state, dev_state = state
-        torch.random.set_rng_state(cpu_state)
-        if dev_state is not None:
-            if self._device.type == "cuda":
-                torch.cuda.set_rng_state(dev_state, self._device)
-            elif self._device.type == "mps":
-                torch.mps.set_rng_state(dev_state)
+    def _restore_rng(self, state: dict[str, Any]) -> None:
+        torch.random.set_rng_state(state["cpu"])
+        if "cuda" in state:
+            torch.cuda.set_rng_state_all(state["cuda"])
+        if "mps" in state:
+            torch.mps.set_rng_state(state["mps"])
 
     @torch.no_grad()
     def sample(self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor]) -> torch.Tensor:

@@ -87,6 +87,40 @@ def test_reset_rng_restarts_the_stream() -> None:
         assert torch.equal(a, b)
 
 
+def test_reset_rng_with_new_seed_changes_stream() -> None:
+    # The per-game-seed fix: reset_rng(seed) must actually re-seed the stream,
+    # else every game replays identical opponent sampling (seed-lock).
+    obs_t, masks_t = _batched_obs_masks(_CPU)
+    opp = build_snapshot_opponent(_snapshot_state(), geometry=_geometry(), device=_CPU, seed=7)
+    opp.reset_rng(seed=11)
+    stream_a = [opp.sample(obs_t, masks_t).clone() for _ in range(8)]
+    opp.reset_rng(seed=20260609)
+    stream_b = [opp.sample(obs_t, masks_t).clone() for _ in range(8)]
+    assert any(not torch.equal(a, b) for a, b in zip(stream_a, stream_b, strict=True))
+
+
+@pytest.mark.skipif(
+    not (
+        hasattr(torch, "mps")
+        and torch.backends.mps.is_available()
+        and hasattr(torch.mps, "get_rng_state")
+    ),
+    reason="requires an available MPS backend",
+)
+def test_sample_does_not_perturb_mps_rng() -> None:
+    # Regression for the CPU-pinned-opponent leak: torch.manual_seed reseeds the
+    # MPS generator even though the opponent runs on CPU, so sample() must
+    # snapshot/restore MPS RNG — else the learner's MPS rollout stream drifts.
+    obs_t, masks_t = _batched_obs_masks(_CPU)  # opponent pinned to CPU
+    opp = build_snapshot_opponent(_snapshot_state(), geometry=_geometry(), device=_CPU, seed=123)
+    torch.mps.manual_seed(999)
+    before = torch.mps.get_rng_state()
+    for _ in range(5):
+        opp.sample(obs_t, masks_t)
+    after = torch.mps.get_rng_state()
+    assert torch.equal(before, after)
+
+
 def test_sample_returns_batched_action() -> None:
     obs_t, masks_t = _batched_obs_masks(_CPU)
     opp = build_snapshot_opponent(_snapshot_state(), geometry=_geometry(), device=_CPU, seed=0)
