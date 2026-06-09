@@ -271,20 +271,21 @@ class TestRepr:
 
 class TestSnapshotEnvSentinel:
     """Pin the contract between :data:`OPPONENT_KIND_SNAPSHOT` and
-    :class:`CatanEnv` (reviewer-caught CRITICAL).
+    :class:`CatanEnv`.
 
-    Until Phase 8 wires the actual snapshot opponent inference path,
-    ``CatanEnv(opponent_type="snapshot")`` must raise
-    ``NotImplementedError`` — NOT the generic ``ValueError`` that the
-    previous "supported: 'random' or 'heuristic'" whitelist produced.
+    The snapshot opponent path is now wired (US1): constructing a snapshot env
+    must NOT raise — until a frozen policy is injected via
+    ``set_snapshot_opponent``, it falls back to the heuristic body (FR-011).
     """
 
-    def test_catan_env_recognises_snapshot_sentinel(self) -> None:
+    def test_catan_env_accepts_snapshot_and_falls_back(self) -> None:
         from catan_rl.env.catan_env import CatanEnv
         from catan_rl.selfplay.league import OPPONENT_KIND_SNAPSHOT
 
-        with pytest.raises(NotImplementedError, match="snapshot"):
-            CatanEnv(opponent_type=OPPONENT_KIND_SNAPSHOT)
+        env = CatanEnv(opponent_type=OPPONENT_KIND_SNAPSHOT)  # no raise
+        assert not env.has_snapshot_opponent  # empty pool -> heuristic fallback
+        obs, _ = env.reset(seed=0)
+        assert obs is not None  # plays via the heuristic body without error
 
     def test_catan_env_rejects_unknown_opponent_type(self) -> None:
         # The whitelist still rejects arbitrary strings (regression

@@ -27,6 +27,7 @@ What is preserved verbatim:
 
 from __future__ import annotations
 
+import logging
 import queue
 import random
 from collections.abc import Sequence
@@ -60,6 +61,7 @@ from catan_rl.policy.obs_schema import (
     OPP_KIND_HEURISTIC,
     OPP_KIND_LEAGUE,
     OPP_KIND_RANDOM,
+    OPP_KIND_SELF_LATEST,
     OPP_KIND_UNKNOWN,
     TILE_DIM,
 )
@@ -116,6 +118,9 @@ class ActionType:
     BANK_TRADE = 10
     DISCARD = 11
     ROLL_DICE = 12
+
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -192,25 +197,19 @@ class CatanEnv(gym.Env):
                 "See docs/plans/rust_engine_actual_state.md."
             )
         self.engine_backend = engine_backend
-        # Whitelist includes ``"snapshot"`` so the
-        # :mod:`catan_rl.selfplay.league` sentinel can reach env
-        # construction without triggering a misleading "unsupported
-        # opponent_type" error from this file. The actual snapshot
-        # opponent inference path lands in Phase 8 of the training-
-        # infra build-out; until then constructing a snapshot env
-        # raises ``NotImplementedError`` with a clear pointer.
+        # ``"snapshot"`` is a frozen past-self policy driving the opponent seat,
+        # injected post-construction via ``set_snapshot_opponent`` (the env does
+        # not own the league pool). Until one is injected, a snapshot env falls
+        # back to the heuristic body (FR-011) so an empty pool never crashes.
         if opponent_type not in {"random", "heuristic", "snapshot"}:
             raise ValueError(
-                f"opponent_type={opponent_type!r}; supported: "
-                "'random', 'heuristic', 'snapshot' (snapshot path Phase 8+)"
-            )
-        if opponent_type == "snapshot":
-            raise NotImplementedError(
-                "opponent_type='snapshot' is reserved by "
-                "catan_rl.selfplay.league but not yet wired; Phase 8 "
-                "checkpoint loading lands the snapshot opponent inference path."
+                f"opponent_type={opponent_type!r}; supported: 'random', 'heuristic', 'snapshot'"
             )
         self.opponent_type = opponent_type
+        self._snapshot_opponent: Any | None = None
+        # Hard per-opponent-turn action cap — force-ends a turn whose policy
+        # never samples EndTurn (livelock guard, FR-013 / T016).
+        self._opp_turn_action_cap = 60
         self.max_turns = int(max_turns)
         self.vp_margin_bonus = float(vp_margin_bonus)
 
@@ -331,7 +330,10 @@ class CatanEnv(gym.Env):
         self.agent_player.game = self.game
         self.agent_player.isAI = False
 
-        if opp_type == "heuristic":
+        # "snapshot" uses a heuristic body so that, until a frozen policy is
+        # injected (or if the league pool is empty), the opponent still plays
+        # via the heuristic — graceful fallback (FR-011).
+        if opp_type in ("heuristic", "snapshot"):
             opp = heuristicAIPlayer("Opponent", "darkslateblue")
             opp.updateAI()
         else:
@@ -375,13 +377,17 @@ class CatanEnv(gym.Env):
         self._game_over = False
         self.last_dice_roll = 0
 
+        # Restart the snapshot opponent's deterministic action stream per game.
+        if self._snapshot_opponent is not None:
+            self._snapshot_opponent.reset_rng()
+
         # Snake draft P1→P2→P2→P1. If agent is seat 1 (P2), opponent
         # places their FIRST settle+road before the agent acts. The
         # opponent's second placement and starting resources are deferred
         # until after the agent's second setup (handled in
         # _handle_setup_step at step 3).
         if self._agent_seat == 1:
-            self.opponent_player.initial_setup(board)
+            self._opponent_setup_placement()
 
         return self._get_obs(), {}
 
@@ -423,7 +429,7 @@ class CatanEnv(gym.Env):
                 if self._opp_pending_robber:
                     # Opponent rolled the 7; resume their robber + main turn.
                     self._opp_pending_robber = False
-                    opponent.heuristic_move_robber(board)
+                    self._opponent_move_robber()
                     self._run_opponent_main_turn()
                     terminated, truncated = self._check_terminal()
                     if not terminated and not truncated:
@@ -641,8 +647,8 @@ class CatanEnv(gym.Env):
             if self._agent_seat == 0:
                 # Snake middle: P2 places BOTH (settle+road)x2 in a row.
                 # Resources are granted from P2's second settlement.
-                opponent.initial_setup(board)
-                opponent.initial_setup(board)
+                self._opponent_setup_placement()
+                self._opponent_setup_placement()
                 self._grant_setup_resources(opponent)
             # agent_seat=1: opponent's second setup is deferred to step 3.
         elif self._setup_step == 2:  # agent settle 2
@@ -657,7 +663,7 @@ class CatanEnv(gym.Env):
                 # Snake tail: opponent (P1) now places their second
                 # settle+road. Resources are granted from this second
                 # settlement.
-                opponent.initial_setup(board)
+                self._opponent_setup_placement()
                 self._grant_setup_resources(opponent)
             self.initial_placement_phase = False
             self.game.gameSetup = False
@@ -763,7 +769,7 @@ class CatanEnv(gym.Env):
                 self.discard_pending = True
                 self._opp_pending_robber = True
                 return
-            opp.heuristic_move_robber(board)
+            self._opponent_move_robber()
 
         if opp.victoryPoints >= self.game.maxPoints:
             return
@@ -772,8 +778,162 @@ class CatanEnv(gym.Env):
 
     def _run_opponent_main_turn(self) -> None:
         assert self.game is not None and self.opponent_player is not None
+        if self._snapshot_opponent is not None:
+            self._drive_snapshot_main_turn()
+            return
         opp = self.opponent_player
         opp.move(self.game.board)
+        self.game.check_longest_road(opp)
+        self.game.check_largest_army(opp)
+
+    # ------------------------------------------------------------------
+    # Snapshot-opponent driver (US1 / T015-T018, full-game scope)
+    # ------------------------------------------------------------------
+
+    def set_snapshot_opponent(self, opponent: Any | None) -> None:
+        """Inject the frozen policy that drives the opponent seat.
+
+        ``None`` (empty league / evicted snapshot) leaves the heuristic body in
+        charge — graceful fallback (FR-011). The injected opponent drives BOTH
+        the snake-draft setup and the main turns.
+        """
+        self._snapshot_opponent = opponent
+
+    @property
+    def has_snapshot_opponent(self) -> bool:
+        return self._snapshot_opponent is not None
+
+    def _opponent_env_state(
+        self,
+        *,
+        roll_pending: bool = False,
+        robber_placement_pending: bool = False,
+        road_building_roads_left: int = 0,
+        initial_placement_phase: bool = False,
+        setup_step: int = 0,
+    ) -> EnvObsState:
+        """Build the OPPONENT-LOCAL ``EnvObsState`` (T005/T015).
+
+        Carries the opponent's OWN sub-turn phase (never the agent's ``self.*``
+        flags). Per the Phase-2 review, the opp-id fields describe the AGENT
+        from the opponent's POV — the learner is ``OPP_KIND_SELF_LATEST``.
+        """
+        return EnvObsState(
+            initial_placement_phase=initial_placement_phase,
+            setup_step=setup_step,
+            roll_pending=roll_pending,
+            discard_pending=False,
+            robber_placement_pending=robber_placement_pending,
+            road_building_roads_left=road_building_roads_left,
+            last_dice_roll=self.last_dice_roll,
+            opp_kind=OPP_KIND_SELF_LATEST,
+            opp_policy_id=N_OPP_POLICY_SLOTS - 1,
+        )
+
+    def _sample_snapshot_action(self, env_state: EnvObsState) -> np.ndarray:
+        """Build the opponent-POV obs + masks for ``env_state`` and sample the
+        frozen snapshot. Returns a length-6 numpy action vector."""
+        import torch
+
+        assert self._snapshot_opponent is not None
+        assert self.opponent_player is not None and self.agent_player is not None
+        masks = self._compute_masks(self.opponent_player, env_state)
+        obs = self._build_obs_for(self.opponent_player, self.agent_player, env_state)
+        device = self._snapshot_opponent.device
+        obs_t = {k: torch.as_tensor(np.expand_dims(v, 0), device=device) for k, v in obs.items()}
+        masks_t = {
+            k: torch.as_tensor(np.expand_dims(v, 0), device=device, dtype=torch.bool)
+            for k, v in masks.items()
+        }
+        action_t = self._snapshot_opponent.sample(obs_t, masks_t)
+        return action_t[0].detach().cpu().numpy().astype(np.int64)
+
+    def _opponent_setup_placement(self) -> None:
+        """Place ONE opponent settlement + adjacent road for the snake draft.
+
+        Snapshot-driven (settlement then road, via the setup masks) when a
+        frozen policy is injected; otherwise the heuristic body's
+        ``initial_setup`` — so self-play openings are symmetric (full-game
+        scope) and the empty-pool fallback still plays (FR-011).
+        """
+        assert self.opponent_player is not None and self.game is not None
+        opp = self.opponent_player
+        board = self.game.board
+        if self._snapshot_opponent is None:
+            opp.initial_setup(board)
+            return
+        s_action = self._sample_snapshot_action(
+            self._opponent_env_state(initial_placement_phase=True, setup_step=0)
+        )
+        opp.build_settlement(self._idx_to_vertex[int(s_action[1])], board, is_free=True)
+        r_action = self._sample_snapshot_action(
+            self._opponent_env_state(initial_placement_phase=True, setup_step=1)
+        )
+        v1, v2 = self._idx_to_edge[int(r_action[2])]
+        opp.build_road(v1, v2, board, is_free=True)
+
+    def _opponent_move_robber(self) -> None:
+        """Opponent robber placement — snapshot-driven if present, else heuristic."""
+        assert self.opponent_player is not None and self.game is not None
+        if self._snapshot_opponent is None:
+            self.opponent_player.heuristic_move_robber(self.game.board)
+            return
+        action = self._sample_snapshot_action(
+            self._opponent_env_state(robber_placement_pending=True)
+        )
+        self._apply_robber_placement(self.opponent_player, int(action[3]))
+
+    def _drive_snapshot_main_turn(self) -> None:
+        """Drive the opponent's full main turn via the frozen policy (T015).
+
+        Mirrors the agent's ``step`` sub-phase machine for the opponent: the
+        knight→robber-placement and road-builder free-road sub-phases are
+        resolved before the next main action (the masks reflect them via the
+        opponent-local ``EnvObsState``), and a hard action cap (T016, FR-013)
+        force-ends a turn whose policy never samples EndTurn.
+        """
+        assert self.opponent_player is not None and self.game is not None
+        opp = self.opponent_player
+        board = self.game.board
+        ts = _TurnState()
+        for _ in range(self._opp_turn_action_cap):
+            if ts.robber_placement_pending:
+                action = self._sample_snapshot_action(
+                    self._opponent_env_state(robber_placement_pending=True)
+                )
+                self._apply_robber_placement(opp, int(action[3]))
+                ts.robber_placement_pending = False
+                continue
+            if ts.road_building_roads_left > 0:
+                action = self._sample_snapshot_action(
+                    self._opponent_env_state(road_building_roads_left=ts.road_building_roads_left)
+                )
+                if int(action[0]) == ActionType.BUILD_ROAD:
+                    v1, v2 = self._idx_to_edge[int(action[2])]
+                    opp.build_road(v1, v2, board, is_free=True)
+                    self.game.check_longest_road(opp)
+                    ts.road_building_roads_left -= 1
+                else:
+                    ts.road_building_roads_left = 0
+                continue
+            action = self._sample_snapshot_action(self._opponent_env_state())
+            if int(action[0]) == ActionType.END_TURN:
+                break
+            self._apply_main_action(
+                opp,
+                action_type=int(action[0]),
+                corner_idx=int(action[1]),
+                edge_idx=int(action[2]),
+                tile_idx=int(action[3]),
+                res1_idx=int(action[4]),
+                res2_idx=int(action[5]),
+                ts=ts,
+            )
+        else:
+            logger.warning(
+                "snapshot opponent turn hit the %d-action cap; forcing EndTurn",
+                self._opp_turn_action_cap,
+            )
         self.game.check_longest_road(opp)
         self.game.check_largest_army(opp)
 
