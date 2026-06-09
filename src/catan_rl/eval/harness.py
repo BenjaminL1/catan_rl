@@ -120,6 +120,19 @@ class EvalResult:
 
 
 @dataclass(frozen=True)
+class EvalMatchupResult(EvalResult):
+    """Champion vs a loaded opponent policy (US2).
+
+    EXTENDS :class:`EvalResult` — reuses all of its ``wr`` / Wilson-CI / seat
+    breakdown machinery (no parallel type) and adds the opponent reference
+    (checkpoint path or snapshot id). ``opponent_type`` is ``"snapshot"`` since
+    the opponent is seated via the in-env snapshot-opponent driver.
+    """
+
+    opponent_ref: str = ""
+
+
+@dataclass(frozen=True)
 class EvalReport:
     """Aggregated results for all matchups in one eval round."""
 
@@ -234,34 +247,32 @@ class EvalHarness:
         except (StopIteration, AttributeError):
             return None
 
+    def _run_matchup_games(
+        self, env: CatanEnv, policy: Any, *, seed_label: str
+    ) -> list[GameOutcome]:
+        """Play ``2 * n_games_per_seat`` seat-symmetrized games on ``env``.
+
+        Seeds derive deterministically from ``self.seed`` + ``seed_label`` so
+        two runs at the same seed are bit-identical (even cross-process —
+        ``zlib.crc32`` is stable where ``hash()`` is PYTHONHASHSEED-salted).
+        """
+        games: list[GameOutcome] = []
+        opp_hash = zlib.crc32(seed_label.encode("utf-8"))
+        base_seed = (self.seed * 1_000_003 + opp_hash) % (2**31 - 1)
+        for game_idx in range(self.n_games_per_seat):
+            seed0 = (base_seed + game_idx * 2) % (2**31 - 1)
+            seed1 = (base_seed + game_idx * 2 + 1) % (2**31 - 1)
+            # Seat 0 — agent first; seat 1 — opponent first (true symmetric
+            # pairing: same board distribution, both seats represented).
+            games.append(self._play_one_game(env=env, policy=policy, seed=seed0, agent_seat=0))
+            games.append(self._play_one_game(env=env, policy=policy, seed=seed1, agent_seat=1))
+        return games
+
     def _evaluate_matchup(self, *, policy: Any, opponent_type: str) -> EvalResult:
         """Play ``2 * n_games_per_seat`` games for one opponent kind."""
         env = CatanEnv(opponent_type=opponent_type, max_turns=self.max_turns)
         try:
-            games: list[GameOutcome] = []
-            # zlib.crc32 is a stable hash across Python processes;
-            # ``hash()`` is salted by PYTHONHASHSEED and would break
-            # cross-process reproducibility. base_seed and the per-game
-            # offsets stay inside the 31-bit non-negative range expected
-            # by ``np.random.seed``.
-            opp_hash = zlib.crc32(opponent_type.encode("utf-8"))
-            base_seed = (self.seed * 1_000_003 + opp_hash) % (2**31 - 1)
-            for game_idx in range(self.n_games_per_seat):
-                # Per-game seed derivation is deterministic in
-                # ``self.seed`` and ``opponent_type`` so two harness
-                # runs at the same ``seed`` produce bit-identical
-                # outcomes — even across Python processes.
-                seed0 = (base_seed + game_idx * 2) % (2**31 - 1)
-                seed1 = (base_seed + game_idx * 2 + 1) % (2**31 - 1)
-                # Seat 0 — agent goes first.
-                games.append(self._play_one_game(env=env, policy=policy, seed=seed0, agent_seat=0))
-                # Seat 1 — opponent goes first. ``CatanEnv`` honours
-                # ``options={"agent_seat": 1}`` by flipping the queue
-                # order and running the opponent's first setup +
-                # first main turn before the agent acts. This is a
-                # true symmetric pairing: same board distribution,
-                # both seats represented equally.
-                games.append(self._play_one_game(env=env, policy=policy, seed=seed1, agent_seat=1))
+            games = self._run_matchup_games(env, policy, seed_label=opponent_type)
             wins = sum(1 for g in games if g.won)
             ci = wilson_interval(wins=wins, n=len(games), alpha=self.alpha)
             return EvalResult(
@@ -270,6 +281,33 @@ class EvalHarness:
                 wins=wins,
                 n=len(games),
                 ci=ci,
+            )
+        finally:
+            env.close()
+
+    def evaluate_vs_policy(
+        self, champion: Any, opponent: Any, *, opponent_ref: str
+    ) -> EvalMatchupResult:
+        """Champion vs a loaded opponent policy (US2).
+
+        ``opponent`` is a :class:`~catan_rl.selfplay.snapshot_opponent.SnapshotOpponent`
+        (e.g. a ``FrozenSnapshotOpponent``); it is seated via the in-env
+        snapshot-opponent driver (NOT the recorder actor). Seat-symmetrized;
+        returns WR + Wilson CI.
+        """
+        env = CatanEnv(opponent_type="snapshot", max_turns=self.max_turns)
+        env.set_snapshot_opponent(opponent)
+        try:
+            games = self._run_matchup_games(env, champion, seed_label=opponent_ref)
+            wins = sum(1 for g in games if g.won)
+            ci = wilson_interval(wins=wins, n=len(games), alpha=self.alpha)
+            return EvalMatchupResult(
+                opponent_type="snapshot",
+                games=tuple(games),
+                wins=wins,
+                n=len(games),
+                ci=ci,
+                opponent_ref=opponent_ref,
             )
         finally:
             env.close()
@@ -349,3 +387,53 @@ class EvalHarness:
             n_turns=n_env_steps,
             rules_violations=violations,
         )
+
+
+# ---------------------------------------------------------------------------
+# Policy-vs-policy eval (US2)
+# ---------------------------------------------------------------------------
+
+
+def evaluate_policy_vs_policy(
+    champion: Any,
+    opponent_ckpt: str,
+    *,
+    n_games: int = 100,
+    seed: int = 0,
+    device: str = "cpu",
+    max_turns: int = 400,
+) -> EvalMatchupResult:
+    """Evaluate ``champion`` head-to-head against a loaded opponent checkpoint.
+
+    The opponent checkpoint is loaded into a frozen ``CatanPolicy`` by reusing
+    ``replay/player_factory.build_actor`` (no new loader), wrapped as a
+    ``FrozenSnapshotOpponent``, and seated via the in-env snapshot-opponent
+    driver. Plays ``2 * (n_games // 2)`` seat-symmetrized games; returns WR +
+    Wilson CI. Bit-for-bit reproducible on CPU at a fixed seed (the opponent's
+    isolated RNG leaves the champion's sampling stream unperturbed).
+    """
+    from typing import cast
+
+    import torch
+
+    from catan_rl.replay.player_factory import PlayerSpec, build_actor
+    from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
+
+    torch.manual_seed(seed)  # reproducible champion sampling stream
+    # kind="policy" always yields a _PolicyActor (exposes .policy / .device);
+    # cast past the Actor union for this load-only reuse.
+    actor = cast(
+        Any,
+        build_actor(
+            PlayerSpec(kind="policy", ckpt_path=str(opponent_ckpt)), seed=seed, device=device
+        ),
+    )
+    opponent = FrozenSnapshotOpponent(actor.policy, device=actor.device, seed=seed)
+    harness = EvalHarness(
+        opponent_types=("snapshot",),
+        n_games_per_seat=max(1, n_games // 2),
+        seed=seed,
+        device=torch.device(device),
+        max_turns=max_turns,
+    )
+    return harness.evaluate_vs_policy(champion, opponent, opponent_ref=str(opponent_ckpt))
