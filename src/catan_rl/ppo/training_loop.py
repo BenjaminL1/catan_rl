@@ -61,6 +61,7 @@ from catan_rl.env.catan_env import CatanEnv
 from catan_rl.eval.harness import EvalHarness
 from catan_rl.policy.board_geometry import build_geometry
 from catan_rl.policy.network import CatanPolicy
+from catan_rl.policy.obs_schema import N_DEV_TYPES
 from catan_rl.ppo.arguments import TrainConfig
 from catan_rl.ppo.buffer import CompositeRolloutBuffer
 from catan_rl.ppo.game_manager import RolloutCollector
@@ -219,11 +220,18 @@ def build_training_state(
         mask_spec = mask_spec_from_env(spec_env)
     finally:
         spec_env.close()
+    # Allocate belief-target storage only when the belief head exists AND its
+    # loss is active (coef > 0). Once allocated, game_manager MUST supply a
+    # target on every add() (the buffer enforces this), so gate it tightly.
+    belief_target_dim = (
+        N_DEV_TYPES if (policy.belief_head is not None and cfg.loss.belief_coef > 0.0) else None
+    )
     buffer = CompositeRolloutBuffer(
         n_steps=cfg.rollout.n_steps,
         n_envs=cfg.rollout.n_envs,
         obs_spec=obs_spec,
         mask_spec=mask_spec,
+        belief_target_dim=belief_target_dim,
     )
     collector = RolloutCollector(vec_env=vec_env, policy=policy, buffer=buffer, device=device)
     trainer = PPOTrainer(cfg=cfg, policy=policy, optimizer=optimizer, device=device)

@@ -520,9 +520,22 @@ class ObsEncoder:
 
         # Dev cards in DEV_CARD_ORDER (5 floats). Clipped: KNIGHT count in
         # hand can exceed 8 in long games (14 in the deck).
+        #
+        # POV split (no-leak): the AGENT sees its OWN currently-HELD (hidden)
+        # hand — it knows its own cards. The OPPONENT contributes only its
+        # PLAYED dev cards (observable); its hidden dev-card TYPES are the only
+        # remaining hidden state in 1v1 (ADR 0002) and MUST NOT appear here —
+        # they are the belief head's prediction target. The opponent's hidden
+        # *count* is still encoded (the 6-bin one-hot appended below for the
+        # opponent), so observable information is preserved.
         dev = getattr(player, "devCards", {}) or {}
-        for c in DEV_CARD_ORDER:
-            feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
+        if is_agent:
+            for c in DEV_CARD_ORDER:
+                feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
+        else:
+            played = _dev_counts(player, hidden=False)
+            for i in range(N_DEV_TYPES):
+                feats.append(min(1.0, float(played[i]) / 8.0))
 
         # Phase flags (5).
         in_setup = bool(env_state.initial_placement_phase)

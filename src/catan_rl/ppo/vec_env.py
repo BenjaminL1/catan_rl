@@ -47,7 +47,7 @@ import numpy as np
 from gymnasium import spaces
 
 from catan_rl.env.catan_env import CatanEnv
-from catan_rl.policy.obs_schema import N_OPP_POLICY_SLOTS, OPP_KIND_LEAGUE
+from catan_rl.policy.obs_schema import N_DEV_TYPES, N_OPP_POLICY_SLOTS, OPP_KIND_LEAGUE
 from catan_rl.ppo.buffer import MaskSpec, ObsSpec
 from catan_rl.selfplay.league import OPPONENT_KIND_SNAPSHOT, OpponentAssignment
 
@@ -180,6 +180,19 @@ class SerialVecEnv:
             self.envs[i].set_snapshot_opponent(self._pending_snapshot[i])
         obs, _ = self.envs[i].reset(seed=seed, options=self._reset_options[i] or None)
         return obs
+
+    def belief_targets(self) -> np.ndarray:
+        """``(n_envs, N_DEV_TYPES)`` belief-head targets for the CURRENT state
+        (the obs last returned by ``reset_all`` / ``step_all``).
+
+        The rollout collector queries this BEFORE stepping, so the target aligns
+        with the obs the agent is about to act on. Training-only ground truth —
+        the opponent's hidden dev-card posterior — never enters the observation.
+        """
+        out = np.zeros((self.n_envs, N_DEV_TYPES), dtype=np.float32)
+        for i, env in enumerate(self.envs):
+            out[i] = env.belief_target()
+        return out
 
     def step_all(
         self, actions: np.ndarray

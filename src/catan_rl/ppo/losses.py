@@ -148,13 +148,23 @@ def compute_belief_loss(
     """Soft cross-entropy of ``belief_target`` (a probability vector)
     against the head's logits.
 
-    The target is a Dirichlet-style soft distribution over hidden
-    dev-card types — not a one-hot, so we use
-    ``-(target * log_softmax(logits)).sum(-1).mean()`` rather than
-    ``F.cross_entropy``.
+    The target is a soft distribution over the opponent's HIDDEN dev-card
+    types — not a one-hot, so we use ``-(target * log_softmax(logits)).sum(-1)``
+    rather than ``F.cross_entropy``.
+
+    Masking (the "useful, not noisy" guarantee): a transition where the
+    opponent holds NO hidden dev cards carries an all-zero target (an undefined
+    posterior). Those rows contribute zero gradient anyway, but we also EXCLUDE
+    them from the mean so the loss magnitude — and thus the effective
+    ``belief_coef`` weight — reflects only the informative transitions, instead
+    of being silently diluted by the (often majority) empty-hand states. If a
+    minibatch happens to have no valid rows, the loss is exactly 0.
     """
     log_q = F.log_softmax(belief_logits, dim=-1)
-    return -(belief_target * log_q).sum(-1).mean()
+    per_row = -(belief_target * log_q).sum(-1)  # (B,)
+    valid = belief_target.sum(-1) > 0  # opponent held >=1 hidden dev card
+    denom = valid.sum().clamp(min=1.0)
+    return (per_row * valid).sum() / denom
 
 
 def compute_entropy_bonus(*, joint_entropy: torch.Tensor) -> torch.Tensor:

@@ -98,6 +98,34 @@ class TestRolloutCollector:
         assert set(obs2.keys()) == set(obs.keys())
         assert set(masks2.keys()) == set(masks.keys())
 
+    def test_collect_stores_belief_targets_when_allocated(self) -> None:
+        # When the buffer has belief storage, collect must query the vec env's
+        # per-state belief targets and store a valid distribution (or an
+        # all-zero masked row) for every transition.
+        from catan_rl.policy.obs_schema import N_DEV_TYPES
+
+        kwargs = {"opponent_type": "heuristic", "max_turns": 50}
+        ve = SerialVecEnv(env_kwargs_list=[kwargs, kwargs])
+        obs_spec = obs_spec_from_env(ve.envs[0])
+        mask_spec = mask_spec_from_env(ve.envs[0])
+        buf = CompositeRolloutBuffer(
+            n_steps=4,
+            n_envs=2,
+            obs_spec=obs_spec,
+            mask_spec=mask_spec,
+            belief_target_dim=N_DEV_TYPES,
+        )
+        policy = _StubPolicy(n_envs=2)
+        collector = RolloutCollector(vec_env=ve, policy=policy, buffer=buf, device="cpu")
+        obs, masks = ve.reset_all(seeds=[0, 1])
+        collector.collect(obs, masks)
+        assert buf.belief_target is not None
+        assert buf.belief_target.shape == (4, 2, N_DEV_TYPES)
+        sums = buf.belief_target.sum(axis=-1)
+        # Each row is a probability vector (sum 1) or a masked empty row (sum 0).
+        assert np.all(np.isclose(sums, 0.0) | np.isclose(sums, 1.0))
+        ve.close()
+
     def test_last_values_populated(self, vec_env_and_buffer) -> None:
         ve, buf = vec_env_and_buffer
         policy = _StubPolicy(n_envs=2)

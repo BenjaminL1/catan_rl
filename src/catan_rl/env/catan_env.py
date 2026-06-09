@@ -51,6 +51,7 @@ from catan_rl.policy.obs_encoder import (
     VERTEX_FEATURE_DIM,
     EnvObsState,
     ObsEncoder,
+    _dev_counts,
 )
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
@@ -1099,6 +1100,25 @@ class CatanEnv(gym.Env):
             env_state,
             hand_tracker=self._hand_tracker,
         )
+
+    def belief_target(self) -> np.ndarray:
+        """Ground-truth target for the belief head (aux loss).
+
+        The OPPONENT's HIDDEN (bought-but-unplayed) dev-card composition as a
+        probability vector over ``DEV_CARD_ORDER``, or all-zeros when the
+        opponent holds none (the masked case — most of the early game). This is
+        a TRAINING-ONLY signal: it is the very information the agent CANNOT
+        observe (the obs carries the opponent's hidden-dev *count* and *played*
+        cards, never the hidden *types*), so the belief head learns to infer the
+        posterior over it. It must NEVER be added to the observation. Uses the
+        same hidden-count semantics as the obs encoder (``_dev_counts``).
+        """
+        assert self.opponent_player is not None
+        counts = _dev_counts(self.opponent_player, hidden=True)  # (N_DEV_TYPES,)
+        total = float(counts.sum())
+        if total <= 0.0:
+            return counts  # all-zeros -> masked out of the belief loss
+        return (counts / total).astype(np.float32)
 
     # ------------------------------------------------------------------
     # Vertex / edge index maps

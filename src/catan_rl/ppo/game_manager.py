@@ -125,6 +125,15 @@ class RolloutCollector:
             value_np = sample_out["value"].cpu().numpy().astype(np.float32)
             per_head_np = sample_out["per_head_log_prob"].cpu().numpy().astype(np.float32)
 
+            # Belief-head target (aux loss): the opponent's hidden dev-card
+            # posterior for the CURRENT state (the one ``obs`` encodes). Queried
+            # BEFORE stepping so it reflects the opponent's hand at the agent's
+            # decision point, not after the opponent has moved. Only when the
+            # buffer was allocated with belief storage (else the head is unused).
+            belief_target_np = (
+                self.vec_env.belief_targets() if self.buffer.belief_target is not None else None
+            )
+
             # Step the vec env. ``next_obs`` / ``next_masks`` are
             # auto-reset-aware: on terminated/truncated envs they
             # already reflect the next episode's start state.
@@ -144,6 +153,7 @@ class RolloutCollector:
                 terminated=terminated,
                 truncated=truncated,
                 masks=masks,
+                belief_target=belief_target_np,
             )
             obs, masks = next_obs, next_masks
             # On the very last in-buffer step, the truncated terminal
