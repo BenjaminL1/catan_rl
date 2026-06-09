@@ -47,9 +47,13 @@ import numpy as np
 from gymnasium import spaces
 
 from catan_rl.env.catan_env import CatanEnv
-from catan_rl.policy.obs_schema import OPP_KIND_LEAGUE
+from catan_rl.policy.obs_schema import N_OPP_POLICY_SLOTS, OPP_KIND_LEAGUE
 from catan_rl.ppo.buffer import MaskSpec, ObsSpec
 from catan_rl.selfplay.league import OPPONENT_KIND_SNAPSHOT, OpponentAssignment
+
+# Sentinel for "this env's snapshot body was never assigned via set_opponents"
+# (leave its construction default untouched), distinct from an explicit None.
+_UNSET_SNAPSHOT = object()
 
 
 class SerialVecEnv:
@@ -76,11 +80,13 @@ class SerialVecEnv:
         self.envs: list[CatanEnv] = [CatanEnv(**kw) for kw in env_kwargs_list]
         self._closed = False
 
-        # Per-env opponent reset options, applied on each env's NEXT reset
-        # (US3 mid-rollout swap). Empty dict = use the env's construction
-        # default opponent. ``set_opponents`` populates these + injects/clears
-        # the frozen snapshot opponent on each env.
+        # Per-env opponent reset options + pending snapshot body, both applied
+        # on each env's NEXT reset (US3 mid-rollout swap — fully deferred so an
+        # in-flight episode never has its opponent swapped under it). Empty
+        # options = the env's construction default; ``_UNSET_SNAPSHOT`` = leave
+        # the snapshot body untouched.
         self._reset_options: list[dict[str, Any]] = [{} for _ in range(self.n_envs)]
+        self._pending_snapshot: list[Any] = [_UNSET_SNAPSHOT for _ in range(self.n_envs)]
 
         # Per-env RNG for auto-reset seed derivation. Owned by the vec
         # env so two runs with the same ``seed`` produce identical
@@ -120,45 +126,60 @@ class SerialVecEnv:
 
         per_env_obs: list[dict[str, np.ndarray]] = []
         per_env_masks: list[dict[str, np.ndarray]] = []
-        for i, (env, seed) in enumerate(zip(self.envs, seeds, strict=True)):
-            obs, _ = env.reset(seed=int(seed), options=self._reset_options[i] or None)
+        for i, seed in enumerate(seeds):
+            obs = self._reset_env(i, int(seed))
             per_env_obs.append(obs)
-            per_env_masks.append(env.get_action_masks())
+            per_env_masks.append(self.envs[i].get_action_masks())
         return self._stack_obs(per_env_obs), self._stack_masks(per_env_masks)
 
     def set_opponents(
         self,
         assignments: Sequence[OpponentAssignment],
         *,
-        snapshot_resolver: Callable[[int], Any] | None = None,
+        snapshot_resolver: Callable[[int, int], Any] | None = None,
     ) -> None:
         """Set each env's opponent for its NEXT reset (US3 mid-rollout swap).
 
         ``assignments`` is one :class:`OpponentAssignment` per env (e.g. from
-        ``League.build_env_opponent_assignments``). For a ``snapshot`` kind, the
-        concrete frozen opponent is resolved via ``snapshot_resolver(snapshot_id)``
-        and injected into the env; if the resolver returns ``None`` (evicted
-        snapshot / no loader), the env falls back to its heuristic body (FR-011).
-        Non-snapshot kinds clear any previously-injected snapshot. Current
-        episodes finish under their old opponent; the swap takes effect on the
-        next ``reset`` (reset_all or auto-reset).
+        ``League.build_env_opponent_assignments``). For a ``snapshot`` kind the
+        concrete frozen opponent is resolved via
+        ``snapshot_resolver(snapshot_id, env_idx)`` — the ``env_idx`` lets the
+        resolver hand back a SEPARATE RNG-bearing wrapper per env (sharing one
+        instance across envs would clobber per-game seeds). A ``None`` result
+        (evicted snapshot / no loader) falls back to the heuristic body (FR-011);
+        a non-snapshot kind clears any previous snapshot.
+
+        BOTH halves — the reset options AND the snapshot body — are DEFERRED to
+        each env's next ``reset`` (reset_all / auto-reset), so an in-flight
+        episode never has its opponent swapped under it.
         """
         if len(assignments) != self.n_envs:
             raise ValueError(f"assignments length {len(assignments)} != n_envs {self.n_envs}")
-        for i, (env, a) in enumerate(zip(self.envs, assignments, strict=True)):
+        for i, a in enumerate(assignments):
             if a.kind == OPPONENT_KIND_SNAPSHOT:
                 # OpponentAssignment guarantees snapshot_id is set for this kind.
                 assert a.snapshot_id is not None
-                frozen = snapshot_resolver(a.snapshot_id) if snapshot_resolver else None
-                env.set_snapshot_opponent(frozen)
+                self._pending_snapshot[i] = (
+                    snapshot_resolver(a.snapshot_id, i) if snapshot_resolver else None
+                )
                 self._reset_options[i] = {
                     "opponent_type": "snapshot",
                     "opponent_kind": OPP_KIND_LEAGUE,
-                    "opponent_policy_id": a.snapshot_id,
+                    # Map the unbounded stable id into the embedding's slot range
+                    # so the opp-id hint stays meaningful past 100 snapshots.
+                    "opponent_policy_id": a.snapshot_id % (N_OPP_POLICY_SLOTS - 1),
                 }
             else:
-                env.set_snapshot_opponent(None)
+                self._pending_snapshot[i] = None
                 self._reset_options[i] = {"opponent_type": a.kind}
+
+    def _reset_env(self, i: int, seed: int) -> dict[str, np.ndarray]:
+        """Reset env ``i``, first applying any pending opponent swap (deferred
+        from ``set_opponents``) so the swap lands at an episode boundary."""
+        if self._pending_snapshot[i] is not _UNSET_SNAPSHOT:
+            self.envs[i].set_snapshot_opponent(self._pending_snapshot[i])
+        obs, _ = self.envs[i].reset(seed=seed, options=self._reset_options[i] or None)
+        return obs
 
     def step_all(
         self, actions: np.ndarray
@@ -225,7 +246,7 @@ class SerialVecEnv:
                 # runs with the same ``seed`` produce identical
                 # auto-reset sequences.
                 new_seed = int(self._reset_rngs[i].integers(0, 2**31 - 1))
-                obs, _ = env.reset(seed=new_seed, options=self._reset_options[i] or None)
+                obs = self._reset_env(i, new_seed)
             per_env_obs.append(obs)
             per_env_masks.append(env.get_action_masks())
 

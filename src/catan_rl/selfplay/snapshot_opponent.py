@@ -27,7 +27,12 @@ import torch
 
 from catan_rl.policy.network import CatanPolicy
 
-__all__ = ["FrozenSnapshotOpponent", "SnapshotOpponent", "build_snapshot_opponent"]
+__all__ = [
+    "FrozenSnapshotOpponent",
+    "SnapshotOpponent",
+    "build_snapshot_opponent",
+    "load_frozen_policy",
+]
 
 
 @runtime_checkable
@@ -107,6 +112,22 @@ class FrozenSnapshotOpponent:
         return out["action"]
 
 
+def load_frozen_policy(state_dict: Mapping[str, Any], *, geometry: dict[str, Any]) -> CatanPolicy:
+    """Load a snapshot's state-dict into a fresh ``CatanPolicy`` (no wrapper).
+
+    Mirrors ``replay/player_factory.build_actor``'s load order: construct a
+    ``CatanPolicy``, wire board geometry, then load the snapshot strictly
+    (raises on any shape mismatch — guards Constitution III back-compat). The
+    returned policy is STATELESS (weights only) and so is safe to SHARE across
+    many per-env ``FrozenSnapshotOpponent`` wrappers — the RNG-bearing state
+    lives in the wrapper, never the policy.
+    """
+    policy = CatanPolicy()
+    policy.set_board_geometry(geometry)
+    policy.load_state_dict(dict(state_dict), strict=True)
+    return policy
+
+
 def build_snapshot_opponent(
     state_dict: Mapping[str, Any],
     *,
@@ -114,13 +135,7 @@ def build_snapshot_opponent(
     device: torch.device,
     seed: int,
 ) -> FrozenSnapshotOpponent:
-    """Build a frozen opponent from a league snapshot's state-dict.
-
-    Mirrors ``replay/player_factory.build_actor``'s load order: construct a
-    fresh ``CatanPolicy``, wire board geometry, then load the snapshot strictly
-    (raises on any shape mismatch — guards Constitution III back-compat).
-    """
-    policy = CatanPolicy()
-    policy.set_board_geometry(geometry)
-    policy.load_state_dict(dict(state_dict), strict=True)
-    return FrozenSnapshotOpponent(policy, device=device, seed=seed)
+    """Load a snapshot and wrap it in a single frozen opponent (one env)."""
+    return FrozenSnapshotOpponent(
+        load_frozen_policy(state_dict, geometry=geometry), device=device, seed=seed
+    )

@@ -373,8 +373,10 @@ class LeagueConfig:
     require_heuristic_floor: bool = True
     """PG-2 guard: when self-play is on (``snapshot_weight > 0``), the heuristic
     must keep a non-zero weight so the agent never forgets how to beat the
-    heuristic that the phase-advancement gate measures. Set ``False`` only for
-    mechanism tests / research configs that intentionally want pure self-play."""
+    heuristic that the phase-advancement gate measures. NOTE this is a floor on
+    the WEIGHT (statistical), not a guaranteed per-rollout count of heuristic
+    envs — the per-env draw is i.i.d. Set ``False`` only for mechanism tests /
+    research configs that intentionally want pure self-play."""
 
     add_snapshot_every_n_updates: int = 4
     """Append a fresh snapshot to the pool every N PPO updates."""

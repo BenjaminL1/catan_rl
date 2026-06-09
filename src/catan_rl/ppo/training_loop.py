@@ -584,25 +584,32 @@ def run_training_loop(
     if max_updates is not None:
         end_update = min(end_update, state.update_idx + max_updates)
 
-    # Self-play opponent resolver (US3): snapshot_id -> frozen opponent, cached
-    # per id (D6) and pruned to the live pool. Only used when self-play is on.
-    _snap_geometry = build_geometry().as_dict_of_tensors()
-    _snap_cache: dict[int, Any] = {}
+    # Self-play opponent resolver (US3). Cache the heavy CatanPolicy per
+    # snapshot id (D6), pruned to the live pool — but hand back a SEPARATE
+    # RNG-bearing wrapper per (snapshot id, env) so envs sharing an id never
+    # clobber each other's per-game seed (review BLOCKER). Geometry is built
+    # lazily so the default (no self-play) run allocates nothing extra.
+    _snap_policy_cache: dict[int, Any] = {}
+    _snap_geom: dict[str, Any] = {}
 
-    def _resolve_snapshot(snapshot_id: int) -> Any:
-        cached = _snap_cache.get(snapshot_id)
-        if cached is not None:
-            return cached
-        snap = state.league.peek_by_id(snapshot_id)
-        if snap is None:
-            return None  # evicted -> env falls back to heuristic body (FR-011)
-        from catan_rl.selfplay.snapshot_opponent import build_snapshot_opponent
-
-        frozen = build_snapshot_opponent(
-            snap.state_dict, geometry=_snap_geometry, device=state.device, seed=cfg.seed
+    def _resolve_snapshot(snapshot_id: int, env_idx: int) -> Any:
+        from catan_rl.selfplay.snapshot_opponent import (
+            FrozenSnapshotOpponent,
+            load_frozen_policy,
         )
-        _snap_cache[snapshot_id] = frozen
-        return frozen
+
+        policy = _snap_policy_cache.get(snapshot_id)
+        if policy is None:
+            snap = state.league.peek_by_id(snapshot_id)
+            if snap is None:
+                return None  # evicted -> env falls back to heuristic body (FR-011)
+            if not _snap_geom:
+                _snap_geom.update(build_geometry().as_dict_of_tensors())
+            policy = load_frozen_policy(snap.state_dict, geometry=_snap_geom)
+            _snap_policy_cache[snapshot_id] = policy
+        # Decorrelated, reproducible per-(id, env) seed.
+        seed = (cfg.seed ^ (snapshot_id * 0x9E3779B1) ^ (env_idx * 0x85EBCA6B)) & 0x7FFFFFFF
+        return FrozenSnapshotOpponent(policy, device=state.device, seed=seed)
 
     try:
         while state.update_idx < end_update:
@@ -615,9 +622,11 @@ def run_training_loop(
             # keeps the assignment sequence resume-reproducible.
             if cfg.league.snapshot_weight > 0:
                 live_ids = state.league.snapshot_ids()
-                for stale in [k for k in _snap_cache if k not in live_ids]:
-                    del _snap_cache[stale]
-                opp_rng = np.random.default_rng((cfg.seed * 1_000_003 + update_idx) % (2**31 - 1))
+                for stale in [k for k in _snap_policy_cache if k not in live_ids]:
+                    del _snap_policy_cache[stale]
+                # SeedSequence-style derivation is collision-free across
+                # (seed, update_idx) and keeps the assignment resume-reproducible.
+                opp_rng = np.random.default_rng([cfg.seed, update_idx])
                 assignments = state.league.build_env_opponent_assignments(
                     n_envs=cfg.rollout.n_envs, rng=opp_rng
                 )
