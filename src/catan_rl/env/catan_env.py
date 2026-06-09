@@ -58,6 +58,7 @@ from catan_rl.policy.obs_schema import (
     N_OPP_POLICY_SLOTS,
     NEXT_PLAYER_DIM,
     OPP_KIND_HEURISTIC,
+    OPP_KIND_LEAGUE,
     OPP_KIND_RANDOM,
     OPP_KIND_UNKNOWN,
     TILE_DIM,
@@ -87,6 +88,10 @@ N_RESOURCES = 5
 _OPP_TYPE_TO_KIND: dict[str, int] = {
     "random": OPP_KIND_RANDOM,
     "heuristic": OPP_KIND_HEURISTIC,
+    # A frozen league snapshot (a past self) feeds the existing LEAGUE slot —
+    # no embedding resize (FR-008); the concrete snapshot is identified by
+    # ``opponent_policy_id`` passed via reset options (T009).
+    "snapshot": OPP_KIND_LEAGUE,
 }
 
 
