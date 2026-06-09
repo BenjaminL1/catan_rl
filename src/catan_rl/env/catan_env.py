@@ -734,7 +734,7 @@ class CatanEnv(gym.Env):
         self.last_dice_roll = dice
         if dice == 7:
             if sum(opponent.resources.values()) > 9:
-                opponent.discardResources(self.game)
+                self._opponent_discard()
             if sum(agent.resources.values()) > 9:
                 self._cards_to_discard = sum(agent.resources.values()) // 2
                 self.discard_pending = True
@@ -776,7 +776,7 @@ class CatanEnv(gym.Env):
             self.game.update_playerResources(dice, opp)
         else:
             if sum(opp.resources.values()) > 9:
-                opp.discardResources(self.game)
+                self._opponent_discard()
             if sum(agent.resources.values()) > 9:
                 # Agent must discard before the opponent can place the robber.
                 self._cards_to_discard = sum(agent.resources.values()) // 2
@@ -821,6 +821,7 @@ class CatanEnv(gym.Env):
         self,
         *,
         roll_pending: bool = False,
+        discard_pending: bool = False,
         robber_placement_pending: bool = False,
         road_building_roads_left: int = 0,
         initial_placement_phase: bool = False,
@@ -836,13 +837,42 @@ class CatanEnv(gym.Env):
             initial_placement_phase=initial_placement_phase,
             setup_step=setup_step,
             roll_pending=roll_pending,
-            discard_pending=False,
+            discard_pending=discard_pending,
             robber_placement_pending=robber_placement_pending,
             road_building_roads_left=road_building_roads_left,
             last_dice_roll=self.last_dice_roll,
             opp_kind=OPP_KIND_SELF_LATEST,
             opp_policy_id=N_OPP_POLICY_SLOTS - 1,
         )
+
+    def _opponent_discard(self) -> None:
+        """Opponent's forced 7-roll discard.
+
+        Snapshot-driven when a frozen policy is injected — the opponent uses its
+        OWN learned Discard head (one card per sample, masked to held resources),
+        exactly like the agent's discard sub-phase — so the self-play opponent
+        plays its discards as well as it learned to, not via the heuristic.
+        Falls back to the heuristic ``discardResources`` when no snapshot is set
+        (empty-pool fallback / non-self-play opponents).
+        """
+        assert self.opponent_player is not None and self.game is not None
+        opp = self.opponent_player
+        if self._snapshot_opponent is None:
+            opp.discardResources(self.game)
+            return
+        n_to_discard = sum(opp.resources.values()) // 2
+        discarded = 0
+        # Safety cap: the discard mask only offers held resources, so each
+        # sample should succeed, but bound the loop against a degenerate mask.
+        for _ in range(max(1, n_to_discard) * 4):
+            if discarded >= n_to_discard:
+                break
+            action = self._sample_snapshot_action(self._opponent_env_state(discard_pending=True))
+            res_name = RESOURCES_CW[int(action[4])]
+            if opp.resources.get(res_name, 0) > 0:
+                opp.resources[res_name] -= 1
+                self.game.log_discard(opp, [res_name])
+                discarded += 1
 
     def _sample_snapshot_action(self, env_state: EnvObsState) -> np.ndarray:
         """Build the opponent-POV obs + masks for ``env_state`` and sample the

@@ -106,6 +106,32 @@ def test_no_snapshot_falls_back_to_heuristic() -> None:
     assert done  # heuristic opponent path runs without error
 
 
+def test_snapshot_opponent_discards_via_its_policy() -> None:
+    # On a 7, the opponent's forced discard must come from its frozen policy's
+    # Discard head (sampled, masked), not the heuristic.
+    env = CatanEnv(opponent_type="snapshot")
+    stub = _SetupThenEndTurnStub()  # _fill_action handles the DISCARD mask
+    env.set_snapshot_opponent(stub)
+    env.reset(seed=0)
+    opp = env.opponent_player
+    opp.resources = {"WOOD": 4, "BRICK": 4, "WHEAT": 4, "ORE": 0, "SHEEP": 0}
+    total = sum(opp.resources.values())  # 12 -> discard 6
+    calls_before = stub.calls
+    env._opponent_discard()
+    assert sum(opp.resources.values()) == total - total // 2  # exactly half dropped
+    assert stub.calls > calls_before  # the frozen policy was sampled, not the heuristic
+
+
+def test_opponent_discard_falls_back_to_heuristic_without_snapshot() -> None:
+    env = CatanEnv(opponent_type="snapshot")  # no snapshot injected -> heuristic
+    env.reset(seed=2)
+    opp = env.opponent_player
+    opp.resources = {"WOOD": 5, "BRICK": 5, "WHEAT": 0, "ORE": 0, "SHEEP": 0}
+    total = sum(opp.resources.values())  # 10
+    env._opponent_discard()
+    assert sum(opp.resources.values()) < total  # heuristic path discarded
+
+
 class _RobberSpamStub:
     """Setup: legal placement; main turns: never EndTurn (spam MoveRobber) so
     the opponent turn never terminates on its own — exercises the action cap."""
