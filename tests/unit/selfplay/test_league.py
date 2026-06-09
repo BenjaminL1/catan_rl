@@ -55,6 +55,19 @@ class TestLeagueConfigValidators:
         with pytest.raises(ValueError, match="add_snapshot_every"):
             LeagueConfig(add_snapshot_every_n_updates=0)
 
+    def test_snapshot_weight_requires_heuristic_floor(self) -> None:
+        # PG-2 guard (T027): self-play with no heuristic weight is rejected.
+        with pytest.raises(ValueError, match="requires heuristic_weight"):
+            LeagueConfig(random_weight=0.0, heuristic_weight=0.0, snapshot_weight=1.0)
+
+    def test_heuristic_floor_can_be_opted_out(self) -> None:
+        LeagueConfig(
+            random_weight=0.0,
+            heuristic_weight=0.0,
+            snapshot_weight=1.0,
+            require_heuristic_floor=False,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Snapshot retention
@@ -239,14 +252,28 @@ class TestOpponentMix:
     def test_snapshot_weight_with_populated_pool_yields_snapshots(self) -> None:
         # Snapshot path is wired (T017): a populated pool yields snapshot kinds,
         # not a raise.
-        lg = League(LeagueConfig(random_weight=0.0, heuristic_weight=0.0, snapshot_weight=1.0))
+        lg = League(
+            LeagueConfig(
+                random_weight=0.0,
+                heuristic_weight=0.0,
+                snapshot_weight=1.0,
+                require_heuristic_floor=False,
+            )
+        )
         lg.add_snapshot({"w": torch.zeros(1)}, update_idx=4)
         rng = np.random.default_rng(0)
         mix = lg.build_env_opponent_mix(n_envs=4, rng=rng)
         assert all(k == OPPONENT_KIND_SNAPSHOT for k in mix)
 
     def test_assignments_carry_stable_snapshot_id(self) -> None:
-        lg = League(LeagueConfig(random_weight=0.0, heuristic_weight=0.0, snapshot_weight=1.0))
+        lg = League(
+            LeagueConfig(
+                random_weight=0.0,
+                heuristic_weight=0.0,
+                snapshot_weight=1.0,
+                require_heuristic_floor=False,
+            )
+        )
         sid = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=4)
         rng = np.random.default_rng(0)
         assigns = lg.build_env_opponent_assignments(n_envs=4, rng=rng)

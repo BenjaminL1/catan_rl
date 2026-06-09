@@ -366,10 +366,15 @@ class LeagueConfig:
     """Weight on the heuristic opponent."""
 
     snapshot_weight: float = 0.0
-    """Weight on past-policy snapshots. Setting >0 with an empty
-    pool falls back to the remaining kinds. Phase 6 raises
-    NotImplementedError if a snapshot is actually sampled — the
-    snapshot opponent path lands in Phase 8+."""
+    """Weight on past-policy snapshots (self-play). Setting >0 with an empty
+    pool falls back to the remaining kinds (FR-011); a non-empty pool hands out
+    snapshot opponents seated in ``CatanEnv`` via the snapshot-opponent driver."""
+
+    require_heuristic_floor: bool = True
+    """PG-2 guard: when self-play is on (``snapshot_weight > 0``), the heuristic
+    must keep a non-zero weight so the agent never forgets how to beat the
+    heuristic that the phase-advancement gate measures. Set ``False`` only for
+    mechanism tests / research configs that intentionally want pure self-play."""
 
     add_snapshot_every_n_updates: int = 4
     """Append a fresh snapshot to the pool every N PPO updates."""
@@ -382,6 +387,12 @@ class LeagueConfig:
             _check_non_negative(name, getattr(self, name))
         if self.random_weight + self.heuristic_weight + self.snapshot_weight == 0:
             raise ValueError("at least one league weight must be > 0; got all zeros")
+        if self.require_heuristic_floor and self.snapshot_weight > 0 and self.heuristic_weight <= 0:
+            raise ValueError(
+                "snapshot_weight > 0 requires heuristic_weight > 0 (PG-2 floor: "
+                "keep beating the heuristic during self-play). Set "
+                "require_heuristic_floor=False to opt out."
+            )
         _check_positive("add_snapshot_every_n_updates", self.add_snapshot_every_n_updates)
         _check_positive("maxlen", self.maxlen)
 

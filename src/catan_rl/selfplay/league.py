@@ -186,6 +186,11 @@ class League:
     def n_snapshots(self) -> int:
         return len(self._snapshots)
 
+    def snapshot_ids(self) -> set[int]:
+        """Stable ids currently in the pool (post-eviction) — used by the
+        self-play opponent cache to prune evicted snapshots."""
+        return {s.snapshot_id for s in self._snapshots}
+
     def peek_snapshot(self, idx: int) -> LeagueSnapshot:
         """Read the snapshot at *positional* index ``idx`` (0 = oldest,
         -1 = newest).

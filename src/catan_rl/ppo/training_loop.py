@@ -198,10 +198,10 @@ def build_training_state(
     )
 
     league = League(cfg.league)
-    # Build the opponent mix once at construction. Phase 6 doesn't
-    # support mid-rollout opponent swap, so this list is the
-    # vec env's opponent assignment for the entire run (until
-    # checkpoint resume rebuilds with a fresh draw — see resume path).
+    # Initial opponent mix at construction. When self-play is on
+    # (snapshot_weight>0) the training loop re-draws the per-env assignment
+    # each rollout via vec_env.set_opponents (US3 / T026), so this is just the
+    # first rollout's opponents; otherwise it stands for the whole run.
     opp_rng = np.random.default_rng(cfg.seed)
     opp_mix = league.build_env_opponent_mix(n_envs=cfg.rollout.n_envs, rng=opp_rng)
     vec_env = SerialVecEnv(
@@ -584,9 +584,44 @@ def run_training_loop(
     if max_updates is not None:
         end_update = min(end_update, state.update_idx + max_updates)
 
+    # Self-play opponent resolver (US3): snapshot_id -> frozen opponent, cached
+    # per id (D6) and pruned to the live pool. Only used when self-play is on.
+    _snap_geometry = build_geometry().as_dict_of_tensors()
+    _snap_cache: dict[int, Any] = {}
+
+    def _resolve_snapshot(snapshot_id: int) -> Any:
+        cached = _snap_cache.get(snapshot_id)
+        if cached is not None:
+            return cached
+        snap = state.league.peek_by_id(snapshot_id)
+        if snap is None:
+            return None  # evicted -> env falls back to heuristic body (FR-011)
+        from catan_rl.selfplay.snapshot_opponent import build_snapshot_opponent
+
+        frozen = build_snapshot_opponent(
+            snap.state_dict, geometry=_snap_geometry, device=state.device, seed=cfg.seed
+        )
+        _snap_cache[snapshot_id] = frozen
+        return frozen
+
     try:
         while state.update_idx < end_update:
             update_idx = state.update_idx
+
+            # ---- self-play opponent refresh (US3) -------------------
+            # Re-draw the per-env opponent assignment each rollout so freshly
+            # added snapshots enter play. Guarded by snapshot_weight>0 so the
+            # default (heuristic-only) run is unchanged. Per-update-seeded RNG
+            # keeps the assignment sequence resume-reproducible.
+            if cfg.league.snapshot_weight > 0:
+                live_ids = state.league.snapshot_ids()
+                for stale in [k for k in _snap_cache if k not in live_ids]:
+                    del _snap_cache[stale]
+                opp_rng = np.random.default_rng((cfg.seed * 1_000_003 + update_idx) % (2**31 - 1))
+                assignments = state.league.build_env_opponent_assignments(
+                    n_envs=cfg.rollout.n_envs, rng=opp_rng
+                )
+                state.vec_env.set_opponents(assignments, snapshot_resolver=_resolve_snapshot)
 
             # ---- rollout ---------------------------------------------
             state.obs, state.masks = state.collector.collect(state.obs, state.masks)

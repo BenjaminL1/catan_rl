@@ -60,9 +60,10 @@ eval:
   eval_opponents: [heuristic]    # audit: dropped 'random' from periodic eval (saturated signal, ~80% of eval time); re-add at milestones
 
 league:
-  random_weight: 0.0             # heuristic-only baseline; flip in Phase 8+
-  heuristic_weight: 1.0
-  snapshot_weight: 0.0           # raises NotImplementedError when sampled
+  random_weight: 0.0             # heuristic-only baseline by default
+  heuristic_weight: 1.0          # PG-2 floor: keep > 0 when self-play is on
+  snapshot_weight: 0.0           # >0 turns on self-play (seats frozen snapshots)
+  require_heuristic_floor: true  # reject snapshot_weight>0 with heuristic_weight=0
   add_snapshot_every_n_updates: 4
   maxlen: 100
 
