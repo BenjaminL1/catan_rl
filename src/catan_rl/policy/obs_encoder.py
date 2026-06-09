@@ -533,9 +533,12 @@ class ObsEncoder:
             for c in DEV_CARD_ORDER:
                 feats.append(min(1.0, float(dev.get(c, 0)) / 8.0))
         else:
-            played = _dev_counts(player, hidden=False)
-            for i in range(N_DEV_TYPES):
-                feats.append(min(1.0, float(played[i]) / 8.0))
+            # Opponent: hidden dev-card TYPES are secret (the belief head's
+            # target) and must NOT leak here. The opponent's observable dev
+            # info is already carried elsewhere — PLAYED composition in
+            # ``next_played_dev_counts`` and the hidden COUNT in the one-hot
+            # appended below — so this slice is zero (no leak, no duplication).
+            feats.extend([0.0] * N_DEV_TYPES)
 
         # Phase flags (5).
         in_setup = bool(env_state.initial_placement_phase)
@@ -663,6 +666,11 @@ def _dev_counts(player: Any, *, hidden: bool) -> np.ndarray:
     Note: this is the input for the v2 ``CountDevEncoder``, which expects
     a (5,) bincount-style vector. The encoder is permutation-invariant by
     construction so the in-array order is purely conventional.
+
+    Foot-gun: with ``hidden=True`` the returned vector INCLUDES VP cards. VP is
+    observable in 1v1 (the victoryPoints / visibleVictoryPoints gap), so any
+    caller wanting the genuinely-SECRET hidden split (e.g. the belief target)
+    must zero the VP index itself — see ``CatanEnv.belief_target``.
     """
     out = np.zeros(N_DEV_TYPES, dtype=np.float32)
     if hidden:

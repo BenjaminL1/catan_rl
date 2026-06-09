@@ -38,11 +38,32 @@ def test_belief_target_counts_just_bought_cards() -> None:
     # newDevCards (bought this turn, not yet playable) are still hidden info.
     env = _fresh_env()
     env.opponent_player.devCards = {"KNIGHT": 1}
-    env.opponent_player.newDevCards = ["VP"]
+    env.opponent_player.newDevCards = ["MONOPOLY"]
     t = env.belief_target()
     assert t.sum() == 1.0
     assert t[DEV_CARD_ORDER.index("KNIGHT")] == 0.5
-    assert t[DEV_CARD_ORDER.index("VP")] == 0.5
+    assert t[DEV_CARD_ORDER.index("MONOPOLY")] == 0.5
+
+
+def test_belief_target_excludes_observable_vp() -> None:
+    # VP cards are observable in 1v1 (the victoryPoints vs visibleVictoryPoints
+    # gap reveals the hidden VP count), so they are EXCLUDED from the hidden
+    # posterior: the head predicts only the genuinely-secret buyable types.
+    env = _fresh_env()
+    env.opponent_player.devCards = {"KNIGHT": 1, "VP": 3}
+    env.opponent_player.newDevCards = []
+    t = env.belief_target()
+    assert t[DEV_CARD_ORDER.index("VP")] == 0.0  # VP never carries target mass
+    assert t[DEV_CARD_ORDER.index("KNIGHT")] == 1.0  # normalized over non-VP only
+    assert t.sum() == 1.0
+
+
+def test_belief_target_vp_only_is_masked() -> None:
+    # An opponent holding ONLY VP cards has no hidden-TYPE signal -> all-zeros.
+    env = _fresh_env()
+    env.opponent_player.devCards = {"VP": 2}
+    env.opponent_player.newDevCards = []
+    assert env.belief_target().sum() == 0.0
 
 
 def test_belief_target_empty_is_all_zeros_masked() -> None:
