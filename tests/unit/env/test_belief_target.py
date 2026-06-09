@@ -9,9 +9,12 @@ answer is not already an input.
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from catan_rl.env.catan_env import DEV_CARD_ORDER, CatanEnv
 from catan_rl.policy.obs_schema import N_DEV_TYPES
+
+_VP_IDX = 5  # next/current_player_main layout: [0:5]=resources, [5]=VP/15
 
 
 def _fresh_env() -> CatanEnv:
@@ -100,3 +103,22 @@ def test_hidden_dev_types_do_not_leak_into_observation() -> None:
         )
     # ... but the belief target distinguishes them (it IS the GT).
     assert not np.array_equal(target_a, target_b)
+
+
+def test_opponent_vp_obs_uses_visible_not_total() -> None:
+    # The opponent's VP obs feature must be visibleVictoryPoints (observable),
+    # never total victoryPoints — otherwise the hidden-VP count leaks.
+    env = _fresh_env()
+    env.opponent_player.victoryPoints = 7
+    env.opponent_player.visibleVictoryPoints = 5  # 2 hidden VP dev cards
+    obs = env._get_obs()
+    assert obs["next_player_main"][_VP_IDX] == pytest.approx(5 / 15)
+
+
+def test_agent_vp_obs_uses_own_total() -> None:
+    # The agent DOES see its own true total VP (it knows its own hidden cards).
+    env = _fresh_env()
+    env.agent_player.victoryPoints = 6
+    env.agent_player.visibleVictoryPoints = 4
+    obs = env._get_obs()
+    assert obs["current_player_main"][_VP_IDX] == pytest.approx(6 / 15)

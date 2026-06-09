@@ -479,8 +479,16 @@ class ObsEncoder:
         for r in RESOURCES_CW:
             feats.append(min(1.0, float(resources.get(r, 0)) / 8.0))
 
-        # VP
-        feats.append(float(player.victoryPoints) / 15.0)
+        # VP / 15. POV split (no-leak): the AGENT sees its OWN true total
+        # (it knows its own hidden VP cards); the OPPONENT contributes only
+        # visibleVictoryPoints (= victoryPoints - hidden VP cards), so the
+        # opponent's hidden-VP count never leaks. A hidden VP only becomes
+        # visible when it wins the game (which ends the episode anyway).
+        if is_agent:
+            feats.append(float(player.victoryPoints) / 15.0)
+        else:
+            visible_vp = getattr(player, "visibleVictoryPoints", player.victoryPoints)
+            feats.append(float(visible_vp) / 15.0)
 
         # Income (resource production rate per resource).
         income = _compute_income(player, game.board)
