@@ -8,8 +8,8 @@ Pins:
    evicted FIFO.
 3. Snapshot cloning — modifying the source state dict after
    ``add_snapshot`` does NOT mutate the stored snapshot.
-4. Snapshot path is currently gated — sampling raises
-   NotImplementedError when snapshot_weight>0 AND the pool is non-empty.
+4. Snapshot sampling is wired — a non-empty pool yields snapshot kinds and
+   assignments carry a stable snapshot_id; an empty pool falls back (FR-011).
 5. add_snapshot_every_n_updates schedule.
 6. Validators reject negative / all-zero weights.
 """
@@ -24,6 +24,7 @@ from catan_rl.ppo.arguments import LeagueConfig
 from catan_rl.selfplay.league import (
     OPPONENT_KIND_HEURISTIC,
     OPPONENT_KIND_RANDOM,
+    OPPONENT_KIND_SNAPSHOT,
     League,
     LeagueSnapshot,
 )
@@ -235,20 +236,32 @@ class TestOpponentMix:
         mix = lg.build_env_opponent_mix(n_envs=8, rng=rng)
         assert all(k == OPPONENT_KIND_HEURISTIC for k in mix)
 
-    def test_snapshot_weight_with_populated_pool_raises(self) -> None:
-        # Phase 6 gates the snapshot opponent path with a loud error.
-        # Wait for Phase 8 (checkpoint loading) before flipping it on.
-        lg = League(
-            LeagueConfig(
-                random_weight=0.0,
-                heuristic_weight=0.0,
-                snapshot_weight=1.0,
-            )
-        )
+    def test_snapshot_weight_with_populated_pool_yields_snapshots(self) -> None:
+        # Snapshot path is wired (T017): a populated pool yields snapshot kinds,
+        # not a raise.
+        lg = League(LeagueConfig(random_weight=0.0, heuristic_weight=0.0, snapshot_weight=1.0))
         lg.add_snapshot({"w": torch.zeros(1)}, update_idx=4)
         rng = np.random.default_rng(0)
-        with pytest.raises(NotImplementedError, match="snapshot opponent path"):
-            lg.build_env_opponent_mix(n_envs=4, rng=rng)
+        mix = lg.build_env_opponent_mix(n_envs=4, rng=rng)
+        assert all(k == OPPONENT_KIND_SNAPSHOT for k in mix)
+
+    def test_assignments_carry_stable_snapshot_id(self) -> None:
+        lg = League(LeagueConfig(random_weight=0.0, heuristic_weight=0.0, snapshot_weight=1.0))
+        sid = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=4)
+        rng = np.random.default_rng(0)
+        assigns = lg.build_env_opponent_assignments(n_envs=4, rng=rng)
+        assert all(a.kind == OPPONENT_KIND_SNAPSHOT for a in assigns)
+        assert all(a.snapshot_id == sid for a in assigns)
+        # The sampled id resolves back through the stable-id lookup.
+        assert lg.peek_by_id(sid) is not None
+
+    def test_assignments_fall_back_when_pool_empty(self) -> None:
+        # snapshot_weight>0 but empty pool -> heuristic, no snapshot id (FR-011).
+        lg = League(LeagueConfig(random_weight=0.0, heuristic_weight=1.0, snapshot_weight=1.0))
+        rng = np.random.default_rng(0)
+        assigns = lg.build_env_opponent_assignments(n_envs=4, rng=rng)
+        assert all(a.kind == OPPONENT_KIND_HEURISTIC for a in assigns)
+        assert all(a.snapshot_id is None for a in assigns)
 
 
 # ---------------------------------------------------------------------------

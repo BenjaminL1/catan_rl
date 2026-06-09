@@ -7,14 +7,13 @@ Phase 6 of the v2 training-infra build-out. Two layered jobs:
    based on the configured weights. The vec env wires this into its
    per-env ``env_kwargs_list`` at construction.
 
-2. **Snapshot retention.** :meth:`League.add_snapshot` stores past
-   policy state dicts in a bounded ``deque``. The snapshot opponent
-   path is **scaffolded but not yet wired** — Phase 6 raises
-   :class:`NotImplementedError` if the config gives the snapshot pool a
-   non-zero weight, so the operator gets a loud failure rather than a
-   silent fallback. The snapshot path becomes live once Phase 8
-   (checkpointing) lands a way to instantiate a frozen-policy opponent
-   inside ``CatanEnv``.
+2. **Snapshot retention + sampling.** :meth:`League.add_snapshot` stores
+   past policy state dicts in a bounded ``deque``;
+   :meth:`League.build_env_opponent_assignments` hands out
+   :class:`OpponentAssignment`\\ s carrying a stable ``snapshot_id`` so the
+   vec env can instantiate a frozen-policy opponent inside ``CatanEnv``
+   (US1, T017). An empty/evicted pool falls back to a non-snapshot kind
+   (FR-011) rather than erroring.
 
 Why now: opponent diversity is a known lever for PPO self-play
 stability, but the Phase-3 features (PFSP-hard / Nash pruning /
@@ -42,11 +41,9 @@ from catan_rl.ppo.arguments import LeagueConfig
 OPPONENT_KIND_RANDOM = "random"
 OPPONENT_KIND_HEURISTIC = "heuristic"
 OPPONENT_KIND_SNAPSHOT = "snapshot"
-"""Sentinel used in :meth:`League.build_env_opponent_mix` when a frozen
-past-policy snapshot is sampled. The vec env interprets ``"snapshot"``
-as "construct a policy-opponent env using ``League.peek_snapshot(i)``"
-— wiring deferred to Phase 8+. For Phase 6 the league refuses to
-return ``"snapshot"`` unless explicitly opted in."""
+"""Opponent kind for a frozen past-policy snapshot. The vec env resolves the
+assignment's ``snapshot_id`` via :meth:`League.peek_by_id` and injects a
+``FrozenSnapshotOpponent`` into ``CatanEnv`` (US1)."""
 
 _KNOWN_KINDS = (OPPONENT_KIND_RANDOM, OPPONENT_KIND_HEURISTIC, OPPONENT_KIND_SNAPSHOT)
 
@@ -259,21 +256,13 @@ class League:
         if self.cfg.heuristic_weight > 0:
             kinds.append(OPPONENT_KIND_HEURISTIC)
             weights.append(self.cfg.heuristic_weight)
+        # Snapshots are sample-eligible only when the pool is non-empty (it is
+        # empty during self-play warm-up); an evicted/empty pool simply
+        # excludes the snapshot kind and renormalises over the rest (FR-011).
         if self.cfg.snapshot_weight > 0 and len(self._snapshots) > 0:
-            # Snapshot path: refuse with a loud error until Phase 8+
-            # wires a snapshot-opponent into CatanEnv. The check is
-            # gated on a non-empty pool so an operator who configures
-            # snapshot_weight>0 BEFORE any snapshots exist (the
-            # warm-up period) doesn't trip the error immediately.
-            raise NotImplementedError(
-                "snapshot_weight > 0 with a non-empty pool: the snapshot "
-                "opponent path is not wired in Phase 6. Wait for Phase 8 "
-                "(checkpoint loading) or set snapshot_weight=0."
-            )
+            kinds.append(OPPONENT_KIND_SNAPSHOT)
+            weights.append(self.cfg.snapshot_weight)
         if not kinds:
-            # All weights are 0 or the only non-zero weight is snapshot
-            # with an empty pool. Fall back to heuristic so the env
-            # still has a valid opponent.
             kinds = [OPPONENT_KIND_HEURISTIC]
             weights = [1.0]
 
@@ -281,6 +270,27 @@ class League:
         probs = probs / probs.sum()
         idxs = rng.choice(len(kinds), size=n_envs, p=probs)
         return [kinds[int(i)] for i in idxs]
+
+    def build_env_opponent_assignments(
+        self, *, n_envs: int, rng: np.random.Generator
+    ) -> list[OpponentAssignment]:
+        """Like :meth:`build_env_opponent_mix` but returns full
+        :class:`OpponentAssignment`\\ s — each ``snapshot`` entry carries a
+        concrete, **stable** ``snapshot_id`` sampled uniformly from the current
+        pool (resolve via :meth:`peek_by_id`; ``None`` if later evicted →
+        caller falls back per FR-011). This is the consumer API for the vec env
+        / training loop (T017); the string ``build_env_opponent_mix`` is kept
+        for back-compat.
+        """
+        kinds = self.build_env_opponent_mix(n_envs=n_envs, rng=rng)
+        pool_ids = [s.snapshot_id for s in self._snapshots]
+        out: list[OpponentAssignment] = []
+        for kind in kinds:
+            if kind == OPPONENT_KIND_SNAPSHOT:
+                out.append(OpponentAssignment(kind=kind, snapshot_id=int(rng.choice(pool_ids))))
+            else:
+                out.append(OpponentAssignment(kind=kind))
+        return out
 
     # ------------------------------------------------------------------
     # Diagnostics
