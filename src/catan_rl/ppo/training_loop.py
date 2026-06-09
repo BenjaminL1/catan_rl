@@ -607,9 +607,13 @@ def run_training_loop(
                 _snap_geom.update(build_geometry().as_dict_of_tensors())
             policy = load_frozen_policy(snap.state_dict, geometry=_snap_geom)
             _snap_policy_cache[snapshot_id] = policy
-        # Decorrelated, reproducible per-(id, env) seed.
+        # Pin the opponent to CPU regardless of the learner device: opponent
+        # inference is per-env BATCH-1, the regime where MPS/CUDA are ~7-8x
+        # SLOWER than CPU (the same reason eval is CPU-pinned). The agent's
+        # rollout forward stays batched on the learner device. (T019 perf fix —
+        # ~3-4x faster self-play updates than running the opponent on MPS.)
         seed = (cfg.seed ^ (snapshot_id * 0x9E3779B1) ^ (env_idx * 0x85EBCA6B)) & 0x7FFFFFFF
-        return FrozenSnapshotOpponent(policy, device=state.device, seed=seed)
+        return FrozenSnapshotOpponent(policy, device=torch.device("cpu"), seed=seed)
 
     try:
         while state.update_idx < end_update:
