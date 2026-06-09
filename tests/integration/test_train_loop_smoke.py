@@ -317,10 +317,15 @@ class TestNonFiniteLossGuard:
 
 class TestMetricsJSONL:
     def _eval_cfg(self, total_updates: int = 2) -> TrainConfig:
-        # Override the base tiny cfg's disabled eval so we exercise
-        # both train and eval lines.
+        # Override the base tiny cfg's disabled eval so we exercise both train
+        # and eval lines. Pin eval_opponents explicitly (the dataclass default
+        # was trimmed to ("heuristic",) by the wall-clock audit) so the
+        # 2-opponent eval-line count asserted below is self-contained.
         cfg = _tiny_cfg(total_updates=total_updates)
-        return replace(cfg, eval=replace(cfg.eval, eval_every_updates=1))
+        return replace(
+            cfg,
+            eval=replace(cfg.eval, eval_every_updates=1, eval_opponents=("random", "heuristic")),
+        )
 
     def test_file_appears_with_expected_schema(
         self, tmp_path: Path, silent_logger: logging.Logger
