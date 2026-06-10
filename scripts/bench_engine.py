@@ -272,7 +272,7 @@ def _run_py_backend(
                 if include_policy:
                     obs_t = _obs_to_torch(obs)
                     _ = policy(obs_t)
-                obs, _masks, _r, _term, _trunc, _final = vec_env.step_all(actions)
+                obs, _masks, _r, _term, _trunc, _final, _final_info = vec_env.step_all(actions)
         return time.perf_counter() - t0
     finally:
         vec_env.close()
