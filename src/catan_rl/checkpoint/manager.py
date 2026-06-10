@@ -156,11 +156,19 @@ def _capture_rng_state() -> dict[str, Any]:
     """Snapshot the three PRNGs the trainer touches: numpy, stdlib
     random, torch. Saved as plain Python objects so the checkpoint can
     be inspected without re-importing torch."""
-    return {
+    state: dict[str, Any] = {
         "numpy_state": np.random.get_state(legacy=False),
         "python_state": random.getstate(),
         "torch_state": torch.random.get_rng_state(),
     }
+    # Rollout action sampling runs on the TRAINING device (MPS), whose per-device
+    # generator the CPU torch_state above does NOT cover — additively capture it
+    # (+ CUDA) so resume is bit-identical on-device. Mirrors snapshot_opponent.
+    if hasattr(torch, "mps") and torch.backends.mps.is_available():
+        state["mps_state"] = torch.mps.get_rng_state()
+    if torch.cuda.is_available():
+        state["cuda_state"] = torch.cuda.get_rng_state_all()
+    return state
 
 
 def _capture_vec_env_state(vec_env: Any) -> dict[str, Any]:
@@ -502,6 +510,16 @@ class CheckpointPayload:
             # ("RNG state must be a torch.ByteTensor"). Force it back to CPU uint8.
             # (MPS-only; CPU resume kept it on-host so this was dormant in CI.)
             torch.random.set_rng_state(torch_state.to(device="cpu", dtype=torch.uint8))
+        # Device generators (additive; absent in pre-device-rng checkpoints). Each
+        # ByteTensor must be CPU uint8 (load_checkpoint's map_location moved them).
+        mps_state = self.rng_state.get("mps_state")
+        if mps_state is not None and hasattr(torch, "mps") and torch.backends.mps.is_available():
+            torch.mps.set_rng_state(mps_state.to(device="cpu", dtype=torch.uint8))
+        cuda_state = self.rng_state.get("cuda_state")
+        if cuda_state is not None and torch.cuda.is_available():
+            torch.cuda.set_rng_state_all(
+                [s.to(device="cpu", dtype=torch.uint8) for s in cuda_state]
+            )
 
     def apply_all(
         self,

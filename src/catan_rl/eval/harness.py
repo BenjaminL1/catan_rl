@@ -34,6 +34,7 @@ Contract for the env:
 
 from __future__ import annotations
 
+import random
 import zlib
 from dataclasses import dataclass, field
 from typing import Any
@@ -204,15 +205,22 @@ class EvalHarness:
         and is skipped entirely for parameter-less policy stubs.
 
         The policy is also switched to ``eval()`` mode for the round and
-        restored to its prior mode afterwards. During training the policy
-        is in ``train()`` mode, and the encoder carries dropout
-        (``encoders.py`` ``dropout=0.05``); without this toggle eval WR
-        would be measured on a stochastically perturbed policy. Restored
-        in the ``finally`` so the next SGD update resumes with dropout on.
+        restored to its prior mode afterwards (defensive: the encoder
+        dropout is 0.0, but the toggle guards against any future stochastic
+        layer perturbing eval WR). Restored in the ``finally``.
+
+        The global numpy + stdlib ``random`` PRNGs are snapshotted and
+        restored around the round: eval plays full games that consume the
+        process-global streams (StackedDice, heuristic, steal/dev-card), and
+        in-loop eval runs INSIDE the training loop — without this, whether/when
+        eval runs would shift the subsequent rollout, and resume on a different
+        eval cadence would diverge. Mirrors ``mask_spec_from_env``.
         """
         orig_device = self._policy_device(policy)
         moved = orig_device is not None and orig_device != self.device
         was_training = bool(getattr(policy, "training", False))
+        np_state = np.random.get_state()
+        py_state = random.getstate()
         if moved:
             policy.to(self.device)
         if was_training:
@@ -230,6 +238,8 @@ class EvalHarness:
                 policy.to(orig_device)
             if was_training:
                 policy.train()
+            np.random.set_state(np_state)
+            random.setstate(py_state)
 
     # ------------------------------------------------------------------
     # Internals

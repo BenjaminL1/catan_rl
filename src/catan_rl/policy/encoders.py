@@ -94,7 +94,12 @@ class TileEncoder(nn.Module):
         n_layers: int = 2,
         n_heads: int = 4,
         dim_ff: int = 192,
-        dropout: float = 0.05,
+        # 0.0 (not 0.05): the training loop never toggles .eval()/.train(), so a
+        # non-zero transformer dropout makes the rollout old_log_prob and the SGD
+        # new_log_prob use DIFFERENT dropout masks -> the PPO ratio != 1 at epoch 0
+        # before any gradient step, inflating clip_frac + approx_kl (the early-stop
+        # gate). No-param layer -> existing checkpoints load unchanged.
+        dropout: float = 0.0,
         axial_dim: int = 24,
         out_dim: int = 25,
     ) -> None:

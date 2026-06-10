@@ -175,13 +175,15 @@ class heuristicAIPlayer(player):
                 if playerAtVertex == self:
                     hexScore -= self.victoryPoints
                 elif playerAtVertex != None:  # There is an adversary on this vertex
-                    hexScore += playerAtVertex.visibleVictoryPoints
+                    # Compute visible VP LIVE (victoryPoints − hidden VP cards):
+                    # player.visibleVictoryPoints is a cache only refreshed at init
+                    # + VP-card buy, so it goes stale after settlement/city/LA/LR
+                    # changes — mirrors the obs_encoder + board.get_robber_spots fix.
+                    vis_vp = playerAtVertex.victoryPoints - playerAtVertex.devCards.get("VP", 0)
+                    hexScore += vis_vp
                     # Find strongest other player at this hex, provided player has resources
-                    if (
-                        playerAtVertex.visibleVictoryPoints >= playerToRob_VP
-                        and sum(playerAtVertex.resources.values()) > 0
-                    ):
-                        playerToRob_VP = playerAtVertex.visibleVictoryPoints
+                    if vis_vp >= playerToRob_VP and sum(playerAtVertex.resources.values()) > 0:
+                        playerToRob_VP = vis_vp
                         playerToRob = playerAtVertex
                 else:
                     pass
