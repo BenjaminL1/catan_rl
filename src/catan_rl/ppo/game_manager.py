@@ -68,6 +68,7 @@ class RolloutCollector:
         policy: Any,
         buffer: CompositeRolloutBuffer,
         device: torch.device | str,
+        league: Any | None = None,
     ) -> None:
         if vec_env.n_envs != buffer.n_envs:
             raise ValueError(
@@ -77,6 +78,10 @@ class RolloutCollector:
         self.policy = policy
         self.buffer = buffer
         self.device = torch.device(device) if isinstance(device, str) else device
+        # When set (PFSP active), the collector attributes each finished game's
+        # win/loss to the snapshot the env faced and records it on the league.
+        # ``None`` (default) → no attribution, zero overhead, byte-identical.
+        self.league = league
 
         # Post-rollout V(s_T+1) for GAE bootstrap. Populated by
         # :meth:`collect`. Always float32 (N,). The buffer's GAE step
@@ -134,14 +139,28 @@ class RolloutCollector:
                 self.vec_env.belief_targets() if self.buffer.belief_target is not None else None
             )
 
+            # PFSP attribution: the opponent each env is CURRENTLY facing, read
+            # BEFORE the step (the just-finishing game belongs to it, not to the
+            # post-auto-reset opponent). Only when a league is wired (PFSP on).
+            pre_opp_ids = self.vec_env.current_opponent_ids() if self.league is not None else None
+
             # Step the vec env. ``next_obs`` / ``next_masks`` are
             # auto-reset-aware: on terminated/truncated envs they
             # already reflect the next episode's start state.
             # ``final_obs`` is sparse — populated only for envs that
-            # just terminated/truncated.
-            next_obs, next_masks, rewards, terminated, truncated, final_obs = self.vec_env.step_all(
-                action_np
+            # just terminated/truncated; ``final_info`` carries their terminal
+            # {agent_vp, opp_vp} (the PFSP win signal, captured pre-reset).
+            next_obs, next_masks, rewards, terminated, truncated, final_obs, final_info = (
+                self.vec_env.step_all(action_np)
             )
+
+            if self.league is not None and pre_opp_ids is not None:
+                for i in range(self.vec_env.n_envs):
+                    if (terminated[i] or truncated[i]) and pre_opp_ids[i] is not None:
+                        info = final_info[i]
+                        self.league.record_outcome(
+                            pre_opp_ids[i], agent_won=info["agent_vp"] > info["opp_vp"]
+                        )
 
             self.buffer.add(
                 obs=obs,

@@ -215,10 +215,16 @@ def _capture_league_state(league: Any) -> dict[str, Any]:
                 "metadata": dict(snap.metadata),
             }
         )
-    return {
+    state: dict[str, Any] = {
         "snapshots": snapshots,
         "next_snapshot_id": int(getattr(league, "_next_snapshot_id", 0)),
     }
+    # PFSP per-opponent win-rate store (additive; absent in old checkpoints).
+    if hasattr(league, "opponent_stats_state"):
+        state["opponent_stats"] = {
+            int(sid): [float(p), float(g)] for sid, (p, g) in league.opponent_stats_state().items()
+        }
+    return state
 
 
 def _fsync_dir(path: Path) -> None:
@@ -404,6 +410,11 @@ class CheckpointPayload:
             default=-1,
         )
         league._next_snapshot_id = max(next_id, max_live + 1)
+        # PFSP win-rate store (additive; absent in pre-PFSP checkpoints → leave
+        # the league's store empty).
+        stats = self.league_state.get("opponent_stats")
+        if stats is not None and hasattr(league, "load_opponent_stats"):
+            league.load_opponent_stats({int(sid): tuple(v) for sid, v in stats.items()})
 
     def apply_to_vec_env(self, vec_env: Any) -> None:
         """Restore the vec env's per-env auto-reset Generator states.

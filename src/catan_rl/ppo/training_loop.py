@@ -233,7 +233,16 @@ def build_training_state(
         mask_spec=mask_spec,
         belief_target_dim=belief_target_dim,
     )
-    collector = RolloutCollector(vec_env=vec_env, policy=policy, buffer=buffer, device=device)
+    # Wire the league into the collector only when PFSP is on, so it attributes
+    # game outcomes to opponents (the win-rate signal). Off → no attribution,
+    # byte-identical rollout.
+    collector = RolloutCollector(
+        vec_env=vec_env,
+        policy=policy,
+        buffer=buffer,
+        device=device,
+        league=league if cfg.league.pfsp_enabled else None,
+    )
     trainer = PPOTrainer(cfg=cfg, policy=policy, optimizer=optimizer, device=device)
 
     # Checkpoint manager pins the directory; pruning is keep_last_n

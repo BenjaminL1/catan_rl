@@ -75,7 +75,7 @@ class TestStepAll:
             for i in range(3):
                 legal = np.flatnonzero(masks["type"][i])
                 actions[i, 0] = int(rng.choice(legal))
-            obs2, _, rewards, term, trunc, final_obs = ve.step_all(actions)
+            obs2, _, rewards, term, trunc, final_obs, _fi = ve.step_all(actions)
             assert isinstance(final_obs, dict)
             for arr in obs2.values():
                 assert arr.shape[0] == 3
@@ -116,7 +116,7 @@ class TestStepAll:
                         actions[i, 0] = 3  # END_TURN
                     else:
                         actions[i, 0] = int(rng.choice(legal))
-                _, masks, _r, term, trunc, final_obs = ve.step_all(actions)
+                _, masks, _r, term, trunc, final_obs, _fi = ve.step_all(actions)
                 done = term | trunc
                 if done.any():
                     saw_done = True

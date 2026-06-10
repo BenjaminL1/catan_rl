@@ -45,6 +45,10 @@ OPPONENT_KIND_SNAPSHOT = "snapshot"
 assignment's ``snapshot_id`` via :meth:`League.peek_by_id` and injects a
 ``FrozenSnapshotOpponent`` into ``CatanEnv`` (US1)."""
 
+# PFSP: minimum per-snapshot weight under the "hard" curve, so a fully-beaten
+# opponent (p_hat=1) keeps a small non-zero share (no starvation; FR-008).
+_PFSP_WEIGHT_FLOOR = 0.05
+
 _KNOWN_KINDS = (OPPONENT_KIND_RANDOM, OPPONENT_KIND_HEURISTIC, OPPONENT_KIND_SNAPSHOT)
 
 
@@ -143,6 +147,11 @@ class League:
         # OUTSIDE the deque so FIFO eviction never touches it, and carries a
         # stable id resolvable through peek_by_id like any snapshot.
         self._anchor: LeagueSnapshot | None = None
+        # PFSP per-opponent win-rate store: snapshot_id -> [p_hat (EMA), games].
+        # p_hat is a recency-weighted estimate of the LEARNER's win rate vs that
+        # snapshot; games gates cold-start. Pruned when a pool snapshot is
+        # evicted; the anchor's entry persists with the anchor.
+        self._opp_stats: dict[int, list[float]] = {}
 
     # ------------------------------------------------------------------
     # Snapshot management
@@ -171,6 +180,11 @@ class League:
         """
         snapshot_id = self._next_snapshot_id
         self._next_snapshot_id += 1
+        # FIFO eviction is silent on a full deque; capture the id that is about
+        # to drop so its PFSP win-rate entry is pruned (store stays <= maxlen+1).
+        evicted_id: int | None = None
+        if len(self._snapshots) == self._snapshots.maxlen and self._snapshots.maxlen:
+            evicted_id = self._snapshots[0].snapshot_id
         self._snapshots.append(
             LeagueSnapshot(
                 state_dict=self._clone_to_cpu(state_dict),
@@ -179,6 +193,8 @@ class League:
                 metadata=dict(metadata or {}),
             )
         )
+        if evicted_id is not None:
+            self._opp_stats.pop(evicted_id, None)
         return snapshot_id
 
     @staticmethod
@@ -220,6 +236,53 @@ class League:
     def anchor_id(self) -> int | None:
         """Stable id of the frozen anchor, or ``None`` if no anchor is set."""
         return None if self._anchor is None else self._anchor.snapshot_id
+
+    # ------------------------------------------------------------------
+    # PFSP win-rate tracking + weighting
+    # ------------------------------------------------------------------
+
+    def record_outcome(self, snapshot_id: int, *, agent_won: bool) -> None:
+        """Record one finished game's outcome (learner win/loss) vs a snapshot,
+        updating its recency-weighted (EMA) win-rate estimate. No-op for ids
+        that are neither in the pool nor the anchor (defensive against stale
+        ids whose snapshot was evicted)."""
+        if snapshot_id not in self.snapshot_ids():
+            return
+        won = 1.0 if agent_won else 0.0
+        st = self._opp_stats.get(snapshot_id)
+        if st is None:
+            self._opp_stats[snapshot_id] = [won, 1.0]  # seed EMA with first outcome
+        else:
+            a = self.cfg.pfsp_ema_alpha
+            st[0] = (1.0 - a) * st[0] + a * won
+            st[1] += 1.0
+
+    def opponent_win_rate(self, snapshot_id: int) -> tuple[float, int]:
+        """``(p_hat, games)`` for a snapshot; ``(0.0, 0)`` if unseen."""
+        st = self._opp_stats.get(snapshot_id)
+        return (0.0, 0) if st is None else (float(st[0]), int(st[1]))
+
+    def opponent_stats_state(self) -> dict[int, tuple[float, int]]:
+        """Serialisable PFSP state for the checkpoint, pruned to live ids."""
+        live = self.snapshot_ids()
+        return {sid: (float(p), int(g)) for sid, (p, g) in self._opp_stats.items() if sid in live}
+
+    def load_opponent_stats(self, state: Mapping[int, tuple[float, int]]) -> None:
+        """Restore PFSP win-rate state on resume (replaces any current)."""
+        self._opp_stats = {int(sid): [float(p), float(g)] for sid, (p, g) in state.items()}
+
+    def _pfsp_pool_weights(self, ids: list[int]) -> np.ndarray:
+        """Per-id sampling weight for the ``"hard"`` curve: the cold-start
+        weight if under ``pfsp_min_games``, else ``max(floor, (1 - p_hat)**k)``.
+        Equal inputs -> equal outputs (uniform); finite at p in {0, 1}."""
+        k = self.cfg.pfsp_k
+        min_games = self.cfg.pfsp_min_games
+        cold = self.cfg.pfsp_cold_start_weight
+        w = np.empty(len(ids), dtype=np.float64)
+        for j, sid in enumerate(ids):
+            p, g = self.opponent_win_rate(sid)
+            w[j] = cold if g < min_games else max(_PFSP_WEIGHT_FLOOR, (1.0 - p) ** k)
+        return w
 
     def n_snapshots(self) -> int:
         return len(self._snapshots)
@@ -362,15 +425,24 @@ class League:
         probs = probs / probs.sum()
         draws = rng.choice(len(labels), size=n_envs, p=probs)
         pool_ids = [s.snapshot_id for s in self._snapshots]
+        # PFSP: precompute the within-pool probability vector ONCE (constant over
+        # the env loop). Only when enabled + "hard"; otherwise the per-env draw
+        # stays the exact uniform ``rng.choice(pool_ids)`` call (byte-identical,
+        # FR-005). Computed only if the pool category is actually eligible.
+        pool_probs: np.ndarray | None = None
+        if self.cfg.pfsp_enabled and self.cfg.pfsp_curve == "hard" and pool_ids:
+            w = self._pfsp_pool_weights(pool_ids)
+            pool_probs = w / w.sum()
         out: list[OpponentAssignment] = []
         for d in draws:
             label = labels[int(d)]
             if label == "pool":
-                out.append(
-                    OpponentAssignment(
-                        kind=OPPONENT_KIND_SNAPSHOT, snapshot_id=int(rng.choice(pool_ids))
-                    )
+                sid = (
+                    int(rng.choice(pool_ids, p=pool_probs))
+                    if pool_probs is not None
+                    else int(rng.choice(pool_ids))
                 )
+                out.append(OpponentAssignment(kind=OPPONENT_KIND_SNAPSHOT, snapshot_id=sid))
             elif label == "anchor":
                 assert self._anchor is not None  # guarded by the weight check above
                 out.append(

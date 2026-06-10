@@ -226,6 +226,28 @@ class TestLeagueRoundTrip:
         new_id = league_b.add_snapshot(policy.state_dict(), update_idx=100)
         assert new_id == 3
 
+    def test_opponent_stats_round_trip(self, tmp_path: Path) -> None:
+        # PFSP win-rate store survives checkpoint save/load exactly (SC-004).
+        league_a = self._build_league_with_snapshots(2)
+        league_a.record_outcome(0, agent_won=True)
+        league_a.record_outcome(1, agent_won=False)
+        before = league_a.opponent_stats_state()
+        assert before  # non-empty
+        policy, opt = _fresh_policy_and_optimizer(seed=7)
+        save_checkpoint(
+            tmp_path / "ckpt.pt",
+            config={},
+            policy=policy,
+            optimizer=opt,
+            update_idx=5,
+            global_step=500,
+            league=league_a,
+        )
+        payload = load_checkpoint(tmp_path / "ckpt.pt")
+        league_b = League(LeagueConfig(maxlen=10, add_snapshot_every_n_updates=1))
+        payload.apply_to_league(league_b)
+        assert league_b.opponent_stats_state() == before
+
     def test_apply_to_league_clears_existing(self, tmp_path: Path) -> None:
         league_a = self._build_league_with_snapshots(2)
         policy, opt = _fresh_policy_and_optimizer(seed=0)

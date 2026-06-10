@@ -55,3 +55,14 @@ Design decisions resolving the spec's deferred choices. Format: Decision / Ratio
 **Decision**: `pfsp_enabled=False` (default) and `pfsp_curve="uniform"` both route the pool draw through the existing `rng.choice(pool_ids)` path unchanged; the category-level weights (random/heuristic/pool/anchor) are untouched by PFSP in all cases.
 
 **Rationale**: FR-005 / SC-003 — existing runs (including the live v4 anchored run) must be unaffected. Guarding the new path behind the flag + curve keeps the default code path identical.
+
+## Plan-review resolutions (folded in before implementation)
+
+Senior-RL plan review found 3 BLOCKERs + 2 SHOULD-FIX; the design is updated as:
+
+- **[B1] Terminal win signal must be plumbed out of the vec env.** `step_all` currently drops `info` and auto-resets before returning, so the collector cannot read the win post-hoc. Resolution: `step_all` (or `final_obs`) additionally returns per-terminated-env **terminal info** captured BEFORE auto-reset — `{agent_vp, opp_vp}` (and/or an `is_success`/`won` flag). The collector reads this, never post-reset env state.
+- **[B2] Per-inner-step attribution.** `current_opponent_ids()` is captured immediately BEFORE EACH `step_all` inside the n_steps loop (not once per rollout), because envs auto-reset multiple times per `collect()`.
+- **[B3] Latch the TRUE snapshot id.** vec_env stores the real `snapshot_id` per env at each `_reset_env` (the existing `opponent_policy_id` is a lossy `% N` and is NOT invertible). `current_opponent_ids()` returns those true ids.
+- **[SF4 — supersedes R1] Recency-weighted win rate.** Replace lifetime `wins/games` with an **EMA** of the per-game outcome (`p̂ ← (1−α)·p̂ + α·won`, α default ≈ 0.1) plus an integer `games` count used only for the cold-start gate. EMA tracks the *moving* learner (a self rated easy long ago becomes hard again as the policy drifts) — lifetime counts would stay stale and re-admit the drift PFSP exists to stop. Both `p̂` (float) and `games` (int) serialise exactly → resume still bit-stable.
+- **[SF5 — supersedes R4] Win by VP margin at episode end.** `won = agent_vp > opp_vp` at termination OR truncation (not "terminated-and-reached-15, truncation=loss"). This avoids spuriously rating strong opponents "hard" via stalemate truncations and reuses B1's terminal `{agent_vp, opp_vp}`.
+- **[CONSIDER] Evicted-stats pruning** (drop a snapshot's EMA/games when it leaves the FIFO deque, so the store stays ≤ maxlen+1); **scope note**: PFSP reweights only within the retained pool — forgetting beyond `maxlen` snapshots is covered by the anchor, not PFSP; optional **TB diagnostic** `pfsp/sampling_entropy` so a collapse-to-uniform is visible; keep the PFSP-off path's exact per-env `rng.choice` call order for byte-identity.

@@ -336,6 +336,109 @@ class TestAnchor:
         assert all(a.snapshot_id != aid for a in assigns)
 
 
+class TestPFSP:
+    def _pool_cfg(self, **kw):
+        return LeagueConfig(
+            heuristic_weight=0.0, snapshot_weight=1.0, require_heuristic_floor=False, **kw
+        )
+
+    def test_record_outcome_ema_and_games(self) -> None:
+        lg = League(self._pool_cfg(pfsp_ema_alpha=0.5))
+        sid = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)
+        lg.record_outcome(sid, agent_won=True)  # seed: p=1.0, games=1
+        assert lg.opponent_win_rate(sid) == (1.0, 1)
+        lg.record_outcome(sid, agent_won=False)  # p = 0.5*1 + 0.5*0 = 0.5, games=2
+        p, g = lg.opponent_win_rate(sid)
+        assert p == 0.5 and g == 2
+
+    def test_record_outcome_ignores_unknown_id(self) -> None:
+        lg = League(self._pool_cfg())
+        lg.record_outcome(999, agent_won=True)  # no such snapshot -> no-op
+        assert lg.opponent_win_rate(999) == (0.0, 0)
+
+    def test_stats_pruned_on_eviction(self) -> None:
+        lg = League(self._pool_cfg(maxlen=2))
+        s0 = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)
+        lg.record_outcome(s0, agent_won=True)
+        lg.add_snapshot({"w": torch.zeros(1)}, update_idx=1)
+        lg.add_snapshot({"w": torch.zeros(1)}, update_idx=2)  # evicts s0
+        assert lg.peek_by_id(s0) is None
+        assert lg.opponent_win_rate(s0) == (0.0, 0)  # stats pruned with the snapshot
+
+    def test_hard_curve_prefers_harder_opponent(self) -> None:
+        # SC-001: a 0.3-WR opponent is drawn >=2x as often as a 0.7-WR one.
+        lg = League(self._pool_cfg(pfsp_enabled=True, pfsp_curve="hard", pfsp_min_games=1))
+        easy = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)  # agent wins -> high WR
+        hard = lg.add_snapshot({"w": torch.ones(1)}, update_idx=4)  # agent loses -> low WR
+        for _ in range(10):
+            lg.record_outcome(easy, agent_won=True)  # p~1.0 (after EMA)
+            lg.record_outcome(hard, agent_won=False)  # p~0.0
+        assigns = lg.build_env_opponent_assignments(n_envs=400, rng=np.random.default_rng(0))
+        n_hard = sum(a.snapshot_id == hard for a in assigns)
+        n_easy = sum(a.snapshot_id == easy for a in assigns)
+        assert n_hard >= 2 * n_easy
+
+    def test_cold_start_snapshot_sampled(self) -> None:
+        # SC-002: a 0-game snapshot still gets a share alongside an established one.
+        lg = League(self._pool_cfg(pfsp_enabled=True, pfsp_curve="hard", pfsp_min_games=5))
+        old = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)
+        for _ in range(10):
+            lg.record_outcome(old, agent_won=True)  # established, easy -> low weight
+        fresh = lg.add_snapshot({"w": torch.ones(1)}, update_idx=4)  # 0 games -> cold-start
+        assigns = lg.build_env_opponent_assignments(n_envs=200, rng=np.random.default_rng(0))
+        assert sum(a.snapshot_id == fresh for a in assigns) > 0
+
+    def test_equal_winrate_is_uniform(self) -> None:
+        # FR-008: equal WRs -> ~uniform (no degeneracy).
+        lg = League(self._pool_cfg(pfsp_enabled=True, pfsp_curve="hard", pfsp_min_games=1))
+        a = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)
+        b = lg.add_snapshot({"w": torch.ones(1)}, update_idx=4)
+        for _ in range(6):
+            lg.record_outcome(a, agent_won=True)
+            lg.record_outcome(b, agent_won=True)  # both p~1.0 -> both floored equally
+        assigns = lg.build_env_opponent_assignments(n_envs=400, rng=np.random.default_rng(1))
+        na = sum(x.snapshot_id == a for x in assigns)
+        assert 150 < na < 250  # ~200, roughly uniform
+
+    def test_off_is_byte_identical(self) -> None:
+        # SC-003/FR-005: pfsp off (or curve uniform) reproduces the exact draw.
+        base = LeagueConfig(
+            heuristic_weight=0.0, snapshot_weight=1.0, require_heuristic_floor=False
+        )
+        pfsp_off = LeagueConfig(
+            heuristic_weight=0.0,
+            snapshot_weight=1.0,
+            require_heuristic_floor=False,
+            pfsp_enabled=True,
+            pfsp_curve="uniform",
+        )
+        for cfg in (base, pfsp_off):
+            lg = League(cfg)
+            ids = [lg.add_snapshot({"w": torch.zeros(1)}, update_idx=i) for i in range(3)]
+            for sid in ids:  # give them WR so a 'hard' curve WOULD differ
+                lg.record_outcome(sid, agent_won=(sid % 2 == 0))
+            seq = [
+                a.snapshot_id
+                for a in lg.build_env_opponent_assignments(n_envs=20, rng=np.random.default_rng(7))
+            ]
+            if cfg is base:
+                baseline = seq
+            else:
+                assert seq == baseline  # identical to the non-PFSP draw
+
+    def test_opponent_stats_round_trip(self) -> None:
+        # SC-004: stats serialise + restore exactly.
+        lg = League(self._pool_cfg(pfsp_ema_alpha=0.3))
+        sid = lg.add_snapshot({"w": torch.zeros(1)}, update_idx=0)
+        lg.record_outcome(sid, agent_won=True)
+        lg.record_outcome(sid, agent_won=False)
+        state = lg.opponent_stats_state()
+        lg2 = League(self._pool_cfg())
+        lg2.add_snapshot({"w": torch.zeros(1)}, update_idx=0)  # same id space (0)
+        lg2.load_opponent_stats(state)
+        assert lg2.opponent_win_rate(sid) == lg.opponent_win_rate(sid)
+
+
 # ---------------------------------------------------------------------------
 # Repr (smoke)
 # ---------------------------------------------------------------------------

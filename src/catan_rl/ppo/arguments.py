@@ -391,9 +391,44 @@ class LeagueConfig:
     forget how to beat a fixed strong baseline — the self-play drift /
     catastrophic-forgetting guard. 0 (default) = no anchor."""
 
+    pfsp_enabled: bool = False
+    """Prioritized Fictitious Self-Play: weight the snapshot-POOL draw by how
+    hard each snapshot currently is for the learner (recency-weighted win rate),
+    instead of uniform. Off by default → pool draw is byte-identical to before.
+    Governs only the pool category; anchor/heuristic/random weights unchanged."""
+
+    pfsp_curve: str = "uniform"
+    """PFSP weighting curve over the pool: ``"uniform"`` (no reweight, reproduces
+    today's behaviour even when pfsp_enabled) or ``"hard"`` (weight ∝
+    max(floor, (1 - win_rate) ** pfsp_k) — up-weight opponents the agent loses to)."""
+
+    pfsp_k: float = 1.0
+    """Sharpness exponent for the ``"hard"`` curve. Validation: > 0."""
+
+    pfsp_min_games: int = 5
+    """Cold-start gate: a snapshot with fewer recorded games gets
+    ``pfsp_cold_start_weight`` (eagerly tried) instead of a curve weight."""
+
+    pfsp_cold_start_weight: float = 1.0
+    """Sampling weight for under-`pfsp_min_games` snapshots (≈ the curve max so
+    fresh snapshots are tried before they have data). Validation: > 0."""
+
+    pfsp_ema_alpha: float = 0.1
+    """EMA step for the per-opponent win-rate estimate: p_hat <- (1-a)*p_hat +
+    a*won. Recency-weighted so a self rated easy long ago becomes hard again as
+    the policy drifts (lifetime counts would go stale and re-admit the drift
+    PFSP exists to stop). Validation: 0 < alpha <= 1."""
+
     def __post_init__(self) -> None:
         for name in ("random_weight", "heuristic_weight", "snapshot_weight", "anchor_weight"):
             _check_non_negative(name, getattr(self, name))
+        if self.pfsp_curve not in ("uniform", "hard"):
+            raise ValueError(f"pfsp_curve must be 'uniform' or 'hard'; got {self.pfsp_curve!r}")
+        _check_positive("pfsp_k", self.pfsp_k)
+        _check_positive("pfsp_min_games", self.pfsp_min_games)
+        _check_positive("pfsp_cold_start_weight", self.pfsp_cold_start_weight)
+        if not (0.0 < self.pfsp_ema_alpha <= 1.0):
+            raise ValueError(f"pfsp_ema_alpha must be in (0, 1]; got {self.pfsp_ema_alpha}")
         if (
             self.random_weight + self.heuristic_weight + self.snapshot_weight + self.anchor_weight
             == 0

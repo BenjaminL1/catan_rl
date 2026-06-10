@@ -87,6 +87,13 @@ class SerialVecEnv:
         # the snapshot body untouched.
         self._reset_options: list[dict[str, Any]] = [{} for _ in range(self.n_envs)]
         self._pending_snapshot: list[Any] = [_UNSET_SNAPSHOT for _ in range(self.n_envs)]
+        # PFSP attribution: the TRUE stable snapshot_id each env faces. `_pending`
+        # is the id to apply at the next reset (set by set_opponents); `_current`
+        # is the id of the in-progress game (latched in _reset_env). None for a
+        # heuristic/random opponent. NB: distinct from `opponent_policy_id`, which
+        # is a lossy `% N` embedding slot and is NOT invertible.
+        self._pending_opponent_id: list[int | None] = [None for _ in range(self.n_envs)]
+        self._current_opponent_id: list[int | None] = [None for _ in range(self.n_envs)]
 
         # Per-env RNG for auto-reset seed derivation. Owned by the vec
         # env so two runs with the same ``seed`` produce identical
@@ -169,17 +176,30 @@ class SerialVecEnv:
                     # so the opp-id hint stays meaningful past 100 snapshots.
                     "opponent_policy_id": a.snapshot_id % (N_OPP_POLICY_SLOTS - 1),
                 }
+                self._pending_opponent_id[i] = a.snapshot_id  # TRUE id for attribution
             else:
                 self._pending_snapshot[i] = None
                 self._reset_options[i] = {"opponent_type": a.kind}
+                self._pending_opponent_id[i] = None
 
     def _reset_env(self, i: int, seed: int) -> dict[str, np.ndarray]:
         """Reset env ``i``, first applying any pending opponent swap (deferred
         from ``set_opponents``) so the swap lands at an episode boundary."""
         if self._pending_snapshot[i] is not _UNSET_SNAPSHOT:
             self.envs[i].set_snapshot_opponent(self._pending_snapshot[i])
+        # Latch the opponent the NEW (about-to-start) game is played against, so
+        # PFSP attributes that game's outcome to the right snapshot. The previous
+        # game's id stays in `_current` until this reset, which is why the
+        # collector reads current_opponent_ids() BEFORE step_all.
+        self._current_opponent_id[i] = self._pending_opponent_id[i]
         obs, _ = self.envs[i].reset(seed=seed, options=self._reset_options[i] or None)
         return obs
+
+    def current_opponent_ids(self) -> list[int | None]:
+        """Per-env stable ``snapshot_id`` of the opponent the env is CURRENTLY
+        playing (``None`` for heuristic/random). PFSP reads this BEFORE
+        ``step_all`` to attribute the finishing game to the correct snapshot."""
+        return list(self._current_opponent_id)
 
     def belief_targets(self) -> np.ndarray:
         """``(n_envs, N_DEV_TYPES)`` belief-head targets for the CURRENT state
@@ -203,6 +223,7 @@ class SerialVecEnv:
         np.ndarray,
         np.ndarray,
         dict[int, dict[str, np.ndarray]],
+        dict[int, dict[str, float]],
     ]:
         """Step every env and return the auto-reset-aware batched output.
 
@@ -240,6 +261,10 @@ class SerialVecEnv:
         terminated = np.zeros(self.n_envs, dtype=bool)
         truncated = np.zeros(self.n_envs, dtype=bool)
         final_obs: dict[int, dict[str, np.ndarray]] = {}
+        # Terminal {agent_vp, opp_vp} per just-finished env, captured BEFORE the
+        # auto-reset zeroes them — the PFSP win signal (won = agent_vp > opp_vp,
+        # covering both a 15-VP win and a truncation-ahead).
+        final_info: dict[int, dict[str, float]] = {}
 
         for i, env in enumerate(self.envs):
             obs, reward, term, trunc, _ = env.step(actions[i])
@@ -247,6 +272,11 @@ class SerialVecEnv:
             terminated[i] = bool(term)
             truncated[i] = bool(trunc)
             if term or trunc:
+                assert env.agent_player is not None and env.opponent_player is not None
+                final_info[i] = {
+                    "agent_vp": float(env.agent_player.victoryPoints),
+                    "opp_vp": float(env.opponent_player.victoryPoints),
+                }
                 # Stash the terminal obs BEFORE auto-resetting so the
                 # collector can value-evaluate it for the truncation
                 # bootstrap. Reviewer-caught CRITICAL: previously the
@@ -270,6 +300,7 @@ class SerialVecEnv:
             terminated,
             truncated,
             final_obs,
+            final_info,
         )
 
     def close(self) -> None:
