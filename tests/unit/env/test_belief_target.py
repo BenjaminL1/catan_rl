@@ -106,11 +106,15 @@ def test_hidden_dev_types_do_not_leak_into_observation() -> None:
 
 
 def test_opponent_vp_obs_uses_visible_not_total() -> None:
-    # The opponent's VP obs feature must be visibleVictoryPoints (observable),
-    # never total victoryPoints — otherwise the hidden-VP count leaks.
+    # The opponent's VP obs feature must be the VISIBLE VP (victoryPoints minus
+    # hidden VP cards), never total victoryPoints — else the hidden-VP count
+    # leaks. Computed LIVE from engine state (FN3): the cached visibleVictoryPoints
+    # attribute goes stale after settlements/cities, so the 2 hidden VP cards are
+    # expressed through devCards (real state) and the stale cache must be ignored.
     env = _fresh_env()
     env.opponent_player.victoryPoints = 7
-    env.opponent_player.visibleVictoryPoints = 5  # 2 hidden VP dev cards
+    env.opponent_player.devCards["VP"] = 2  # 2 hidden VP cards -> visible = 5
+    env.opponent_player.visibleVictoryPoints = 0  # stale cache must be IGNORED
     obs = env._get_obs()
     assert obs["next_player_main"][_VP_IDX] == pytest.approx(5 / 15)
 

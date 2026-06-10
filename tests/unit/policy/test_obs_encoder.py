@@ -149,6 +149,33 @@ def test_resource_ordering_charlesworth(
     assert RESOURCES_CW[4] == "SHEEP"
 
 
+def test_opponent_vp_is_live_not_stale(
+    encoder: ObsEncoder,
+    game_with_players: tuple[catanGame, object, object],
+    initial_env_state: EnvObsState,
+) -> None:
+    """FN3 regression: the opponent VP obs feature (next_player_main[5]) must be
+    computed LIVE (victoryPoints - hidden VP cards), not read from the cached
+    player.visibleVictoryPoints, which the engine only refreshes at init +
+    VP-card buy — so it goes stale after every settlement/city (the dominant
+    VP source in 1v1)."""
+    game, agent, opp = game_with_players
+    # Engine state after the opponent has built to 4 VP, but with the cached
+    # attribute left at its stale post-init value (what the engine actually does
+    # — build_settlement/build_city never refresh visibleVictoryPoints).
+    opp.victoryPoints = 4
+    opp.devCards["VP"] = 0
+    opp.visibleVictoryPoints = 0  # stale cache
+    obs = encoder.build_obs(game, agent, opp, initial_env_state)
+    assert obs["next_player_main"][5] == pytest.approx(4.0 / 15.0)  # live, not stale 0
+
+    # Hidden VP cards stay hidden: a VP card raises victoryPoints but not visible.
+    opp.victoryPoints = 6
+    opp.devCards["VP"] = 2
+    obs = encoder.build_obs(game, agent, opp, initial_env_state)
+    assert obs["next_player_main"][5] == pytest.approx(4.0 / 15.0)  # 6 - 2 hidden
+
+
 def test_next_player_resources_in_charlesworth_order(
     encoder: ObsEncoder,
     game_with_players: tuple[catanGame, object, object],

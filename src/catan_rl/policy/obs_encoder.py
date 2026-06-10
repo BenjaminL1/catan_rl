@@ -487,7 +487,12 @@ class ObsEncoder:
         if is_agent:
             feats.append(float(player.victoryPoints) / 15.0)
         else:
-            visible_vp = getattr(player, "visibleVictoryPoints", player.victoryPoints)
+            # Compute visible VP LIVE (matches board.py get_robber_spots): the
+            # cached player.visibleVictoryPoints attribute is only refreshed at
+            # init + VP-card buy, so it goes stale after every settlement/city/
+            # LA/LR change — the dominant VP sources in 1v1. victoryPoints minus
+            # the hidden VP-card count is current AND still hides hidden VP.
+            visible_vp = player.victoryPoints - player.devCards.get("VP", 0)
             feats.append(float(visible_vp) / 15.0)
 
         # Income (resource production rate per resource).
