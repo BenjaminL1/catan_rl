@@ -438,6 +438,18 @@ class TestPFSP:
         lg2.load_opponent_stats(state)
         assert lg2.opponent_win_rate(sid) == lg.opponent_win_rate(sid)
 
+    def test_selfplay_diagnostics(self) -> None:
+        lg = League(self._pool_cfg(pfsp_enabled=True, pfsp_curve="hard", pfsp_min_games=1))
+        assert lg.selfplay_diagnostics() == {}  # no anchor + empty pool -> nothing
+        aid = lg.set_anchor({"w": torch.zeros(1)}, update_idx=0)
+        lg.record_outcome(aid, agent_won=True)
+        for u in (4, 8):  # >=2 pool snapshots so entropy is defined
+            lg.record_outcome(lg.add_snapshot({"w": torch.zeros(1)}, update_idx=u), agent_won=False)
+        d = lg.selfplay_diagnostics()
+        assert d["anchor_winrate"] == 1.0 and d["anchor_games"] == 1.0
+        assert 0.0 <= d["pfsp_sampling_entropy"] <= 1.0  # normalized
+        assert 0.0 <= d["pfsp_p_hat_max"] <= 1.0
+
 
 # ---------------------------------------------------------------------------
 # Repr (smoke)

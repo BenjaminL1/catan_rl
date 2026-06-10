@@ -71,7 +71,12 @@ from catan_rl.ppo.vec_env import (
     mask_spec_from_env,
     obs_spec_from_env,
 )
-from catan_rl.selfplay.league import League
+from catan_rl.selfplay.league import (
+    OPPONENT_KIND_HEURISTIC,
+    OPPONENT_KIND_RANDOM,
+    OPPONENT_KIND_SNAPSHOT,
+    League,
+)
 
 # ---------------------------------------------------------------------------
 # State container
@@ -438,6 +443,32 @@ def _log_eval_report(writer: Any, report: Any, *, global_step: int) -> None:
         writer.add_scalar(f"eval/n_truncated_{opp}", res.n_truncated, global_step)
 
 
+def _log_selfplay_metrics(writer: Any, assignments: Any, league: Any, *, global_step: int) -> None:
+    """Log the realized opponent mix + PFSP/anchor health (additive, append-only
+    ``selfplay/*`` scalars). Lets the operator see the anchor's win-rate and PFSP
+    concentration directly instead of inferring them from the external tracker."""
+    if writer is None:
+        return
+    aid = league.anchor_id()
+    n_anchor = n_pool = n_heuristic = n_random = 0
+    for a in assignments:
+        if a.kind == OPPONENT_KIND_SNAPSHOT:
+            if aid is not None and a.snapshot_id == aid:
+                n_anchor += 1
+            else:
+                n_pool += 1
+        elif a.kind == OPPONENT_KIND_HEURISTIC:
+            n_heuristic += 1
+        elif a.kind == OPPONENT_KIND_RANDOM:
+            n_random += 1
+    writer.add_scalar("selfplay/n_envs_anchor", n_anchor, global_step)
+    writer.add_scalar("selfplay/n_envs_pool", n_pool, global_step)
+    writer.add_scalar("selfplay/n_envs_heuristic", n_heuristic, global_step)
+    writer.add_scalar("selfplay/n_envs_random", n_random, global_step)
+    for k, v in league.selfplay_diagnostics().items():
+        writer.add_scalar(f"selfplay/{k}", v, global_step)
+
+
 # ---------------------------------------------------------------------------
 # Metrics JSONL (run_dir/metrics.jsonl)
 # ---------------------------------------------------------------------------
@@ -680,6 +711,9 @@ def run_training_loop(
                     n_envs=cfg.rollout.n_envs, rng=opp_rng
                 )
                 state.vec_env.set_opponents(assignments, snapshot_resolver=_resolve_snapshot)
+                _log_selfplay_metrics(
+                    state.tb_writer, assignments, state.league, global_step=state.global_step
+                )
 
             # ---- rollout ---------------------------------------------
             state.obs, state.masks = state.collector.collect(state.obs, state.masks)

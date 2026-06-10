@@ -284,6 +284,37 @@ class League:
             w[j] = cold if g < min_games else max(_PFSP_WEIGHT_FLOOR, (1.0 - p) ** k)
         return w
 
+    def selfplay_diagnostics(self) -> dict[str, float]:
+        """Lightweight self-play health metrics for TB/jsonl (no extra inference):
+        the anchor's win-rate (the strength-vs-frozen-reference signal) and PFSP
+        pool concentration (sampling entropy + p_hat spread). Returns only the
+        keys that are currently meaningful — empty when nothing to report."""
+        out: dict[str, float] = {}
+        aid = self.anchor_id()
+        if aid is not None:
+            p, g = self.opponent_win_rate(aid)
+            if g > 0:
+                out["anchor_winrate"] = p
+                out["anchor_games"] = float(g)
+        pool_ids = [s.snapshot_id for s in self._snapshots]
+        if self.cfg.pfsp_enabled and self.cfg.pfsp_curve == "hard" and len(pool_ids) >= 2:
+            w = self._pfsp_pool_weights(pool_ids)
+            probs = w / w.sum()
+            nz = probs[probs > 0]
+            ent = float(-(nz * np.log(nz)).sum())
+            out["pfsp_sampling_entropy"] = ent / float(np.log(len(pool_ids)))  # 1=uniform
+            out["pfsp_pool_effective_n"] = float(np.exp(ent))
+            phats = [
+                self.opponent_win_rate(sid)[0]
+                for sid in pool_ids
+                if self.opponent_win_rate(sid)[1] > 0
+            ]
+            if phats:
+                out["pfsp_p_hat_min"] = float(min(phats))
+                out["pfsp_p_hat_median"] = float(np.median(phats))
+                out["pfsp_p_hat_max"] = float(max(phats))
+        return out
+
     def n_snapshots(self) -> int:
         return len(self._snapshots)
 
