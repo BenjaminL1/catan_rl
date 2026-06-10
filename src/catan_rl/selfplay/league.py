@@ -139,6 +139,10 @@ class League:
         # vec-env consumers can hold a stable handle to a specific
         # snapshot even after the deque rolls over.
         self._next_snapshot_id: int = 0
+        # The permanent, non-evicted anchor (set via set_anchor). It lives
+        # OUTSIDE the deque so FIFO eviction never touches it, and carries a
+        # stable id resolvable through peek_by_id like any snapshot.
+        self._anchor: LeagueSnapshot | None = None
 
     # ------------------------------------------------------------------
     # Snapshot management
@@ -165,17 +169,11 @@ class League:
         hundreds of MB on the training device (1.4M params * fp32 *
         maxlen=100 = ~560 MB if left on GPU).
         """
-        cloned: dict[str, Any] = {}
-        for k, v in state_dict.items():
-            if hasattr(v, "detach") and hasattr(v, "to"):
-                cloned[k] = v.detach().to("cpu", copy=True)
-            else:
-                cloned[k] = v
         snapshot_id = self._next_snapshot_id
         self._next_snapshot_id += 1
         self._snapshots.append(
             LeagueSnapshot(
-                state_dict=cloned,
+                state_dict=self._clone_to_cpu(state_dict),
                 update_idx=update_idx,
                 snapshot_id=snapshot_id,
                 metadata=dict(metadata or {}),
@@ -183,13 +181,57 @@ class League:
         )
         return snapshot_id
 
+    @staticmethod
+    def _clone_to_cpu(state_dict: Mapping[str, Any]) -> dict[str, Any]:
+        cloned: dict[str, Any] = {}
+        for k, v in state_dict.items():
+            if hasattr(v, "detach") and hasattr(v, "to"):
+                cloned[k] = v.detach().to("cpu", copy=True)
+            else:
+                cloned[k] = v
+        return cloned
+
+    def set_anchor(
+        self,
+        state_dict: Mapping[str, Any],
+        *,
+        update_idx: int = 0,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Install a PERMANENT, non-evicted reference opponent (the frozen
+        anchor) and return its stable ``snapshot_id``.
+
+        The anchor lives outside the FIFO pool so it is never evicted;
+        ``build_env_opponent_assignments`` reserves ``cfg.anchor_weight`` of the
+        env assignments for it. It resolves through :meth:`peek_by_id` exactly
+        like a pool snapshot, so the snapshot-opponent driver needs no special
+        casing. Replaces any prior anchor.
+        """
+        snapshot_id = self._next_snapshot_id
+        self._next_snapshot_id += 1
+        self._anchor = LeagueSnapshot(
+            state_dict=self._clone_to_cpu(state_dict),
+            update_idx=update_idx,
+            snapshot_id=snapshot_id,
+            metadata=dict(metadata or {}),
+        )
+        return snapshot_id
+
+    def anchor_id(self) -> int | None:
+        """Stable id of the frozen anchor, or ``None`` if no anchor is set."""
+        return None if self._anchor is None else self._anchor.snapshot_id
+
     def n_snapshots(self) -> int:
         return len(self._snapshots)
 
     def snapshot_ids(self) -> set[int]:
-        """Stable ids currently in the pool (post-eviction) — used by the
-        self-play opponent cache to prune evicted snapshots."""
-        return {s.snapshot_id for s in self._snapshots}
+        """Stable ids currently resolvable (pool + anchor) — used by the
+        self-play opponent cache to prune evicted snapshots. The anchor is
+        always included so its cached policy is never pruned."""
+        ids = {s.snapshot_id for s in self._snapshots}
+        if self._anchor is not None:
+            ids.add(self._anchor.snapshot_id)
+        return ids
 
     def peek_snapshot(self, idx: int) -> LeagueSnapshot:
         """Read the snapshot at *positional* index ``idx`` (0 = oldest,
@@ -213,8 +255,11 @@ class League:
         This is the consumer-safe path for any code that holds onto a
         snapshot handle across multiple rollouts (Phase 8+ snapshot
         opponent). Positional ``peek_snapshot(idx)`` reshuffles on
-        eviction and is reserved for tests + diagnostics.
+        eviction and is reserved for tests + diagnostics. The frozen anchor
+        resolves here too (it is never evicted).
         """
+        if self._anchor is not None and self._anchor.snapshot_id == snapshot_id:
+            return self._anchor
         for snap in self._snapshots:
             if snap.snapshot_id == snapshot_id:
                 return snap
@@ -287,19 +332,54 @@ class League:
         / training loop (T017); the string ``build_env_opponent_mix`` is kept
         for back-compat.
         """
-        kinds = self.build_env_opponent_mix(n_envs=n_envs, rng=rng)
+        if n_envs <= 0:
+            raise ValueError(f"n_envs must be > 0, got {n_envs}")
+        # Self-contained weighted draw over categories. "pool" = a uniform draw
+        # from the evicting snapshot pool; "anchor" = the permanent non-evicted
+        # reference (kept at a guaranteed weight so the policy can't forget how
+        # to beat it). Both map to a kind="snapshot" assignment carrying the
+        # resolved id — the driver treats them identically. When anchor_weight
+        # is 0 (default) this matches the prior pool/heuristic/random behaviour.
+        labels: list[str] = []
+        weights: list[float] = []
+        if self.cfg.random_weight > 0:
+            labels.append(OPPONENT_KIND_RANDOM)
+            weights.append(self.cfg.random_weight)
+        if self.cfg.heuristic_weight > 0:
+            labels.append(OPPONENT_KIND_HEURISTIC)
+            weights.append(self.cfg.heuristic_weight)
+        if self.cfg.snapshot_weight > 0 and len(self._snapshots) > 0:
+            labels.append("pool")
+            weights.append(self.cfg.snapshot_weight)
+        if self.cfg.anchor_weight > 0 and self._anchor is not None:
+            labels.append("anchor")
+            weights.append(self.cfg.anchor_weight)
+        if not labels:
+            labels = [OPPONENT_KIND_HEURISTIC]
+            weights = [1.0]
+
+        probs = np.asarray(weights, dtype=np.float64)
+        probs = probs / probs.sum()
+        draws = rng.choice(len(labels), size=n_envs, p=probs)
         pool_ids = [s.snapshot_id for s in self._snapshots]
         out: list[OpponentAssignment] = []
-        for kind in kinds:
-            if kind == OPPONENT_KIND_SNAPSHOT:
-                # Invariant: build_env_opponent_mix only emits a snapshot kind
-                # when the pool is non-empty. Guard so a future refactor that
-                # breaks it fails loudly, not with an opaque rng.choice([]).
-                if not pool_ids:
-                    raise RuntimeError("snapshot kind emitted with an empty league pool")
-                out.append(OpponentAssignment(kind=kind, snapshot_id=int(rng.choice(pool_ids))))
+        for d in draws:
+            label = labels[int(d)]
+            if label == "pool":
+                out.append(
+                    OpponentAssignment(
+                        kind=OPPONENT_KIND_SNAPSHOT, snapshot_id=int(rng.choice(pool_ids))
+                    )
+                )
+            elif label == "anchor":
+                assert self._anchor is not None  # guarded by the weight check above
+                out.append(
+                    OpponentAssignment(
+                        kind=OPPONENT_KIND_SNAPSHOT, snapshot_id=self._anchor.snapshot_id
+                    )
+                )
             else:
-                out.append(OpponentAssignment(kind=kind))
+                out.append(OpponentAssignment(kind=label))
         return out
 
     # ------------------------------------------------------------------

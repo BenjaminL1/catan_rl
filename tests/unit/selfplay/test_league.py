@@ -291,6 +291,51 @@ class TestOpponentMix:
         assert all(a.snapshot_id is None for a in assigns)
 
 
+class TestAnchor:
+    def test_set_anchor_resolves_and_reports_id(self) -> None:
+        lg = League(LeagueConfig())
+        aid = lg.set_anchor({"w": torch.ones(2)}, update_idx=99)
+        assert lg.anchor_id() == aid
+        snap = lg.peek_by_id(aid)
+        assert snap is not None and torch.equal(snap.state_dict["w"], torch.ones(2))
+        assert aid in lg.snapshot_ids()
+
+    def test_anchor_never_evicted(self) -> None:
+        lg = League(LeagueConfig(maxlen=3))
+        aid = lg.set_anchor({"w": torch.zeros(1)}, update_idx=0)
+        for i in range(10):  # overflow the maxlen=3 pool many times over
+            lg.add_snapshot({"w": torch.zeros(1)}, update_idx=i + 1)
+        assert lg.n_snapshots() == 3  # pool stays capped
+        assert lg.peek_by_id(aid) is not None  # anchor survived all evictions
+        assert aid in lg.snapshot_ids()
+
+    def test_anchor_gets_reserved_weight(self) -> None:
+        # 50/50 anchor vs pool -> anchor id appears ~half the assignments.
+        lg = League(
+            LeagueConfig(
+                heuristic_weight=0.0,
+                snapshot_weight=1.0,
+                anchor_weight=1.0,
+                require_heuristic_floor=False,
+            )
+        )
+        aid = lg.set_anchor({"w": torch.zeros(1)}, update_idx=0)
+        pid = lg.add_snapshot({"w": torch.ones(1)}, update_idx=4)
+        assigns = lg.build_env_opponent_assignments(n_envs=200, rng=np.random.default_rng(0))
+        assert all(a.kind == OPPONENT_KIND_SNAPSHOT for a in assigns)
+        n_anchor = sum(a.snapshot_id == aid for a in assigns)
+        assert sum(a.snapshot_id == pid for a in assigns) + n_anchor == 200
+        assert 70 < n_anchor < 130  # ~100 expected; generous band
+
+    def test_anchor_absent_when_weight_zero(self) -> None:
+        # Anchor set but anchor_weight=0 (default) -> never assigned.
+        lg = League(LeagueConfig(heuristic_weight=1.0, snapshot_weight=1.0))
+        aid = lg.set_anchor({"w": torch.zeros(1)}, update_idx=0)
+        lg.add_snapshot({"w": torch.ones(1)}, update_idx=4)
+        assigns = lg.build_env_opponent_assignments(n_envs=100, rng=np.random.default_rng(0))
+        assert all(a.snapshot_id != aid for a in assigns)
+
+
 # ---------------------------------------------------------------------------
 # Repr (smoke)
 # ---------------------------------------------------------------------------

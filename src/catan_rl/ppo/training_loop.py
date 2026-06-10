@@ -629,10 +629,11 @@ def run_training_loop(
 
             # ---- self-play opponent refresh (US3) -------------------
             # Re-draw the per-env opponent assignment each rollout so freshly
-            # added snapshots enter play. Guarded by snapshot_weight>0 so the
-            # default (heuristic-only) run is unchanged. Per-update-seeded RNG
-            # keeps the assignment sequence resume-reproducible.
-            if cfg.league.snapshot_weight > 0:
+            # added snapshots (and the frozen anchor) enter play. Guarded by
+            # snapshot_weight>0 OR anchor_weight>0 so the default (heuristic-only)
+            # run is unchanged. Per-update-seeded RNG keeps the assignment
+            # sequence resume-reproducible.
+            if cfg.league.snapshot_weight > 0 or cfg.league.anchor_weight > 0:
                 live_ids = state.league.snapshot_ids()
                 for stale in [k for k in _snap_policy_cache if k not in live_ids]:
                     del _snap_policy_cache[stale]

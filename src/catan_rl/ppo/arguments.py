@@ -384,8 +384,15 @@ class LeagueConfig:
     maxlen: int = 100
     """Maximum snapshot pool size; oldest entries are evicted FIFO."""
 
+    anchor_weight: float = 0.0
+    """Weight on a PERMANENT, non-evicted reference opponent (the frozen anchor,
+    installed via ``League.set_anchor``). Unlike pool snapshots it is never
+    evicted and is sampled at this guaranteed weight, so the policy can never
+    forget how to beat a fixed strong baseline — the self-play drift /
+    catastrophic-forgetting guard. 0 (default) = no anchor."""
+
     def __post_init__(self) -> None:
-        for name in ("random_weight", "heuristic_weight", "snapshot_weight"):
+        for name in ("random_weight", "heuristic_weight", "snapshot_weight", "anchor_weight"):
             _check_non_negative(name, getattr(self, name))
         if self.random_weight + self.heuristic_weight + self.snapshot_weight == 0:
             raise ValueError("at least one league weight must be > 0; got all zeros")
