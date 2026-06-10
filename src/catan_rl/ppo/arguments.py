@@ -394,7 +394,10 @@ class LeagueConfig:
     def __post_init__(self) -> None:
         for name in ("random_weight", "heuristic_weight", "snapshot_weight", "anchor_weight"):
             _check_non_negative(name, getattr(self, name))
-        if self.random_weight + self.heuristic_weight + self.snapshot_weight == 0:
+        if (
+            self.random_weight + self.heuristic_weight + self.snapshot_weight + self.anchor_weight
+            == 0
+        ):
             raise ValueError("at least one league weight must be > 0; got all zeros")
         if self.require_heuristic_floor and self.snapshot_weight > 0 and self.heuristic_weight <= 0:
             raise ValueError(
