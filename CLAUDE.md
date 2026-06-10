@@ -134,7 +134,8 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
   green, but it's a safety net, not a merge gate.
 
 <!-- SPECKIT START -->
-Active Spec Kit feature: **self-play snapshot opponent** — see
-`specs/001-selfplay-snapshot-opponent/plan.md` (plus `spec.md`, `research.md`,
-`data-model.md`, `contracts/`, `quickstart.md`) for the current plan.
+Active Spec Kit feature: **PFSP opponent sampling** — see
+`specs/002-pfsp-opponent-sampling/plan.md` (plus `spec.md`, `research.md`,
+`data-model.md`, `contracts/`, `quickstart.md`) for the current plan. (Prior:
+`specs/001-selfplay-snapshot-opponent/` — shipped.)
 <!-- SPECKIT END -->
