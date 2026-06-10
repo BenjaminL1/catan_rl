@@ -38,4 +38,4 @@ Final fusion: concat → Linear → LayerNorm → ReLU → 512-dim state vector.
 ## Related
 
 - `src/catan_rl/models/observation/`
-- `docs/obs_schema.md`
+- `docs/io_schema.md`

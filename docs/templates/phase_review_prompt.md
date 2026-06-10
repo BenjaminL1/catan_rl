@@ -43,7 +43,7 @@ You are reviewing Phase {PHASE_NUMBER}: {PHASE_NAME} of a 1v1 Settlers of Catan 
    - `vec_env_mode` = **"serial"**. (Pre-2026-06-06 this template
      recommended `"subproc"` — that recommendation was forensically
      refuted: no ``SubprocVecEnv`` class exists in ``src/catan_rl/``.
-     Recheck against ``docs/plans/rust_engine_actual_state.md`` before
+     Recheck against ``docs/plans/rust_engine.md`` before
      restoring the subproc recommendation; the Rust migration's Phase 6
      either implements it or removes the literal.)
    - `torch_compile` = **False**

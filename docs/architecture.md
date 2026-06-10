@@ -1,185 +1,106 @@
 # Architecture Overview
 
-One-page description of the training loop. For details, see the linked source files (paths are relative to repo root).
+One page on the v2 system: obs → trunk → heads, and the PPO training loop.
+Source of truth is `src/catan_rl/`; this doc may lag.
 
-## Layers
-
-```
-┌─────────────────────────────────────────────────────┐
-│ catan-rl-train (= src/catan_rl/cli/train.py)        │
-│   └─ resolve_config(yaml_path)                      │
-│      └─ CatanPPO(config).train()                    │
-└─────────────────────────────────────────────────────┘
-                       │
-       ┌───────────────┴───────────────┐
-       ▼                               ▼
-┌─────────────────┐            ┌──────────────────┐
-│ algorithms/ppo  │            │ selfplay         │
-│   trainer.py    │            │   league.py      │
-│   arguments.py  │            │   game_manager   │
-└─────────────────┘            └──────────────────┘
-       │                               │
-       │                               ▼
-       │                       ┌──────────────────┐
-       │                       │ env              │
-       │                       │   catan_env.py   │
-       │                       │   hand_tracker   │
-       │                       └──────────────────┘
-       ▼                               │
-┌─────────────────┐                    ▼
-│ models          │            ┌──────────────────┐
-│   policy.py     │            │ engine           │
-│   action_heads  │            │   game.py        │
-│   observation/  │            │   board.py       │
-│     tile_enc    │            │   player.py      │
-│     player_mod  │            │   dice.py        │
-│   distributions │            │   broadcast.py   │
-└─────────────────┘            └──────────────────┘
-       │
-       ▼
-┌─────────────────┐
-│ algorithms/     │
-│   common/       │
-│     gae.py      │
-│     rollout_buf │
-└─────────────────┘
-```
-
-## Training step
+## Modules
 
 ```
-1. GameManager.reset_all()
-   ├─ each env samples opponent from League (PFSP / random / heuristic)
-   └─ env.reset(opponent_options)
+catan-rl-train  (catan_rl.cli.train:main; scripts/train.py is a shim)
+  └─ TrainConfig.load(yaml)            # catan_rl/ppo/arguments.py (config SoT)
+     └─ trainer / training_loop        # catan_rl/ppo/{trainer,training_loop}.py
 
-2. CatanPPO.collect_rollouts():
-   └─ while steps < n_steps:
-        ├─ batched policy.act()
-        ├─ env.step() per env
-        ├─ if opp_turn_pending: batched opponent NN inference
-        └─ buffer.add(obs, action, reward, terminated, truncated, value, log_prob, masks)
+catan_rl/
+  ppo/        trainer, training_loop, buffer, gae, vec_env, game_manager,
+              losses, schedules, arguments
+  selfplay/   league.py (snapshot pool), snapshot_opponent.py
+  env/        catan_env.py (dict obs, action masks, opponent dispatch), hand_tracker
+  policy/     network.py (CatanPolicy), encoders.py, obs_encoder.py,
+              obs_schema.py (shape SoT), heads.py
+  engine/     game.py, board.py, player.py, dice.py, broadcast.py, geometry
+  eval/       harness.py (symmetric-seat WR), wilson.py, rules_invariants.py
+```
 
-3. Compute GAE with terminated/truncated split (Phase 0).
-4. Per-batch advantage normalization.
-5. PPO update for n_epochs (or until KL > target_kl).
-6. League.maybe_add(policy snapshot) every N updates.
-7. Periodic eval against heuristic / random / champion.
+## Policy pipeline (`catan_rl/policy/`)
+
+The env emits a dict obs (keys/shapes in `obs_schema.py`, built by
+`obs_encoder.py`). `CatanPolicy._encode` runs:
+
+1. **TileEncoder** over `tile_representations` `(19, 79)` → per-tile vectors,
+   flattened.
+2. **GraphEncoder** (GNN) over `hex_features` / `vertex_features` /
+   `edge_features` — tripartite message passing → pooled vector.
+3. **Player/dev encoders** over `current_player_main` `(54,)`,
+   `next_player_main` `(61,)`, and the two `(5,)` dev-count vectors.
+4. **Opp-id embedding** over `opponent_kind` + `opponent_policy_id`.
+
+All parts are concatenated → `Linear → LayerNorm → GELU` → **512-d trunk**
+(`CatanPolicy`, ~1.5M params). The trunk feeds:
+
+- **CatanActionHeads** — six masked autoregressive heads (`heads.py`).
+  `type/edge/tile` are plain MLPs; `corner/resource1/resource2` use FiLM/AdaLN
+  context conditioning. Joint log-prob/entropy sum only the heads relevant to
+  the sampled action type (per-type relevance buffer).
+- **ValueHead** — `512 → 256 → 128 → 1`.
+- **BeliefHead** — 5-way logits over the opponent's hidden dev-card types
+  (`DEV_CARD_ORDER`), trained via soft cross-entropy against the engine's
+  ground-truth distribution. This is the only model component that consumes
+  hidden opponent state; the obs itself stays honest.
+
+Full I/O contract: [`io_schema.md`](io_schema.md).
+
+## Training loop (`catan_rl/ppo/`)
+
+```
+1. Reset the vec env (catan_rl/ppo/vec_env.py); each env is seated with an
+   opponent per the league weights (heuristic by default; frozen snapshots
+   when snapshot_weight > 0, driven by selfplay/snapshot_opponent.py).
+
+2. Collect a rollout of n_envs * n_steps (= 128 * 256 = 32,768) transitions:
+     - batched policy.sample() → action (6 heads) + value + belief + log_prob
+     - env.step(); the opponent's full turn is driven inside the env
+     - buffer.add(obs, action, reward, terminated, truncated, value, log_prob,
+       masks)
+
+3. Compute GAE (gae.py) with a terminated/truncated split: a real game-over
+   zeros the bootstrap; a max_turns truncation keeps V(s_T) but resets the
+   accumulator at the boundary.
+
+4. Standardise advantages per rollout (advantage_norm="rollout"). There is
+   NO value/return normalizer.
+
+5. PPO update for n_epochs=4, early-stopping when the k3-KL estimate exceeds
+   target_kl=0.02. Total loss = policy + value_coef*value
+   - entropy_coef(t)*entropy + belief_coef*belief_CE
+   + opp_action_coef*opp_action_CE (the opp-action term fires only on
+   rollouts seated against a historical league policy).
+
+6. Every league.add_snapshot_every_n_updates (=4) updates, push the current
+   weights into the snapshot pool (FIFO, maxlen 100).
+
+7. Every eval.eval_every_updates (=40) updates, run the eval harness
+   (CPU-pinned, symmetric seats) vs the heuristic.
 ```
 
 ## Key entry points
 
-| Concern | File |
+| Concern | Entry point |
 |---|---|
-| Train | `catan-rl-train` → `src/catan_rl/cli/train.py` |
-| Evaluate vs heuristic/random | `scripts/evaluate.py` |
-| Play vs trained model (GUI) | `scripts/play_vs_model.py` |
-| Setup-phase trainer | `scripts/train_setup.py` |
-| Eval harness (rules-invariant / champion-bench / exploitability / league-rating) | `scripts/eval_harness.py` |
-| Migrate pre-Phase-0 checkpoint | `catan-rl-migrate-ckpt` → `src/catan_rl/cli/migrate_checkpoint.py` |
-| Record a single 1v1 game to a JSON replay | `catan-rl-record` → `src/catan_rl/cli/record_game.py` |
-| Play back a replay in a pygame window | `catan-rl-replay` → `src/catan_rl/replay/viewer/event_loop.py` |
-| Behavioral-cloning data pipeline | `catan-rl-bc-generate`, `catan-rl-bc-train` → `src/catan_rl/cli/{generate_bc_dataset,train_bc}.py` |
-| Setup-phase labeling tool | `catan-rl-label-setup` → `src/catan_rl/cli/label_setup.py` |
+| Train | `catan-rl-train` → `catan_rl.cli.train:main` |
+| Eval harness (symmetric-seat WR, Wilson CI, rule invariants) | `catan_rl.eval.harness` |
+| Behavioral cloning | `catan-rl-bc-generate`, `catan-rl-bc-train` |
+| Migrate a v2 checkpoint | `catan-rl-migrate-ckpt` |
+| Record / replay a game | `catan-rl-record`, `catan-rl-replay` |
+| Setup-phase labeling | `catan-rl-label-setup` |
 
-The `catan-rl-*` console scripts are wired by `[project.scripts]` in `pyproject.toml`. `python scripts/<name>.py` invocations still work via thin back-compat shims (see `scripts/`).
+`catan-rl-*` console scripts are wired by `[project.scripts]` in
+`pyproject.toml`; the `scripts/*.py` files are thin shims.
 
-## Phase 1 sample-efficiency upgrades
+## Honesty & 1v1 invariants baked into the obs/heads
 
-All five sub-features are config-flagged so leave-one-out ablations work.
-Defaults preserve back-compat with `checkpoint_07390040.pt`; opt in via
-`configs/phase1_full.yaml`.
-
-| Sub-feature | Config key | Default | Effect |
-|---|---|---|---|
-| 1.1 PPO2 value clipping | `use_value_clipping`, `clip_range_vf` | `True`, `0.2` | Pessimistic value loss `max(MSE_unclipped, MSE_clipped)` |
-| 1.2 Per-rollout adv. norm | `advantage_norm` | `"rollout"` | Standardize over the whole buffer; alt: `"batch"`, `"none"` |
-| 1.3 Compact obs schema | `use_thermometer_encoding` | `True` (legacy) | Drop bucket8: 166/173 → 54/61 |
-| 1.4 Dev-card count enc. | `use_devcard_mha` | `True` (legacy) | Replace MHA over padded sequence with bincount + MLP (~36k fewer params) |
-| 1.5 D6 symmetry aug. | `symmetry_aug_prob` | `0.0` | Per-minibatch, with this probability sample one of 11 non-identity D6 elements and permute tile/corner/edge slots |
-
-Phase 1 lineage is **not** state-dict-compatible with `checkpoint_07390040.pt`
-(compact obs changes the model's first-layer input dim). Phase 1 training
-runs from scratch; the frozen champion stays on the legacy 166/173 lineage
-for benchmark purposes.
-
-## Phase 2 architecture upgrades
-
-Four config-flagged additions on top of Phase 1. Defaults preserve Phase 1
-behavior; opt in via `configs/phase2_full.yaml` (or the four leave-one-outs).
-
-| Sub-feature | Config key | Default | Effect |
-|---|---|---|---|
-| 2.1 Axial pos. embedding | `use_axial_pos_emb`, `axial_pos_dim` | `False`, `24` | Learned 2D embedding indexed by hex axial coords `(q, r)`; concatenated to per-tile features before the transformer projection. Breaks the encoder's permutation-equivariance over tiles |
-| 2.2 Modern transformer recipe | `transformer_dropout`, `transformer_activation` | `None`, `"relu"` | Pre-norm was already on; adds optional dropout (0.05 in `phase2_full`) and GELU FFN activation |
-| 2.4 AdaLN action heads | `action_head_film` | `False` | Replaces concat-MLP conditioning on context-using heads (corner / resource1 / resource2) with FiLM modulation: `(1+γ) ⊙ LN(x) + β` where `(γ, β)` are per-sample, generated from the head's context. γ-init=0 → identity at construction |
-| 2.5 Decoupled value tower | `value_head_mode` | `"shared"` | `"decoupled"` builds a second `ObservationModule` exclusively for the value head, breaking gradient interference between policy loss and value loss. ~+0.7M params |
-| 2.5b Belief head (1v1) | `use_belief_head`, `belief_head_hidden_dim`, `belief_loss_weight` | `False`, `128`, `0.05` | 2-layer MLP from policy encoder → 5-way logits over opponent hidden dev-card types. Soft cross-entropy against env's true normalized count vector (training-only target via `obs['belief_target']`). Default loss weight 0.05; trainer logs `train/belief_loss`. |
-| 2.5c Opp-action aux (1v1) | `use_opponent_action_head`, `opp_action_loss_weight` | `False`, `0.03` | 2-layer MLP → 13-way logits over opponent's *next* action type. Trained only on rollouts where opponent is a historical league policy (filter excludes random/heuristic/current_self). |
-| 2.3 GNN encoder | `use_graph_encoder`, `graph_hidden_dim`, `graph_n_rounds`, `graph_out_dim` | `False`, `64`, `2`, `64` | Tripartite message passing over 19 hex + 54 vertex + 72 edge nodes. Pooled output concatenated to fusion input alongside the tile-encoder output. |
-| 4.2 GRU recurrent value | `use_recurrent_value`, `gru_hidden_dim` | `False`, `64` | `nn.GRUCell` + value MLP replacing the standalone `value_net`. Hidden state maintained per-env across rollout steps, resets on `terminated=True`. Buffer stores per-step input hidden state for replay during PPO update. |
-| 4.1 ISMCTS (library) | — | — | `src/catan_rl/algorithms/search/ismcts.py`: single-step PUCT with belief-determinization. Available as a library; activation gating on belief quality is a follow-up. |
-
-Phase 2 lineage stays on the Phase 1 obs schema (compact 54/61). The full
-phase2_full policy is ~2.22M params (vs ~1.54M for phase1_full); the bulk of
-the increase is the second observation encoder for the value head.
-
-`build_agent_model.DEFAULT_MODEL_CONFIG`, `arguments.MODEL_CONFIG`, and the
-trainer's `model_kwargs` whitelist all carry the four new keys. The four
-leave-one-out configs live next to `phase2_full.yaml`:
-`phase2_no_axial_pos`, `phase2_no_transformer_recipe`, `phase2_no_film`,
-`phase2_no_decoupled_value`.
-
-## Phase 3 self-play diversity
-
-Five config-flagged additions on top of Phase 2; defaults preserve Phase 2
-behavior. Opt in via `configs/phase3_full.yaml` (or one of five leave-one-outs).
-
-| Sub-feature | Config key | Default | Effect |
-|---|---|---|---|
-| 3.1 PFSP-hard | `pfsp_mode`, `pfsp_p`, `pfsp_window` | `'linear'`, `2.0`, `32` | `'hard'` switches to AlphaStar `(1-w)^p` priorities biased toward losses; sliding 32-game window per opponent |
-| 3.2 Latest-policy reg. | `latest_policy_weight` | `0.0` | With this prob, league emits `('current_self', None, -2)`; trainer fills with a fresh in-place snapshot |
-| 3.3 Duo exploiter cycle | `exploiter_mode`, `exploiter_cycle_steps`, `exploiter_n_updates`, `exploiter_priority_multiplier`, `exploiter_priority_games` | `'off'`, `1_000_000`, `32`, `1.5`, `64` | `'duo'` interleaves exploiter training: main snapshot → fresh policy + frozen-main league → ``exploiter_n_updates`` PPO updates → restore main → inject exploiter into league with PFSP priority boost for first ``exploiter_priority_games`` matches |
-| 3.4 TrueSkill ratings | `use_trueskill`, `trueskill_decay` | `False`, `1.001` | TrueSkill (or Glicko-2 fallback) per-policy ratings; σ inflated each PPO update so non-stationarity is visible |
-| 3.5 Nash pruning | `prune_strategy`, `prune_every`, `nash_top_k`, `nash_prune_round_games` | `'fifo'`, `20`, `32`, `50` | `'nash'` runs replicator dynamics on a top-K round-robin payoff matrix every `prune_every` adds; drops the lowest-Nash-mass entry |
-| 3.6 Opponent ID emb. | `use_opponent_id_emb`, `opp_id_emb_dim`, `opp_id_mask_prob` | `False`, `16`, `0.40` | Two embeddings (kind ∈ {unknown, random, heuristic, self_latest, league, main_exploiter}; policy_id ∈ {0..league_maxlen}) concatenated to the fusion input. With `opp_id_mask_prob` the kind is force-set to `unknown` to keep the policy robust at eval time |
-
-Phase 3 builds on the Phase 2 architecture (and inherits its compact-obs /
-fresh-training lineage). `phase3_full` policy is ~2.24M params (vs ~2.22M
-phase2_full) — the only delta is the small embedding pair on the obs encoder.
-
-Files modified:
-- `src/catan_rl/selfplay/league.py`: PFSP mode dispatch, sliding-window WR,
-  `current_self` emission, `prune_nash` math.
-- `src/catan_rl/selfplay/game_manager.py`: `current_policy_state_fn` hook,
-  `record_match_fn` hook, opponent-id options plumbed to env reset.
-- `src/catan_rl/selfplay/ratings.py`: unchanged (built in Phase 0; activated here).
-- `src/catan_rl/env/catan_env.py`: opponent-kind enum, `_opponent_id_obs`
-  with random masking, optional dict-obs keys.
-- `src/catan_rl/models/observation_module.py`: opponent-id embedding pair,
-  fusion-input width grows by `opp_id_emb_dim`.
-- `src/catan_rl/algorithms/common/rollout_buffer.py`: opt-in
-  `store_opponent_id` per-step storage.
-- `src/catan_rl/algorithms/ppo/trainer.py`: rating table + decay + scalar
-  logging, Nash-pruning round-robin, exploiter-cycle stub.
-
-## Phase 0 diagnostics
-
-The trainer's TensorBoard scalars now include per-head entropy diagnostics
-that detect silent collapse on individual action heads:
-
-  - `train/entropy_head_<name>` — unconditional mean entropy of head `<name>`
-    (one of: `type, corner, edge, tile, resource1, resource2`).
-  - `train/entropy_head_<name>_cond` — relevance-weighted mean: only averages
-    over samples where this head's output actually contributed to the
-    chosen action.
-  - `train/entropy_collapse_flag` — set to `1.0` if any head's unconditional
-    entropy stayed below `entropy_collapse_threshold` (config) for
-    `entropy_collapse_consecutive_updates` consecutive updates.
-
-The legacy `train/entropy` joint-entropy scalar is preserved.
-
-GAE handling now distinguishes terminated (real game-over) from truncated
-(`max_turns` cutoff): terminations zero the bootstrap value; truncations keep
-the bootstrap (`V(s_T)`) but reset the GAE accumulator at the boundary. See
-`catan_rl.algorithms.common.gae` for the recurrence and
-`tests/unit/algorithms/test_gae.py` for the contract tests.
+- Obs models exactly **one** opponent; no opponent-set encoder.
+- No P2P-trade actions; `BankTrade` is the only trade type (1v1 ruleset).
+- The opponent's hidden dev-card *types* and hidden VP never enter the obs —
+  the belief head predicts the types. Played dev cards and hidden-card *count*
+  are observable and encoded.
+- Self-play assumes a symmetric 2-player zero-sum game.

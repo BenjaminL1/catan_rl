@@ -9,7 +9,7 @@
   - Step 3 BC has converged with Gates 1 + 2 + 3 green (per `v2_step3_bc.md` §6). The BC checkpoint becomes the warm-start anchor for the fine-tune.
   - **Minimum yield gate**: ≥ 200 labeled scenarios in `data/labels/setup/v1/scenarios.jsonl`. Below this, the labels are used **validation-only** (held-out top-1 setup-agreement metric); BC fine-tune is not invoked. See §6 acceptance gate + §STOP/RESUME.
 
-This doc is the planning equivalent of `v2_step3_bc.md` / `v2_step4_ppo.md` / `v2_step5_mcts.md` — it specifies what gets built, how it's tested, what numbers count as success, and where the risks are. The motivating problem and scope come from `docs/plans/setup_pretrain_plan.md` (the v1 Monte-Carlo-only ancestor of this idea): the setup phase has high-SNR labels available cheaply if a strong human can supply them, and the v2 BC anchor benefits disproportionately from setup-phase signal because all subsequent gameplay is downstream of those four picks.
+This doc is the planning equivalent of `v2_step3_bc.md` / `v2_step4_ppo.md` / `v2_step5_mcts.md` — it specifies what gets built, how it's tested, what numbers count as success, and where the risks are. The motivating problem and scope come from the (removed) v1 Monte-Carlo setup-pretrain plan (the v1 Monte-Carlo-only ancestor of this idea): the setup phase has high-SNR labels available cheaply if a strong human can supply them, and the v2 BC anchor benefits disproportionately from setup-phase signal because all subsequent gameplay is downstream of those four picks.
 
 ## Inputs
 
@@ -19,7 +19,7 @@ This doc is the planning equivalent of `v2_step3_bc.md` / `v2_step4_ppo.md` / `v
 - `BcDataset` interface from `src/catan_rl/bc/loader.py` — the 10 obs keys (`_OBS_KEYS_FLOAT` + `_OBS_KEYS_INT`) and 9 mask keys (`_MASK_KEYS`) the converter must emit, per `loader.py:94-115`.
 - 1v1 Colonist.io ruleset (15 VP, no P2P trade, 9-card discard, Friendly Robber, StackedDice persistent Karma) — see `docs/1v1_rules.md`. The labeling tool is **read-only** w.r.t. these rules; it never overrides them.
 - Snake draft order: P1 settle+road → P2 settle+road → P2 settle+road → P1 settle+road. Standard Colonist.io.
-- v1 setup-pretrain ancestor (informational, not load-bearing): `/Users/benjaminli/my_projects/catan_rl/docs/plans/setup_pretrain_plan.md` and `/Users/benjaminli/my_projects/catan_rl/src/catan_rl/rl/setup/`. The Monte-Carlo rollout heuristic is **not** ported — humans are the label source here, not MC.
+- v1 setup-pretrain ancestor (informational, not load-bearing): `/Users/benjaminli/my_projects/catan_rl/the removed v1 setup-pretrain plan` and `/Users/benjaminli/my_projects/catan_rl/src/catan_rl/rl/setup/`. The Monte-Carlo rollout heuristic is **not** ported — humans are the label source here, not MC.
 
 ## Outputs
 
@@ -617,7 +617,7 @@ Decisions inherited from `CLAUDE.md` + `v2_step3_bc.md` + `v2_step4_ppo.md` + `v
 
 ## Provenance
 
-- Base motivation: `docs/plans/setup_pretrain_plan.md` (v1 Monte-Carlo-only ancestor of this idea). The v2 design swaps MC rollouts for human labels; the rest of the structure (setup-phase focus, encoder-shared head-targeted fine-tune, KL-regularised merge back to the live policy) carries forward in spirit.
+- Base motivation: the (removed) v1 Monte-Carlo setup-pretrain plan (v1 Monte-Carlo-only ancestor of this idea). The v2 design swaps MC rollouts for human labels; the rest of the structure (setup-phase focus, encoder-shared head-targeted fine-tune, KL-regularised merge back to the live policy) carries forward in spirit.
 - BC plan that this fine-tune layers on top of: `docs/plans/v2_step3_bc.md`. The fine-tune is gated on Step 3's Gates 1+2+3 green per §0.
 - PPO plan that consumes the fine-tuned BC checkpoint: `docs/plans/v2_step4_ppo.md`. The fine-tuned `checkpoints/bc/best.pt` becomes the Step-4 piKL anchor + warm-start, replacing the heuristic-only BC checkpoint after promotion.
 - MCTS plan that downstream consumes the Step-4 anchor: `docs/plans/v2_step5_mcts.md`. Not directly affected by this work, but the setup-pretrain improvement propagates through Step 4 → Step 5.

@@ -47,9 +47,9 @@ How v2 differs from the two prior efforts:
 ### Learning algorithm
 - **Keep** the full pipeline: Step 3 BC warm-start → Step 4 PPO + piKL anchor (`λ=0.2`, 2M-step decay, `target_kl=0.03`, terminal-only reward) → Step 5 AlphaZero-style PUCT MCTS with `c_puct=1.5`, 25 sims × 2 determinizations, 6-bucket dice fan-out, belief-determinization sampling (`v2_step5_mcts.md` §1).
 - **Borrow from Catanatron**: nothing in the algorithm itself, but **borrow the depth-3 paradox as a calibration concern**. Add a `value/calibration_l1_vs_heuristic_wr` probe to Step-4 milestone evals (per D1 compromise).
-- **Reject from Catanatron**: hand-tuned value weights. v2's learned value has a path to superhuman; hand-tuned weights are bounded by tuning quality (`round_1_learning_algo.md` table).
+- **Reject from Catanatron**: hand-tuned value weights. v2's learned value has a path to superhuman; hand-tuned weights are bounded by tuning quality.
 - **Reject from Catanatron**: vanilla MCTS with random rollouts. v2 uses the AlphaZero recipe (learned prior + value at leaves), which is a different algorithm class.
-- **Reject from QSettlers**: DQN. Not because modern DQN couldn't work in principle, but because (a) flat Q over the 6-head autoregressive space loses conditional structure, (b) deadly triad under sparse terminal reward, (c) no Catan-shape precedent. PPO is on-policy and trust-region-bounded — directly addresses both failures (`round_1_learning_algo.md` §2).
+- **Reject from QSettlers**: DQN. Not because modern DQN couldn't work in principle, but because (a) flat Q over the 6-head autoregressive space loses conditional structure, (b) deadly triad under sparse terminal reward, (c) no Catan-shape precedent. PPO is on-policy and trust-region-bounded — directly addresses both failures.
 
 ### Reward + evaluation
 - **Keep**, pending A1: `±1 + (vp_diff)/15` terminal-only.
@@ -130,11 +130,10 @@ Ranked by impact on final strength:
 
 ## Provenance
 
-- Briefing pack: `analysis/00_briefing/{my_agent,catanatron,qsettlers,glossary}.md`.
-- Round 1 position papers: `analysis/round_1_{state_action,learning_algo,reward_eval,skeptic}.md`.
-- Round 2 disagreement list: `analysis/round_2_disagreements.md`.
-- Round 3 targeted debate: `analysis/round_3_debate.md`.
-- Round 4 resolution: `analysis/round_4_resolution.md`.
+- Briefing pack: `docs/research/00_briefing/{my_agent,catanatron,qsettlers,glossary}.md`.
+- Round 1–4 debate transcripts (position papers, disagreement list, targeted
+  debate, resolution): produced during the planning phase and **since
+  removed** — this document is the synthesis that supersedes them.
 - External sources: Catanatron repo (master, fetched 2026-05-14), Collazo Medium postmortem, QSettlers writeup at akrishna77.github.io.
 - v2 codebase: `/Users/benjaminli/my_projects/catan_rl_v2/` (Step 3 BC verified; Steps 4, 5 planned not yet built).
 

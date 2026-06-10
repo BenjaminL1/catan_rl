@@ -2,7 +2,7 @@
 
 **Status**: design draft (single author, senior-review distilled 2026-06-03); implementation gated on the §0 preflight gates. Plan layered on top of v2 Step 3 BC + v2 setup-labeling deliverables.
 
-**Provenance**: senior RL research-engineer review of `docs/plans/setup_pretrain_plan.md` (v1 MC ancestor) and `docs/plans/v2_setup_labeling.md` (human-label fine-tune). The review's central claim: the v1 MC rollout estimator for setup-phase vertex value is *strictly dominated* by a closed-form expected-pip-yield score now that the chip layout is the verified 18-chip ABC spiral (`src/catan_rl/engine/board.py:34-44`), and the dihedral-aug pipeline silently leaks port information in BC training because `symmetry_tables.py` does not export a port permutation. Phase C is a meta-redirect surfacing the senior's "you may be solving the wrong problem" critique.
+**Provenance**: senior RL research-engineer review of the (removed) v1 Monte-Carlo setup-pretrain plan (v1 MC ancestor) and `docs/plans/v2_setup_labeling.md` (human-label fine-tune). The review's central claim: the v1 MC rollout estimator for setup-phase vertex value is *strictly dominated* by a closed-form expected-pip-yield score now that the chip layout is the verified 18-chip ABC spiral (`src/catan_rl/engine/board.py:34-44`), and the dihedral-aug pipeline silently leaks port information in BC training because `symmetry_tables.py` does not export a port permutation. Phase C is a meta-redirect surfacing the senior's "you may be solving the wrong problem" critique.
 
 ---
 
@@ -47,7 +47,7 @@ Confirmed: zero `port_perm` references in `src/catan_rl/augmentation/symmetry_ta
 
 ## Phase A — Analytic value rollouts in the setup trainer
 
-**Problem.** The setup-phase trainer (v1 location: `docs/plans/setup_pretrain_plan.md` §3, `mc_rollout_collector.py`; v2 location: NOT YET PORTED — this plan ports it) estimates vertex value via Monte Carlo dice rollouts at `n_rollouts=50` per position (the v1 default; the senior cited 20 in review — both are too noisy). With the chip layout deterministic, the first-moment expected pip yield has a closed form and dice variance is unnecessary supervision noise. Reviewer quote: *"the resource weight table is the whole ballgame — get it wrong and you bake a systematic placement bias into every game."*
+**Problem.** The setup-phase trainer (v1 location: the (removed) v1 Monte-Carlo setup-pretrain plan §3, `mc_rollout_collector.py`; v2 location: NOT YET PORTED — this plan ports it) estimates vertex value via Monte Carlo dice rollouts at `n_rollouts=50` per position (the v1 default; the senior cited 20 in review — both are too noisy). With the chip layout deterministic, the first-moment expected pip yield has a closed form and dice variance is unnecessary supervision noise. Reviewer quote: *"the resource weight table is the whole ballgame — get it wrong and you bake a systematic placement bias into every game."*
 
 **Target.** Replace MC with `value(v) = Σ_h ∈ adjacent(v) dots(chip[h]) × resource_weight(res[h])` where `dots(·)` maps the 2..12 token to its pip count (2→1, 3→2, …, 6→5, 7→0, 8→5, …, 12→1) and `resource_weight: dict[str, float]` is a **calibrated** scalar per resource type. Calibration is a real design subtask, not a constant.
 

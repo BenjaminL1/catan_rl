@@ -111,13 +111,16 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
 - **Constitution**: `.specify/memory/constitution.md` (authoritative principles).
 - **Feature state is not "Phase X landed".** Older docs claimed many advanced
   league/search/aux-head features as "landed"; the 2026-06 gap audit found most
-  were **scaffolded-but-unwired in v2**. As of 2026-06-08 the **self-play
-  snapshot-opponent keystone IS wired & merged** (in-env full-game opponent
-  driver, league assignment consumer, `vec_env.set_opponents` mid-rollout swap,
-  `evaluate_policy_vs_policy`); self-play *training* has not been RUN yet. Still
-  unwired: PFSP, TrueSkill, Nash pruning, exploiters, MCTS, piKL, belief/
-  opp-action aux heads. **Verify actual feature state against `src/catan_rl/`**,
-  not against feature-claim lists.
+  were **scaffolded-but-unwired in v2**. As of 2026-06-09: the **self-play
+  snapshot-opponent keystone is wired & merged** (in-env full-game opponent
+  driver, league consumer, `vec_env.set_opponents` mid-rollout swap,
+  `evaluate_policy_vs_policy`); **self-play training is RUNNING** (honest-obs
+  lineage seeded from `bootstrap_v1` u799); the **belief head is wired** (aux
+  soft-CE on opponent hidden dev-card types, `belief_coef=0.05`); the obs is
+  **honest** (opponent hidden dev types + hidden VP no longer leak). Still
+  unwired: PFSP, TrueSkill, Nash pruning, exploiters, MCTS, piKL, opp-action aux
+  head. **Verify actual feature state against `src/catan_rl/`**, not against
+  feature-claim lists.
 
 ## Commit & workflow conventions
 

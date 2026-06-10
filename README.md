@@ -1,28 +1,20 @@
-# Catan RL: 1v1 Settlers of Catan with Custom PPO
+# Catan RL — 1v1 Settlers of Catan with Custom PPO
 
-A reinforcement learning agent trained to play 1v1 Settlers of Catan (Colonist.io ruleset) using a custom PPO implementation. The agent uses a Transformer-based observation encoder and a 6-head autoregressive action representation to handle Catan's complex, multi-phase action space.
+A reinforcement-learning agent for **1v1 Settlers of Catan** under the
+Colonist.io ruleset, trained with a custom PPO implementation. The policy
+pairs a tile transformer + GNN board encoder with a **6-head autoregressive
+action space** that handles Catan's multi-phase, structured action set.
 
-Trained via self-play league on an Apple M1 Pro (CPU-only). The original
-1.54M-param baseline reached ~7.4M steps before archiving; subsequent
-phases extended the architecture to ~2.74M params (`phase4_full`) with
-GNN topology priors, AdaLN action heads, decoupled value tower with
-optional GRU recurrence, opponent-belief and opponent-action auxiliary
-losses, AlphaStar-style PFSP-hard self-play with TrueSkill ratings and
-Nash pruning, duo exploiter cycles, and an ISMCTS module for inference-
-time policy improvement.
-
-The full progression and design choices live in
-[`docs/plans/superhuman_roadmap.md`](docs/plans/superhuman_roadmap.md)
-and the ADRs under [`docs/decisions/`](docs/decisions/). Every phase
-feature is config-flagged for ablation; defaults preserve back-compat.
+Training path: **heuristic bootstrap → league self-play**. The agent trains
+on MPS (Apple M1 Pro); eval is pinned to CPU. This is the **v2** codebase
+(`src/catan_rl/`); the old v1 `catan/` tree is deprecated and gone.
 
 ---
 
 ## Credits
 
-Game engine adapted from [Catan-AI](https://github.com/kvombatkere/Catan-AI) by Karan Vombatkere.
-
-RL architecture inspired by [settlers_of_catan_RL](https://github.com/henrycharlesworth/settlers_of_catan_RL) by Henry Charlesworth.
+- Game engine adapted from [Catan-AI](https://github.com/kvombatkere/Catan-AI) by Karan Vombatkere.
+- RL architecture inspired by [settlers_of_catan_RL](https://github.com/henrycharlesworth/settlers_of_catan_RL) by Henry Charlesworth (Charlesworth resource order).
 
 ---
 
@@ -31,198 +23,148 @@ RL architecture inspired by [settlers_of_catan_RL](https://github.com/henrycharl
 | Rule | Value |
 |------|-------|
 | Win condition | **15 VP** (vs 10 in standard 4-player) |
-| Player trading | **Disabled** — bank/port only |
-| Discard threshold | **9 cards** (vs standard 7) |
-| Friendly Robber | Cannot place robber on hex adjacent to player with <3 visible VP |
-| Dice | **StackedDice** — shuffled bag of 36 outcomes with noise + Karma mechanic |
+| Players | **2** |
+| Player-to-player trading | **Disabled** — bank/port only |
+| Discard threshold on a 7 | **9 cards** (vs standard 7) |
+| Friendly Robber | No robber on a hex adjacent to a player with `< 3` visible VP |
+| Dice | **StackedDice** — shuffled bag of 36 outcomes + 1 noise swap + 20% Karma forced-7 |
 | Setup | Snake draft (1→2→2→1); 2nd settlement yields starting resources |
+
+See [`docs/1v1_rules.md`](docs/1v1_rules.md) for the authoritative table.
 
 ---
 
 ## Architecture
 
-### Observation (Dict, Charlesworth-Style)
+### Observation (dict, Charlesworth order)
 
-| Component | Shape | Encoder | Output |
-|-----------|-------|---------|--------|
-| `tile_representations` | 19 × 79 | Transformer (2 layers, 4 heads) → projection | 475-dim |
-| `current_player_main` | 166-dim | MLP | 128-dim |
-| `current_player_hidden_dev` / `_played_dev` | seq × 6 | Embedding + MHA | 25-dim each |
-| `next_player_main` | 173-dim | MLP | 128-dim |
+Built by `src/catan_rl/policy/obs_encoder.py`; dims live in
+`src/catan_rl/policy/obs_schema.py` (do not hardcode). The obs is **honest**:
+the opponent's hidden dev-card *types* and hidden-VP count are **not** in the
+obs — only the opponent's hidden-card *count* and *played* cards are. The
+belief head predicts the hidden types as an auxiliary target.
 
-All components concatenated → Linear → LayerNorm → ReLU → **512-dim state vector**
+| Key | Shape | Notes |
+|-----|-------|-------|
+| `tile_representations` | `(19, 79)` | per-tile features (resource/token/robber/ownership) |
+| `current_player_main` | `(54,)` | agent scalars |
+| `next_player_main` | `(61,)` | opponent scalars (54 + hidden-count one-hot + total-res) |
+| `current_dev_counts` | `(5,)` | agent's held dev-card counts |
+| `next_played_dev_counts` | `(5,)` | opponent's *played* dev cards (observable) |
+| `hex_features` / `vertex_features` / `edge_features` | `(19,19)` / `(54,16)` / `(72,16)` | GNN node inputs |
+| `opponent_kind` / `opponent_policy_id` | scalar `int64` | opp-id embedding inputs |
 
-Total parameters: **1.54M**
+Trunk: TileEncoder + GraphEncoder + player/dev encoders + opp-id embedding →
+concat → Linear → LayerNorm → GELU → **512-dim trunk** (`CatanPolicy`,
+~1.5M params). Full I/O contract in [`docs/io_schema.md`](docs/io_schema.md).
 
-### Action Space (6 Autoregressive Heads)
+### Action space (6 autoregressive heads)
+
+`MultiDiscrete([13, 54, 72, 19, 5, 5])` = `[type, corner, edge, tile, res1, res2]`.
 
 | Head | Size | Purpose |
 |------|------|---------|
-| 0 `action_type` | 13 | Which action (BuildSettlement, BuildCity, BuildRoad, EndTurn, MoveRobber, BuyDevCard, PlayKnight, PlayYoP, PlayMonopoly, PlayRoadBuilder, BankTrade, Discard, RollDice) |
-| 1 `corner` | 54 | Settlement / city vertex |
-| 2 `edge` | 72 | Road edge |
-| 3 `tile` | 19 | Robber placement hex |
-| 4 `resource_1` | 5 | Primary resource (YoP / Monopoly / Trade-give / Discard) |
-| 5 `resource_2` | 5 | Secondary resource (YoP 2nd / Trade-receive) |
+| 0 `type` | 13 | action type (see below) |
+| 1 `corner` | 54 | settlement / city vertex |
+| 2 `edge` | 72 | road edge |
+| 3 `tile` | 19 | robber hex |
+| 4 `resource1` | 5 | YoP / Monopoly / Trade-give / Discard |
+| 5 `resource2` | 5 | YoP-2nd / Trade-receive |
 
-Each head is a 2-layer MLP → MaskedCategorical. Joint log-prob is the sum of relevant head log-probs (irrelevant heads zero-weighted via registered buffers).
+Types: `0 BuildSettlement, 1 BuildCity, 2 BuildRoad, 3 EndTurn, 4 MoveRobber,
+5 BuyDevCard, 6 PlayKnight, 7 PlayYoP, 8 PlayMonopoly, 9 PlayRoadBuilder,
+10 BankTrade, 11 Discard, 12 RollDice`. There are **no P2P-trade actions**.
+Each head is masked; the joint log-prob sums only the relevant heads
+(per-type relevance buffers). Context-using heads (corner/res1/res2) use
+FiLM/AdaLN conditioning. A value head and a 5-way belief head share the trunk.
 
-### PPO Hyperparameters (current defaults — see `arguments.py` for source of truth)
+### PPO hyperparameters (defaults — `src/catan_rl/ppo/arguments.py` is the source of truth)
 
 | Param | Value |
 |-------|-------|
-| n_steps | 4096 |
-| n_envs | 8 |
+| n_envs | 128 |
+| n_steps | 256 (→ 32,768 transitions/rollout) |
 | batch_size | 512 |
-| n_epochs | 6 |
+| n_epochs | 4 |
 | γ (discount) | 0.995 |
 | λ (GAE) | 0.95 |
-| clip ε | 0.2 |
-| target_kl | 0.025 |
-| LR | 1e-4 → 1e-5 (linear decay) |
-| Entropy coef | 0.04 → 0.005 (annealed updates 500–3000) |
-| Value normalization | Running normalizer (Welford) |
-| Total target steps | 200M |
+| clip ε / clip_vf | 0.2 / 0.2 |
+| target_kl (k3 estimator) | 0.02 |
+| LR | 3e-4 → 1e-5 (linear decay) |
+| entropy coef | 0.04 → 0.005 (annealed updates 50–200) |
+| advantage norm | per-rollout (no value/return normalizer) |
+| belief_coef / opp_action_coef | 0.05 / 0.03 |
+| total_steps | 50,003,968 (~50M) |
+| device | `auto` → MPS on M1 (eval pinned to CPU) |
 
-### Self-Play (League)
+### Self-play (league)
 
-- In-memory deque of past policy state dicts (maxlen=100)
-- New policy added every 4 PPO updates
-- Sampling: uniform base + linear recency bias toward most recent 25 policies (legacy)
-- Pure self-play (no random opponents after warm-up)
-
-### Phase progression — optional features (all config-flagged)
-
-Each row is opt-in via the `configs/phaseN_*.yaml` it ships in. Defaults
-preserve the original 1.54M baseline. See ADRs under `docs/decisions/`
-for full design rationale.
-
-| Phase | Feature | Config flag | Notes |
-|---|---|---|---|
-| 0 | terminated/truncated split + per-head entropy + eval harness | always-on | trainer correctness |
-| 1.1 | PPO2 value clipping | `use_value_clipping` | `loss = max(unclipped_MSE, clipped_MSE)` |
-| 1.2 | Per-rollout advantage norm | `advantage_norm` | `'rollout' \| 'batch' \| 'none'` |
-| 1.3 | Compact obs schema | `use_thermometer_encoding` | drops bucket8: 166/173 → 54/61 |
-| 1.4 | Dev-card count encoding | `use_devcard_mha` | swaps MHA for bincount + MLP |
-| 1.5 | D6 dihedral symmetry aug | `symmetry_aug_prob` | per-minibatch augmentation, 11 non-identity D6 elements |
-| 2.1 | Axial positional embedding | `use_axial_pos_emb` | learned `(q, r)` embedding into tile encoder |
-| 2.2 | Modern transformer recipe | `transformer_dropout`, `transformer_activation` | dropout + GELU FFN |
-| 2.3 | GNN encoder | `use_graph_encoder` | tripartite hex/vertex/edge message passing |
-| 2.4 | AdaLN/FiLM action heads | `action_head_film` | FiLM modulation on context-using heads |
-| 2.5 | Decoupled value tower | `value_head_mode='decoupled'` | separate ObservationModule for value |
-| 2.5b | Belief head (1v1) | `use_belief_head` | predicts opponent's hidden dev-card type distribution |
-| 2.5c | Opponent-action aux head (1v1) | `use_opponent_action_head` | predicts opponent's next action type, league-only |
-| 3.1 | PFSP-hard sampling | `pfsp_mode='hard'` | `(1-w)^p` priorities + sliding window |
-| 3.2 | Latest-policy regularization | `latest_policy_weight` | `current_self` opponent in league |
-| 3.3 | Duo exploiter cycles | `exploiter_mode='duo'` | periodic exploiter trains vs frozen main, injected back with PFSP boost |
-| 3.4 | TrueSkill league rating | `use_trueskill` | μ/σ tracking + σ-decay |
-| 3.5 | Nash-weighted pruning | `prune_strategy='nash'` | replicator-dynamics eviction at capacity |
-| 3.6 | Opponent ID embedding | `use_opponent_id_emb` | 6-way kind + policy_id embedding, 40% mask |
-| 4.1 | ISMCTS (library) | — | single-step PUCT + belief-determinization; rollout-loop integration deferred |
-| 4.2 | GRU recurrent value head | `use_recurrent_value` | value-only GRU; resets on `terminated`, preserves on `truncated` |
-
-Param count: ~1.54M (baseline) → 2.22M (`phase2_full`) → 2.24M (`phase3_full`) → 2.74M (`phase4_full`).
+`src/catan_rl/selfplay/league.py` keeps a FIFO snapshot pool (maxlen 100); a
+snapshot is added every 4 PPO updates. Opponent draws mix
+`random_weight` / `heuristic_weight` / `snapshot_weight`. Defaults are
+heuristic-only (`snapshot_weight=0`); setting `snapshot_weight>0` turns on
+self-play and the snapshot-opponent driver seats frozen snapshots in-env.
+A heuristic-weight floor (`require_heuristic_floor`) keeps the agent from
+forgetting how to beat the heuristic during self-play.
 
 ---
 
-## Project Structure
+## Project layout
 
 ```
 src/catan_rl/
-  engine/               Pure game logic (board, player, dice, geometry, broadcast)
-  agents/               Heuristic and random AI opponents
-  env/                  Gymnasium env, action masks, observation building, hand tracker
-  models/               Policy net: ObservationModule + 6 autoregressive heads + value net
-  algorithms/
-    ppo/                CatanPPO trainer + arguments
-    common/             GAE, rollout buffer (shared with future PPG/MCTS)
-    search/             ISMCTS module (Phase 4.1); PUCT + belief-determinization
-  selfplay/             League (PFSP), GameManager (multi-env opponent sampling)
-  eval/                 EvaluationManager, rules-invariants (Phase 0)
-  setup_phase/          Decoupled setup-phase trainer (Monte Carlo rollouts)
-  gui/                  Optional pygame GUI
-  viz/                  Optional debug renderers
-
-scripts/                Thin CLI entry points (train.py, evaluate.py, play_vs_model.py, train_setup.py)
-configs/                Phase-specific YAML configs (`_base.yaml` + phase overrides)
-tests/{unit,integration} Pytest suite mirroring src/catan_rl
-docs/
-  architecture.md       One-pager on training loop
-  obs_schema.md         Canonical observation keys/dims/ranges
-  action_schema.md      Canonical 6-head action space and mask keys
-  1v1_rules.md          Colonist.io 1v1 rule table (single source of truth)
-  decisions/            ADRs (1v1 invariant, hand tracking, src-layout, etc.)
-  plans/
-    superhuman_roadmap.md      5-phase upgrade plan
-    file_layout_restructure.md Repo restructure plan (implemented)
-    archive/                   Historical plans (kept for context)
+  engine/     pure-Python game (game, board, player, dice, broadcast, geometry)
+  env/        Gymnasium env (catan_env.py), action masks, hand tracker
+  policy/     CatanPolicy: encoders, obs_encoder, obs_schema, heads, network
+  ppo/        trainer, buffer, gae, vec_env, game_manager, arguments (config SoT)
+  selfplay/   league.py (snapshot pool), snapshot_opponent.py
+  eval/       harness.py, wilson.py, rules_invariants.py
+  bc/ setup_phase/ replay/ agents/ augmentation/ checkpoint/ cli/
+  gui/        optional pygame (never import on training/eval paths)
+src/catan_engine/   Rust engine crate (scaffolding; not the default backend)
+scripts/    thin CLI shims (train.py, train_bc.py, generate_bc_dataset.py, …)
+configs/    ppo_default.yaml, bc.yaml
+docs/       architecture.md, io_schema.md, 1v1_rules.md, decisions/, plans/
 ```
-
-See [`docs/architecture.md`](docs/architecture.md) for a one-pager on the training loop and [`docs/decisions/`](docs/decisions/) for ADRs.
 
 ---
 
-## Getting Started
+## Getting started
 
 ### Install
 
 ```bash
-# Editable install with dev tools (pytest, ruff, mypy, pre-commit).
-pip install -e ".[dev]"
-
-# Optional: GUI (pygame) for play_vs_model.py.
-pip install -e ".[dev,gui]"
+pip install -e ".[dev]"        # editable + dev tools (pytest, ruff, mypy)
+pip install -e ".[dev,gui]"    # add optional pygame GUI / replay viewer
 ```
 
 ### Train
 
 ```bash
-# Fresh run with defaults
-make train
-
-# Or via the console script (wired by ``pip install -e .``):
-catan-rl-train --verbose
-
-# With a phase-specific YAML config
-catan-rl-train --config configs/phase0_baseline.yaml --verbose
-
-# Resume from checkpoint
-catan-rl-train --resume checkpoints/train/checkpoint_XXXXXXXX.pt --verbose
+make train                                  # defaults
+catan-rl-train --config configs/ppo_default.yaml --run-name my_run
+python scripts/train.py --dry-run           # validate config without training
 ```
 
-> ``python scripts/train.py …`` still works — it's a thin
-> back-compat shim that re-exports ``catan_rl.cli.train:main``.
-> The canonical entry point is the console script.
+`scripts/train.py` is a thin shim for the `catan-rl-train` console script
+(`catan_rl.cli.train:main`). Common flags: `--config`, `--run-name`,
+`--total-steps`, `--n-envs`, `--device`, `--dry-run`, `--max-updates`.
 
-### Monitor
+### Monitor / test
 
 ```bash
 tensorboard --logdir runs/train/
-```
-
-### Evaluate
-
-```bash
-make eval   # heuristic over 100 games against the champion checkpoint
-
-# Or directly:
-python scripts/evaluate.py checkpoints/train/checkpoint_07390040.pt --opponent heuristic --n-games 200
-```
-
-### Test
-
-```bash
-make test            # unit tests
-make lint            # ruff
-make typecheck       # mypy
+make test          # pytest tests/unit
+make lint          # ruff
+make typecheck     # mypy
 ```
 
 ---
 
-## Training Notes
+## Notes
 
-- Hardware: Apple M1 Pro, CPU-only (MPS too slow at batch=1 inference)
-- Real-world throughput: ~25-30 steps/s on `phase4_full` (~2.74M params with all features active); ~30-35 steps/s on the 1.54M baseline; ~2–2.5M steps/day accounting for sleep/idle
-- Checkpoints saved every 500k steps; eval vs heuristic every 100k steps
-- Bottleneck profiling (n_envs=4, n_steps=2048): NN inference ~53% of rollout time, obs-building ~33%
-- Obs-building optimized: cached per-tile static features and corner geometry at episode reset → ~1.8× speedup on `_build_tile_features`
+- Training resolves `device: auto` → MPS on M1 (batched SGD is ~2.6–3.3× faster
+  than CPU at batch 512); eval runs on CPU. Launch long runs detached (`nohup`).
+- The training bottleneck is SGD (~80% of each update at n_envs=128), not the
+  engine — the Rust backend barely changes wall-clock.
+- `arguments.py` is the config source of truth; this README may lag.

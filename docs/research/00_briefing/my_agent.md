@@ -2,7 +2,7 @@
 
 ## 1. State Representation
 
-The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Phase 3 additions at lines 45-50 in `docs/obs_schema.md`):
+The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Phase 3 additions in `docs/io_schema.md`):
 
 | Key | Shape | Dtype | Encoding |
 |---|---|---|---|
@@ -23,7 +23,7 @@ The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Ph
 
 ## 2. Action Space
 
-6 autoregressive heads: `MultiDiscrete([13, 54, 72, 19, 5, 5])` per `docs/action_schema.md:7`.
+6 autoregressive heads: `MultiDiscrete([13, 54, 72, 19, 5, 5])` per `docs/io_schema.md`.
 
 | Head | Size | Used by action types | Notes |
 |---|---|---|---|
@@ -34,7 +34,7 @@ The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Ph
 | 4. `resource1` | 5 | 7, 8, 10, 11 | YoP/Monopoly/BankTrade-give/Discard resource |
 | 5. `resource2` | 5 | 7, 10 | YoP-2nd / BankTrade-receive resource |
 
-**Action types 0–12** (per `docs/action_schema.md:18-35` and `src/catan_rl/policy/obs_schema.py:78-93`):
+**Action types 0–12** (per `docs/io_schema.md` and `src/catan_rl/policy/obs_schema.py:78-93`):
 - 0: `BUILD_SETTLEMENT` (corner)
 - 1: `BUILD_CITY` (corner)
 - 2: `BUILD_ROAD` (edge)
@@ -53,7 +53,7 @@ The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Ph
 
 ## 3. Action Masking
 
-The 9-key mask dict is computed by `src/catan_rl/env/masks.py:55-101` and applied at inference and training. Per `docs/action_schema.md:40-52`:
+The 9-key mask dict is computed by `src/catan_rl/env/masks.py:55-101` and applied at inference and training. Per `docs/io_schema.md`:
 
 | Mask key | Shape | Notes |
 |---|---|---|
@@ -73,7 +73,7 @@ Masked categories use hard masking via `masked_log_softmax` in `src/catan_rl/pol
 
 The opponent's hidden dev-card *type* distribution is modeled via the **belief head**, a 5-way softmax over `{KNIGHT, VP, ROADBUILDER, YOP, MONOPOLY}` per `src/catan_rl/policy/heads.py:407-426`.
 
-**`BroadcastHandTracker`** (`src/catan_rl/env/hand_tracker.py:53-100`) maintains *perfect* opponent resource counts by subscribing to the engine's `RESOURCE_CHANGE` broadcast events. In 1v1 with no player-to-player trading, every resource mutation is observable (build, buy, trade, discard, rob, dev-card effects, dice yield). This is rule-correct per `CLAUDE.md` lines 28-29 and `docs/decisions/0002-perfect-hand-tracking.md` (referenced in `docs/obs_schema.md:93`). The tracker maintains hands in Charlesworth order and feeds directly into `next_player_main` construction.
+**`BroadcastHandTracker`** (`src/catan_rl/env/hand_tracker.py:53-100`) maintains *perfect* opponent resource counts by subscribing to the engine's `RESOURCE_CHANGE` broadcast events. In 1v1 with no player-to-player trading, every resource mutation is observable (build, buy, trade, discard, rob, dev-card effects, dice yield). This is rule-correct per `CLAUDE.md` lines 28-29 and `docs/decisions/0002-perfect-hand-tracking.md` (referenced in `docs/io_schema.md`). The tracker maintains hands in Charlesworth order and feeds directly into `next_player_main` construction.
 
 The belief head is trained with soft cross-entropy on the env's ground-truth normalized opponent dev-card type count vector (`obs['belief_target']`, shape (5,)). Loss weight = 0.05 in both BC (Step 3, `docs/plans/v2_step3_bc.md:102-174`) and PPO (Step 4, `docs/plans/v2_step4_ppo.md:45-70`). In Step 5 MCTS, the belief head is used as a sampler for belief-state determinization per `docs/plans/v2_step5_mcts.md:145-160`.
 

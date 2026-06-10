@@ -1,4 +1,4 @@
-.PHONY: install install-gui install-all test test-unit test-integration test-all lint format typecheck train eval bench clean smoke-train smoke-eval rust-setup rust-build rust-test rust-bench rust-clean
+.PHONY: install install-gui install-all test test-unit test-integration test-all lint format typecheck train bench clean smoke-train rust-setup rust-build rust-test rust-bench rust-clean
 
 PYTHON ?= python
 
@@ -34,16 +34,13 @@ typecheck:
 	mypy src
 
 train:
-	$(PYTHON) scripts/train.py --verbose
+	$(PYTHON) scripts/train.py --config configs/ppo_default.yaml --verbose
 
-eval:
-	$(PYTHON) scripts/evaluate.py checkpoints/train/checkpoint_07390040.pt --opponent heuristic --n-games 100
+# Evaluation runs inside the training loop (catan_rl.eval.harness, periodic
+# WR-vs-heuristic with Wilson CIs); there is no standalone eval CLI in v2.
 
 smoke-train:
-	$(PYTHON) scripts/train.py --total-timesteps 200 --verbose
-
-smoke-eval:
-	$(PYTHON) scripts/evaluate.py checkpoints/train/checkpoint_07390040.pt --opponent random --n-games 5
+	$(PYTHON) scripts/train.py --dry-run
 
 # ``bench`` runs the engine throughput harness (Rust migration plan
 # Phase 1) and writes CSV + JSON to ``benchmarks/results/``. The
@@ -51,7 +48,7 @@ smoke-eval:
 # timing loop so the numbers reflect actual training-loop conditions,
 # not env-step throughput in isolation — env stepping is not the
 # bottleneck per ``analysis/diag_*.log`` (SGD = ~80% of wall-time).
-# See ``docs/plans/rust_engine_actual_state.md``.
+# See ``docs/plans/rust_engine.md``.
 bench:
 	@if [ ! -f scripts/bench_engine.py ]; then \
 	    echo "scripts/bench_engine.py not yet implemented (Phase 1 of the Rust migration remediation plan). See docs/plans/rust_engine_actual_state.md."; \

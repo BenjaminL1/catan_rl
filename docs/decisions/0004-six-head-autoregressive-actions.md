@@ -13,7 +13,7 @@ Use a 6-head autoregressive action space `MultiDiscrete([13, 54, 72, 19, 5, 5])`
 
 ## Consequences
 
-- Action masking is per-head (9 mask keys); see `docs/action_schema.md`.
+- Action masking is per-head (9 mask keys); see `docs/io_schema.md`.
 - All 6 heads always forward-pass; relevance is applied at log-prob/entropy aggregation. Phase 2.4 of the roadmap will tighten this with AdaLN/FiLM head conditioning so each head is more strongly conditioned on action type.
 - Joint entropy can mask silent collapse on individual heads. Phase 0 adds **per-head** entropy logging to detect this.
 - The resource heads (4, 5) are reused across YoP, Monopoly, BankTrade, Discard via context one-hot. This is space-efficient but couples four different operational meanings into one head's gradient signal.
@@ -27,5 +27,5 @@ Use a 6-head autoregressive action space `MultiDiscrete([13, 54, 72, 19, 5, 5])`
 
 - `src/catan_rl/models/action_heads_module.py`
 - `src/catan_rl/models/distributions.py` (MaskedCategorical)
-- `docs/action_schema.md`
+- `docs/io_schema.md`
 - `docs/plans/superhuman_roadmap.md` §5.1.4 (AdaLN head conditioning)
