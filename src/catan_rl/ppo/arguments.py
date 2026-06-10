@@ -391,6 +391,14 @@ class LeagueConfig:
     forget how to beat a fixed strong baseline — the self-play drift /
     catastrophic-forgetting guard. 0 (default) = no anchor."""
 
+    anchor_checkpoint_path: str | None = None
+    """Path to a v2 checkpoint to install as the frozen anchor at startup — the
+    in-tree way to wire the anchor (``build_training_state`` loads it and calls
+    ``League.set_anchor``). When ``anchor_weight > 0`` an anchor MUST be present
+    by the time the loop starts (via this path or a manual ``set_anchor``), else
+    the loop fails fast rather than silently renormalizing the anchor weight
+    away. ``None`` (default) = no in-tree anchor install."""
+
     pfsp_enabled: bool = False
     """Prioritized Fictitious Self-Play: weight the snapshot-POOL draw by how
     hard each snapshot currently is for the learner (recency-weighted win rate),

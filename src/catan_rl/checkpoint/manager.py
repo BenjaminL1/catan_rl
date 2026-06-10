@@ -33,6 +33,13 @@ deserialiser.
                 ...
             ],
             "next_snapshot_id": int,
+            "opponent_stats": {snapshot_id: [p_hat, games]},  # optional (PFSP)
+            "anchor": {                     # optional (frozen anchor); same shape
+                "state_dict": dict,         # as a snapshot, kept with its
+                "update_idx": int,          # ORIGINAL id so it round-trips
+                "snapshot_id": int,         # without orphaning opponent_stats
+                "metadata": dict,
+            },
         },
         "rng": {
             "numpy_state": dict,        # np.random.get_state(legacy=False)
@@ -224,6 +231,17 @@ def _capture_league_state(league: Any) -> dict[str, Any]:
         state["opponent_stats"] = {
             int(sid): [float(p), float(g)] for sid, (p, g) in league.opponent_stats_state().items()
         }
+    # Frozen anchor (additive; absent in pre-anchor checkpoints). Persisted with
+    # its ORIGINAL stable id so its opponent_stats key + obs embedding slot stay
+    # put on resume — the drift guard must survive a restart, not vanish.
+    anchor = getattr(league, "_anchor", None)
+    if anchor is not None:
+        state["anchor"] = {
+            "state_dict": _state_dict_to_cpu(anchor.state_dict),
+            "update_idx": int(anchor.update_idx),
+            "snapshot_id": int(anchor.snapshot_id),
+            "metadata": dict(anchor.metadata),
+        }
     return state
 
 
@@ -405,10 +423,23 @@ class CheckpointPayload:
         next_id = int(self.league_state.get("next_snapshot_id", 0))
         # Defensive max: in case the saved cursor somehow lags behind
         # the highest live id (shouldn't happen, but cheap to guard).
-        max_live = max(
-            (snap.snapshot_id for snap in deque_),
-            default=-1,
-        )
+        # Frozen anchor (additive; absent in pre-anchor checkpoints). Restore it
+        # with its ORIGINAL stable id — NOT via set_anchor, which would mint a
+        # fresh id and orphan the anchor's opponent_stats + shift its obs
+        # embedding slot. The checkpoint's anchor (with accumulated EMA) wins
+        # over any path-installed one.
+        anchor_state = self.league_state.get("anchor")
+        if anchor_state is not None:
+            league._anchor = LeagueSnapshot(
+                state_dict=dict(anchor_state["state_dict"]),
+                update_idx=int(anchor_state["update_idx"]),
+                snapshot_id=int(anchor_state["snapshot_id"]),
+                metadata=dict(anchor_state.get("metadata", {})),
+            )
+        live_ids = [snap.snapshot_id for snap in deque_]
+        if getattr(league, "_anchor", None) is not None:
+            live_ids.append(league._anchor.snapshot_id)
+        max_live = max(live_ids, default=-1)
         league._next_snapshot_id = max(next_id, max_live + 1)
         # PFSP win-rate store (additive; absent in pre-PFSP checkpoints → leave
         # the league's store empty).

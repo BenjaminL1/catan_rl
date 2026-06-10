@@ -14,6 +14,7 @@ import logging
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 import torch
 
 from catan_rl.env.catan_env import CatanEnv
@@ -105,6 +106,20 @@ def test_pfsp_smoke_records_outcomes(tmp_path: Path) -> None:
     # Outcomes were attributed: at least one snapshot accrued recorded games.
     total_games = sum(g for _p, g in state.league.opponent_stats_state().values())
     assert total_games > 0, "PFSP recorded no game outcomes — attribution path broken"
+
+
+def test_anchor_weight_without_anchor_fails_fast(tmp_path: Path) -> None:
+    """FN2: anchor_weight>0 with no anchor installed (no anchor_checkpoint_path,
+    no manual set_anchor) must raise at run start, not silently renormalize the
+    anchor's 25% away leaving the drift guard inert."""
+    base = _selfplay_cfg(total_updates=1)
+    cfg = replace(base, league=replace(base.league, anchor_weight=0.25))
+    log = logging.getLogger("catan_rl.train.anchor_failfast")
+    log.setLevel(logging.CRITICAL)
+    with pytest.raises(ValueError, match="anchor"):
+        run_training(
+            cfg, run_dir=tmp_path, device_label="cpu", logger=log, max_updates=1, open_tb=False
+        )
 
 
 def test_selfplay_preserves_1v1_ruleset() -> None:

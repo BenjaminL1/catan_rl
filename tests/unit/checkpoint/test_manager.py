@@ -248,6 +248,53 @@ class TestLeagueRoundTrip:
         payload.apply_to_league(league_b)
         assert league_b.opponent_stats_state() == before
 
+    def test_anchor_round_trip(self, tmp_path: Path) -> None:
+        # FN2: the frozen anchor + its accumulated EMA survive save/load with the
+        # SAME id, so the drift guard does not vanish (or re-mint) on resume.
+        league_a = self._build_league_with_snapshots(1)  # pool snapshot id 0
+        anchor_policy, _ = _fresh_policy_and_optimizer(seed=11)
+        aid = league_a.set_anchor(anchor_policy.state_dict(), update_idx=99)
+        league_a.record_outcome(aid, agent_won=True)
+        league_a.record_outcome(aid, agent_won=False)
+        before_stats = league_a.opponent_win_rate(aid)
+        policy, opt = _fresh_policy_and_optimizer(seed=12)
+        save_checkpoint(
+            tmp_path / "ckpt.pt",
+            config={},
+            policy=policy,
+            optimizer=opt,
+            update_idx=7,
+            global_step=700,
+            league=league_a,
+        )
+        payload = load_checkpoint(tmp_path / "ckpt.pt")
+        league_b = League(LeagueConfig(maxlen=10, add_snapshot_every_n_updates=1))
+        payload.apply_to_league(league_b)
+        assert league_b.anchor_id() == aid  # SAME id (not re-minted)
+        assert league_b.peek_by_id(aid) is not None  # resolvable as an opponent
+        assert league_b.opponent_win_rate(aid) == before_stats  # EMA survived
+        # The id cursor accounts for the anchor: a new snapshot gets id > anchor.
+        assert league_b.add_snapshot(policy.state_dict(), update_idx=100) > aid
+
+    def test_pre_anchor_checkpoint_loads_without_anchor(self, tmp_path: Path) -> None:
+        # Additive: a checkpoint with no "anchor" key restores to no anchor.
+        league_a = self._build_league_with_snapshots(2)  # no set_anchor
+        policy, opt = _fresh_policy_and_optimizer(seed=13)
+        save_checkpoint(
+            tmp_path / "ckpt.pt",
+            config={},
+            policy=policy,
+            optimizer=opt,
+            update_idx=1,
+            global_step=1,
+            league=league_a,
+        )
+        payload = load_checkpoint(tmp_path / "ckpt.pt")
+        assert "anchor" not in (payload.league_state or {})
+        league_b = League(LeagueConfig(maxlen=10, add_snapshot_every_n_updates=1))
+        payload.apply_to_league(league_b)
+        assert league_b.anchor_id() is None
+
     def test_apply_to_league_clears_existing(self, tmp_path: Path) -> None:
         league_a = self._build_league_with_snapshots(2)
         policy, opt = _fresh_policy_and_optimizer(seed=0)

@@ -199,6 +199,22 @@ def build_training_state(
     )
 
     league = League(cfg.league)
+    # Install the frozen anchor from the configured checkpoint (the in-tree
+    # wiring). A run may instead install it manually via set_anchor after this
+    # function returns; the anchor-present check happens at run-loop start.
+    if cfg.league.anchor_checkpoint_path:
+        anchor_payload = load_checkpoint(cfg.league.anchor_checkpoint_path)
+        anchor_id = league.set_anchor(
+            anchor_payload.policy_state_dict,
+            update_idx=0,
+            metadata={"source": cfg.league.anchor_checkpoint_path},
+        )
+        if logger is not None:
+            logger.info(
+                "installed frozen anchor (id=%d) from %s",
+                anchor_id,
+                cfg.league.anchor_checkpoint_path,
+            )
     # Initial opponent mix at construction. When self-play is on
     # (snapshot_weight>0) the training loop re-draws the per-env assignment
     # each rollout via vec_env.set_opponents (US3 / T026), so this is just the
@@ -579,6 +595,17 @@ def run_training_loop(
     """
     log = logger or logging.getLogger("catan_rl.train")
     cfg = state.cfg
+
+    # Fail fast on the silent-renormalize footgun: anchor_weight > 0 but no anchor
+    # was ever installed (no anchor_checkpoint_path, no manual set_anchor) means
+    # build_env_opponent_assignments would drop the anchor branch and quietly
+    # reassign its weight — the drift guard would be inert with no error.
+    if cfg.league.anchor_weight > 0 and state.league.anchor_id() is None:
+        raise ValueError(
+            "league.anchor_weight > 0 but no anchor is installed; set "
+            "league.anchor_checkpoint_path or call league.set_anchor() before "
+            "run_training_loop (else the anchor weight is silently renormalized away)."
+        )
 
     if state.obs is None or state.masks is None:
         # First call. Reset envs to draw the initial obs. Explicit
