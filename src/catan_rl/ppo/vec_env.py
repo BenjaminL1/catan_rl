@@ -166,9 +166,8 @@ class SerialVecEnv:
             if a.kind == OPPONENT_KIND_SNAPSHOT:
                 # OpponentAssignment guarantees snapshot_id is set for this kind.
                 assert a.snapshot_id is not None
-                self._pending_snapshot[i] = (
-                    snapshot_resolver(a.snapshot_id, i) if snapshot_resolver else None
-                )
+                resolved = snapshot_resolver(a.snapshot_id, i) if snapshot_resolver else None
+                self._pending_snapshot[i] = resolved
                 self._reset_options[i] = {
                     "opponent_type": "snapshot",
                     "opponent_kind": OPP_KIND_LEAGUE,
@@ -176,7 +175,10 @@ class SerialVecEnv:
                     # so the opp-id hint stays meaningful past 100 snapshots.
                     "opponent_policy_id": a.snapshot_id % (N_OPP_POLICY_SLOTS - 1),
                 }
-                self._pending_opponent_id[i] = a.snapshot_id  # TRUE id for attribution
+                # Attribute to the snapshot only if it actually loaded; an evicted
+                # snapshot (resolved is None) falls back to the heuristic body, so
+                # its games must NOT be credited to that snapshot id (PFSP).
+                self._pending_opponent_id[i] = a.snapshot_id if resolved is not None else None
             else:
                 self._pending_snapshot[i] = None
                 self._reset_options[i] = {"opponent_type": a.kind}
