@@ -414,7 +414,10 @@ class CheckpointPayload:
         for snap_dict in self.league_state.get("snapshots", []):
             deque_.append(
                 LeagueSnapshot(
-                    state_dict=dict(snap_dict["state_dict"]),
+                    # Force CPU: load_checkpoint(map_location=<train device>) moved
+                    # these onto e.g. MPS, but the league's invariant is CPU-resident
+                    # snapshots (else maxlen=100 pool = ~470MB on the train device).
+                    state_dict=_state_dict_to_cpu(snap_dict["state_dict"]),
                     update_idx=int(snap_dict["update_idx"]),
                     snapshot_id=int(snap_dict["snapshot_id"]),
                     metadata=dict(snap_dict.get("metadata", {})),
@@ -431,7 +434,7 @@ class CheckpointPayload:
         anchor_state = self.league_state.get("anchor")
         if anchor_state is not None:
             league._anchor = LeagueSnapshot(
-                state_dict=dict(anchor_state["state_dict"]),
+                state_dict=_state_dict_to_cpu(anchor_state["state_dict"]),  # CPU invariant
                 update_idx=int(anchor_state["update_idx"]),
                 snapshot_id=int(anchor_state["snapshot_id"]),
                 metadata=dict(anchor_state.get("metadata", {})),
@@ -493,7 +496,12 @@ class CheckpointPayload:
             random.setstate(tuple(py_state))
         torch_state = self.rng_state.get("torch_state")
         if torch_state is not None:
-            torch.random.set_rng_state(torch_state)
+            # torch.set_rng_state requires a CPU uint8 ByteTensor. load_checkpoint
+            # passes map_location=<train device>, which moves EVERY payload tensor
+            # (including this one) onto e.g. MPS — set_rng_state then rejects it
+            # ("RNG state must be a torch.ByteTensor"). Force it back to CPU uint8.
+            # (MPS-only; CPU resume kept it on-host so this was dormant in CI.)
+            torch.random.set_rng_state(torch_state.to(device="cpu", dtype=torch.uint8))
 
     def apply_all(
         self,
