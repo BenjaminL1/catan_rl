@@ -162,6 +162,25 @@ class RolloutCollector:
                             pre_opp_ids[i], agent_won=info["agent_vp"] > info["opp_vp"]
                         )
 
+            # GAE mid-rollout truncation bootstrap: a truncated episode needs
+            # V(s_T), but values[t+1] is V(next-game-start) under auto-reset.
+            # Compute V(terminal obs) for envs that truncated THIS step (sparse;
+            # one extra batched value forward only when truncations occur). The
+            # last in-buffer step is handled by the post-loop bootstrap splice.
+            truncation_value_np: np.ndarray | None = None
+            if step_idx < self.buffer.n_steps - 1:
+                trunc_idxs = [i for i in final_obs if truncated[i] and not terminated[i]]
+                if trunc_idxs:
+                    term_batch = {
+                        k: np.stack([final_obs[i][k] for i in trunc_idxs])
+                        for k in final_obs[trunc_idxs[0]]
+                    }
+                    tv = self.policy(self._to_torch(term_batch))["value"]
+                    tv_np = tv.cpu().numpy().astype(np.float32).reshape(-1)
+                    truncation_value_np = np.zeros(self.vec_env.n_envs, dtype=np.float32)
+                    for j, i in enumerate(trunc_idxs):
+                        truncation_value_np[i] = tv_np[j]
+
             self.buffer.add(
                 obs=obs,
                 action=action_np,
@@ -173,6 +192,7 @@ class RolloutCollector:
                 truncated=truncated,
                 masks=masks,
                 belief_target=belief_target_np,
+                truncation_value=truncation_value_np,
             )
             obs, masks = next_obs, next_masks
             # On the very last in-buffer step, the truncated terminal

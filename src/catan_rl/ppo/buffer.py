@@ -140,6 +140,10 @@ class CompositeRolloutBuffer:
         self.rewards: np.ndarray = np.zeros(TN, dtype=np.float32)
         self.terminated: np.ndarray = np.zeros(TN, dtype=bool)
         self.truncated: np.ndarray = np.zeros(TN, dtype=bool)
+        # V(s_T) for envs that TRUNCATED at this step (0 otherwise) — the correct
+        # GAE bootstrap for mid-rollout truncations (values[t+1] would be the
+        # next game's start value under auto-reset). Overwritten every add().
+        self.truncation_values: np.ndarray = np.zeros(TN, dtype=np.float32)
 
         # --- masks (one (T,N,K_i) per key) -----------------------------
         self.masks: dict[str, np.ndarray] = {
@@ -204,6 +208,7 @@ class CompositeRolloutBuffer:
         opp_action_target_valid: np.ndarray | None = None,
         opp_kind: np.ndarray | None = None,
         opp_policy_id: np.ndarray | None = None,
+        truncation_value: np.ndarray | None = None,
     ) -> None:
         """Write one step's worth of transitions into the buffer.
 
@@ -256,6 +261,9 @@ class CompositeRolloutBuffer:
         self.rewards[t] = reward
         self.terminated[t] = terminated
         self.truncated[t] = truncated
+        # 0 when not supplied (no truncations this step, or pre-fix callers) —
+        # compute_gae only reads it where truncated[t] & ~terminated[t].
+        self.truncation_values[t] = 0.0 if truncation_value is None else truncation_value
 
         for k, arr in masks.items():
             if k not in self.masks:
@@ -376,6 +384,7 @@ class CompositeRolloutBuffer:
             last_values=last_values.astype(np.float32),
             gamma=gamma,
             gae_lambda=gae_lambda,
+            truncation_values=self.truncation_values,
         )
 
         self.advantages_raw = adv_raw.copy()

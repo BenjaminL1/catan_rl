@@ -35,6 +35,7 @@ def compute_gae(
     last_values: np.ndarray,
     gamma: float,
     gae_lambda: float,
+    truncation_values: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Vectorized GAE.
 
@@ -56,6 +57,14 @@ def compute_gae(
             under auto-reset).
         gamma: discount factor in ``(0, 1]``.
         gae_lambda: GAE λ in ``[0, 1]``.
+        truncation_values: optional ``(T, N)`` ``V(s_T)`` for transitions that
+            TRUNCATED mid-rollout (``t < T-1``). Under auto-reset, ``values[t+1]``
+            is ``V(next-game-start)``, not the truncated episode's terminal
+            value, so without this every mid-rollout-truncated episode's whole
+            advantage chain is corrupted. Only consulted where ``truncated[t] &
+            ~terminated[t]`` and ``t < T-1``; the last step uses ``last_values``
+            (the collector splices its terminal obs). ``None`` = legacy behaviour
+            (bootstrap mid-rollout truncations from the next-game value — the bug).
 
     Returns:
         ``(advantages, returns)`` both shaped ``(T, N)``. ``returns =
@@ -82,6 +91,10 @@ def compute_gae(
         )
     if last_values.shape != (rewards.shape[1],):
         raise ValueError(f"last_values shape {last_values.shape} expected ({rewards.shape[1]},)")
+    if truncation_values is not None and truncation_values.shape != rewards.shape:
+        raise ValueError(
+            f"truncation_values shape {truncation_values.shape} expected {rewards.shape}"
+        )
     if not 0 < gamma <= 1.0:
         raise ValueError(f"gamma must be in (0, 1], got {gamma}")
     if not 0 <= gae_lambda <= 1.0:
@@ -100,6 +113,15 @@ def compute_gae(
     for t in reversed(range(T)):
         is_last = t == T - 1
         in_buffer_next = last_values if is_last else values[t + 1].astype(np.float32)
+        if truncation_values is not None and not is_last:
+            # Mid-rollout truncation: bootstrap from V(s_T) (the truncated
+            # episode's terminal value), NOT values[t+1] = V(next-game-start)
+            # under auto-reset. terminated is zeroed below; the last step uses
+            # last_values (terminal obs spliced by the collector).
+            trunc_mid = truncated[t] & ~terminated[t]
+            in_buffer_next = np.where(
+                trunc_mid, truncation_values[t].astype(np.float32), in_buffer_next
+            )
         next_values = np.where(terminated[t], 0.0, in_buffer_next).astype(np.float32)
         non_terminal = (~terminated[t]).astype(np.float32)
         # Last step has no in-buffer successor → inheritance is always 0.

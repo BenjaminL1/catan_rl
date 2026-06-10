@@ -140,6 +140,53 @@ class TestTerminatedVsTruncated:
         # adv[0,0] = r[0] + γ*V[1] - V[0] = 1.0 + 0.99*100 - 0.5 = 99.5
         assert adv[0, 0] == pytest.approx(99.5, abs=1e-5)
 
+    def test_mid_rollout_truncation_bootstraps_from_terminal_value(self) -> None:
+        # The fix: with truncation_values, a mid-rollout truncation bootstraps
+        # from V(s_T), NOT values[t+1] (= V(next-game-start) under auto-reset).
+        rewards = np.array([[1.0], [10.0]], dtype=np.float32)
+        values = np.array([[0.5], [100.0]], dtype=np.float32)  # values[1] = V(next game)
+        terminated = np.zeros((2, 1), dtype=bool)
+        truncated = np.array([[True], [False]])
+        last_values = np.array([0.0], dtype=np.float32)
+        trunc_vals = np.array([[7.0], [0.0]], dtype=np.float32)  # V(s_T) of the truncated ep
+
+        adv, _ = compute_gae(
+            rewards=rewards,
+            values=values,
+            terminated=terminated,
+            truncated=truncated,
+            last_values=last_values,
+            gamma=0.99,
+            gae_lambda=0.95,
+            truncation_values=trunc_vals,
+        )
+        # Bootstraps from V(s_T)=7, not values[1]=100:
+        # adv[0,0] = 1.0 + 0.99*7 - 0.5 = 7.43  (NOT 99.5)
+        assert adv[0, 0] == pytest.approx(1.0 + 0.99 * 7.0 - 0.5, abs=1e-5)
+
+    def test_truncation_values_ignored_when_terminated(self) -> None:
+        # Only consulted where truncated & ~terminated: a terminated step still
+        # zeros the bootstrap even if a (stray) truncation_value is supplied.
+        rewards = np.array([[1.0], [2.0]], dtype=np.float32)
+        values = np.array([[0.5], [3.0]], dtype=np.float32)
+        terminated = np.array([[True], [False]])
+        truncated = np.zeros((2, 1), dtype=bool)
+        last_values = np.array([0.0], dtype=np.float32)
+        trunc_vals = np.array([[99.0], [0.0]], dtype=np.float32)  # must be IGNORED
+
+        adv, _ = compute_gae(
+            rewards=rewards,
+            values=values,
+            terminated=terminated,
+            truncated=truncated,
+            last_values=last_values,
+            gamma=0.99,
+            gae_lambda=0.95,
+            truncation_values=trunc_vals,
+        )
+        # terminated[0] -> bootstrap 0: adv[0,0] = 1.0 + 0 - 0.5 = 0.5
+        assert adv[0, 0] == pytest.approx(0.5, abs=1e-5)
+
     def test_terminated_at_last_step_zeros_bootstrap(self) -> None:
         # Reviewer fix: the new API derives "last step was terminated"
         # directly from terminated[T-1, n]. Passing last_values=100 with
