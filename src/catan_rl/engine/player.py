@@ -274,59 +274,51 @@ class player:
 
         return
 
-    # Function to calculate road length for longest road calculation
-    # Use both player buildgraph and board graph to compute recursively
-
     def get_road_length(self, board):
-        if not self.buildGraph["ROADS"]:
+        """Longest continuous road (the Longest-Road VP input) = the longest
+        TRAIL over the player's road segments: each segment (edge) is traversed
+        at most once, but vertices MAY be revisited, so a closed loop counts in
+        full (e.g. a ringed hex's 6 segments + a spur = 7). The road is BROKEN at
+        any vertex carrying an OPPONENT settlement/city — the trail cannot
+        continue THROUGH it — but it passes freely through empty vertices and the
+        player's own buildings.
+        """
+        roads = self.buildGraph["ROADS"]
+        if not roads:
             return 0
-        roadLengths = []  # List to store road lengths from each starting edge
-        for road in self.buildGraph["ROADS"]:  # check for every starting edge
-            self.road_i_lengths = []
-            # Use sets for O(1) membership checks instead of O(n) list scans
-            self.check_path_length(road, set(), 0, set(), board.boardGraph)
-            road_inverted = (road[1], road[0])
-            self.check_path_length(road_inverted, set(), 0, set(), board.boardGraph)
-            roadLengths.append(max(self.road_i_lengths))
 
-        return max(roadLengths)
+        # Adjacency keyed by the player's own segments; the integer edge index
+        # enforces "each segment once" (vertices are unconstrained -> trail).
+        adjacency = {}  # vertex -> list of (neighbor_vertex, edge_index)
+        for idx, (a, b) in enumerate(roads):
+            adjacency.setdefault(a, []).append((b, idx))
+            adjacency.setdefault(b, []).append((a, idx))
 
-    def check_path_length(self, edge, edgeSet, roadLength, vertexSet, boardGraph):
-        edgeSet.add(edge)
-        roadLength += 1
-        vertexSet.add(edge[0])
+        boardGraph = board.boardGraph
 
-        road_neighbors_list = self.get_neighboring_roads(edge, boardGraph, edgeSet, vertexSet)
+        def can_continue_through(vertex):
+            owner = boardGraph[vertex].owner
+            return owner is None or owner is self  # an opponent building breaks here
 
-        if not road_neighbors_list:
-            self.road_i_lengths.append(roadLength)
-            return
+        best = 0
 
-        for neighbor_road in road_neighbors_list:
-            self.check_path_length(neighbor_road, edgeSet, roadLength, vertexSet, boardGraph)
+        def walk(vertex, used_edges, length):
+            nonlocal best
+            if length > best:
+                best = length
+            if not can_continue_through(vertex):
+                return  # road broken at an opponent settlement/city (segment in still counts)
+            for neighbor, edge_idx in adjacency[vertex]:
+                if edge_idx not in used_edges:
+                    used_edges.add(edge_idx)
+                    walk(neighbor, used_edges, length + 1)
+                    used_edges.discard(edge_idx)  # backtrack so siblings explore freely
 
-    def get_neighboring_roads(self, road_i, boardGraph, visitedRoads, visitedVertices):
-        newNeighbors = []
-        v1 = road_i[0]
-        v2 = road_i[1]
-        v2_owner = boardGraph[v2].owner
-        if v2_owner is not self and v2_owner is not None:
-            return newNeighbors
-        for edge in self.buildGraph["ROADS"]:
-            if edge[1] in visitedVertices:
-                edge = (edge[1], edge[0])
-
-            if edge not in visitedRoads:
-                if edge[0] == v2 and edge[0] not in visitedVertices:
-                    newNeighbors.append(edge)
-                if edge[0] == v1 and edge[0] not in visitedVertices:
-                    newNeighbors.append(edge)
-                if edge[1] == v2 and edge[1] not in visitedVertices:
-                    newNeighbors.append((edge[1], edge[0]))
-                if edge[1] == v1 and edge[1] not in visitedVertices:
-                    newNeighbors.append((edge[1], edge[0]))
-
-        return newNeighbors
+        # A trail's endpoint is a vertex; starting from every vertex covers all
+        # trails (incl. pure cycles, which have no degree-1 endpoint).
+        for start in adjacency:
+            walk(start, set(), 0)
+        return best
 
     # function to end turn
 
