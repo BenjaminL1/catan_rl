@@ -373,45 +373,52 @@ class catanGame:
     # function to check if a player has the longest road - after building latest road
 
     def check_longest_road(self, player_i):
-        if player_i.maxRoadLength >= 5:  # Only eligible if road length is at least 5
-            longestRoad = True
-            for p in list(self.playerQueue.queue):
-                # Check if any other players have a longer road
-                if p.maxRoadLength >= player_i.maxRoadLength and p != player_i:
-                    longestRoad = False
+        """Re-evaluate the Longest Road bonus after any build that can change
+        road lengths — a road build EXTENDS a road, an opponent settlement can
+        SPLIT one. RECOMPUTES every player's road length first (so a split is
+        modelled, not just an extension), then applies the Colonist rules:
 
-            # if player_i takes longest road and didn't already have longest road
-            if longestRoad and player_i.longestRoadFlag == False:
-                # Set previous players flag to false and give player_i the longest road points
-                prev_owner_name: str | None = None
-                for p in list(self.playerQueue.queue):
-                    if p.longestRoadFlag:
-                        p.longestRoadFlag = False
-                        p.victoryPoints -= 2
-                        prev_owner_name = p.name
+        * a player TAKES the 2-VP card only with road length >= 5 AND strictly
+          longer than everyone else;
+        * the current holder KEEPS it on a tie (ties never transfer);
+        * it is REVOKED when a split drops the holder below 5 or below another
+          player — passing to a new SOLE leader (>=5), or to nobody if the new
+          lead is tied.
 
-                player_i.longestRoadFlag = True
-                player_i.victoryPoints += 2
+        ``player_i`` is the builder that triggered the check (kept for call-site
+        compatibility); the evaluation itself is global. Emits
+        ``longest_road_change`` only on an actual holder change (incl. revocation
+        to no holder).
+        """
+        players = list(self.playerQueue.queue)
+        for p in players:
+            p.maxRoadLength = p.get_road_length(self.board)
 
-                # Phase 0.5: emit ONLY on actual holder change.
-                # ``prev_owner_name`` is None on the first-ever award;
-                # any subsequent transfer carries the previous holder.
-                # NOTE for any future engine port that models
-                # road-breaking (e.g., an opponent settlement that
-                # splits a long road): a "lost, no new winner" path
-                # would have no emit hook here. A separate
-                # ``longest_road_change(prev, None, length)`` emit
-                # site would be needed at the road-break trigger; the
-                # current engine doesn't model road-breaking so the
-                # check is purely acquisition-driven.
-                self.broadcast.longest_road_change(
-                    prev_owner=prev_owner_name,
-                    new_owner=player_i.name,
-                    length=int(player_i.maxRoadLength),
-                )
+        holder = next((p for p in players if p.longestRoadFlag), None)
+        eligible = [p for p in players if p.maxRoadLength >= 5]
+        max_len = max((p.maxRoadLength for p in eligible), default=0)
+        leaders = [p for p in eligible if p.maxRoadLength == max_len]
 
-                # print("Player {} takes Longest Road {}".format(
-                #     player_i.name, prev_owner_name))
+        # Holder keeps the card while still (tied for) the longest at >= 5.
+        if holder is not None and holder in leaders:
+            return
+        # Otherwise the holder (if any) has lost it. A sole leader at >= 5 takes
+        # it; a tie among non-holders leaves the card unheld.
+        new_holder = leaders[0] if len(leaders) == 1 else None
+        if holder is new_holder:
+            return  # no change (e.g. no holder + a tie -> still nobody)
+
+        if holder is not None:
+            holder.longestRoadFlag = False
+            holder.victoryPoints -= 2
+        if new_holder is not None:
+            new_holder.longestRoadFlag = True
+            new_holder.victoryPoints += 2
+        self.broadcast.longest_road_change(
+            prev_owner=holder.name if holder is not None else None,
+            new_owner=new_holder.name if new_holder is not None else None,
+            length=int(max_len) if new_holder is not None else 0,
+        )
 
     # function to check if a player has the largest army - after playing latest knight
     def check_largest_army(self, player_i):

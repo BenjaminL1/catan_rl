@@ -92,3 +92,82 @@ def test_own_settlement_does_not_break_road() -> None:
     me.buildGraph["ROADS"] = [(0, 1), (1, 2)]
     owners = {0: _Vtx(None), 1: _Vtx(me), 2: _Vtx(None)}  # own building at the junction
     assert me.get_road_length(_Board(owners)) == 2
+
+
+# ---------------------------------------------------------------------------
+# check_longest_road: global recompute + acquire / transfer / tie / REVOKE
+# ---------------------------------------------------------------------------
+
+
+def _two_player_game(roads0, roads1, owners):
+    game = catanGame(render_mode=None)
+    p0, p1 = list(game.playerQueue.queue)[:2]
+    p0.buildGraph["ROADS"], p1.buildGraph["ROADS"] = list(roads0), list(roads1)
+    p0.longestRoadFlag = p1.longestRoadFlag = False
+    p0.victoryPoints = p1.victoryPoints = 0
+    game.board = _Board(owners)  # check_longest_road uses self.board
+    return game, p0, p1
+
+
+_LINE6 = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5)]  # 5 segments -> length 5
+_EMPTY_OWNERS = {v: _Vtx(None) for v in range(7)}
+
+
+def test_acquire_longest_road() -> None:
+    game, p0, p1 = _two_player_game(_LINE6, [], dict(_EMPTY_OWNERS))
+    game.check_longest_road(p0)
+    assert p0.longestRoadFlag and p0.victoryPoints == 2
+    assert not p1.longestRoadFlag and p0.maxRoadLength == 5  # recomputed
+
+
+def test_below_five_never_awarded() -> None:
+    game, p0, _p1 = _two_player_game([(0, 1), (1, 2), (2, 3)], [], dict(_EMPTY_OWNERS))
+    game.check_longest_road(p0)
+    assert not p0.longestRoadFlag and p0.victoryPoints == 0
+
+
+def test_transfer_to_strictly_longer() -> None:
+    game, p0, p1 = _two_player_game(_LINE6, [], dict(_EMPTY_OWNERS))
+    game.check_longest_road(p0)  # p0 holds at 5
+    p1.buildGraph["ROADS"] = [(10, 11), (11, 12), (12, 13), (13, 14), (14, 15), (15, 16)]  # 6
+    game.board = _Board({v: _Vtx(None) for v in range(7)} | {v: _Vtx(None) for v in range(10, 17)})
+    game.check_longest_road(p1)
+    assert p1.longestRoadFlag and p1.victoryPoints == 2
+    assert not p0.longestRoadFlag and p0.victoryPoints == 0  # lost the 2 VP
+
+
+def test_tie_does_not_transfer_from_holder() -> None:
+    game, p0, p1 = _two_player_game(_LINE6, [], dict(_EMPTY_OWNERS))
+    game.check_longest_road(p0)  # p0 holds at 5
+    p1.buildGraph["ROADS"] = [(10, 11), (11, 12), (12, 13), (13, 14), (14, 15)]  # ties at 5
+    game.board = _Board({v: _Vtx(None) for v in range(7)} | {v: _Vtx(None) for v in range(10, 16)})
+    game.check_longest_road(p1)
+    assert p0.longestRoadFlag and not p1.longestRoadFlag  # holder keeps it on a tie
+
+
+def test_revoke_when_opponent_settlement_splits_below_five() -> None:
+    # p0 holds LR at length 5; p1 settles at vertex 3, splitting p0's road into
+    # 3 + 2 -> p0 drops to 3 -> LR revoked, going to nobody (p1 has no road).
+    game, p0, p1 = _two_player_game(_LINE6, [], dict(_EMPTY_OWNERS))
+    game.check_longest_road(p0)
+    assert p0.longestRoadFlag and p0.victoryPoints == 2
+    game.board = _Board(dict(_EMPTY_OWNERS) | {3: _Vtx(p1)})  # opponent splits at vertex 3
+    game.check_longest_road(p1)
+    assert not p0.longestRoadFlag and p0.victoryPoints == 0  # revoked
+    assert p0.maxRoadLength == 3  # recomputed (no longer stale at 5)
+
+
+def test_split_transfers_to_opponent_with_five() -> None:
+    # p0 holds at 6; a split drops p0 to 4 while p1 has 5 -> transfers to p1.
+    line7 = [(0, 1), (1, 2), (2, 3), (3, 4), (4, 5), (5, 6)]  # length 6
+    p1roads = [(10, 11), (11, 12), (12, 13), (13, 14), (14, 15)]  # length 5
+    owners = {v: _Vtx(None) for v in range(7)} | {v: _Vtx(None) for v in range(10, 16)}
+    game, p0, p1 = _two_player_game(line7, p1roads, owners)
+    game.check_longest_road(p0)  # p0 holds at 6
+    assert p0.longestRoadFlag
+    # opponent settles at vertex 5 -> p0 splits into 5 (0..5) + 1 (5..6)... actually
+    # breaks AT 5: 0-1-2-3-4-5 stops at 5 (len 5) but 5 is opp -> can't pass; recompute.
+    game.board = _Board(dict(owners) | {2: _Vtx(p1)})  # split p0 at vertex 2 -> 2 + 4 = max 4
+    game.check_longest_road(p1)
+    assert p1.longestRoadFlag and p1.victoryPoints == 2
+    assert not p0.longestRoadFlag and p0.victoryPoints == 0
