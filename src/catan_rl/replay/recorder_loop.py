@@ -669,12 +669,27 @@ def _partition_main_events_by_actor(
     current_actor = initial_actor
     current_events: list[dict] = []
     for event in raw_events:
-        if event.get("type") == BroadcastEventType.DICE_ROLL.value:
+        etype = event.get("type")
+        if etype == BroadcastEventType.DICE_ROLL.value:
             if current_events:
                 groups.append((current_actor, current_events))
             mapped = _actor_for(event.get("player"), seat_to_actor)
             current_actor = mapped if mapped is not None else current_actor
             current_events = [event]
+        elif etype == BroadcastEventType.DISCARD.value:
+            mapped = _actor_for(event.get("player"), seat_to_actor)
+            if mapped is not None and mapped != current_actor:
+                # Forced discard by the NON-acting player: on a 7-roll BOTH
+                # players over the discard threshold must discard, so the
+                # opponent discards during the roller's turn. Attribute it to the
+                # discarder's own group, then resume the roller — the DICE_ROLL
+                # boundary alone would mis-credit the discard to the roller.
+                if current_events:
+                    groups.append((current_actor, current_events))
+                    current_events = []
+                groups.append((mapped, [event]))
+            else:
+                current_events.append(event)
         else:
             current_events.append(event)
     if current_events:

@@ -1,6 +1,6 @@
 """Closed-form expected-pip-yield scorer for setup-phase vertex placement.
 
-Plan §A.1 (`docs/plans/v2_setup_strength_roadmap.md`).
+Plan §A.1 (`docs/plans/v2/setup_strength_roadmap.md`).
 
 Core observation: Colonist's board generation places the official ABC chip
 sequence in a deterministic spiral, so at setup time every hex's

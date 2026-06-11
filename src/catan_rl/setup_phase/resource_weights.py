@@ -1,6 +1,6 @@
 """Named resource-weight tables for the analytic setup-phase scorer.
 
-Plan §A.2 (`docs/plans/v2_setup_strength_roadmap.md`).
+Plan §A.2 (`docs/plans/v2/setup_strength_roadmap.md`).
 
 Two tables ship with Phase A; §A.4 acceptance gate picks the winner:
 

@@ -36,7 +36,10 @@ loader:
   # Plan: start at 0.5; re-probe equivariance after BC to revisit.
   aug_prob: 0.5
   batch_size: 1024              # M1 Pro throughput-bound at BC; large batch OK
-  num_workers: 4                # DataLoader worker procs (NOT optimizer batches)
+  num_workers: 0                # DataLoader worker procs. Authoritative knob is the
+                                # CLI flag `catan-rl-bc-train --num-workers` (default
+                                # 0); this value is reference-only. >0 is now safe —
+                                # train.py reseeds each worker's aug RNG per worker_id.
   shuffle: true
   val_split_pct: 0.10           # 10% holdout by game_id (not by sample)
 

@@ -127,12 +127,26 @@ def train_bc(
     train_ds, val_ds = BcDataset.train_val_split(
         data_dir, val_pct=val_pct, seed=seed, train_aug_prob=aug_prob, val_aug_prob=0.0
     )
+
+    def _worker_init(worker_id: int) -> None:
+        # Reseed each worker's private augmentation RNG from (seed, worker_id).
+        # BcDataset._rng is a np.random.default_rng that torch's default
+        # per-worker reseed does NOT touch, so on fork every worker would
+        # otherwise share one stream and draw correlated D6 augmentations.
+        # Keying on worker_id (not fork divergence) is also correct under spawn.
+        info = torch.utils.data.get_worker_info()
+        if info is not None:
+            ds = info.dataset
+            assert isinstance(ds, BcDataset)
+            ds._rng = np.random.default_rng([seed, worker_id])
+
     train_loader = DataLoader(
         train_ds,
         batch_size=batch_size,
         shuffle=True,
         collate_fn=bc_collate,
         num_workers=num_workers,
+        worker_init_fn=_worker_init if num_workers > 0 else None,
         drop_last=False,
     )
     val_loader = DataLoader(

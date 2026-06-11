@@ -20,11 +20,9 @@ CLI-level matchup validation rules:
 * ``--out`` refuses to overwrite an existing file unless ``--force``
   is set — protects against accidental clobbers.
 
-This script is the entry point only. The actual simulation +
-recording loop is built in Recorder Phases 2a-2d (which haven't
-landed yet); for now the script validates args, prints a summary,
-and exits with a clear "not yet wired" error if asked to actually
-record.
+This script is the entry point: it validates args, builds the player
+specs, runs the recording loop (``record_game``), and writes the replay
+(``save_replay``).
 """
 
 from __future__ import annotations
@@ -35,13 +33,6 @@ from pathlib import Path
 
 from catan_rl.replay import record_game, save_replay
 from catan_rl.replay.player_factory import PlayerSpec
-
-#: Exit code used when the recorder simulation logic is not yet
-#: implemented (Phases 2a-2d). 64 = "do not retry" per the POSIX
-#: convention used elsewhere in this codebase (see scripts/train.py).
-#: Kept for back-compat; the recorder is now wired so this code path
-#: is unreachable in the main flow.
-EXIT_RECORDER_NOT_WIRED = 64
 
 
 def build_parser() -> argparse.ArgumentParser:
