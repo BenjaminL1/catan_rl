@@ -1,11 +1,10 @@
 """Apply D6 dihedral-group augmentation to a v2 (obs, action, mask) batch.
 
-This is the runtime entry point used by:
-
-  * The BC loader's ``__getitem__`` — augments single examples at training
-    time (batch=1 is fine; the implementation broadcasts).
-  * The PPO rollout buffer's minibatch sampler — augments full
-    minibatches before each gradient step.
+This is the runtime entry point used by the BC loader's ``__getitem__``
+(augments single examples at training time; batch=1 is fine, the
+implementation broadcasts). NOTE: despite earlier intent, it is NOT wired
+into the PPO rollout buffer — `bc/loader.py` is the only `src/catan_rl/`
+consumer, so the live self-play loop does not augment.
 
 Permutations applied for a chosen D6 element ``g``:
 
@@ -154,9 +153,8 @@ def _permute_tile_features(tile_features: torch.Tensor, g: int) -> torch.Tensor:
 
     # 3) Within-tile edge block reorder.
     edge_p = within_tile_edge_perm(g)
-    inv_edge = np.argsort(edge_p)
     edge_dim_perm = (
-        inv_edge[:, None] * _TILE_EDGE_BLOCK_WIDTH + np.arange(_TILE_EDGE_BLOCK_WIDTH)
+        edge_p[:, None] * _TILE_EDGE_BLOCK_WIDTH + np.arange(_TILE_EDGE_BLOCK_WIDTH)
     ).reshape(-1)
     edge_dim_perm_full = edge_dim_perm + _TILE_EDGE_START
 

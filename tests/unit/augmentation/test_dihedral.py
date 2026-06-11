@@ -334,3 +334,42 @@ def test_apply_symmetry_rejects_bad_tile_features_shape() -> None:
     obs["tile_representations"] = torch.zeros((1, 19, 78), dtype=torch.float32)
     with pytest.raises(ValueError):
         apply_symmetry(obs, _make_actions(1), _make_masks(1), 1)
+
+
+def test_within_tile_edge_block_follows_corner_block() -> None:
+    """Edges are rigidly attached to corners: edge slot e sits between corner
+    slots e and (e+1)%6, so after ANY D6 transform the output edge at slot s must
+    be the original edge that joined the two original corners now occupying output
+    slots s and s+1. This pins ABSOLUTE within-tile edge geometry against the
+    (independently test-pinned) corner block — a round-trip test cannot catch a
+    directional inversion, which is how the edge-block argsort inversion hid.
+    """
+    from catan_rl.augmentation import dihedral as D
+
+    cs, cw = D._TILE_CORNER_START, D._TILE_CORNER_BLOCK_WIDTH
+    es, ew = D._TILE_EDGE_START, D._TILE_EDGE_BLOCK_WIDTH
+    feats = torch.zeros((1, 19, 79), dtype=torch.float32)
+    for t in range(19):
+        for c in range(6):
+            feats[0, t, cs + c * cw] = c + 1  # corner slot identity marker
+        for e in range(6):
+            feats[0, t, es + e * ew] = e + 1  # edge slot identity marker
+
+    def old_edge_joining(a: int, b: int) -> int:
+        if (a + 1) % 6 == b:
+            return a
+        if (b + 1) % 6 == a:
+            return b
+        raise AssertionError(f"corners {a},{b} are not tile-adjacent")
+
+    for g in range(12):
+        out = D._permute_tile_features(feats, g)
+        cmark = [int(out[0, 0, cs + s * cw].item()) - 1 for s in range(6)]
+        emark = [int(out[0, 0, es + s * ew].item()) - 1 for s in range(6)]
+        for s in range(6):
+            expected = old_edge_joining(cmark[s], cmark[(s + 1) % 6])
+            assert emark[s] == expected, (
+                f"g={g}: output edge slot {s} holds old edge {emark[s]}, but the "
+                f"corners now there ({cmark[s]},{cmark[(s + 1) % 6]}) joined old edge "
+                f"{expected} — edge block out of sync with corner block"
+            )
