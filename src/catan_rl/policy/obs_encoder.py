@@ -704,6 +704,23 @@ def _dev_counts(player: Any, *, hidden: bool) -> np.ndarray:
     return out
 
 
+def hidden_belief_target(player: Any) -> np.ndarray:
+    """Ground-truth belief-head target: ``player``'s HIDDEN dev-card type split
+    over the four SECRET buyable types (KNIGHT/ROADBUILDER/YEAROFPLENTY/MONOPOLY)
+    as a probability vector — VP ZEROED (it's observable in 1v1 via the
+    victoryPoints/visibleVictoryPoints gap), all-zeros when the player holds none
+    (the masked case). Shared by ``CatanEnv.belief_target`` (PPO) and the BC
+    dataset so the belief head is supervised IDENTICALLY across the BC→PPO
+    lineage (the two previously diverged: BC included VP + used a uniform prior
+    on the empty hand, which PPO then had to unlearn)."""
+    counts = _dev_counts(player, hidden=True)
+    counts[DEV_CARD_ORDER.index("VP")] = 0.0
+    total = float(counts.sum())
+    if total <= 0.0:
+        return np.zeros(N_DEV_TYPES, dtype=np.float32)
+    return (counts / total).astype(np.float32)
+
+
 def _compute_income(player: Any, board: Any) -> list[float]:
     """5-element vector of per-resource expected production per turn (× 0.1).
 

@@ -61,9 +61,8 @@ from catan_rl.engine.game import catanGame
 from catan_rl.engine.tracker import ResourceTracker
 from catan_rl.env.hand_tracker import BroadcastHandTracker
 from catan_rl.env.masks import compute_action_masks
-from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder
+from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder, hidden_belief_target
 from catan_rl.policy.obs_schema import (
-    DEV_CARD_ORDER,
     N_DEV_TYPES,
     RESOURCES_CW,
     ActionType,
@@ -138,24 +137,13 @@ def _edge_key(v1: Any, v2: Any) -> tuple[str, str]:
 
 
 def _belief_target_for(opp: Any) -> np.ndarray:
-    """Opponent's true hidden dev-card type distribution (5-way, normalised).
-
-    Matches the env's belief-target convention (§2.5b in the design):
-    sums ``opponent.devCards`` (held, including VPs) + ``newDevCards``
-    (just-bought) across the 5 types and normalises. If opponent has
-    zero hidden cards, returns the uniform 5-way distribution (so
-    soft-CE is defined).
-    """
-    out = np.zeros(N_DEV_TYPES, dtype=np.float32)
-    for c in getattr(opp, "newDevCards", []) or []:
-        if c in DEV_CARD_ORDER:
-            out[DEV_CARD_ORDER.index(c)] += 1.0
-    for i, name in enumerate(DEV_CARD_ORDER):
-        out[i] += float(getattr(opp, "devCards", {}).get(name, 0))
-    total = out.sum()
-    if total <= 0:
-        return np.full(N_DEV_TYPES, 1.0 / N_DEV_TYPES, dtype=np.float32)
-    return out / total
+    """Opponent's true hidden dev-card type target (5-way), via the SHARED
+    ``obs_encoder.hidden_belief_target`` so BC supervises the belief head
+    IDENTICALLY to the env/PPO path: VP zeroed (observable in 1v1) and all-zeros
+    on an empty hidden hand (the masked case). Previously this summed devCards
+    *including* VP and returned a uniform prior on empty — both of which PPO then
+    had to unlearn (the belief head is shared across the BC→PPO lineage)."""
+    return hidden_belief_target(opp)
 
 
 # ---------------------------------------------------------------------------

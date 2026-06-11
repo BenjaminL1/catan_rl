@@ -52,6 +52,7 @@ from catan_rl.policy.obs_encoder import (
     EnvObsState,
     ObsEncoder,
     _dev_counts,
+    hidden_belief_target,
 )
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
@@ -1156,12 +1157,7 @@ class CatanEnv(gym.Env):
         so it learns to put no mass there.
         """
         assert self.opponent_player is not None
-        counts = _dev_counts(self.opponent_player, hidden=True)  # (N_DEV_TYPES,)
-        counts[DEV_CARD_ORDER.index("VP")] = 0.0  # VP is observable -> not a hidden target
-        total = float(counts.sum())
-        if total <= 0.0:
-            return np.zeros(N_DEV_TYPES, dtype=np.float32)  # masked out of the belief loss
-        return (counts / total).astype(np.float32)
+        return hidden_belief_target(self.opponent_player)
 
     # ------------------------------------------------------------------
     # Vertex / edge index maps

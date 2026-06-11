@@ -89,7 +89,13 @@ def bc_loss(
     # Belief soft-CE.
     belief_logits = policy_out["belief_logits"]  # (B, 5)
     log_probs_belief = torch.log_softmax(belief_logits, dim=-1)
-    belief_loss = -(batch["belief_target"] * log_probs_belief).sum(dim=-1).mean()
+    # Mask out empty-hand rows (all-zero target) and average over the INFORMATIVE
+    # rows only — matches ppo.losses.compute_belief_loss, so belief_weight means
+    # the same thing in BC and PPO. A plain .mean() would divide by the batch
+    # (incl. the dominant empty-hand rows), silently shrinking the belief signal.
+    per_row_belief = -(batch["belief_target"] * log_probs_belief).sum(dim=-1)
+    belief_valid = batch["belief_target"].sum(dim=-1) > 0
+    belief_loss = (per_row_belief * belief_valid).sum() / belief_valid.sum().clamp(min=1.0)
 
     total = policy_total + value_weight * value_loss + belief_weight * belief_loss
 
