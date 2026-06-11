@@ -90,7 +90,11 @@ class player:
                 if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                     self.game.broadcast.build(self.name, kind="ROAD", location=-1)
 
-                # Calculate current max road length and update
+                # Calculate current max road length and update. Main-phase builds
+                # also recompute this inside game.check_longest_road (global pass),
+                # so this is redundant there — but it is the ONLY refresh during
+                # SETUP (setup road builds have no following check_longest_road),
+                # and the obs reads maxRoadLength. Do not remove.
                 maxRoads = self.get_road_length(board)
                 self.maxRoadLength = maxRoads
 

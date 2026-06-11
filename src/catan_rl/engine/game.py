@@ -544,6 +544,9 @@ class catanGame:
                                     # Can only build settlement after rolling dice
                                     if diceRolled == True:
                                         self.build(currPlayer, "SETTLE")
+                                        # A settlement can SPLIT an opponent's road -> re-evaluate
+                                        # Longest Road (recompute + revoke), mirroring the ROAD button.
+                                        self.check_longest_road(currPlayer)
                                         self.boardView.displayGameScreen()  # Update back to original gamescreen
                                         # Show updated points and resources
                                         print(
