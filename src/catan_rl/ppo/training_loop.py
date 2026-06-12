@@ -781,6 +781,45 @@ def run_training_loop(
                     update_idx,
                 )
 
+            # ---- auto-re-anchor (in-process anchor promotion) -------
+            # This rollout's anchor outcomes are already in the league EMA
+            # (collector.record_outcome), and this runs BEFORE the checkpoint
+            # save below, so a promotion at update K is captured in the SAME
+            # checkpoint (promote-then-checkpoint -> faithful resume).
+            if cfg.league.auto_reanchor_enabled and (
+                update_idx % cfg.league.auto_reanchor_check_every_updates == 0
+            ):
+                new_anchor_id = state.league.maybe_promote_anchor(
+                    state.policy.state_dict(), update_idx=update_idx
+                )
+                if new_anchor_id is not None:
+                    log.info(
+                        "league: AUTO-RE-ANCHORED to id=%d at update %d (promotion #%d)",
+                        new_anchor_id,
+                        update_idx,
+                        state.league._n_promotions,
+                    )
+                    if state.tb_writer is not None:
+                        state.tb_writer.add_scalar(
+                            "selfplay/anchor_promotions_total",
+                            float(state.league._n_promotions),
+                            state.global_step,
+                        )
+                        state.tb_writer.add_scalar(
+                            "selfplay/anchor_promotion_event", 1.0, state.global_step
+                        )
+                    _write_jsonl(
+                        state.metrics_fh,
+                        {
+                            "kind": "reanchor",
+                            "wall_time": _wall_time_iso(),
+                            "update_idx": int(update_idx),
+                            "global_step": int(state.global_step),
+                            "new_anchor_id": int(new_anchor_id),
+                            "n_promotions": int(state.league._n_promotions),
+                        },
+                    )
+
             # ---- eval -----------------------------------------------
             if (
                 cfg.eval.eval_every_updates > 0

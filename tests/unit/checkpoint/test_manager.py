@@ -314,6 +314,90 @@ class TestLeagueRoundTrip:
         payload.apply_to_league(league_b)
         assert league_b.n_snapshots() == 2
 
+    @staticmethod
+    def _reanchor_cfg() -> LeagueConfig:
+        return LeagueConfig(
+            maxlen=10,
+            add_snapshot_every_n_updates=1,
+            anchor_weight=0.25,
+            snapshot_weight=0.5,
+            heuristic_weight=0.25,
+            pfsp_enabled=True,
+            auto_reanchor_enabled=True,
+            auto_reanchor_winrate_threshold=0.92,
+            auto_reanchor_sustained_checks=1,
+            auto_reanchor_min_games=10,
+            auto_reanchor_cooldown_updates=200,
+        )
+
+    def test_reanchor_counters_round_trip(self, tmp_path: Path) -> None:
+        # An auto-promoted anchor + its promotion counters survive save/load, and
+        # a resume does NOT double-promote (cooldown honored from restored state).
+        cfg = self._reanchor_cfg()
+        league_a = League(cfg)
+        p0, _ = _fresh_policy_and_optimizer(seed=1)
+        league_a.set_anchor(p0.state_dict(), update_idx=0)
+        aid0 = league_a.anchor_id()
+        league_a._opp_stats[aid0] = [0.95, 50]  # outgrown -> promote
+        p1, _ = _fresh_policy_and_optimizer(seed=2)
+        new_id = league_a.maybe_promote_anchor(p1.state_dict(), update_idx=100)
+        assert new_id is not None and league_a._n_promotions == 1
+        league_a._reanchor_streak = 2  # a mid-streak partial state to round-trip
+        policy, opt = _fresh_policy_and_optimizer(seed=9)
+        save_checkpoint(
+            tmp_path / "ckpt.pt",
+            config={},
+            policy=policy,
+            optimizer=opt,
+            update_idx=100,
+            global_step=10000,
+            league=league_a,
+        )
+        payload = load_checkpoint(tmp_path / "ckpt.pt")
+        league_b = League(cfg)
+        payload.apply_to_league(league_b)
+        assert league_b.anchor_id() == new_id  # checkpoint anchor, not config path
+        assert league_b._n_promotions == 1
+        assert league_b._last_promote_update == 100
+        assert league_b._reanchor_streak == 2
+        assert any(s.metadata.get("demoted_from_anchor_id") == aid0 for s in league_b._snapshots)
+        # No double-promote on resume: 150 - 100 = 50 < cooldown(200) blocks even
+        # with a high WR seeded on the restored anchor.
+        league_b._opp_stats[league_b.anchor_id()] = [0.99, 500]
+        assert league_b.maybe_promote_anchor(p1.state_dict(), update_idx=150) is None
+
+    def test_pre_feature_anchor_checkpoint_restores_defaults(self, tmp_path: Path) -> None:
+        # A checkpoint whose anchor dict predates the promotion keys restores to
+        # the cold-start zero/never state without error (.get defaults).
+        league_a = self._build_league_with_snapshots(1)
+        ap, _ = _fresh_policy_and_optimizer(seed=3)
+        aid = league_a.set_anchor(ap.state_dict(), update_idx=5)
+        policy, opt = _fresh_policy_and_optimizer(seed=4)
+        save_checkpoint(
+            tmp_path / "ckpt.pt",
+            config={},
+            policy=policy,
+            optimizer=opt,
+            update_idx=1,
+            global_step=100,
+            league=league_a,
+        )
+        payload = load_checkpoint(tmp_path / "ckpt.pt")
+        assert payload.league_state is not None
+        for k in (
+            "reanchor_streak",
+            "last_promote_update",
+            "anchor_games_at_promote",
+            "n_promotions",
+        ):
+            payload.league_state["anchor"].pop(k, None)  # simulate pre-feature ckpt
+        league_b = League(LeagueConfig(maxlen=10, add_snapshot_every_n_updates=1))
+        payload.apply_to_league(league_b)  # must not raise
+        assert league_b.anchor_id() == aid
+        assert league_b._reanchor_streak == 0
+        assert league_b._last_promote_update == -1
+        assert league_b._n_promotions == 0
+
 
 # ---------------------------------------------------------------------------
 # Atomic + error paths

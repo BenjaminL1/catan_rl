@@ -427,6 +427,40 @@ class LeagueConfig:
     the policy drifts (lifetime counts would go stale and re-admit the drift
     PFSP exists to stop). Validation: 0 < alpha <= 1."""
 
+    auto_reanchor_enabled: bool = False
+    """Master switch for IN-PROCESS auto-re-anchoring. When the learner durably
+    outgrows the frozen anchor (its anchor-WR EMA stays above threshold), the
+    league demotes the old anchor into the PFSP pool and installs a fresh frozen
+    snapshot of the current learner as the new anchor — no process restart, the
+    optimizer/LR-clock/value-norm/pool are untouched. Keeps the anchor a *live*
+    signal instead of a dead one the agent has fully outgrown. OFF (default)
+    makes ``League.maybe_promote_anchor`` a pure no-op (byte-identical)."""
+
+    auto_reanchor_winrate_threshold: float = 0.92
+    """Anchor-WR EMA must be STRICTLY above this for a check to qualify. Sits
+    above the empirically-observed ~0.80-0.88 anchor-WR oscillation band, so a
+    transient up-wobble can't trigger; strict-``>`` means the threshold value
+    itself can't start a streak. Validation: 0.5 < thr < 1.0."""
+
+    auto_reanchor_sustained_checks: int = 3
+    """Consecutive qualifying checks required to promote (anti-thrash debounce).
+    Any sub-threshold check resets the streak to 0. Validation: >= 1."""
+
+    auto_reanchor_check_every_updates: int = 50
+    """Cadence (in PPO updates) at which the promotion trigger is evaluated. Pins
+    one 'check' to a stable update budget so ``sustained_checks`` means a fixed
+    amount of persistence. Validation: >= 1."""
+
+    auto_reanchor_min_games: int = 200
+    """The current anchor must have accrued >= this many recorded games before a
+    check can qualify (gates cold-start EMA noise — a fresh anchor's first lucky
+    game would otherwise seed p_hat=1.0). A games-short check SKIPS without
+    resetting the streak. Validation: >= 1."""
+
+    auto_reanchor_cooldown_updates: int = 200
+    """Minimum PPO updates between promotions, so a freshly installed anchor has
+    time to start losing before it can retire. Validation: >= 0."""
+
     def __post_init__(self) -> None:
         for name in ("random_weight", "heuristic_weight", "snapshot_weight", "anchor_weight"):
             _check_non_negative(name, getattr(self, name))
@@ -450,6 +484,30 @@ class LeagueConfig:
             )
         _check_positive("add_snapshot_every_n_updates", self.add_snapshot_every_n_updates)
         _check_positive("maxlen", self.maxlen)
+        if self.auto_reanchor_enabled:
+            if not (0.5 < self.auto_reanchor_winrate_threshold < 1.0):
+                raise ValueError(
+                    "auto_reanchor_winrate_threshold must be in (0.5, 1.0); got "
+                    f"{self.auto_reanchor_winrate_threshold}"
+                )
+            _check_positive("auto_reanchor_sustained_checks", self.auto_reanchor_sustained_checks)
+            _check_positive(
+                "auto_reanchor_check_every_updates", self.auto_reanchor_check_every_updates
+            )
+            _check_positive("auto_reanchor_min_games", self.auto_reanchor_min_games)
+            _check_non_negative(
+                "auto_reanchor_cooldown_updates", self.auto_reanchor_cooldown_updates
+            )
+            if self.anchor_weight <= 0:
+                raise ValueError(
+                    "auto_reanchor_enabled requires anchor_weight > 0 "
+                    "(re-anchoring a zero-weight anchor is inert)"
+                )
+            if not self.pfsp_enabled:
+                raise ValueError(
+                    "auto_reanchor_enabled requires pfsp_enabled=True "
+                    "(the demoted old anchor lives in the PFSP pool)"
+                )
 
 
 @dataclass(frozen=True)

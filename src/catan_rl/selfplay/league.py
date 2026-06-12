@@ -152,6 +152,12 @@ class League:
         # snapshot; games gates cold-start. Pruned when a pool snapshot is
         # evicted; the anchor's entry persists with the anchor.
         self._opp_stats: dict[int, list[float]] = {}
+        # Auto-re-anchor promotion bookkeeping (additive; round-trips via the
+        # checkpoint's anchor dict). All inert unless cfg.auto_reanchor_enabled.
+        self._reanchor_streak: int = 0  # consecutive qualifying checks so far
+        self._last_promote_update: int = -1  # update_idx of last promotion (-1=never)
+        self._anchor_games_at_promote: float = 0.0  # resume safety baseline
+        self._n_promotions: int = 0  # monotonic count (also a TB scalar)
 
     # ------------------------------------------------------------------
     # Snapshot management
@@ -237,6 +243,77 @@ class League:
         """Stable id of the frozen anchor, or ``None`` if no anchor is set."""
         return None if self._anchor is None else self._anchor.snapshot_id
 
+    def maybe_promote_anchor(
+        self, current_state_dict: Mapping[str, Any], *, update_idx: int
+    ) -> int | None:
+        """Auto-re-anchor IN-PROCESS when the learner has durably outgrown the
+        frozen anchor: demote the old anchor into the PFSP pool, then install a
+        frozen CPU snapshot of the current learner as the new anchor (fresh id,
+        empty EMA). Returns the new anchor id on promotion, else ``None``.
+
+        OFF (``auto_reanchor_enabled=False``) returns ``None`` on the FIRST line
+        WITHOUT touching any state, so the call is byte-identical to absent.
+
+        Trigger (all must hold): cooldown elapsed since the last promotion; the
+        current anchor has >= ``min_games`` recorded games (a games-short check
+        SKIPS without resetting the streak); the anchor-WR EMA is STRICTLY above
+        ``winrate_threshold`` (a sub-threshold check RESETS the streak); and the
+        qualifying streak has reached ``sustained_checks``. The strict threshold
+        above the WR oscillation band plus the streak debounce stop a transient
+        up-wobble from thrashing promotions.
+        """
+        cfg = self.cfg
+        if not cfg.auto_reanchor_enabled:
+            return None
+        aid = self.anchor_id()
+        if aid is None or self._anchor is None:
+            return None
+        # Cooldown gate: a freshly installed anchor must have time to start losing.
+        if (
+            self._last_promote_update >= 0
+            and (update_idx - self._last_promote_update) < cfg.auto_reanchor_cooldown_updates
+        ):
+            return None
+        p, g = self.opponent_win_rate(aid)
+        # Min-games gate: a "not enough data yet" SKIP — does NOT reset the streak.
+        if g < cfg.auto_reanchor_min_games:
+            return None
+        # Qualifying check (STRICT >). A sub-threshold check RESETS the streak.
+        if p > cfg.auto_reanchor_winrate_threshold:
+            self._reanchor_streak += 1
+        else:
+            self._reanchor_streak = 0
+            return None
+        if self._reanchor_streak < cfg.auto_reanchor_sustained_checks:
+            return None
+        # FIRE: demote the outgoing anchor into the pool (anti-forgetting — it is
+        # the second-strongest reference; PFSP keeps it drawable), then install
+        # the current learner as the fresh frozen anchor.
+        old = self._anchor
+        self.add_snapshot(
+            old.state_dict,
+            update_idx=old.update_idx,
+            metadata={
+                **old.metadata,
+                "demoted_from_anchor_id": old.snapshot_id,
+                "demoted_at_update": update_idx,
+            },
+        )
+        new_id = self.set_anchor(
+            current_state_dict,
+            update_idx=update_idx,
+            metadata={
+                "auto_reanchored": True,
+                "promotion_index": self._n_promotions + 1,
+                "prev_anchor_id": old.snapshot_id,
+            },
+        )
+        self._reanchor_streak = 0
+        self._last_promote_update = update_idx
+        self._anchor_games_at_promote = 0.0
+        self._n_promotions += 1
+        return new_id
+
     # ------------------------------------------------------------------
     # PFSP win-rate tracking + weighting
     # ------------------------------------------------------------------
@@ -313,6 +390,9 @@ class League:
                 out["pfsp_p_hat_min"] = float(min(phats))
                 out["pfsp_p_hat_median"] = float(np.median(phats))
                 out["pfsp_p_hat_max"] = float(max(phats))
+        if self.cfg.auto_reanchor_enabled:
+            out["reanchor_streak"] = float(self._reanchor_streak)
+            out["anchor_promotions_total"] = float(self._n_promotions)
         return out
 
     def n_snapshots(self) -> int:

@@ -507,3 +507,132 @@ class TestLeagueSnapshot:
         b = LeagueSnapshot(state_dict={}, update_idx=1)
         a.metadata["x"] = 1
         assert b.metadata == {}
+
+
+# ---------------------------------------------------------------------------
+# Auto-re-anchor (in-process rolling frontier anchor)
+# ---------------------------------------------------------------------------
+
+
+class TestAutoReAnchor:
+    @staticmethod
+    def _cfg(**kw: object) -> LeagueConfig:
+        base: dict[str, object] = dict(
+            anchor_weight=0.25,
+            snapshot_weight=0.5,
+            heuristic_weight=0.25,
+            pfsp_enabled=True,
+            pfsp_curve="hard",
+            auto_reanchor_enabled=True,
+            auto_reanchor_winrate_threshold=0.92,
+            auto_reanchor_sustained_checks=3,
+            auto_reanchor_check_every_updates=50,
+            auto_reanchor_min_games=10,
+            auto_reanchor_cooldown_updates=0,
+        )
+        base.update(kw)
+        return LeagueConfig(**base)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _sd(v: float = 0.0) -> dict[str, torch.Tensor]:
+        return {"w": torch.full((2,), float(v))}
+
+    def _set_anchor_wr(self, lg: League, p: float, g: float) -> None:
+        lg._opp_stats[lg.anchor_id()] = [float(p), float(g)]  # type: ignore[index]
+
+    def test_fires_on_sustained_high(self) -> None:
+        lg = League(self._cfg())
+        lg.set_anchor(self._sd(1), update_idx=0)
+        old_aid = lg.anchor_id()
+        results = []
+        for i in range(3):
+            self._set_anchor_wr(lg, 0.95, 50)
+            results.append(lg.maybe_promote_anchor(self._sd(2), update_idx=(i + 1) * 50))
+        assert results[0] is None and results[1] is None
+        assert results[2] is not None and results[2] != old_aid
+        assert lg._n_promotions == 1
+        assert lg.anchor_id() == results[2]
+
+    def test_no_thrash_on_v6_wobble(self) -> None:
+        # The exact live-observed anchor-WR EMA series; must fire ONLY at the end.
+        lg = League(self._cfg())
+        lg.set_anchor(self._sd(1), update_idx=0)
+        series = [0.82, 0.87, 0.88, 0.80, 0.92, 0.94, 0.82, 0.94, 0.94, 0.986]
+        fired = []
+        streak_after_wobble = None
+        for i, p in enumerate(series):
+            self._set_anchor_wr(lg, p, 50)
+            r = lg.maybe_promote_anchor(self._sd(9), update_idx=(i + 1) * 50)
+            fired.append(r is not None)
+            if i == 6:  # the 0.94 -> 0.82 transition must reset the streak
+                streak_after_wobble = lg._reanchor_streak
+        assert fired == [False] * 9 + [True]
+        assert streak_after_wobble == 0
+        assert lg._n_promotions == 1
+
+    def test_strict_threshold_does_not_qualify(self) -> None:
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1))
+        lg.set_anchor(self._sd(1), update_idx=0)
+        self._set_anchor_wr(lg, 0.92, 50)  # exactly threshold -> NOT strictly >
+        assert lg.maybe_promote_anchor(self._sd(2), update_idx=50) is None
+        assert lg._reanchor_streak == 0
+
+    def test_min_games_is_non_resetting_skip(self) -> None:
+        lg = League(self._cfg(auto_reanchor_min_games=200))
+        lg.set_anchor(self._sd(1), update_idx=0)
+        self._set_anchor_wr(lg, 0.95, 300)
+        lg.maybe_promote_anchor(self._sd(2), update_idx=50)
+        assert lg._reanchor_streak == 1
+        # games-short check: returns None AND leaves the streak intact
+        self._set_anchor_wr(lg, 0.99, 5)
+        assert lg.maybe_promote_anchor(self._sd(2), update_idx=100) is None
+        assert lg._reanchor_streak == 1
+
+    def test_cooldown_blocks_then_allows(self) -> None:
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1, auto_reanchor_cooldown_updates=200))
+        lg.set_anchor(self._sd(1), update_idx=0)
+        self._set_anchor_wr(lg, 0.95, 50)
+        assert lg.maybe_promote_anchor(self._sd(2), update_idx=50) is not None  # promote @50
+        self._set_anchor_wr(lg, 0.95, 300)
+        assert lg.maybe_promote_anchor(self._sd(3), update_idx=200) is None  # 150 < 200 cooldown
+        self._set_anchor_wr(lg, 0.95, 300)
+        assert lg.maybe_promote_anchor(self._sd(3), update_idx=251) is not None  # 201 >= 200
+
+    def test_demote_old_anchor_to_pool(self) -> None:
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1))
+        lg.set_anchor(self._sd(1), update_idx=0)
+        old_aid = lg.anchor_id()
+        self._set_anchor_wr(lg, 0.95, 50)
+        new_id = lg.maybe_promote_anchor(self._sd(2), update_idx=50)
+        assert new_id != old_aid and lg.anchor_id() == new_id
+        # The old anchor is demoted into the pool under a FRESH id (cold-start),
+        # tagged with its former anchor id in metadata.
+        demoted = [s for s in lg._snapshots if s.metadata.get("demoted_from_anchor_id") == old_aid]
+        assert len(demoted) == 1
+        assert lg.peek_by_id(demoted[0].snapshot_id) is not None
+
+    def test_fresh_anchor_blocks_instant_repromote(self) -> None:
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1))
+        lg.set_anchor(self._sd(1), update_idx=0)
+        self._set_anchor_wr(lg, 0.95, 50)
+        lg.maybe_promote_anchor(self._sd(2), update_idx=50)
+        assert lg.opponent_win_rate(lg.anchor_id()) == (0.0, 0)  # fresh anchor, no games
+        assert lg.maybe_promote_anchor(self._sd(3), update_idx=100) is None  # min-games gate
+
+    def test_off_is_pure_noop(self) -> None:
+        lg = League(
+            LeagueConfig(
+                anchor_weight=0.25,
+                snapshot_weight=0.5,
+                heuristic_weight=0.25,
+                pfsp_enabled=True,
+            )  # auto_reanchor_enabled defaults False
+        )
+        lg.set_anchor(self._sd(1), update_idx=0)
+        lg._opp_stats[lg.anchor_id()] = [1.0, 9999]  # type: ignore[index]
+        for u in (50, 100, 150, 200):
+            assert lg.maybe_promote_anchor(self._sd(2), update_idx=u) is None
+        assert lg._reanchor_streak == 0
+        assert lg._last_promote_update == -1
+        assert lg._n_promotions == 0
+        assert "reanchor_streak" not in lg.selfplay_diagnostics()
