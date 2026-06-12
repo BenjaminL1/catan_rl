@@ -783,9 +783,10 @@ def run_training_loop(
 
             # ---- auto-re-anchor (in-process anchor promotion) -------
             # This rollout's anchor outcomes are already in the league EMA
-            # (collector.record_outcome), and this runs BEFORE the checkpoint
-            # save below, so a promotion at update K is captured in the SAME
-            # checkpoint (promote-then-checkpoint -> faithful resume).
+            # (collector.record_outcome). A promotion is persisted at the NEXT
+            # checkpoint save (the save cadence is phase-shifted by 1 — save fires
+            # on update_idx+1), and resume re-derives the streak/EMA deterministically
+            # while the cooldown blocks any re-fire, so this is faithful regardless.
             if cfg.league.auto_reanchor_enabled and (
                 update_idx % cfg.league.auto_reanchor_check_every_updates == 0
             ):

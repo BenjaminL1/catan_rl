@@ -253,7 +253,6 @@ def _capture_league_state(league: Any) -> dict[str, Any]:
             # checkpoints -> restored to the cold-start zero/never state).
             "reanchor_streak": int(getattr(league, "_reanchor_streak", 0)),
             "last_promote_update": int(getattr(league, "_last_promote_update", -1)),
-            "anchor_games_at_promote": float(getattr(league, "_anchor_games_at_promote", 0.0)),
             "n_promotions": int(getattr(league, "_n_promotions", 0)),
         }
     return state
@@ -457,9 +456,6 @@ class CheckpointPayload:
             # checkpoints restore to the cold-start state without error).
             league._reanchor_streak = int(anchor_state.get("reanchor_streak", 0))
             league._last_promote_update = int(anchor_state.get("last_promote_update", -1))
-            league._anchor_games_at_promote = float(
-                anchor_state.get("anchor_games_at_promote", 0.0)
-            )
             league._n_promotions = int(anchor_state.get("n_promotions", 0))
         live_ids = [snap.snapshot_id for snap in deque_]
         if getattr(league, "_anchor", None) is not None:

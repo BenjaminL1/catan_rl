@@ -156,7 +156,6 @@ class League:
         # checkpoint's anchor dict). All inert unless cfg.auto_reanchor_enabled.
         self._reanchor_streak: int = 0  # consecutive qualifying checks so far
         self._last_promote_update: int = -1  # update_idx of last promotion (-1=never)
-        self._anchor_games_at_promote: float = 0.0  # resume safety baseline
         self._n_promotions: int = 0  # monotonic count (also a TB scalar)
 
     # ------------------------------------------------------------------
@@ -308,9 +307,12 @@ class League:
                 "prev_anchor_id": old.snapshot_id,
             },
         )
+        # The old anchor id is now neither the anchor nor a pool id (the demoted
+        # copy got a fresh id), so prune its orphaned EMA entry — mirrors the
+        # FIFO eviction prune in add_snapshot.
+        self._opp_stats.pop(old.snapshot_id, None)
         self._reanchor_streak = 0
         self._last_promote_update = update_idx
-        self._anchor_games_at_promote = 0.0
         self._n_promotions += 1
         return new_id
 
