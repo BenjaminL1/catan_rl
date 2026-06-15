@@ -41,7 +41,7 @@ def main() -> None:
         res = evaluate_search_vs_policy(
             cfg, CKPT, CKPT, n_games=N_GAMES, seed=SEED, device="cpu", max_turns=400
         )
-        row = {
+        row: dict[str, object] = {
             "sims": sims,
             "n": res.n,
             "wins": res.wins,
