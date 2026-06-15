@@ -29,19 +29,19 @@ pass *before* the expensive bake-off T016 runs.
 
 ## Phase 1: Setup
 
-- [ ] T001 Create the isolated package `src/catan_rl/search/__init__.py` (empty public exports) and test package `tests/unit/search/__init__.py`. Confirm no existing module imports `search` (additive/isolated gate, FR-009).
+- [x] T001 Create the isolated package `src/catan_rl/search/__init__.py` (empty public exports) and test package `tests/unit/search/__init__.py`. Confirm no existing module imports `search` (additive/isolated gate, FR-009).
 
 ---
 
 ## Phase 2: Foundational (blocking — shared by all stories)
 
-- [ ] T002 [P] Add `SearchConfig` dataclass + `__post_init__` validation in `src/catan_rl/search/config.py` (per data-model: `sims_per_move`/`time_budget_s` mutually exclusive, `n_determinizations>=1`, `c_puct>0`, `value_squash_a/b`, `pw_c/pw_alpha`, `max_depth`, `seed`).
-- [ ] T003 [P] Write `tests/unit/search/test_value.py`: `squash_value` returns strictly (0,1) and is monotone; raw-V inputs across [-1.6, 1.8] map into (0,1); perspective sign flips for the to-move seat; a terminal node uses the true 1/0 outcome, not the leaf.
-- [ ] T004 Implement `src/catan_rl/search/value.py` — `squash_value(v,a=3.22,b=-1.14)=sigmoid(a*v+b)` and `leaf_value(policy, env, *, perspective_seat)` -> squashed win-prob — to pass T003 (contract C1).
-- [ ] T005 [P] Write `tests/unit/search/test_priors.py`: `action_priors` keys are exactly the legal actions from `env.get_action_masks()`, probabilities sum to 1, no illegal action has nonzero prior, built as type-head x conditional sub-head priors.
-- [ ] T006 Implement `src/catan_rl/search/priors.py` — `action_priors(policy, env)` over the 6 autoregressive heads, legal-only + normalized — to pass T005 (contract C2).
+- [x] T002 [P] Add `SearchConfig` dataclass + `__post_init__` validation in `src/catan_rl/search/config.py` (per data-model: `sims_per_move`/`time_budget_s` mutually exclusive, `n_determinizations>=1`, `c_puct>0`, `value_squash_a/b`, `pw_c/pw_alpha`, `max_depth`, `seed`).
+- [x] T003 [P] Write `tests/unit/search/test_value.py`: `squash_value` returns strictly (0,1) and is monotone; raw-V inputs across [-1.6, 1.8] map into (0,1); perspective sign flips for the to-move seat; a terminal node uses the true 1/0 outcome, not the leaf.
+- [x] T004 Implement `src/catan_rl/search/value.py` — `squash_value(v,a=3.22,b=-1.14)=sigmoid(a*v+b)` and `leaf_value(policy, env, *, perspective_seat)` -> squashed win-prob — to pass T003 (contract C1).
+- [x] T005 [P] Write `tests/unit/search/test_priors.py`: `action_priors` keys are exactly the legal actions from `env.get_action_masks()`, probabilities sum to 1, no illegal action has nonzero prior, built as type-head x conditional sub-head priors.
+- [x] T006 Implement `src/catan_rl/search/priors.py` — `action_priors(policy, env)` over the 6 autoregressive heads, legal-only + normalized — to pass T005 (contract C2).
 
-- [ ] **🔬 REVIEW GATE RG-Foundational** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 1+2 diff. Focus: value-squash bounds/perspective sign (C1), priors mask-consistency + normalization (C2), SearchConfig isolation/validation, additivity. Resolve BLOCKER/SHOULD-FIX before T007.
+- [x] **🔬 REVIEW GATE RG-Foundational** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 1+2 diff. Focus: value-squash bounds/perspective sign (C1), priors mask-consistency + normalization (C2), SearchConfig isolation/validation, additivity. Resolve BLOCKER/SHOULD-FIX before T007.
 
 ---
 
@@ -51,17 +51,17 @@ pass *before* the expensive bake-off T016 runs.
 
 **Independent test**: build only the minimal search + the env-access eval loop; `evaluate_search_vs_policy(search, raw_v6_1499)` over >=200 seat-symmetrized games yields a Wilson lower bound > 0.50 (or a documented FAIL).
 
-- [ ] T007 [P] [US1] Write `tests/unit/search/test_mcts.py`: PUCT select/expand/backup on a small node; deterministic under fixed seed; backup sign is correct across an EndTurn transition (the opponent's turn is folded into the agent's EndTurn step — value perspective must flip correctly).
-- [ ] T008 [US1] Implement `src/catan_rl/search/node.py` — `SearchNode` (cloned `CatanEnv`, `legal_types`, `priors`, `children`, `N`/`W`, `is_terminal`/`outcome`) per data-model.
-- [ ] T009 [US1] Implement the MINIMAL determinized PUCT in `src/catan_rl/search/mcts.py`: select by PUCT on the SQUASHED leaf value; expand one prior-sampled child per simulation; clone the env per simulation to fix that line's dice future (1 determinization); backup; terminal uses the true outcome. Fixed small sim budget; NO progressive widening yet. Passes T007.
-- [ ] T010 [P] [US1] Write `tests/unit/search/test_agent.py`: a forced move (1 legal action) short-circuits without spending budget; the returned action is always legal; `choose_action` does NOT mutate the passed env; identical seed+budget -> identical action sequence.
-- [ ] T011 [US1] Implement `src/catan_rl/search/agent.py` — `SearchAgent(policy, cfg).choose_action(env) -> np.ndarray` + `last_diagnostics` — to pass T010 (contract C3).
-- [ ] T012 [P] [US1] Write `tests/unit/search/test_eval_search.py`: `evaluate_search_vs_policy` is seat-symmetrized and returns a Wilson CI, mirroring `evaluate_policy_vs_policy` semantics; tiny n.
-- [ ] T013 [US1] Implement `src/catan_rl/search/eval_search.py` — `evaluate_search_vs_policy(search_cfg, search_ckpt, opponent_ckpt, *, n_games, seed, device="cpu", max_turns=400)`: a search-aware loop that hands `SearchAgent.choose_action(env)` the LIVE env, opponent = `FrozenSnapshotOpponent(opponent_ckpt)`, seat-symmetrized, CPU-pinned, torch RNG saved/restored — to pass T012 (contract C4).
-- [ ] T014 [US1] Add `tests/integration/test_search_smoke.py`: a tiny-budget search vs the heuristic plays a full game to completion with zero ruleset violations (assert via `eval/rules_invariants.py`).
-- [ ] T015 [US1] Implement `src/catan_rl/search/bakeoff.py` — `run_bakeoff(ckpt)`: minimal search vs the raw `ckpt`, PASS iff Wilson lower bound > 0.50 at n>=200 then re-confirmed at n>=500; returns `{passed, wr, ci, failure_mode}` (contract C6, encodes SC-001).
-- [ ] **🔬 REVIEW GATE RG-US1 (HARD-BLOCKING)** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 3 diff BEFORE T016. Focus: backup/perspective-sign across EndTurn (the silent killer), determinization/env-clone of the dice future, no env mutation in `choose_action`, legality, eval-loop RNG save/restore + seat symmetry, test strength (do they actually catch a sign flip / noise-not-lookahead?). T016 does NOT run until every BLOCKER/SHOULD-FIX is resolved.
-- [ ] T016 [US1] 🚦 **RUN THE GATE**: execute `run_bakeoff(runs/train/selfplay_v6_20260611_065459/checkpoints/ckpt_000001499.pt)`; write results to `runs/search/bakeoff_n200.json` + `bakeoff_n500.json`. **If PASS -> proceed to Phase 4/5. If FAIL (WR~0.50 or LB<=0.50) -> STOP; document the pivot (priors-weighted search / bounded-rollout-to-a-late-state / fix the leaf) in the spec notes and DO NOT build US2/US3.**
+- [x] T007 [P] [US1] Write `tests/unit/search/test_mcts.py`: PUCT select/expand/backup on a small node; deterministic under fixed seed; backup sign is correct across an EndTurn transition (the opponent's turn is folded into the agent's EndTurn step — value perspective must flip correctly).
+- [x] T008 [US1] Implement `src/catan_rl/search/node.py` — `SearchNode` (cloned `CatanEnv`, `legal_types`, `priors`, `children`, `N`/`W`, `is_terminal`/`outcome`) per data-model.
+- [x] T009 [US1] Implement the MINIMAL determinized PUCT in `src/catan_rl/search/mcts.py`: select by PUCT on the SQUASHED leaf value; expand one prior-sampled child per simulation; clone the env per simulation to fix that line's dice future (1 determinization); backup; terminal uses the true outcome. Fixed small sim budget; NO progressive widening yet. Passes T007.
+- [x] T010 [P] [US1] Write `tests/unit/search/test_agent.py`: a forced move (1 legal action) short-circuits without spending budget; the returned action is always legal; `choose_action` does NOT mutate the passed env; identical seed+budget -> identical action sequence.
+- [x] T011 [US1] Implement `src/catan_rl/search/agent.py` — `SearchAgent(policy, cfg).choose_action(env) -> np.ndarray` + `last_diagnostics` — to pass T010 (contract C3).
+- [x] T012 [P] [US1] Write `tests/unit/search/test_eval_search.py`: `evaluate_search_vs_policy` is seat-symmetrized and returns a Wilson CI, mirroring `evaluate_policy_vs_policy` semantics; tiny n.
+- [x] T013 [US1] Implement `src/catan_rl/search/eval_search.py` — `evaluate_search_vs_policy(search_cfg, search_ckpt, opponent_ckpt, *, n_games, seed, device="cpu", max_turns=400)`: a search-aware loop that hands `SearchAgent.choose_action(env)` the LIVE env, opponent = `FrozenSnapshotOpponent(opponent_ckpt)`, seat-symmetrized, CPU-pinned, torch RNG saved/restored — to pass T012 (contract C4).
+- [x] T014 [US1] Add `tests/integration/test_search_smoke.py`: a tiny-budget search vs the heuristic plays a full game to completion with zero ruleset violations (assert via `eval/rules_invariants.py`).
+- [x] T015 [US1] Implement `src/catan_rl/search/bakeoff.py` — `run_bakeoff(ckpt)`: minimal search vs the raw `ckpt`, PASS iff Wilson lower bound > 0.50 at n>=200 then re-confirmed at n>=500; returns `{passed, wr, ci, failure_mode}` (contract C6, encodes SC-001).
+- [x] **🔬 REVIEW GATE RG-US1 (HARD-BLOCKING)** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 3 diff BEFORE T016. Focus: backup/perspective-sign across EndTurn (the silent killer), determinization/env-clone of the dice future, no env mutation in `choose_action`, legality, eval-loop RNG save/restore + seat symmetry, test strength (do they actually catch a sign flip / noise-not-lookahead?). T016 does NOT run until every BLOCKER/SHOULD-FIX is resolved.
+- [~] T016 [US1] 🚦 **RUN THE GATE** (RUNNING — PID in runs/search/bakeoff.pid): execute `run_bakeoff(runs/train/selfplay_v6_20260611_065459/checkpoints/ckpt_000001499.pt)`; write results to `runs/search/bakeoff_n200.json` + `bakeoff_n500.json`. **If PASS -> proceed to Phase 4/5. If FAIL (WR~0.50 or LB<=0.50) -> STOP; document the pivot (priors-weighted search / bounded-rollout-to-a-late-state / fix the leaf) in the spec notes and DO NOT build US2/US3.**
 
 **Checkpoint**: US1 alone is a complete, decisive MVP — it answers "does lookahead beat the policy?" with a Wilson-bounded number.
 
