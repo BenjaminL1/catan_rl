@@ -13,6 +13,20 @@
 
 ---
 
+## Review Gates (auto-run)
+
+After **every** phase that produces code, before advancing, run the two-reviewer
+gate in [`reviewers.md`](reviewers.md) on that phase's diff
+(`git diff <phase-start-sha>..HEAD`): **Reviewer A — senior RL game-dev** (search
+correctness) + **Reviewer B — senior game-dev SWE** (quality/architecture), both
+as `general-purpose` subagents, in parallel. Resolve every **BLOCKER** and
+**SHOULD-FIX**, re-green tests + `mypy --strict`/`ruff`, then commit and proceed.
+The build workflow triggers these automatically at the `🔬 REVIEW GATE` markers
+below — they are mandatory, not optional. **RG-US1 is hard-blocking**: it must
+pass *before* the expensive bake-off T016 runs.
+
+---
+
 ## Phase 1: Setup
 
 - [ ] T001 Create the isolated package `src/catan_rl/search/__init__.py` (empty public exports) and test package `tests/unit/search/__init__.py`. Confirm no existing module imports `search` (additive/isolated gate, FR-009).
@@ -26,6 +40,8 @@
 - [ ] T004 Implement `src/catan_rl/search/value.py` — `squash_value(v,a=3.22,b=-1.14)=sigmoid(a*v+b)` and `leaf_value(policy, env, *, perspective_seat)` -> squashed win-prob — to pass T003 (contract C1).
 - [ ] T005 [P] Write `tests/unit/search/test_priors.py`: `action_priors` keys are exactly the legal actions from `env.get_action_masks()`, probabilities sum to 1, no illegal action has nonzero prior, built as type-head x conditional sub-head priors.
 - [ ] T006 Implement `src/catan_rl/search/priors.py` — `action_priors(policy, env)` over the 6 autoregressive heads, legal-only + normalized — to pass T005 (contract C2).
+
+- [ ] **🔬 REVIEW GATE RG-Foundational** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 1+2 diff. Focus: value-squash bounds/perspective sign (C1), priors mask-consistency + normalization (C2), SearchConfig isolation/validation, additivity. Resolve BLOCKER/SHOULD-FIX before T007.
 
 ---
 
@@ -44,6 +60,7 @@
 - [ ] T013 [US1] Implement `src/catan_rl/search/eval_search.py` — `evaluate_search_vs_policy(search_cfg, search_ckpt, opponent_ckpt, *, n_games, seed, device="cpu", max_turns=400)`: a search-aware loop that hands `SearchAgent.choose_action(env)` the LIVE env, opponent = `FrozenSnapshotOpponent(opponent_ckpt)`, seat-symmetrized, CPU-pinned, torch RNG saved/restored — to pass T012 (contract C4).
 - [ ] T014 [US1] Add `tests/integration/test_search_smoke.py`: a tiny-budget search vs the heuristic plays a full game to completion with zero ruleset violations (assert via `eval/rules_invariants.py`).
 - [ ] T015 [US1] Implement `src/catan_rl/search/bakeoff.py` — `run_bakeoff(ckpt)`: minimal search vs the raw `ckpt`, PASS iff Wilson lower bound > 0.50 at n>=200 then re-confirmed at n>=500; returns `{passed, wr, ci, failure_mode}` (contract C6, encodes SC-001).
+- [ ] **🔬 REVIEW GATE RG-US1 (HARD-BLOCKING)** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 3 diff BEFORE T016. Focus: backup/perspective-sign across EndTurn (the silent killer), determinization/env-clone of the dice future, no env mutation in `choose_action`, legality, eval-loop RNG save/restore + seat symmetry, test strength (do they actually catch a sign flip / noise-not-lookahead?). T016 does NOT run until every BLOCKER/SHOULD-FIX is resolved.
 - [ ] T016 [US1] 🚦 **RUN THE GATE**: execute `run_bakeoff(runs/train/selfplay_v6_20260611_065459/checkpoints/ckpt_000001499.pt)`; write results to `runs/search/bakeoff_n200.json` + `bakeoff_n500.json`. **If PASS -> proceed to Phase 4/5. If FAIL (WR~0.50 or LB<=0.50) -> STOP; document the pivot (priors-weighted search / bounded-rollout-to-a-late-state / fix the leaf) in the spec notes and DO NOT build US2/US3.**
 
 **Checkpoint**: US1 alone is a complete, decisive MVP — it answers "does lookahead beat the policy?" with a Wilson-bounded number.
@@ -59,6 +76,7 @@
 - [ ] T019 [US2] Implement `src/catan_rl/cli/search_eval.py` and add the `catan-rl-search-eval` console-script to `pyproject.toml` (contract C5; additive entry; no GUI import).
 - [ ] T020 [P] [US2] Add `tests/unit/search/test_determinism.py`: same seed + budget reproduces an identical action sequence over a short game (SC-003).
 - [ ] T021 [US2] Run the strength-budget ladder (quickstart Scenario 2): search vs raw v6 at 0.25/1/5 s per move; assert WR is monotone in budget; write `runs/search/ladder_{0.25,1,5}s.json` (SC-002).
+- [ ] **🔬 REVIEW GATE RG-US2** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 4 diff. Focus: progressive-widening schedule, N-determinization aggregation, anytime/time-budget returns best-so-far, CLI off training path + no GUI import. Resolve before Phase 5.
 
 ---
 
