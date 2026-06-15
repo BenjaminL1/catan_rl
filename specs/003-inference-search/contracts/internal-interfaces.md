@@ -6,10 +6,13 @@ No external/network API — this is an internal library + CLI feature. Contracts
 
 ```text
 search/value.py
-  squash_value(v: float | Tensor, a=3.22, b=-1.14) -> float | Tensor   # sigmoid(a*v+b) in (0,1)
-  leaf_value(policy, env, *, perspective_seat) -> float                 # forward -> squash; sign from perspective
+  squash_value(v: float | Tensor, a=3.22, b=-1.14) -> float | Tensor      # sigmoid(a*v+b) in (0,1)
+  value_from_obs(policy, obs, *, device, a=3.22, b=-1.14) -> float         # squashed win-prob from a built agent-POV obs
+  leaf_value(policy, env, *, device=None, a=3.22, b=-1.14) -> float        # convenience: reads env._get_obs() then squashes
 ```
-**Contract**: returns a bounded win-probability in (0,1) from the to-move seat's perspective. NEVER returns raw V. For a terminal state, the caller uses the true outcome (1/0), not `leaf_value`.
+**Contract**: returns a bounded win-probability in (0,1). NEVER returns raw V. For a terminal state, the caller uses the true outcome (1/0), not `leaf_value`.
+
+**No perspective_seat / no per-ply sign flip** (revised after implementation): `CatanEnv.step` folds the opponent's *entire* turn + dice into the agent's `EndTurn` transition, so every search node is an *agent* decision point and `env._get_obs()` is always built from the agent's POV. The squashed value is therefore the agent's win-probability directly — there is no opponent-POV node to flip. (Verified against `_terminal_reward`, which is always agent-POV: +1+margin on agent win, −1+margin on opp win.) The squash constants default from `SearchConfig.value_squash_{a,b}` (single SoT in `search.value`).
 
 ## C2 — Priors over the autoregressive action space
 
