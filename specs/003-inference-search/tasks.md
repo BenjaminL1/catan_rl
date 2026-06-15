@@ -75,15 +75,15 @@ pass *before* the expensive bake-off T016 runs.
 - [x] T018 [P] [US2] Extend `tests/unit/search/test_mcts.py`: progressive widening expands more types as visits grow; anytime returns within budget; N-determinization averages across cloned futures.
 - [x] T019 [US2] Implement `src/catan_rl/cli/search_eval.py` and add the `catan-rl-search-eval` console-script to `pyproject.toml` (contract C5; additive entry; no GUI import).
 - [x] T020 [P] [US2] Add `tests/unit/search/test_determinism.py`: same seed + budget reproduces an identical action sequence over a short game (SC-003).
-- [~] T021 [US2] (RUNNING — sims ladder, runs/search/ladder.pid) Run the strength-budget ladder (quickstart Scenario 2): search vs raw v6 at 0.25/1/5 s per move; assert WR is monotone in budget; write `runs/search/ladder_{0.25,1,5}s.json` (SC-002).
+- [x] T021 [US2] (DONE — monotone WR 0.50/0.55/0.59 at sims 10/50/100; runs/search/ladder_summary.json) Run the strength-budget ladder (quickstart Scenario 2): search vs raw v6 at 0.25/1/5 s per move; assert WR is monotone in budget; write `runs/search/ladder_{0.25,1,5}s.json` (SC-002).
 - [x] **🔬 REVIEW GATE RG-US2** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 4 diff. Focus: progressive-widening schedule, N-determinization aggregation, anytime/time-budget returns best-so-far, CLI off training path + no GUI import. Resolve before Phase 5.
 
 ---
 
 ## Phase 5: User Story 3 — Elo uplift on the strength ladder (P3)  *(only if T016 PASSED)*
 
-- [ ] T022 [US3] Promote the ladder harness to a committed `scripts/elo_ladder.py` (from `/tmp/elo_ladder.py`) that can include a `SearchAgent` rung; run a round-robin with `search@1s` + `v6_u1499` (+ a couple of v6 rungs).
-- [ ] T023 [US3] Report `search@1s` Elo delta over raw `v6_u1499` with CI to `runs/search/elo_uplift.json`; confirm positive + non-overlapping CI when the gate passed (SC-004).
+- [x] T022 [US3] Promote the ladder harness to a committed `scripts/elo_ladder.py` (from `/tmp/elo_ladder.py`) that can include a `SearchAgent` rung; run a round-robin with `search@1s` + `v6_u1499` (+ a couple of v6 rungs).
+- [x] T023 [US3] Report `search@1s` Elo delta over raw `v6_u1499` with CI to `runs/search/elo_uplift.json`; confirm positive + non-overlapping CI when the gate passed (SC-004).
 
 ---
 
