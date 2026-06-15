@@ -71,12 +71,12 @@ pass *before* the expensive bake-off T016 runs.
 
 **Goal**: a configurable, deterministic agent that plays measurably stronger as its budget grows.
 
-- [ ] T017 [US2] Harden `src/catan_rl/search/mcts.py`: progressive widening on the type head (`ceil(pw_c * N^pw_alpha)` legal types), N-determinization aggregation, anytime `time_budget_s` (return best action found so far), optional `max_depth` leaf cut.
-- [ ] T018 [P] [US2] Extend `tests/unit/search/test_mcts.py`: progressive widening expands more types as visits grow; anytime returns within budget; N-determinization averages across cloned futures.
-- [ ] T019 [US2] Implement `src/catan_rl/cli/search_eval.py` and add the `catan-rl-search-eval` console-script to `pyproject.toml` (contract C5; additive entry; no GUI import).
-- [ ] T020 [P] [US2] Add `tests/unit/search/test_determinism.py`: same seed + budget reproduces an identical action sequence over a short game (SC-003).
-- [ ] T021 [US2] Run the strength-budget ladder (quickstart Scenario 2): search vs raw v6 at 0.25/1/5 s per move; assert WR is monotone in budget; write `runs/search/ladder_{0.25,1,5}s.json` (SC-002).
-- [ ] **🔬 REVIEW GATE RG-US2** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 4 diff. Focus: progressive-widening schedule, N-determinization aggregation, anytime/time-budget returns best-so-far, CLI off training path + no GUI import. Resolve before Phase 5.
+- [x] T017 [US2] Harden `src/catan_rl/search/mcts.py`: progressive widening on the type head (`ceil(pw_c * N^pw_alpha)` legal types), N-determinization aggregation, anytime `time_budget_s` (return best action found so far), optional `max_depth` leaf cut.
+- [x] T018 [P] [US2] Extend `tests/unit/search/test_mcts.py`: progressive widening expands more types as visits grow; anytime returns within budget; N-determinization averages across cloned futures.
+- [x] T019 [US2] Implement `src/catan_rl/cli/search_eval.py` and add the `catan-rl-search-eval` console-script to `pyproject.toml` (contract C5; additive entry; no GUI import).
+- [x] T020 [P] [US2] Add `tests/unit/search/test_determinism.py`: same seed + budget reproduces an identical action sequence over a short game (SC-003).
+- [~] T021 [US2] (RUNNING — sims ladder, runs/search/ladder.pid) Run the strength-budget ladder (quickstart Scenario 2): search vs raw v6 at 0.25/1/5 s per move; assert WR is monotone in budget; write `runs/search/ladder_{0.25,1,5}s.json` (SC-002).
+- [x] **🔬 REVIEW GATE RG-US2** — run [`reviewers.md`](reviewers.md) (A+B) on the Phase 4 diff. Focus: progressive-widening schedule, N-determinization aggregation, anytime/time-budget returns best-so-far, CLI off training path + no GUI import. Resolve before Phase 5.
 
 ---
 
