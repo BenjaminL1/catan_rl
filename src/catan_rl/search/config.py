@@ -24,6 +24,9 @@ class SearchConfig:
     #: Fixed simulation budget per move. Mutually exclusive with ``time_budget_s``.
     sims_per_move: int | None = 100
     #: Anytime wall-clock budget (seconds) per move. Mutually exclusive with sims.
+    #: NOTE: time-budget mode is NOT bit-reproducible (the sim count run varies
+    #: with machine load); only ``sims_per_move`` mode satisfies FR-006's
+    #: same-seed-same-actions guarantee.
     time_budget_s: float | None = None
     #: Number of determinizations (independent dice/opponent worlds) to average.
     n_determinizations: int = 1
@@ -36,9 +39,16 @@ class SearchConfig:
     #: threads these into ``value_from_obs(..., a=, b=)``.
     value_squash_a: float = VALUE_SQUASH_A
     value_squash_b: float = VALUE_SQUASH_B
-    #: Progressive widening on the type head: at N visits, expand up to
-    #: ceil(pw_c * N**pw_alpha) of the legal types (used in US2 hardening).
-    pw_c: float = 1.0
+    #: Progressive widening on the type head, OFF by default. The type head's
+    #: branching is small (2-6 legal mid-game), so widening mostly risks
+    #: under-exploration rather than taming a combinatorial blow-up — and the US1
+    #: bake-off (WR 0.578) measured the all-types path. Left as a tunable (turn on
+    #: for ablations); when off, PUCT sees all legal types as in US1.
+    progressive_widening: bool = False
+    #: When ``progressive_widening`` is on, a node exposes its top
+    #: max(2, ceil(pw_c * N**pw_alpha)) legal types by prior (pw_c=2.0 matches the
+    #: locked data-model: all 6 types visible by ~9 visits).
+    pw_c: float = 2.0
     pw_alpha: float = 0.5
     #: Optional hard depth cut for the simulation (None = no cut).
     max_depth: int | None = None

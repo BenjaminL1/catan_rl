@@ -61,6 +61,7 @@ catan-rl-migrate-ckpt  = "catan_rl.cli.migrate_checkpoint:main"
 catan-rl-bc-train      = "catan_rl.cli.train_bc:main"
 catan-rl-bc-generate   = "catan_rl.cli.generate_bc_dataset:main"
 catan-rl-label-setup   = "catan_rl.cli.label_setup:main"
+catan-rl-search-eval   = "catan_rl.cli.search_eval:main"
 
 # Maturin builds the native ``catan_engine`` Rust crate (under
 # ``crates/catan_engine``) into a Python extension module AND ships

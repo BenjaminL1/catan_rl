@@ -1,4 +1,4 @@
-"""Minimal determinized PUCT-MCTS (T009).
+"""Determinized PUCT-MCTS.
 
 A max-only tree over agent decision points (the env folds the opponent's turn +
 dice into the agent's ``EndTurn`` transition). One simulation = descend by PUCT
@@ -6,18 +6,32 @@ on the SQUASHED leaf value, expand exactly one new child (clone the parent's env
 and ``step`` the action — the clone faithfully + independently continues the
 parent's dice future, so the line's stochasticity is fixed), evaluate the new
 leaf with the value head (or the true outcome if terminal), and back the value up
-the path. No rollouts, no progressive widening yet (that is US2 hardening).
+the path.
+
+US2 hardening (T017) layered on the minimal core:
+- **Progressive widening** on the type head (OFF by default — ``cfg.
+  progressive_widening``): when on, a node only exposes its top
+  ``max(2, ceil(pw_c * N^pw_alpha))`` legal types (by prior) to PUCT, revealing
+  more as the node's visits grow. Default-off keeps the US1 (gated) all-types
+  behavior, since the type head's 2-6 branching doesn't need taming.
+- **N-determinization aggregation**: run ``n_determinizations`` independent trees
+  (distinct determinization base seeds), aggregate the root visit/value across
+  them, and pick the globally most-visited action (variance reduction; N=1 is the
+  gated US1 behavior, unchanged).
+- **Anytime ``time_budget_s``**: simulate until a wall-clock deadline and return
+  the best action found so far (the budget is split evenly across determinizations).
+- **``max_depth``**: optional depth cut — beyond it a node returns its static leaf
+  value instead of expanding.
 
 Determinism + determinization: the tree logic is pure. The opponent model's
 sampling (inside a folded ``EndTurn``) and the engine's dev-card/steal/YoP draws
-go through the process-global RNG; ``run`` reseeds them PER SIMULATION from a seed
-derived from ``(cfg.seed, root state)``, so each expanded node gets a clean,
-reproducible opponent/chance sample independent of tree-traversal order (open-loop
-determinized MCTS — one fresh sample per expanded node). The dice are per-line
-faithful via the env clone (Rust RNG, deep-copied). The *agent* (``SearchAgent``)
-snapshots/restores the global RNG around a whole search so it never perturbs the
-live game's stream (FR-006). Closed-loop per-line replay + N-determinization
-averaging is the US2 hardening (T017).
+go through the process-global RNG; each simulation reseeds them from a seed
+derived from ``(cfg.seed, root state, determinization, sim index)``, so each
+expanded node gets a clean, reproducible opponent/chance sample independent of
+tree-traversal order (open-loop determinized MCTS). The dice are per-line faithful
+via the env clone (Rust RNG, deep-copied). The *agent* (``SearchAgent``) snapshots/
+restores the global RNG around a whole search so it never perturbs the live game's
+stream (FR-006).
 """
 
 from __future__ import annotations
@@ -25,6 +39,7 @@ from __future__ import annotations
 import copy
 import math
 import random
+import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -37,6 +52,13 @@ if TYPE_CHECKING:
     from catan_rl.search.config import SearchConfig
     from catan_rl.search.priors import ActionTuple
     from catan_rl.selfplay.snapshot_opponent import SnapshotOpponent
+
+#: Stride between determinization base seeds. Keeps per-det sim-seed ranges
+#: (``det_base + i`` for i in [0, sims)) disjoint for any sims < this stride —
+#: true for all realistic budgets.
+_DET_SEED_STRIDE = 1_000_003
+#: END_TURN action fallback for a degenerate state with no legal actions.
+_END_TURN_ACTION: tuple[int, int, int, int, int, int] = (3, 0, 0, 0, 0, 0)
 
 
 def clone_env(env: CatanEnv, opponent: SnapshotOpponent | None) -> CatanEnv:
@@ -60,12 +82,22 @@ def clone_env(env: CatanEnv, opponent: SnapshotOpponent | None) -> CatanEnv:
     return clone
 
 
-def _puct_select(node: SearchNode, c_puct: float) -> ActionTuple:
-    """Pick the action maximising Q + c_puct * P * sqrt(ΣN) / (1 + N)."""
+def _puct_select(
+    node: SearchNode,
+    c_puct: float,
+    candidates: list[ActionTuple] | None = None,
+) -> ActionTuple:
+    """Pick the action maximising Q + c_puct * P * sqrt(ΣN) / (1 + N).
+
+    ``candidates`` restricts the selectable actions (progressive widening);
+    ``None`` considers all legal actions (the minimal/US1 behavior).
+    """
+    actions = candidates if candidates is not None else list(node.priors.keys())
     sqrt_total = math.sqrt(max(1, node.total_N))
     best_action: ActionTuple | None = None
     best_score = -math.inf
-    for action, prior in node.priors.items():
+    for action in actions:
+        prior = node.priors[action]
         q = node.q_value(action)
         u = c_puct * prior * sqrt_total / (1 + node.child_N.get(action, 0))
         score = q + u
@@ -124,16 +156,10 @@ class MCTS:
     def _reseed(self, s: int) -> None:
         """Reseed the opponent model + the engine's global RNG streams.
 
-        Called once per simulation. Each simulation expands exactly one new node;
-        reseeding here makes that expansion's opponent reply + dev-card/steal/YoP
-        draws (which go through the process-global ``np.random`` / stdlib
-        ``random``) a clean, reproducible sample INDEPENDENT of how many sims ran
-        before it — removing the cross-simulation traversal-order coupling (a
-        single global stream sliced arbitrarily by tree descent). The dice stay
-        per-line faithful via the env clone (Rust RNG, deep-copied, untouched by
-        these seeds). This is open-loop determinized MCTS (one fresh
-        opponent/chance sample per expanded node); closed-loop per-line replay +
-        N-determinization averaging is the US2 hardening (T017).
+        Called once per simulation so that simulation's expansion draws a clean,
+        reproducible opponent reply + dev-card/steal/YoP sample INDEPENDENT of how
+        many sims ran before it (no cross-sim traversal-order coupling). Dice stay
+        per-line faithful via the env clone (Rust RNG, deep-copied, untouched).
         """
         s32 = s & 0x7FFF_FFFF
         if self.opponent is not None:
@@ -141,52 +167,129 @@ class MCTS:
         np.random.seed(s32)
         random.seed(s32)
 
+    def _widened_actions(self, node: SearchNode) -> list[ActionTuple]:
+        """Progressive widening on the type head: the top-k legal types by prior.
+
+        ``k = max(2, ceil(pw_c * N^pw_alpha))`` grows with the node's visit count;
+        a node with <=2 legal actions exposes them all. As ``N`` grows ``k`` reaches
+        ``len(priors)``, so widening front-loads compute on high-prior types
+        without ever capping the action set.
+
+        Disabled by default (``cfg.progressive_widening`` False) — then PUCT sees
+        ALL legal types, identical to the US1 (gated) behavior.
+        """
+        actions = node.legal_actions
+        if not self.cfg.progressive_widening or len(actions) <= 2:
+            return actions
+        k = max(2, math.ceil(self.cfg.pw_c * (node.total_N**self.cfg.pw_alpha)))
+        if k >= len(actions):
+            return actions
+        return sorted(actions, key=lambda a: node.priors[a], reverse=True)[:k]
+
     def run(self, root_env: CatanEnv) -> tuple[ActionTuple, dict[str, Any]]:
         """Search from ``root_env`` (the live env, NOT mutated) and return the
         chosen action 6-tuple + diagnostics. A forced root (<=1 representative
-        legal action) short-circuits without spending the simulation budget."""
-        root = self._make_node(
-            clone_env(root_env, self.opponent), root_env._get_obs(), terminal=False
-        )
+        legal action) short-circuits without spending the simulation budget;
+        otherwise ``n_determinizations`` trees are run and their root statistics
+        aggregated."""
+        obs = root_env._get_obs()
+        base = self._search_base_seed(root_env)
+        n_det = max(1, self.cfg.n_determinizations)
 
-        sims_run = 0
-        if len(root.legal_actions) > 1:
-            if self.cfg.sims_per_move is None:
-                raise NotImplementedError(
-                    "time-budget search is US2 (T021); set sims_per_move for the minimal MCTS"
-                )
-            base_seed = self._search_base_seed(root_env)
-            for i in range(self.cfg.sims_per_move):
-                self._reseed(base_seed + i)
-                self._simulate(root)
-                sims_run += 1
+        legal_actions: list[ActionTuple] | None = None
+        priors: dict[ActionTuple, float] = {}
+        root_value = 0.0
+        forced = False
+        total_sims = 0
+        agg_n: dict[ActionTuple, int] = {}
+        agg_w: dict[ActionTuple, float] = {}
 
-        best = self._best_action(root)
+        for d in range(n_det):
+            root = self._make_node(clone_env(root_env, self.opponent), obs, terminal=False)
+            if legal_actions is None:
+                legal_actions = root.legal_actions
+                priors = root.priors
+                root_value = root.value
+                forced = len(legal_actions) <= 1
+            if forced:
+                break
+            total_sims += self._run_one_tree(
+                root, (base + d * _DET_SEED_STRIDE) & 0x7FFF_FFFF, n_det
+            )
+            for action in root.legal_actions:
+                agg_n[action] = agg_n.get(action, 0) + root.child_N.get(action, 0)
+                agg_w[action] = agg_w.get(action, 0.0) + root.child_W.get(action, 0.0)
+
+        assert legal_actions is not None
+        if forced or not agg_n:
+            best = legal_actions[0] if legal_actions else _END_TURN_ACTION
+        else:
+            best = max(
+                legal_actions,
+                key=lambda a: (
+                    agg_n.get(a, 0),
+                    agg_w.get(a, 0.0) / max(1, agg_n.get(a, 0)),
+                    priors[a],
+                ),
+            )
+
+        best_n = agg_n.get(best, 0)
         diagnostics: dict[str, Any] = {
-            "root_value": root.value,
-            "root_visits": root.total_N,
-            "sims_run": sims_run,
-            "n_legal_actions": len(root.legal_actions),
+            "root_value": root_value,
+            "root_visits": sum(agg_n.values()),
+            "sims_run": total_sims,
+            "n_determinizations": n_det,
+            "n_legal_actions": len(legal_actions),
             "best_action": best,
-            "best_q": root.q_value(best),
-            "best_visits": root.child_N.get(best, 0),
-            "forced": len(root.legal_actions) <= 1,
+            "best_q": (agg_w.get(best, 0.0) / best_n) if best_n > 0 else 0.0,
+            "best_visits": best_n,
+            "forced": forced,
         }
         return best, diagnostics
 
+    def _run_one_tree(self, root: SearchNode, det_base: int, n_det: int) -> int:
+        """Run one tree's simulations (fixed sim budget or anytime wall-clock).
+
+        Returns the number of simulations run. For ``time_budget_s`` the per-move
+        budget is split evenly across the ``n_det`` determinization trees.
+        """
+        sims_run = 0
+        if self.cfg.time_budget_s is not None:
+            deadline = time.monotonic() + (self.cfg.time_budget_s / n_det)
+            i = 0
+            # Run at least one simulation per tree even if a single sim already
+            # exceeds the (split) budget — never return a zero-lookahead move while
+            # reporting it as searched.
+            while sims_run == 0 or time.monotonic() < deadline:
+                self._reseed(det_base + i)
+                self._simulate(root)
+                i += 1
+                sims_run += 1
+        else:
+            assert self.cfg.sims_per_move is not None
+            for i in range(self.cfg.sims_per_move):
+                self._reseed(det_base + i)
+                self._simulate(root)
+                sims_run += 1
+        return sims_run
+
     def _best_action(self, root: SearchNode) -> ActionTuple:
-        """Most-visited action (robust child), tie-broken by mean value then prior."""
+        """Most-visited action of a SINGLE tree (robust child), tie-broken by mean
+        value then prior. Aggregation across determinizations happens in ``run``."""
         return max(
             root.legal_actions,
             key=lambda a: (root.child_N.get(a, 0), root.q_value(a), root.priors[a]),
         )
 
-    def _simulate(self, node: SearchNode) -> float:
-        """One playout from ``node``; returns the agent-POV value backed up."""
+    def _simulate(self, node: SearchNode, depth: int = 0) -> float:
+        """One playout from ``node`` at tree ``depth``; returns the backed-up value."""
         if node.is_terminal:
             return node.outcome
+        if self.cfg.max_depth is not None and depth >= self.cfg.max_depth:
+            # Depth cut: use the static squashed leaf value, do not expand deeper.
+            return node.value
 
-        action = _puct_select(node, self.cfg.c_puct)
+        action = _puct_select(node, self.cfg.c_puct, self._widened_actions(node))
         if action not in node.children:
             # Expand exactly one new child: clone this node's env (fixing the
             # line's dice future) and step the action through the real engine.
@@ -200,7 +303,7 @@ class MCTS:
             node.children[action] = child
             value = child.outcome if terminal else child.value
         else:
-            value = self._simulate(node.children[action])
+            value = self._simulate(node.children[action], depth + 1)
 
         node.record(action, value)
         return value

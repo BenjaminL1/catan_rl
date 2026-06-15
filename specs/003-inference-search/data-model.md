@@ -9,16 +9,17 @@ Immutable config for a search run. Source of truth = a dataclass (mirrors `argum
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `sims_per_move` | int \| None | 100 | budget; mutually exclusive with `time_budget_s` |
-| `time_budget_s` | float \| None | None | anytime budget; if set, overrides `sims_per_move` |
-| `n_determinizations` | int | 1 | sampled futures per descent; start 1, tune via variance probe |
+| `time_budget_s` | float \| None | None | anytime budget; mutually exclusive with `sims_per_move`. NOT bit-reproducible (sim count varies with load) — only `sims_per_move` mode satisfies FR-006 |
+| `n_determinizations` | int | 1 | independent trees aggregated per move; start 1, tune via variance probe |
 | `c_puct` | float | 1.5 | PUCT exploration constant (tuned for the squashed [0,1] value) |
 | `value_squash_a` | float | 3.22 | leaf squash `sigmoid(a·V + b)` (Platt fit, D4) |
 | `value_squash_b` | float | -1.14 | " |
-| `pw_c`, `pw_alpha` | float | 2.0, 0.5 | progressive-widening `⌈c·N^alpha⌉` on the type head |
+| `progressive_widening` | bool | False | OFF by default — the type head's 2-6 branching doesn't need taming, and the US1 gate (WR 0.578) measured the all-types path; a tunable for ablations |
+| `pw_c`, `pw_alpha` | float | 2.0, 0.5 | when widening is on, expose top-`max(2, ⌈c·N^alpha⌉)` types by prior |
 | `max_depth` | int \| None | None | optional depth cut (leaf-eval beyond it) |
 | `seed` | int | 0 | reproducibility |
 
-**Validation**: exactly one of `sims_per_move`/`time_budget_s` set; `c_puct>0`; `0<value_squash` finite; `n_determinizations≥1`; `0<pw_alpha≤1`.
+**Validation**: exactly one of `sims_per_move`/`time_budget_s` set; `c_puct>0`; `value_squash_a>0`; `n_determinizations≥1`; `pw_c>0`; `0<pw_alpha≤1`; `max_depth≥1` or None.
 
 ## SearchNode
 
