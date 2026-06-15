@@ -114,8 +114,15 @@ def train_bc(
     device: str = "cpu",
     num_workers: int = 0,
     verbose: bool = True,
+    init_ckpt: Path | None = None,
 ) -> dict[str, Any]:
-    """Run the BC training loop and return the per-eval history."""
+    """Run the BC training loop and return the per-eval history.
+
+    ``init_ckpt`` (default None) warm-starts the policy from an existing
+    v2-lineage checkpoint before training — used for expert-iteration
+    distillation (fine-tune v6 on search-derived targets). ``None`` keeps the
+    original from-scratch behavior, byte-identical.
+    """
     data_dir = Path(data_dir)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -160,6 +167,13 @@ def train_bc(
 
     policy = CatanPolicy().to(dev)
     policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+    if init_ckpt is not None:
+        # Warm-start (expert-iteration distillation): load v2-lineage weights into
+        # the policy before fine-tuning. set_board_geometry ran first so the
+        # strict load overwrites the geometry buffers with the checkpoint's.
+        from catan_rl.checkpoint import load_checkpoint
+
+        load_checkpoint(Path(init_ckpt), map_location=dev).apply_to_policy(policy, strict=True)
 
     optimizer = AdamW(
         policy.parameters(),

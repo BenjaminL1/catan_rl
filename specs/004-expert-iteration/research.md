@@ -55,8 +55,12 @@ deferred to US2 as a diversity/quality lever.
 ## D6 — Pilot gate: search-FREE eval, Wilson LB > 0.50, n≥200→500
 
 **Decision**: `evaluate_policy_vs_policy(distilled_ckpt, v6_ckpt)` (single-forward, no MCTS),
-seat-symmetrized, PASS iff Wilson lower bound > 0.50 at n≥200 then a disjoint n≥500. Also eval
-vs the heuristic + a prior-lineage rung to catch catastrophic forgetting.
+seat-symmetrized, PASS iff Wilson lower bound > 0.50 at n≥200 then a disjoint n≥500 AND the
+distilled policy still beats the heuristic above a floor (default 0.60 — v6 is ~0.9, so a
+healthy distill stays well above; a distill that overfit to v6 and collapsed elsewhere fails
+as catastrophic forgetting). The prior-lineage rung from the original sketch is DEFERRED to
+US2 — for the one-round pilot, v6 is the only prior lineage and is already the head-to-head
+opponent, so heuristic-floor forgetting detection suffices.
 **Rationale**: the whole point is a *fast* stronger policy; the gate must be search-free. The
 eval is cheap (no search), so n=500 is minutes. LB>0.50 = significant improvement (the spec's
 SC-001; WR≥0.55/+35 Elo is the SC-002 aspiration).
