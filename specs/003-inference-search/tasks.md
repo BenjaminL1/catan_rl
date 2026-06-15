@@ -89,9 +89,9 @@ pass *before* the expensive bake-off T016 runs.
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T024 [P] No-regression: run `pytest tests/unit/eval tests/integration/test_selfplay_smoke.py` — confirm existing eval/training behavior is byte-identical with search present-but-unused (SC-005).
-- [ ] T025 [P] Green CI on the new module: `ruff check` + `mypy --strict` over `src/catan_rl/search/` and `src/catan_rl/cli/search_eval.py`; fix nits.
-- [ ] T026 Update `MEMORY.md` + `project_inference_search_viability.md` with the bake-off outcome (Elo uplift, or the documented pivot if it failed); refresh `specs/003-inference-search/` notes. No new docs.
+- [x] T024 [P] No-regression: run `pytest tests/unit/eval tests/integration/test_selfplay_smoke.py` — confirm existing eval/training behavior is byte-identical with search present-but-unused (SC-005).
+- [x] T025 [P] Green CI on the new module: `ruff check` + `mypy --strict` over `src/catan_rl/search/` and `src/catan_rl/cli/search_eval.py`; fix nits.
+- [x] T026 Update `MEMORY.md` + `project_inference_search_viability.md` with the bake-off outcome (Elo uplift, or the documented pivot if it failed); refresh `specs/003-inference-search/` notes. No new docs.
 
 ---
 
