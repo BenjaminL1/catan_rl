@@ -136,5 +136,5 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at specs/003-inference-search/plan.md
+at specs/004-expert-iteration/plan.md
 <!-- SPECKIT END -->
