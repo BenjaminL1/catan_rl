@@ -71,6 +71,10 @@ def at_main_phase(env: CatanEnv) -> bool:
     )
 
 
+def n_legal_types(env: CatanEnv) -> int:
+    return int(env.get_action_masks()["type"].sum())
+
+
 def drive_to_main_phase(env: CatanEnv, *, max_steps: int = 300) -> bool:
     """Step legal actions through setup + the first roll to a main-phase decision.
 
@@ -80,6 +84,23 @@ def drive_to_main_phase(env: CatanEnv, *, max_steps: int = 300) -> bool:
     """
     for _ in range(max_steps):
         if at_main_phase(env):
+            return True
+        _, _, terminated, truncated, _ = env.step(legal_action(env))
+        if terminated or truncated:
+            return False
+    return False
+
+
+def drive_to_decision(env: CatanEnv, *, max_steps: int = 400) -> bool:
+    """Advance to a main-phase state offering a genuine choice (>1 legal type).
+
+    Many early main-phase turns are forced (only END_TURN affordable); search is
+    a no-op there. Stepping the forced action (END_TURN) advances the game and
+    accumulates resources until a real multi-type decision appears. The stop
+    condition is checked BEFORE stepping, so no choice-creating resource is spent.
+    """
+    for _ in range(max_steps):
+        if at_main_phase(env) and n_legal_types(env) > 1:
             return True
         _, _, terminated, truncated, _ = env.step(legal_action(env))
         if terminated or truncated:

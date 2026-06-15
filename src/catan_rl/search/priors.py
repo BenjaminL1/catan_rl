@@ -88,30 +88,16 @@ def _representative_action(
     return (type_id, corner, edge, tile, res1, res2)
 
 
-@torch.no_grad()
-def action_priors(
-    policy: CatanPolicy,
-    env: CatanEnv,
-    *,
-    device: torch.device | None = None,
+def priors_from_trunk(
+    heads: CatanActionHeads,
+    trunk: torch.Tensor,
+    masks_t: dict[str, torch.Tensor],
 ) -> dict[ActionTuple, float]:
-    """Prior distribution over one representative legal action per legal type.
+    """Priors over one representative legal action per legal type, from a trunk.
 
-    Keys are legal 6-tuples consistent with ``env.get_action_masks()``; values
-    are non-negative and sum to 1. No illegal type ever appears.
+    The hot-path core (no forward here): the MCTS node builder computes ``trunk``
+    + value in ONE ``policy.forward`` and calls this to avoid a second forward.
     """
-    from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
-
-    if device is None:
-        device = next(policy.parameters()).device
-
-    obs = env._get_obs()
-    masks = env.get_action_masks()
-    obs_t = obs_to_torch(obs, device, add_batch=True)
-    masks_t = masks_to_torch(masks, device, add_batch=True)
-
-    trunk = policy.forward(obs_t)["trunk"]
-    heads = policy.action_heads
     type_logp = masked_log_softmax(heads.type_head(trunk), masks_t["type"])
     type_p = type_logp.exp()[0]  # (13,)
 
@@ -127,3 +113,28 @@ def action_priors(
     if total > 0.0:
         priors = {a: p / total for a, p in priors.items()}
     return priors
+
+
+@torch.no_grad()
+def action_priors(
+    policy: CatanPolicy,
+    env: CatanEnv,
+    *,
+    device: torch.device | None = None,
+) -> dict[ActionTuple, float]:
+    """Prior distribution over one representative legal action per legal type.
+
+    Keys are legal 6-tuples consistent with ``env.get_action_masks()``; values
+    are non-negative and sum to 1. No illegal type ever appears. Standalone C2
+    surface (does its own forward) for the root / tests; the MCTS hot path uses
+    :func:`priors_from_trunk` to share a single forward with the value head.
+    """
+    from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
+
+    if device is None:
+        device = next(policy.parameters()).device
+
+    obs_t = obs_to_torch(env._get_obs(), device, add_batch=True)
+    masks_t = masks_to_torch(env.get_action_masks(), device, add_batch=True)
+    trunk = policy.forward(obs_t)["trunk"]
+    return priors_from_trunk(policy.action_heads, trunk, masks_t)

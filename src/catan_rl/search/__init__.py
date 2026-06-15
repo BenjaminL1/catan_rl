@@ -14,14 +14,23 @@ agent's POV and backup needs no per-ply sign flip. See ``mcts.py``.
 
 from __future__ import annotations
 
+from catan_rl.search.agent import SearchAgent
+from catan_rl.search.bakeoff import run_bakeoff
 from catan_rl.search.config import SearchConfig
+from catan_rl.search.eval_search import evaluate_search_vs_policy, run_search_matchup
+from catan_rl.search.mcts import MCTS
 from catan_rl.search.priors import action_priors
 from catan_rl.search.value import leaf_value, squash_value, value_from_obs
 
 __all__ = [
+    "MCTS",
+    "SearchAgent",
     "SearchConfig",
     "action_priors",
+    "evaluate_search_vs_policy",
     "leaf_value",
+    "run_bakeoff",
+    "run_search_matchup",
     "squash_value",
     "value_from_obs",
 ]
