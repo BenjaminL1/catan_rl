@@ -785,6 +785,7 @@ def record_game(
     intended_hex_size: tuple[int, int] = (1000, 800),
     device: str = "cpu",
     log: logging.Logger | None = None,
+    agent_actor: Any | None = None,
 ) -> Replay:
     """Record one 1v1 Catan game between ``spec_a`` and ``spec_b``.
 
@@ -797,9 +798,13 @@ def record_game(
 
     agent_seat, opp_kind = _resolve_seat_and_opp(spec_a, spec_b)
     seat_to_actor = _seat_to_actor(agent_seat)
-    agent_actor = _resolve_agent_actor(
-        spec_a, spec_b, agent_seat=agent_seat, seed=seed, device=device
-    )
+    # An injected ``agent_actor`` (e.g. a search agent that needs the live env)
+    # overrides the spec-built one; the seat/opp resolution above still uses the
+    # specs (spec_a a policy-kind placeholder, spec_b the env opponent).
+    if agent_actor is None:
+        agent_actor = _resolve_agent_actor(
+            spec_a, spec_b, agent_seat=agent_seat, seed=seed, device=device
+        )
 
     # Heavy import deferred — keeps the replay module importable from
     # the viewer (which has no torch / gymnasium).
@@ -812,6 +817,11 @@ def record_game(
     assert env.game is not None
     assert env.agent_player is not None
     assert env.opponent_player is not None
+
+    # A search agent needs the LIVE env (the obs is a lossy encoding); hand it
+    # the env it drives. Plain actors don't expose bind_env -> no-op.
+    if hasattr(agent_actor, "bind_env"):
+        agent_actor.bind_env(env)
 
     # Index maps used by snapshot_step_state.
     vertex_pixel_to_idx = dict(env._vertex_to_idx)
