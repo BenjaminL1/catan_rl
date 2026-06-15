@@ -19,15 +19,15 @@ mypy --strict, commit. **RG-US1 is hard-blocking before the pilot run T016.**
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `src/catan_rl/expert_iteration/__init__.py` (module name avoids the `exit` builtin) + `tests/unit/expert_iteration/__init__.py`. Confirm nothing imports it (additive gate, FR-011).
+- [x] T001 Create `src/catan_rl/expert_iteration/__init__.py` (module name avoids the `exit` builtin) + `tests/unit/expert_iteration/__init__.py`. Confirm nothing imports it (additive gate, FR-011).
 
 ## Phase 2: Foundational (blocking — shared by all stories)
 
-- [ ] T002 [P] Write `tests/unit/bc/test_train_warmstart.py`: `train_bc(init_ckpt=PATH)` loads the checkpoint's policy weights before training (param shifts from the loaded init, not random); `init_ckpt=None` path unchanged.
-- [ ] T003 Add `init_ckpt: Path | None = None` to `train_bc` in `src/catan_rl/bc/train.py` — when set, strict-load that checkpoint into the policy after `set_board_geometry`, before the loop (warm-start, contract C2; default None byte-identical). Passes T002.
-- [ ] T004 [P] Add `SearchLabelConfig` + `DistillConfig` dataclasses (+ `__post_init__` validation per data-model) in `src/catan_rl/expert_iteration/config.py`; `tests/unit/expert_iteration/test_config.py`.
+- [x] T002 [P] Write `tests/unit/bc/test_train_warmstart.py`: `train_bc(init_ckpt=PATH)` loads the checkpoint's policy weights before training (param shifts from the loaded init, not random); `init_ckpt=None` path unchanged.
+- [x] T003 Add `init_ckpt: Path | None = None` to `train_bc` in `src/catan_rl/bc/train.py` — when set, strict-load that checkpoint into the policy after `set_board_geometry`, before the loop (warm-start, contract C2; default None byte-identical). Passes T002.
+- [x] T004 [P] Add `SearchLabelConfig` + `DistillConfig` dataclasses (+ `__post_init__` validation per data-model) in `src/catan_rl/expert_iteration/config.py`; `tests/unit/expert_iteration/test_config.py`.
 
-- [ ] **🔬 REVIEW GATE RG-Foundational** — reviewers.md (A+B) on the Phase 1+2 diff. Focus: warm-start strict-load + v2-lineage + `init_ckpt=None` byte-identical; config validation; additivity.
+- [x] **🔬 REVIEW GATE RG-Foundational** — reviewers.md (A+B) on the Phase 1+2 diff. Focus: warm-start strict-load + v2-lineage + `init_ckpt=None` byte-identical; config validation; additivity.
 
 ---
 
@@ -37,16 +37,16 @@ mypy --strict, commit. **RG-US1 is hard-blocking before the pilot run T016.**
 
 **Independent test**: `run_exit_pilot.py` → `gate.json` with Wilson LB > 0.50 at n≥200→500 (or a documented FAIL).
 
-- [ ] T005 [P] [US1] Write `tests/unit/expert_iteration/test_labeler.py`: generated shards are `BcDataset`-loadable; recorded `action` equals the `SearchAgent` choice at that state; forced (mask_sum==1) decisions skipped; `z_disc` filled; reproducible at a fixed seed; tiny n.
-- [ ] T006 [US1] Implement `src/catan_rl/expert_iteration/labeler.py` — `generate_search_labels(cfg)` plays `SearchAgent` vs opponent, records non-forced agent decisions as BcDataset-compatible NPZ shards + manifest (reuse `bc.dataset` `_DecisionRecord`/`_flatten_records`/shard writer) (contract C1). Passes T005.
-- [ ] T007 [P] [US1] Write `tests/unit/expert_iteration/test_distill.py`: `distill(cfg)` warm-starts from the base ckpt, trains on a tiny labeled shard dir, and returns a v2-lineage checkpoint loadable by the existing manager.
-- [ ] T008 [US1] Implement `src/catan_rl/expert_iteration/distill.py` — `distill(cfg)` calls `train_bc(init_ckpt=base, data_dir=labels, peak_lr/max_epochs per D8)` -> distilled ckpt (contract C2). Passes T007.
-- [ ] T009 [P] [US1] Write `tests/unit/expert_iteration/test_gate.py`: `run_gate` is search-free (reuses `evaluate_policy_vs_policy`), seat-symmetrized, PASS iff Wilson LB > 0.50; reports WR vs heuristic + a prior rung; tiny n.
-- [ ] T010 [US1] Implement `src/catan_rl/expert_iteration/gate.py` — `run_gate(distilled, v6, ...) -> GateResult` (contract C3, encodes SC-001 + the forgetting guard). Passes T009.
-- [ ] T011 [US1] Implement `scripts/run_exit_pilot.py` — label → distill → gate; writes `data/exit/round_0/` + `runs/exit/round_0/{distill,gate.json}` (contract C5; detached-friendly; CPU search/eval, MPS distill; no GUI import).
-- [ ] T012 [US1] Add `tests/integration/test_exit_smoke.py`: a tiny pilot (few games, sims=4, max_turns small) runs label→distill→gate end-to-end producing a GateResult with zero ruleset violations.
-- [ ] **🔬 REVIEW GATE RG-US1 (HARD-BLOCKING)** — reviewers.md (A+B) on the Phase 3 diff BEFORE T016. Focus: label fidelity (action == search choice, obs/mask consistency, forced-skip, z_disc), warm-start distillation correctness (no v6-clobber; LR sane), search-free gate (no MCTS at eval), forgetting guard, reproducibility, test strength. Resolve all BLOCKER/SHOULD-FIX before the run.
-- [ ] T016 [US1] 🚦 **RUN THE GATE**: `run_exit_pilot.py --sims 50 --n-positions 5000 --seed 0` (detached + watcher). **If PASS (Wilson LB>0.50 at n≥500) → US2/US3. If FAIL → STOP; document the pivot (soft visit-distribution targets / more positions / more sims via batched leaf eval / LR+epoch tuning) and DO NOT build US2/US3.**
+- [x] T005 [P] [US1] Write `tests/unit/expert_iteration/test_labeler.py`: generated shards are `BcDataset`-loadable; recorded `action` equals the `SearchAgent` choice at that state; forced (mask_sum==1) decisions skipped; `z_disc` filled; reproducible at a fixed seed; tiny n.
+- [x] T006 [US1] Implement `src/catan_rl/expert_iteration/labeler.py` — `generate_search_labels(cfg)` plays `SearchAgent` vs opponent, records non-forced agent decisions as BcDataset-compatible NPZ shards + manifest (reuse `bc.dataset` `_DecisionRecord`/`_flatten_records`/shard writer) (contract C1). Passes T005.
+- [x] T007 [P] [US1] Write `tests/unit/expert_iteration/test_distill.py`: `distill(cfg)` warm-starts from the base ckpt, trains on a tiny labeled shard dir, and returns a v2-lineage checkpoint loadable by the existing manager.
+- [x] T008 [US1] Implement `src/catan_rl/expert_iteration/distill.py` — `distill(cfg)` calls `train_bc(init_ckpt=base, data_dir=labels, peak_lr/max_epochs per D8)` -> distilled ckpt (contract C2). Passes T007.
+- [x] T009 [P] [US1] Write `tests/unit/expert_iteration/test_gate.py`: `run_gate` is search-free (reuses `evaluate_policy_vs_policy`), seat-symmetrized, PASS iff Wilson LB > 0.50; reports WR vs heuristic + a prior rung; tiny n.
+- [x] T010 [US1] Implement `src/catan_rl/expert_iteration/gate.py` — `run_gate(distilled, v6, ...) -> GateResult` (contract C3, encodes SC-001 + the forgetting guard). Passes T009.
+- [x] T011 [US1] Implement `scripts/run_exit_pilot.py` — label → distill → gate; writes `data/exit/round_0/` + `runs/exit/round_0/{distill,gate.json}` (contract C5; detached-friendly; CPU search/eval, MPS distill; no GUI import).
+- [x] T012 [US1] Add `tests/integration/test_exit_smoke.py`: a tiny pilot (few games, sims=4, max_turns small) runs label→distill→gate end-to-end producing a GateResult with zero ruleset violations.
+- [x] **🔬 REVIEW GATE RG-US1 (HARD-BLOCKING)** — reviewers.md (A+B) on the Phase 3 diff BEFORE T016. Focus: label fidelity (action == search choice, obs/mask consistency, forced-skip, z_disc), warm-start distillation correctness (no v6-clobber; LR sane), search-free gate (no MCTS at eval), forgetting guard, reproducibility, test strength. Resolve all BLOCKER/SHOULD-FIX before the run.
+- [~] T016 [US1] 🚦 **RUN THE GATE** (RUNNING — PID runs/exit/pilot.pid): `run_exit_pilot.py --sims 50 --n-positions 5000 --seed 0` (detached + watcher). **If PASS (Wilson LB>0.50 at n≥500) → US2/US3. If FAIL → STOP; document the pivot (soft visit-distribution targets / more positions / more sims via batched leaf eval / LR+epoch tuning) and DO NOT build US2/US3.**
 
 **Checkpoint**: US1 alone answers "does distilling search beat the base policy?" with a Wilson-bounded number — a decisive MVP.
 
