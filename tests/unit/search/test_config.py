@@ -54,6 +54,8 @@ def test_time_budget_mode() -> None:
         {"max_depth": 0},
         {"value_squash_a": 0.0},
         {"value_squash_a": -3.22},
+        {"sub_actions_per_type": 0},
+        {"sub_actions_per_type": -2},
     ],
 )
 def test_invalid_values_raise(kwargs: dict[str, object]) -> None:

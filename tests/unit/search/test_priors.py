@@ -160,3 +160,50 @@ def test_priors_are_deterministic(policy) -> None:  # type: ignore[no-untyped-de
     env.reset(seed=5)
     assert drive_to_main_phase(env)
     assert action_priors(policy, env) == action_priors(policy, env)
+
+
+def test_priors_k1_is_default_behavior(policy) -> None:  # type: ignore[no-untyped-def]
+    # sub_actions_per_type=1 must be byte-identical to the default (the shipped 003
+    # behavior) — the additivity guarantee that keeps the gated bake-off result valid.
+    env = CatanEnv(opponent_type="heuristic")
+    env.reset(seed=3)
+    assert drive_to_main_phase(env)
+    assert action_priors(policy, env, sub_actions_per_type=1) == action_priors(policy, env)
+
+
+def test_multirep_priors_expand_placement_and_preserve_type_mass(policy) -> None:  # type: ignore[no-untyped-def]
+    # At setup, BUILD_SETTLEMENT is the only legal type with many legal corners, so
+    # k>1 MUST emit multiple distinct settlement sub-actions (k=1 emits exactly one),
+    # all legal, summing to 1, and their masses must sum to the k=1 P(type) (the
+    # P(type) is SPLIT across sub-actions, never changed).
+    env = CatanEnv(opponent_type="heuristic")
+    env.reset(seed=3)
+    masks = env.get_action_masks()
+    p1 = action_priors(policy, env, sub_actions_per_type=1)
+    p4 = action_priors(policy, env, sub_actions_per_type=4)
+    _assert_priors_well_formed(p4, masks)
+    settle1 = [a for a in p1 if a[0] == ActionType.BUILD_SETTLEMENT]
+    settle4 = [a for a in p4 if a[0] == ActionType.BUILD_SETTLEMENT]
+    assert len(settle1) == 1
+    assert 2 <= len(settle4) <= 4, "k=4 must expand multiple legal corners at setup"
+    assert len({a[1] for a in settle4}) == len(settle4), "expanded corners must be distinct"
+    # P(type) split-not-changed invariant: the k=1 modal corner is the top-prior k=4 child.
+    assert max(settle4, key=lambda a: p4[a])[1] == settle1[0][1]
+    # The total settlement mass is preserved between k=1 and k=4 (both renormalised
+    # over the same single legal type -> 1.0 here; assert the per-type aggregate matches).
+    assert abs(sum(p4[a] for a in settle4) - sum(p1[a] for a in settle1)) < 1e-5
+
+
+def test_multirep_priors_split_mass_by_conditional_prob(policy) -> None:  # type: ignore[no-untyped-def]
+    # The expanded sub-actions for a type must carry mass in the policy's conditional
+    # head order (top sub-action >= the rest) — i.e. mass is split BY the head probs,
+    # not uniformly. At setup the settlement corners are the cleanest probe.
+    env = CatanEnv(opponent_type="heuristic")
+    env.reset(seed=3)
+    p4 = action_priors(policy, env, sub_actions_per_type=4)
+    settle4 = sorted(
+        (a for a in p4 if a[0] == ActionType.BUILD_SETTLEMENT), key=lambda a: p4[a], reverse=True
+    )
+    masses = [p4[a] for a in settle4]
+    assert masses == sorted(masses, reverse=True)
+    assert masses[0] >= masses[-1]

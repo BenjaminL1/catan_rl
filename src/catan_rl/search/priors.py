@@ -88,15 +88,72 @@ def _representative_action(
     return (type_id, corner, edge, tile, res1, res2)
 
 
+#: type -> (primary "where" sub-head slot index, mask key, FiLM?) for multi-rep
+#: expansion. settle/city -> corner (FiLM, type-conditioned); road -> edge;
+#: robber/knight -> tile. Others (res / no-sub types) get a single argmax rep.
+_WHERE_HEAD = {0: 1, 1: 1, 2: 2, 4: 3, 6: 3}  # type_id -> head_relevance slot (corner/edge/tile)
+
+
+def _subaction_candidates(
+    heads: CatanActionHeads,
+    trunk: torch.Tensor,
+    masks_t: dict[str, torch.Tensor],
+    type_id: int,
+    k: int,
+) -> list[tuple[ActionTuple, float]]:
+    """Up to ``k`` (action, conditional-prob) candidates for ``type_id``.
+
+    For a placement type, the top-``k`` values of its primary WHERE head (corner/
+    edge/tile) by the policy's conditional prob, each with the OTHER sub-fields at
+    their argmax; conditional probs are renormalised within the top-k so they sum
+    to 1 (k=1 -> [1.0], i.e. prior == P(type), preserving the US1 behavior). Types
+    without a WHERE head (resources / EndTurn / ...) get a single argmax rep.
+    """
+    base = _representative_action(heads, trunk, masks_t, type_id)
+    slot = _WHERE_HEAD.get(type_id)
+    if slot is None or k <= 1:
+        return [(base, 1.0)]
+
+    type_idx = torch.tensor([type_id], device=trunk.device)
+    if slot == 1:  # corner (FiLM, type-conditioned)
+        logits = heads.corner_head(trunk, heads._corner_context(type_idx))
+        mask = heads._corner_mask(type_idx, masks_t)
+    elif slot == 2:  # edge
+        logits = heads.edge_head(trunk)
+        mask = masks_t["edge"]
+    else:  # slot == 3, tile
+        logits = heads.tile_head(trunk)
+        mask = masks_t["tile"]
+
+    if not bool(mask.any()):
+        return [(base, 1.0)]
+    probs = masked_log_softmax(logits, mask).exp()[0]  # (D,)
+    kk = min(k, int(mask[0].sum().item()))
+    topk = torch.topk(probs, kk)
+    idxs = topk.indices.tolist()
+    vals = topk.values.tolist()
+    denom = float(sum(vals)) or 1.0
+    out: list[tuple[ActionTuple, float]] = []
+    for idx, p in zip(idxs, vals, strict=True):
+        action = list(base)
+        action[slot] = int(idx)
+        out.append((tuple(action), float(p) / denom))  # type: ignore[arg-type]
+    return out
+
+
 def priors_from_trunk(
     heads: CatanActionHeads,
     trunk: torch.Tensor,
     masks_t: dict[str, torch.Tensor],
+    sub_actions_per_type: int = 1,
 ) -> dict[ActionTuple, float]:
-    """Priors over one representative legal action per legal type, from a trunk.
+    """Priors over representative legal actions, from a trunk.
 
-    The hot-path core (no forward here): the MCTS node builder computes ``trunk``
-    + value in ONE ``policy.forward`` and calls this to avoid a second forward.
+    With ``sub_actions_per_type==1`` (default): one modal action per legal type,
+    prior == P(type) — the US1 behavior, unchanged. With k>1: each placement
+    type's P(type) is split across its top-k WHERE sub-actions by the conditional
+    head probs, so search can explore *where* to build, not only *which* type.
+    The hot-path core (no forward here): the MCTS node builder shares one forward.
     """
     type_logp = masked_log_softmax(heads.type_head(trunk), masks_t["type"])
     type_p = type_logp.exp()[0]  # (13,)
@@ -104,10 +161,11 @@ def priors_from_trunk(
     legal_types = torch.nonzero(masks_t["type"][0], as_tuple=False).flatten().tolist()
     priors: dict[ActionTuple, float] = {}
     for type_id in legal_types:
-        action = _representative_action(heads, trunk, masks_t, int(type_id))
-        # Accumulate in case two types collapse to the same tuple (shouldn't, but
-        # be defensive — the type field differs so keys are distinct in practice).
-        priors[action] = priors.get(action, 0.0) + float(type_p[type_id].item())
+        p_type = float(type_p[type_id].item())
+        for action, sub_p in _subaction_candidates(
+            heads, trunk, masks_t, int(type_id), sub_actions_per_type
+        ):
+            priors[action] = priors.get(action, 0.0) + p_type * sub_p
 
     total = sum(priors.values())
     if total > 0.0:
@@ -121,12 +179,12 @@ def action_priors(
     env: CatanEnv,
     *,
     device: torch.device | None = None,
+    sub_actions_per_type: int = 1,
 ) -> dict[ActionTuple, float]:
-    """Prior distribution over one representative legal action per legal type.
+    """Prior distribution over representative legal actions (standalone C2 surface).
 
-    Keys are legal 6-tuples consistent with ``env.get_action_masks()``; values
-    are non-negative and sum to 1. No illegal type ever appears. Standalone C2
-    surface (does its own forward) for the root / tests; the MCTS hot path uses
+    Keys are legal 6-tuples consistent with ``env.get_action_masks()``; values are
+    non-negative and sum to 1. No illegal type ever appears. The MCTS hot path uses
     :func:`priors_from_trunk` to share a single forward with the value head.
     """
     from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
@@ -137,4 +195,4 @@ def action_priors(
     obs_t = obs_to_torch(env._get_obs(), device, add_batch=True)
     masks_t = masks_to_torch(env.get_action_masks(), device, add_batch=True)
     trunk = policy.forward(obs_t)["trunk"]
-    return priors_from_trunk(policy.action_heads, trunk, masks_t)
+    return priors_from_trunk(policy.action_heads, trunk, masks_t, sub_actions_per_type)

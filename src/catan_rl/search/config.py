@@ -50,6 +50,10 @@ class SearchConfig:
     #: locked data-model: all 6 types visible by ~9 visits).
     pw_c: float = 2.0
     pw_alpha: float = 0.5
+    #: Sub-actions per placement type the priors expand (where-to-build exploration).
+    #: 1 (default) = one modal action per type (US1 behavior, unchanged). >1 lets
+    #: search explore multiple vertices/edges/tiles per type (expert-iteration round 2).
+    sub_actions_per_type: int = 1
     #: Optional hard depth cut for the simulation (None = no cut).
     max_depth: int | None = None
     #: RNG seed — search + uplift eval are reproducible at a fixed seed (FR-006).
@@ -77,5 +81,7 @@ class SearchConfig:
             raise ValueError(f"pw_c must be > 0, got {self.pw_c}")
         if not 0.0 < self.pw_alpha <= 1.0:
             raise ValueError(f"pw_alpha must be in (0, 1], got {self.pw_alpha}")
+        if self.sub_actions_per_type < 1:
+            raise ValueError(f"sub_actions_per_type must be >= 1, got {self.sub_actions_per_type}")
         if self.max_depth is not None and self.max_depth < 1:
             raise ValueError(f"max_depth must be >= 1 or None, got {self.max_depth}")

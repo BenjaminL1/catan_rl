@@ -89,12 +89,15 @@ def build_node(
     device: torch.device,
     a: float,
     b: float,
+    sub_actions_per_type: int = 1,
 ) -> SearchNode:
     """Construct a node for ``env``'s current state.
 
     Terminal: read the true agent-POV outcome and drop the env (no expansion).
     Non-terminal: ONE ``policy.forward`` yields both the squashed leaf value and
-    the action priors (shared trunk) — the NN-bound hot path.
+    the action priors (shared trunk) — the NN-bound hot path. ``sub_actions_per_type``
+    (default 1 = one modal action per legal type) lets the priors expand multiple
+    WHERE sub-actions per placement type so search can explore where-to-build.
     """
     if terminal:
         return SearchNode(
@@ -113,7 +116,7 @@ def build_node(
     out = policy.forward(obs_t)
     v = squash_value(out["value"], a, b)
     assert isinstance(v, torch.Tensor)
-    priors = priors_from_trunk(policy.action_heads, out["trunk"], masks_t)
+    priors = priors_from_trunk(policy.action_heads, out["trunk"], masks_t, sub_actions_per_type)
     return SearchNode(
         env=env,
         obs=obs,

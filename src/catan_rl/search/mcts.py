@@ -57,6 +57,8 @@ if TYPE_CHECKING:
 #: (``det_base + i`` for i in [0, sims)) disjoint for any sims < this stride —
 #: true for all realistic budgets.
 _DET_SEED_STRIDE = 1_000_003
+#: Action-type head width (the 13-way type head); the soft policy target's length.
+_N_ACTION_TYPES = 13
 #: END_TURN action fallback for a degenerate state with no legal actions.
 _END_TURN_ACTION: tuple[int, int, int, int, int, int] = (3, 0, 0, 0, 0, 0)
 
@@ -134,6 +136,7 @@ class MCTS:
             device=self.device,
             a=self.cfg.value_squash_a,
             b=self.cfg.value_squash_b,
+            sub_actions_per_type=self.cfg.sub_actions_per_type,
         )
 
     def _search_base_seed(self, root_env: CatanEnv) -> int:
@@ -234,6 +237,18 @@ class MCTS:
             )
 
         best_n = agg_n.get(best, 0)
+        # Per-type visit distribution over the 13-way type head (the search's
+        # post-lookahead "how to distribute across action types") — the soft
+        # expert-iteration policy target. Forced/no-sims -> one-hot at best's type.
+        type_visits = np.zeros(_N_ACTION_TYPES, dtype=np.float64)
+        for action, n in agg_n.items():
+            type_visits[action[0]] += n
+        tv_total = float(type_visits.sum())
+        if tv_total > 0.0:
+            type_visit_dist = type_visits / tv_total
+        else:
+            type_visit_dist = np.zeros(_N_ACTION_TYPES, dtype=np.float64)
+            type_visit_dist[best[0]] = 1.0
         diagnostics: dict[str, Any] = {
             "root_value": root_value,
             "root_visits": sum(agg_n.values()),
@@ -244,6 +259,13 @@ class MCTS:
             "best_q": (agg_w.get(best, 0.0) / best_n) if best_n > 0 else 0.0,
             "best_visits": best_n,
             "forced": forced,
+            "type_visit_dist": type_visit_dist,
+            # Full-action soft target: search visit counts + the policy prior, on
+            # the same (k-expanded) legal-action support. The soft-distillation
+            # labeler reads visit_counts as the policy target; the probe compares
+            # the two to measure the distillable where-to-build gap.
+            "visit_counts": dict(agg_n),
+            "priors": dict(priors),
         }
         return best, diagnostics
 
