@@ -88,3 +88,34 @@ Search labeling is NN-forward-bound (~120 sims/sec). For the full flywheel (tens
 of positions/round × multiple rounds), batched leaf evaluation (many MCTS leaves per forward)
 is the 5-10× multiplier. In scope ONLY after the pilot passes — the pilot is sized to current
 throughput so the gate is reached without it.
+
+## Pilot outcome — US1 GATE FAILED (2026-06-15)
+
+`runs/exit/round_0/gate.json`: **quick n=200 WR 0.49 vs raw v6, Wilson LB 0.422 ≤ 0.50** →
+FAIL (confirm not run). 0 ruleset violations. Run was clean end-to-end (5,055 search@50 labels
+in 38 min → 5-epoch warm-started MPS distill in 22 min → search-free gate in 5 min). The
+distilled policy is **statistically indistinguishable from v6** (CI [0.422, 0.558] straddles
+0.50) — distillation did not move it.
+
+**Root cause (the finding): hard-action distillation captured too little signal.** D1's hard
+label = the search's *chosen action*. But on most positions a 50-sim search's argmax AGREES
+with v6's own argmax (search refines, rarely overturns the top move of an already-decent
+policy), so distilling "search's action" ≈ distilling "v6's own argmax" ≈ an identity map →
+WR ≈ 0.50. The real ExIt signal lives in the *visit distribution* (where search is uncertain,
+or strongly prefers a NON-argmax move) and the *margin* — both discarded by hard labels.
+
+**Recommended pivots (ranked; USER DECISION — not auto-pursued):**
+1. **Soft visit-distribution targets** (KL/soft-CE toward the search root's normalized visit
+   counts over the type head + conditional sub-heads), replacing hard-action CE. The principled
+   ExIt target; carries the full search preference. Needs a `bc_loss` soft-policy extension.
+   *(Top recommendation — directly attacks the dilution.)*
+2. **Train only on DISAGREEMENT positions** (search argmax ≠ v6 argmax), or up-weight them —
+   concentrates the learning signal; cheap; composes with (1) or hard labels.
+3. **Stronger teacher** (higher sims-per-label → more positions where search overturns v6),
+   which needs batched leaf eval (FR-012) to stay tractable; composes with (1).
+4. **LR/epoch sweep** (D8) — least likely to fix the *dilution* root cause, but a cheap check
+   that the fine-tune isn't simply too gentle (the distilled landed ≈ v6, not worse, so it did
+   move — just toward v6's own argmax).
+
+The gate-first discipline worked: this retired a weak approach in ~1 h + the minimal prototype,
+before building the flywheel. Decision deferred to the user; US2/US3 NOT built.
