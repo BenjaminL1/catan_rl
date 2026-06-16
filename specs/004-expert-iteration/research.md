@@ -119,3 +119,44 @@ or strongly prefers a NON-argmax move) and the *margin* — both discarded by ha
 
 The gate-first discipline worked: this retired a weak approach in ~1 h + the minimal prototype,
 before building the flywheel. Decision deferred to the user; US2/US3 NOT built.
+
+## Round-2 de-risk — SOFT + SUB-ACTION distillation REJECTED (2026-06-16)
+
+User chose pivot (1) + "go full" (let search explore sub-actions, then distill the full soft
+visit distribution). Built the apparatus (additive multi-representative priors,
+`sub_actions_per_type` threaded SearchConfig→build_node→MCTS; `MCTS.run` diagnostics now expose
+`visit_counts` + `priors`; commit `b1a0e7f`, 64 search tests green) and **re-probed BEFORE
+building the soft pipeline** (`/tmp/search_where_probe.py`, `/tmp/value_lookahead_probe.py`).
+
+**Probe A — full-action gap (k=4 sub-action search @200 sims, 80 where-rich on-distribution
+placement states, mean 6.3 candidate actions):**
+- `full_tv(search visits, v6 prior)` = **0.025** (97.5% overlap) — vs type-only `type_tv` 0.011.
+  Sub-action search ~doubled the divergence over k=1 (0.012) but the absolute level stays tiny.
+- search overturns v6's greedy FULL action **1 / 80 = 1.25%** (the one override was a where-move);
+  placement-only where-override = 1 / 71 = 1.4%.
+- **Conclusion: REJECTED.** v6 is confident about *where* to build, not just *which type*. A
+  whole-distribution soft target (type + sub-action) is ~98% identical to v6's own prior →
+  distilling it ≈ identity → would reproduce the ~0.49 pilot. Reconciles with "search@50 beats
+  v6 0.578 in games": search's edge is ~1-2% rare PIVOTAL overrides, too sparse for
+  whole-distribution distillation to capture (the signal is averaged to ~zero across the set).
+
+**Probe B — value lookahead (same setting, 70 states):** unlike the action distribution, the
+search-backed value DOES diverge from v6's leaf value: mean `|best_q − root_value|` = **0.056**,
+p90 = **0.155**, **systematic +0.030 optimism bias** (v6 under-rates its own win-prob), 33% of
+states corrected by >0.05 (13% by >0.10), corr 0.98. → Value carries a live, non-identity signal.
+
+**Implication / refined fork (USER DECISION):** policy-action distillation (hard OR soft, type OR
+sub-action) is **empirically dead** for producing a stronger SEARCH-FREE agent — v6 already
+imitates search's actions ~98%. The remaining levers:
+- **A. Accept search as inference-only** (shipped +55 Elo) and close ExIt. The action-distillation
+  thesis is retired by two probes.
+- **B. Value-targeted distillation** — distill `best_q` (search-backed value) into the value head.
+  Non-identity (Probe B). Does NOT change search-free move selection (the value head isn't
+  consulted at action time), so it does not directly satisfy the 004 "fast agent stronger than
+  v6" goal; it sharpens leaf values (modestly helps the inference-search lever) and could give a
+  PPO/self-play restart better-calibrated advantages (fixes the +3pp pessimism). Cheap (reuse
+  pilot pipeline, swap z_disc→best_q).
+- **C. Disagreement-targeted policy distillation** — the ONLY path to a stronger search-free
+  policy: filter/up-weight the ~1-2% pivotal override states instead of averaging across all.
+  Expensive: ~50-100× more searched positions to collect enough disagreement labels → needs
+  batched leaf eval (FR-012, was scoped post-gate); highest effort + highest uncertainty.
