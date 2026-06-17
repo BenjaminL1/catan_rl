@@ -1,0 +1,96 @@
+# Promotion-bar experiment (post-005 review). HYPOTHESIS: v7's self-play plateaued not for lack of
+# population diversity but because the auto-reanchor bar (0.85) was punishingly high — the learner
+# HELD ~0.65 vs its frozen anchor for ~8M steps and so NEVER promoted (0 promotions). In a symmetric
+# zero-sum game 0.85 is very hard to reach. TEST: replicate v7's EXACT self-play recipe but lower the
+# reanchor bar to 0.63 (single-variable change), warm-started from where v7 ended, anchored on the
+# SAME seed v7 was measured against. If the ratchet now fires (promotions > 0) AND the champion's
+# strength vs FROZEN v7 rises, the "plateau" was largely a too-high-threshold artifact — champion
+# improvement with NO exploiter program. If 0 promotions / no gain vs v7 -> escalate to the
+# v6-seeded exploiter arm. (Codebase league.py itself notes the plateau is "probably value-learning,
+# not opponent diversity".) GATE: final champion vs frozen v7 Wilson LB>0.55 at n=600, OR >=1
+# promotion + rising vs-v7 strength.
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic        # unused once the league drives opponents
+  engine_backend: python
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:                             # v7's exact loss recipe
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.03
+
+optimizer:                        # v7's exact optimizer
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 0
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 12
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 40          # in-loop monitor vs heuristic; the real gate is post-hoc vs frozen v7
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:                           # v7's EXACT league recipe, with ONE change: the reanchor bar.
+  random_weight: 0.0
+  heuristic_weight: 0.25
+  snapshot_weight: 0.5
+  anchor_weight: 0.25
+  anchor_checkpoint_path: runs/anchors/v7_frontier_seed.pt   # the SAME anchor v7 was stuck at 0.65 against
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63   # <-- THE single-variable change (v7 used 0.85; learner held 0.65)
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 50
+  auto_reanchor_min_games: 200
+  auto_reanchor_cooldown_updates: 200
+
+# Warm-start the learner from where v7 ended (continue the frontier), so it begins ~0.65 vs the
+# frozen v7_frontier_seed anchor -> with the 0.63 bar it should promote where v7 (at 0.85) never could.
+init_policy_checkpoint: runs/anchors/v7_final_u399.pt
+
+total_steps: 7995392             # 244 rollouts * 128 * 256 (~8.0M); enough to see promotions fire + a
+                                 # vs-v7 strength trajectory (v7 itself got 0 promotions over ~13M @0.85)
+seed: 7
+device: auto                     # -> MPS
+torch_compile: false
+run_name: selfplay_promobar
+output_dir: runs/train
