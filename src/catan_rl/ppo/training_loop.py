@@ -197,6 +197,16 @@ def build_training_state(
     policy = policy.to(device)
     log.info("policy: %d parameters", policy.num_parameters())
 
+    # Warm-start the LEARNER from a v2-lineage checkpoint (strict), BEFORE the
+    # optimizer is created so the optimizer is fresh on the warm-started weights.
+    # Distinct from resume (which also restores optimizer + step count). Default
+    # None = from-scratch, byte-identical. Geometry buffers were set above; the
+    # strict load overwrites them with the checkpoint's (same shapes).
+    if cfg.init_policy_checkpoint:
+        init_payload = load_checkpoint(cfg.init_policy_checkpoint, map_location=device)
+        init_payload.apply_to_policy(policy, strict=True)
+        log.info("warm-started learner from %s", cfg.init_policy_checkpoint)
+
     optimizer = torch.optim.AdamW(
         policy.parameters(),
         lr=cfg.optimizer.lr_start,

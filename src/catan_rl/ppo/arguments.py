@@ -554,6 +554,15 @@ class TrainConfig:
     output_dir: str = "runs/train"
     """Root directory for TB logs + checkpoints."""
 
+    init_policy_checkpoint: str | None = None
+    """Optional v2-lineage checkpoint to WARM-START the *learner* policy from at
+    construction (strict load), with a FRESH optimizer — distinct from resume
+    (which also restores optimizer + step count). ``None`` (default) = the
+    original from-scratch behavior, byte-identical. Used by the exploiter probe
+    (005) and any future warm-started self-play run; the analogue of BC's
+    ``train_bc(init_ckpt=)``. The anchor OPPONENT is wired separately via
+    ``league.anchor_checkpoint_path``; this field is the *learner* seed."""
+
     def __post_init__(self) -> None:
         _check_positive("total_steps", self.total_steps)
         _check_in("device", self.device, _DEVICE_VALUES)
