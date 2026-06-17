@@ -871,6 +871,28 @@ def run_training_loop(
                 log.info("checkpoint saved: %s", path)
 
             state.update_idx += 1
+
+        # Terminal save: guarantee the FINAL update's checkpoint exists even when
+        # the total update count is not a multiple of save_every_updates (the
+        # in-loop cadence above would otherwise drop the last partial window —
+        # e.g. 122 updates @ save_every=25 saves only through update 99). Idempotent:
+        # skipped when the last update already saved on cadence. Mirrors the in-loop save.
+        last_idx = state.update_idx - 1
+        if (
+            cfg.checkpoint.save_every_updates > 0
+            and last_idx >= 0
+            and (last_idx + 1) % cfg.checkpoint.save_every_updates != 0
+        ):
+            path = state.ckpt_mgr.save(
+                config=cfg.to_dict(),
+                policy=state.policy,
+                optimizer=state.optimizer,
+                update_idx=last_idx,
+                global_step=state.global_step,
+                league=state.league,
+                vec_env=state.vec_env,
+            )
+            log.info("final checkpoint saved: %s", path)
     finally:
         if state.tb_writer is not None:
             import contextlib

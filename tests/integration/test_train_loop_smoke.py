@@ -101,6 +101,33 @@ class TestEndToEndSmoke:
             "ckpt_000000002.pt",
         ]
 
+    def test_terminal_save_on_non_cadence_final(
+        self, tmp_path: Path, silent_logger: logging.Logger
+    ) -> None:
+        # 3 updates @ save_every=2: cadence saves only update_idx 1 ((1+1)%2==0).
+        # The terminal save must capture the FINAL update_idx 2 ((2+1)%2!=0), so the
+        # last partial window isn't dropped (the exploiter-probe footgun, 005 review).
+        cfg = replace(
+            _tiny_cfg(total_updates=3),
+            checkpoint=replace(_tiny_cfg().checkpoint, save_every_updates=2, keep_last_n=8),
+        )
+        run_training(
+            cfg,
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=3,
+            open_tb=False,
+        )
+        files = sorted(p.name for p in (tmp_path / "checkpoints").iterdir())
+        assert "ckpt_000000002.pt" in files, (
+            "terminal save did not write the FINAL update's checkpoint"
+        )
+        assert "ckpt_000000001.pt" in files, "cadence save missing"
+        assert "ckpt_000000000.pt" not in files, (
+            "update 0 is neither on cadence nor final — should not save"
+        )
+
     def test_league_snapshots_added(self, tmp_path: Path, silent_logger: logging.Logger) -> None:
         # add_snapshot_every_n_updates=1 BUT the league skips update 0
         # (Phase 6 reviewer fix), so after 3 updates we expect 2
