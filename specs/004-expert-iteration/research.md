@@ -214,3 +214,42 @@ flywheel only if the corrected pilot's Wilson LB > 0.50 at n≥500. **Options A 
 (value-distill) survive as fallbacks, but the "policy distillation is dead" framing is withdrawn —
 the signal is real; the open question is whether the policy can absorb it (a capacity ablation at
 ~1.5M params is a cheap parallel check the panel flagged).**
+
+## Course-of-action execution — policy-distillation NOT VIABLE (gates negative, 2026-06-17)
+
+A second senior-RL panel (3 lenses + synthesis, conf 0.74) reviewed ALL the work and ordered a
+cheapest-decisive-first course of action. It also sharpened the settling-experiment claim: the
++0.154 "value-positive margin" is **near-tautological** — `best_q` and `q(argmax)` are both backed-up
+Q from the SAME tree under the SAME (+0.030-optimistic) v6 value head, and `be` is the visit-winner
+so `q_be ≥ q_pa` is structural (ZERO overrides were filtered by the eps=0.02 test; the honest
+`lookahead_gain = best_q − root_value` is NEGATIVE on 5/11 overrides). So the override RATE is real
+but its win-value was never established. Two gates were run:
+
+**STEP 1 — re-gate the EXISTING pilot checkpoint at n=600 (search-free, bypassing the n=200
+short-circuit that gate.py structurally hits).** `runs/exit/round_0/regate_n600.json`: WR vs v6 =
+**0.483, Wilson CI [0.444, 0.523]** (upper bound only +2.3%), 0 violations, WR vs heuristic 0.94 (no
+forgetting), big seat split 0.607/0.360. → The pilot did NOT secretly pass; hard-label distill of
+the collapsed teacher is genuinely flat.
+
+**STEP 2 — OUT-OF-MODEL override-WR probe (the in-model circularity breaker).** Force the exploring
+search's override 6-tuple vs v6's argmax at 30 search-stepped override states (sims=100), play BOTH
+to terminal with v6 under 24 matched determinization seeds (720 pairs); `/tmp/override_wr_probe.json`:
+override-action WR **0.368** vs v6-argmax WR **0.343** → **delta +0.025, per-state 95% CI
+[−0.038, +0.088]** (overlaps 0); 8 states positive / 6 negative / 16 ties. → **The 7.3% overrides do
+NOT convert to a measurable win-rate gain when played out** — individually near-neutral. (Reconciles
+the whole arc: hard-label pilot flat (step 1) + tautological in-model margin (panel) + overrides
+win-neutral out-of-model (step 2).)
+
+**FINAL VERDICT (this matters):** ExIt policy-action distillation — hard OR soft, type OR
+sub-action — is **NOT a viable lever for a stronger search-free policy on this architecture**. The
+settling experiment's "reversal" was itself an overcorrection: the override RATE (7.3%) is real, but
+the moves are individually win-neutral, so there is nothing bankable to distill. The course of
+action's Step-2 kill criterion fired → Step 3 (capacity ablation) and Step 4 (soft pipeline) were
+NOT built. **Banked:** 003 inference search (+54.6 Elo, shipped) remains the deployed human-level
+lever. **Recommended next directions (USER DECISION, a new bet):** (i) corrected SELF-PLAY restart —
+PFSP + frozen anchor + 1-2 exploiters (all scaffolded-but-unwired), the panel's likeliest
+plateau-breaker; (ii) a ~1.5M-param capacity ablation to test whether the net itself is the ceiling
+behind both the distillation null and the self-play plateau; (iii) value-distill `best_q` (cheap,
+sharpens the inference-search leaf only — does not move the fast policy). ExIt (004) closes as: the
+search teacher and v6 agree on the decisions that matter; their rare disagreements are real but
+win-neutral, so distillation cannot bank the +55 Elo search gain into a fast policy.
