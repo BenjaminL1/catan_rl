@@ -160,3 +160,47 @@ imitates search's actions ~98%. The remaining levers:
   policy: filter/up-weight the ~1-2% pivotal override states instead of averaging across all.
   Expensive: ~50-100× more searched positions to collect enough disagreement labels → needs
   batched leaf eval (FR-012, was scoped post-gate); highest effort + highest uncertainty.
+
+## Settling experiment — the "distillation is dead" verdict was an ARTIFACT, REVERSED (2026-06-16)
+
+A senior-RL panel review (4 lenses + adversarial synthesis) found the round-2 probes measured a
+search that **mechanically cannot explore**: `node.py` hardcodes **FPU = 0**, and there is **no
+root Dirichlet noise / temperature** — so with squashed leaf values ~0.5-0.9 every unvisited
+sibling sits at Q=0 below the prior argmax and PUCT never revisits it. Verified in the value-probe
+JSON: **median chosen-action visit-share = 1.000, 51% of states put ALL sims on one action.** So
+"search agrees with v6 ~98%" was substantially circular. Second confound (pragmatist/skeptic):
+the probes sampled v6's OWN self-play distribution — the easy states v6 already navigates — not
+the states search actually visits.
+
+Built additive, default-off exploration knobs (`root_dirichlet_alpha`/`_fraction`, `fpu_mode`
+`zero`|`parent`; `MCTS.run` also exposes per-action `action_q`; commit `badd0b3`, 73 search tests
+green, shipped search byte-identical when off) and ran the settling experiment
+(`/tmp/settling_probe.py`): step games with the EXPLORING search (FPU=parent + Dir(0.5)@0.25),
+n=150 search-stepped non-forced states, compare each search's best action to v6's clean prior
+argmax + the per-override value margin.
+
+**Result — the null is REFUTED:**
+- visit collapse broken: median visit-share 1.000 (baseline FPU=0) → **0.795** (exploring), mean
+  3.17 distinct actions visited.
+- **override rate = 7.3%** (Wilson 95% CI **[4.1%, 12.7%]**) — vs the 1.25% the flawed probe
+  reported. Lower bound 4.1% is ABOVE the "signal real" threshold, far above the 2% "dead" line.
+- **every override is value-positive**, mean margin **+0.154 win-probability** — search's overrides
+  are large, genuine improvements, not noise.
+- Nuance: override rate is 7.3% for BOTH baseline and exploring configs on this distribution → the
+  DOMINANT fix was the SAMPLING DISTRIBUTION (DAgger: evaluate the teacher on the states it
+  visits). FPU+noise fixed a DIFFERENT thing — the collapsed visit distribution (one-hot → spread),
+  which is what makes a *soft* visit-count target usable.
+
+**Reconciliation:** 7.3% overrides × ~15pp margin is exactly consistent with search@50 winning
+0.578. The first pilot failed (WR 0.49) because it distilled HARD actions from a COLLAPSED-tree
+teacher on the WRONG (heuristic-stepped) distribution → ≈ identity. The corrected recipe is
+materially different and untested.
+
+**CORRECTED PATH (recommended, gate-first):** a corrected ExIt PILOT before the full flywheel —
+teacher = exploring search (FPU=parent + root noise, sims ~50-100); data = DAgger (label the
+states the SEARCH teacher visits, not heuristic/v6 self-play — the labeler already steps with
+SearchAgent, swap in the exploring config); targets = value-margin-weighted actions or completed-Q
+soft targets; gate = search-free vs v6, Wilson LB > 0.50 at n≥500. Cost ≈ the first pilot (reuses
+the pipeline; no batched-eval needed at pilot scale). Only escalate to the full Gumbel-AlphaZero +
+batched-leaf-eval flywheel if the corrected pilot passes. **Options A/B above stand as fallbacks,
+but the "policy distillation is dead" framing that motivated them is withdrawn.**
