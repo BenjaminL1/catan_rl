@@ -15,7 +15,7 @@ from catan_rl.search.mcts import MCTS, _puct_select, clone_env
 from catan_rl.search.node import SearchNode, agent_outcome, build_node
 from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
 
-from .conftest import drive_to_decision
+from .conftest import drive_to_decision, drive_to_main_phase
 
 
 def _mcts(policy, cfg: SearchConfig) -> MCTS:  # type: ignore[no-untyped-def]
@@ -64,6 +64,31 @@ def test_record_and_q_value_average() -> None:
     assert math.isclose(node.q_value(a), 0.5)
 
 
+def test_fpu_keeps_unvisited_sibling_competitive() -> None:
+    # A visited prior-argmax with a POOR backed-up Q vs an unvisited sibling. With
+    # FPU=0 (shipped) the sibling sits at Q=0 and the small-but-positive Q of the
+    # argmax can keep winning; with FPU=parent the sibling inherits the node value
+    # and overtakes the proven-bad argmax — the visit-collapse fix.
+    node = SearchNode(
+        env=None,
+        obs={},
+        is_terminal=False,
+        value=0.6,
+        outcome=0.0,
+        priors={(2, 0, 1, 0, 0, 0): 0.9, (3, 0, 0, 0, 0, 0): 0.1},
+    )
+    good_looking_but_bad = (2, 0, 1, 0, 0, 0)
+    sibling = (3, 0, 0, 0, 0, 0)
+    for _ in range(3):
+        node.record(good_looking_but_bad, 0.3)  # visited, mediocre backed-up Q
+    # FPU=0: the low-prior sibling sits at Q=0 with a small U -> the visited (already
+    # explored, mediocre) action wins, so the tree never re-checks the sibling.
+    assert _puct_select(node, 1.0, fpu=0.0) == good_looking_but_bad
+    # FPU=parent (0.6): the sibling inherits the node value (0.6 > the bad Q 0.3) and
+    # overtakes it -> exploration switches to the unvisited sibling (the collapse fix).
+    assert _puct_select(node, 1.0, fpu=node.value) == sibling
+
+
 def test_agent_outcome_sign() -> None:
     env = CatanEnv(opponent_type="heuristic")
     env.reset(seed=0)
@@ -95,6 +120,52 @@ def test_run_spends_budget_and_returns_legal_action(policy) -> None:  # type: ig
     assert diag["root_visits"] == 12
     assert bool(masks["type"][action[0]]), "chosen type must be legal"
     assert 0.0 <= diag["best_q"] <= 1.0
+
+
+def _distinct_visited(diag: dict) -> int:  # type: ignore[type-arg]
+    return sum(1 for n in diag["visit_counts"].values() if n > 0)
+
+
+def test_root_noise_is_reproducible(policy) -> None:  # type: ignore[no-untyped-def]
+    # Same exploring config + same seed -> identical search (the noise is drawn from
+    # a seeded local Generator, so FR-006 reproducibility survives root exploration).
+    cfg = SearchConfig(sims_per_move=24, seed=0, root_dirichlet_alpha=0.5, fpu_mode="parent")
+    out = []
+    for _ in range(2):
+        env = CatanEnv(opponent_type="heuristic")
+        env.reset(seed=3)
+        assert drive_to_decision(env)
+        mcts = _mcts(policy, cfg)
+        _seed(mcts, cfg)
+        action, diag = mcts.run(env)
+        out.append((tuple(action), diag["visit_counts"]))
+    assert out[0] == out[1]
+
+
+def test_exploration_knobs_break_the_visit_collapse(policy) -> None:  # type: ignore[no-untyped-def]
+    # The settling-experiment premise: FPU=parent + root noise let the tree explore
+    # more than one action instead of collapsing all visits onto the prior argmax
+    # (the shipped FPU=0/no-noise failure mode the probe measured: median visit-share
+    # 1.000). At a >=2-type state the exploring config must visit >1 distinct action.
+    env = CatanEnv(opponent_type="heuristic")
+    env.reset(seed=0)
+    assert drive_to_main_phase(env)
+    if int(env.get_action_masks()["type"].sum()) < 2:
+        import pytest
+
+        pytest.skip("state lacks >=2 legal types to exercise exploration spread")
+
+    exploring = SearchConfig(
+        sims_per_move=48,
+        seed=0,
+        root_dirichlet_alpha=0.8,
+        root_dirichlet_fraction=0.4,
+        fpu_mode="parent",
+    )
+    m = _mcts(policy, exploring)
+    _seed(m, exploring)
+    _, d_exp = m.run(env)
+    assert _distinct_visited(d_exp) >= 2, "exploration must visit >1 action (no collapse)"
 
 
 def test_backup_values_are_bounded_agent_pov_probabilities(policy) -> None:  # type: ignore[no-untyped-def]

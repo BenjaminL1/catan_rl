@@ -54,6 +54,18 @@ class SearchConfig:
     #: 1 (default) = one modal action per type (US1 behavior, unchanged). >1 lets
     #: search explore multiple vertices/edges/tiles per type (expert-iteration round 2).
     sub_actions_per_type: int = 1
+    #: Root exploration (AlphaZero-style), OFF by default. When ``root_dirichlet_alpha``
+    #: is set, mix Dir(alpha) noise into the ROOT priors at fraction
+    #: ``root_dirichlet_fraction`` so PUCT can explore away from a confident prior.
+    #: None = no noise = shipped (US1/bake-off) behavior, byte-identical.
+    root_dirichlet_alpha: float | None = None
+    root_dirichlet_fraction: float = 0.25
+    #: First-Play-Urgency for an unvisited edge's Q. "zero" (default) = the shipped
+    #: behavior (Q=0 for an unvisited child — with squashed leaf values ~0.5-0.9 this
+    #: starves siblings of the prior argmax, collapsing visits to one action).
+    #: "parent" = an unvisited edge inherits the node's own leaf value, keeping
+    #: siblings competitive so exploration is governed by the prior + visit counts.
+    fpu_mode: str = "zero"
     #: Optional hard depth cut for the simulation (None = no cut).
     max_depth: int | None = None
     #: RNG seed — search + uplift eval are reproducible at a fixed seed (FR-006).
@@ -83,5 +95,15 @@ class SearchConfig:
             raise ValueError(f"pw_alpha must be in (0, 1], got {self.pw_alpha}")
         if self.sub_actions_per_type < 1:
             raise ValueError(f"sub_actions_per_type must be >= 1, got {self.sub_actions_per_type}")
+        if self.root_dirichlet_alpha is not None and self.root_dirichlet_alpha <= 0:
+            raise ValueError(
+                f"root_dirichlet_alpha must be > 0 or None, got {self.root_dirichlet_alpha}"
+            )
+        if not 0.0 <= self.root_dirichlet_fraction <= 1.0:
+            raise ValueError(
+                f"root_dirichlet_fraction must be in [0, 1], got {self.root_dirichlet_fraction}"
+            )
+        if self.fpu_mode not in ("zero", "parent"):
+            raise ValueError(f"fpu_mode must be 'zero' or 'parent', got {self.fpu_mode!r}")
         if self.max_depth is not None and self.max_depth < 1:
             raise ValueError(f"max_depth must be >= 1 or None, got {self.max_depth}")

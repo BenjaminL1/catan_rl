@@ -56,6 +56,12 @@ def test_time_budget_mode() -> None:
         {"value_squash_a": -3.22},
         {"sub_actions_per_type": 0},
         {"sub_actions_per_type": -2},
+        {"root_dirichlet_alpha": 0.0},
+        {"root_dirichlet_alpha": -0.3},
+        {"root_dirichlet_fraction": -0.1},
+        {"root_dirichlet_fraction": 1.5},
+        {"fpu_mode": "max"},
+        {"fpu_mode": ""},
     ],
 )
 def test_invalid_values_raise(kwargs: dict[str, object]) -> None:

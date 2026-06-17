@@ -88,11 +88,15 @@ def _puct_select(
     node: SearchNode,
     c_puct: float,
     candidates: list[ActionTuple] | None = None,
+    fpu: float = 0.0,
 ) -> ActionTuple:
     """Pick the action maximising Q + c_puct * P * sqrt(ΣN) / (1 + N).
 
     ``candidates`` restricts the selectable actions (progressive widening);
-    ``None`` considers all legal actions (the minimal/US1 behavior).
+    ``None`` considers all legal actions (the minimal/US1 behavior). ``fpu`` is the
+    First-Play-Urgency value used for an *unvisited* edge's Q (default 0.0 = the
+    shipped behavior; with squashed leaf values ~0.5-0.9 that starves siblings,
+    so "parent"-mode passes the node's own value here to keep them competitive).
     """
     actions = candidates if candidates is not None else list(node.priors.keys())
     sqrt_total = math.sqrt(max(1, node.total_N))
@@ -100,8 +104,9 @@ def _puct_select(
     best_score = -math.inf
     for action in actions:
         prior = node.priors[action]
-        q = node.q_value(action)
-        u = c_puct * prior * sqrt_total / (1 + node.child_N.get(action, 0))
+        n = node.child_N.get(action, 0)
+        q = (node.child_W[action] / n) if n > 0 else fpu
+        u = c_puct * prior * sqrt_total / (1 + n)
         score = q + u
         if score > best_score:
             best_score = score
@@ -170,6 +175,34 @@ class MCTS:
         np.random.seed(s32)
         random.seed(s32)
 
+    def _fpu(self, node: SearchNode) -> float:
+        """First-Play-Urgency value for an unvisited edge of ``node``.
+
+        "zero" (shipped) -> 0.0; "parent" -> the node's own squashed leaf value, so
+        an unvisited sibling stays competitive with the visited prior-argmax instead
+        of sitting at Q=0 far below it (the visit-collapse fix).
+        """
+        return node.value if self.cfg.fpu_mode == "parent" else 0.0
+
+    def _apply_root_noise(self, root: SearchNode, seed: int) -> None:
+        """Mix Dir(alpha) noise into ``root``'s priors (AlphaZero root exploration).
+
+        No-op unless ``cfg.root_dirichlet_alpha`` is set (default off = shipped). A
+        LOCAL ``Generator(seed)`` draws the noise so it is reproducible and does NOT
+        perturb the process-global RNG that ``_reseed`` uses for opponent/chance
+        sampling. Mutates this tree's root priors only (each det tree is fresh)."""
+        alpha = self.cfg.root_dirichlet_alpha
+        if alpha is None:
+            return
+        actions = root.legal_actions
+        if len(actions) <= 1:
+            return
+        rng = np.random.default_rng(seed & 0x7FFF_FFFF)
+        noise = rng.dirichlet([alpha] * len(actions))
+        frac = self.cfg.root_dirichlet_fraction
+        for action, e in zip(actions, noise, strict=True):
+            root.priors[action] = (1.0 - frac) * root.priors[action] + frac * float(e)
+
     def _widened_actions(self, node: SearchNode) -> list[ActionTuple]:
         """Progressive widening on the type head: the top-k legal types by prior.
 
@@ -211,11 +244,16 @@ class MCTS:
             root = self._make_node(clone_env(root_env, self.opponent), obs, terminal=False)
             if legal_actions is None:
                 legal_actions = root.legal_actions
-                priors = root.priors
+                # Capture a COPY of the clean (pre-noise) policy prior for diagnostics
+                # — root noise (if on) mutates root.priors in place below.
+                priors = dict(root.priors)
                 root_value = root.value
                 forced = len(legal_actions) <= 1
             if forced:
                 break
+            # Root exploration noise (default off): perturb THIS tree's root priors
+            # with a stream offset from the per-sim reseed stream.
+            self._apply_root_noise(root, (base + d * _DET_SEED_STRIDE + 7919) & 0x7FFF_FFFF)
             total_sims += self._run_one_tree(
                 root, (base + d * _DET_SEED_STRIDE) & 0x7FFF_FFFF, n_det
             )
@@ -263,9 +301,11 @@ class MCTS:
             # Full-action soft target: search visit counts + the policy prior, on
             # the same (k-expanded) legal-action support. The soft-distillation
             # labeler reads visit_counts as the policy target; the probe compares
-            # the two to measure the distillable where-to-build gap.
+            # the two to measure the distillable where-to-build gap. ``action_q`` is
+            # the backed-up mean value per visited action (for value-margin metrics).
             "visit_counts": dict(agg_n),
             "priors": dict(priors),
+            "action_q": {a: agg_w[a] / n for a, n in agg_n.items() if n > 0},
         }
         return best, diagnostics
 
@@ -311,7 +351,9 @@ class MCTS:
             # Depth cut: use the static squashed leaf value, do not expand deeper.
             return node.value
 
-        action = _puct_select(node, self.cfg.c_puct, self._widened_actions(node))
+        action = _puct_select(
+            node, self.cfg.c_puct, self._widened_actions(node), fpu=self._fpu(node)
+        )
         if action not in node.children:
             # Expand exactly one new child: clone this node's env (fixing the
             # line's dice future) and step the action through the real engine.
