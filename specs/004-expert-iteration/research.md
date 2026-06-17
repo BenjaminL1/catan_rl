@@ -191,16 +191,26 @@ argmax + the per-override value margin.
   visits). FPU+noise fixed a DIFFERENT thing — the collapsed visit distribution (one-hot → spread),
   which is what makes a *soft* visit-count target usable.
 
-**Reconciliation:** 7.3% overrides × ~15pp margin is exactly consistent with search@50 winning
-0.578. The first pilot failed (WR 0.49) because it distilled HARD actions from a COLLAPSED-tree
-teacher on the WRONG (heuristic-stepped) distribution → ≈ identity. The corrected recipe is
-materially different and untested.
+**Reconciliation + why the pilot still failed (corrected — the pilot was NOT mis-sampled):** the
+WHERE-PROBE that produced "1.25% / dead" stepped with raw v6 (easy distribution) — that was the
+artifact. The PILOT, however, ALREADY stepped with the SearchAgent (`labeler.py:54`
+`agent.choose_action(env)`), so its data was on the 7.3%-override search distribution — it had real
+disagreement signal and STILL returned WR 0.49. So the pilot's failure is NOT distribution. The two
+real causes: (1) it used HARD-action labels from a COLLAPSED (FPU=0) teacher whose visit
+distribution is one-hot — unusable as a soft target, and hard labels under-extract a 7%-sparse
+signal; (2) it stopped at an UNDERPOWERED n=200 quick gate — a 7%-override distill plausibly yields
+only ~+2-4% WR, and at n=200 the Wilson half-width is ~7%, so LB 0.422 is fully CONSISTENT with a
+small true improvement the gate couldn't resolve (n=500 was never run). 7.3% × ~15pp margin is
+exactly consistent with search@50's 0.578 WR.
 
-**CORRECTED PATH (recommended, gate-first):** a corrected ExIt PILOT before the full flywheel —
-teacher = exploring search (FPU=parent + root noise, sims ~50-100); data = DAgger (label the
-states the SEARCH teacher visits, not heuristic/v6 self-play — the labeler already steps with
-SearchAgent, swap in the exploring config); targets = value-margin-weighted actions or completed-Q
-soft targets; gate = search-free vs v6, Wilson LB > 0.50 at n≥500. Cost ≈ the first pilot (reuses
-the pipeline; no batched-eval needed at pilot scale). Only escalate to the full Gumbel-AlphaZero +
-batched-leaf-eval flywheel if the corrected pilot passes. **Options A/B above stand as fallbacks,
-but the "policy distillation is dead" framing that motivated them is withdrawn.**
+**CORRECTED PATH (recommended, gate-first):** a corrected ExIt PILOT before the full flywheel. Keep
+the (already search-stepped) labeler; change three things: (a) teacher = EXPLORING search
+(FPU=parent + root noise, sims ~50-100) so the visit distribution is non-degenerate and usable as a
+SOFT target; (b) targets = completed-Q soft targets or value-margin-weighted labels (amplify the
+~7% high-margin overrides over the 93% identity labels); (c) a PROPERLY-POWERED gate — n≥500, not
+the n=200 quick gate the first pilot stopped at. Cost ≈ the first pilot (reuses the pipeline; no
+batched-eval needed at pilot scale). Escalate to the full Gumbel-AlphaZero + batched-leaf-eval
+flywheel only if the corrected pilot's Wilson LB > 0.50 at n≥500. **Options A (inference-only) / B
+(value-distill) survive as fallbacks, but the "policy distillation is dead" framing is withdrawn —
+the signal is real; the open question is whether the policy can absorb it (a capacity ablation at
+~1.5M params is a cheap parallel check the panel flagged).**
