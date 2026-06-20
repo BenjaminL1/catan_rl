@@ -11,6 +11,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 _GATE = Path(__file__).resolve().parents[3] / "scripts" / "ladder_gate.py"
 _spec = importlib.util.spec_from_file_location("ladder_gate_module", _GATE)
 assert _spec is not None and _spec.loader is not None
@@ -93,3 +95,36 @@ def test_gate_folds_in_global_gain_and_rejects_lateral_counter() -> None:
     )
     assert lat["clause1_global_gain_vs_anchors"] is False
     assert lat["passed"] is False
+
+
+def test_validate_inputs_rejects_bad_candidate(tmp_path: Path) -> None:
+    led = tmp_path / "ladder.json"
+    led.write_text("{}")
+    with pytest.raises(SystemExit, match="candidate-ckpt"):
+        lg.validate_inputs(str(tmp_path / "nope.pt"), ["v8_u243"], str(led), lg._DEFAULT_REVERIFY)
+
+
+def test_validate_inputs_rejects_unknown_opponent(tmp_path: Path) -> None:
+    ckpt = tmp_path / "cand.pt"
+    ckpt.write_text("x")
+    led = tmp_path / "ladder.json"
+    led.write_text("{}")
+    with pytest.raises(SystemExit, match="unknown opponent"):
+        lg.validate_inputs(str(ckpt), ["v8_invalid"], str(led), lg._DEFAULT_REVERIFY)
+
+
+def test_validate_inputs_rejects_missing_ladder_json(tmp_path: Path) -> None:
+    ckpt = tmp_path / "cand.pt"
+    ckpt.write_text("x")
+    absent = str(tmp_path / "absent.json")
+    with pytest.raises(SystemExit, match="ladder-json"):
+        lg.validate_inputs(str(ckpt), ["v8_u243"], absent, lg._DEFAULT_REVERIFY)
+
+
+def test_validate_inputs_accepts_valid(tmp_path: Path) -> None:
+    ckpt = tmp_path / "cand.pt"
+    ckpt.write_text("x")
+    led = tmp_path / "ladder.json"
+    led.write_text("{}")
+    # heuristic is engine-driven (no path) and a real rung name -> must pass
+    lg.validate_inputs(str(ckpt), ["v8_u243", "heuristic"], str(led), lg._DEFAULT_REVERIFY)

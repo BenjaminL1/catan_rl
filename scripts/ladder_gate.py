@@ -38,6 +38,24 @@ _spec.loader.exec_module(elo)
 # Checkpoint paths for the ladder rungs (single source of truth = elo_ladder's RUNGS table).
 _PATH: dict[str, str | None] = {nm: p for nm, _k, p in elo.RUNGS}
 _ENGINE_KINDS = {"heuristic", "random"}
+_DEFAULT_REVERIFY = "runs/reverify_ckpt524.json"
+
+
+def validate_inputs(
+    candidate_ckpt: str, opponents: list[str], ladder_json: str, reverify_json: str
+) -> None:
+    """Fail-fast on operator errors BEFORE the multi-hour eval Pool (a typo or missing file
+    otherwise crashes loudly only AFTER wasting the eval). Raises SystemExit on any bad input."""
+    if not Path(candidate_ckpt).is_file():
+        raise SystemExit(f"candidate-ckpt {candidate_ckpt} does not exist or is not a file")
+    for o in opponents:
+        kind, path = _kind_and_path(o)
+        if kind == "policy" and path is None:
+            raise SystemExit(f"unknown opponent {o!r}: not a rung in elo_ladder RUNGS")
+    if not Path(ladder_json).is_file():
+        raise SystemExit(f"ladder-json {ladder_json} not found — run scripts/elo_ladder.py first")
+    if reverify_json != _DEFAULT_REVERIFY and not Path(reverify_json).is_file():
+        raise SystemExit(f"reverify-json {reverify_json} not found")
 
 
 def _kind_and_path(name: str) -> tuple[str, str | None]:
@@ -99,7 +117,7 @@ def main() -> None:
     ap.add_argument("--ladder-json", default="runs/elo_ladder_transitive.json")
     ap.add_argument(
         "--reverify-json",
-        default="runs/reverify_ckpt524.json",
+        default=_DEFAULT_REVERIFY,
         help="optional: upgrade baseline-vs-anchor pairs to these high-n matchups",
     )
     ap.add_argument("--workers", type=int, default=6)
@@ -116,8 +134,7 @@ def main() -> None:
             opponents.append(o)
     out_path = Path(args.out or f"runs/ladder_gate_{cand}.json")
 
-    if Path(args.candidate_ckpt).resolve() == _ROOT.joinpath("runs").resolve():
-        raise SystemExit("candidate-ckpt must be a file")
+    validate_inputs(args.candidate_ckpt, opponents, args.ladder_json, args.reverify_json)
     print(f"[gate] candidate={cand} ({args.candidate_ckpt})", flush=True)
     print(f"[gate] baseline={base}  anchors={anchors}  opponents={opponents}", flush=True)
     print(f"[gate] n={2 * args.nps}/pair, seed base {args.seed_base}", flush=True)
@@ -136,6 +153,10 @@ def main() -> None:
                 flush=True,
             )
     dt = time.time() - t0
+    # Belt-and-suspenders: a SIGKILL'd worker is the one path imap_unordered handles less
+    # crisply than its re-raise of ordinary exceptions; never gate on partial matchups.
+    if len(cand_matches) != len(tasks):
+        raise SystemExit(f"expected {len(tasks)} matchups, got {len(cand_matches)} — a worker died")
 
     led = json.loads(Path(args.ladder_json).read_text())
     names = list(led["ratings"].keys())
