@@ -244,6 +244,49 @@ def _candidate_wr_vs(
     return None
 
 
+def min_anchor_delta_dist(
+    matches: list[tuple[str, str, int, int]],
+    *,
+    candidate: str,
+    baseline: str,
+    anchors: tuple[str, ...],
+    n_boot: int = 1000,
+    rng_seed: int = 1,
+) -> dict[str, Any]:
+    """Bootstrap the MIN over un-gamed anchors of
+    [pairwise-Elo(candidate vs a) - pairwise-Elo(baseline vs a)].
+
+    This is the un-gameable clause-1 signal: a candidate that only COUNTERS the
+    baseline head-to-head is flat vs the un-gamed anchors (delta ~0); a GLOBAL gain
+    beats EVERY anchor by more than the baseline (min delta > 0). The joint-Elo delta
+    used previously is gameable — Bradley-Terry ranks an intransitive counter ABOVE
+    the baseline via its head-to-head edge, so it must NOT be the gate."""
+    rng = np.random.default_rng(rng_seed)
+    pairs: dict[str, tuple[tuple[int, int], tuple[int, int]]] = {}
+    for a in anchors:
+        cw = _candidate_wr_vs(matches, candidate, a)
+        bw = _candidate_wr_vs(matches, baseline, a)
+        if cw is not None and bw is not None:
+            pairs[a] = (cw, bw)
+    if not pairs:
+        return {"ci": None, "per_anchor": {}}
+    mins: list[float] = []
+    for _ in range(n_boot):
+        ds: list[float] = []
+        for cw, bw in pairs.values():
+            cwr = int(rng.binomial(cw[1], cw[0] / cw[1])) / cw[1]
+            bwr = int(rng.binomial(bw[1], bw[0] / bw[1])) / bw[1]
+            ds.append(elo_from_wr(cwr) - elo_from_wr(bwr))
+        mins.append(min(ds))
+    per_anchor = {
+        a: elo_from_wr(cw[0] / cw[1]) - elo_from_wr(bw[0] / bw[1]) for a, (cw, bw) in pairs.items()
+    }
+    return {
+        "ci": [float(np.percentile(mins, 2.5)), float(np.percentile(mins, 97.5))],
+        "per_anchor": per_anchor,
+    }
+
+
 def promotion_check(
     matches: list[tuple[str, str, int, int]],
     names: list[str],
@@ -254,18 +297,33 @@ def promotion_check(
     baseline: str = "v8_u243",
     anchors: tuple[str, ...] = ("v6_u1399", "v7_u399"),
     search_anchor: str | None = None,
+    n_boot: int = 1000,
+    rng_seed: int = 1,
 ) -> dict[str, Any]:
     """3-clause gate that a candidate is GLOBALLY better than ``baseline`` (defeats the
-    intransitive trap): (1) paired-bootstrap joint-Elo delta CI strictly > 0; (2)
-    non-regression vs un-gamed anchors (Wilson LB > 0.45 each); (3) non-transitivity
-    residual does not increase (<= without-candidate R + 0.01)."""
+    intransitive trap): (1) MIN-over-un-gamed-anchors pairwise-Elo delta CI strictly > 0
+    (the candidate beats EVERY un-gamed anchor by more than the baseline — an isolated
+    head-to-head edge over the baseline canNOT satisfy this, unlike the gameable joint-Elo
+    delta which BT inflates for an intransitive counter); (2) non-regression vs the
+    un-gamed anchors (Wilson LB > 0.45 each); (3) non-transitivity residual does not
+    increase (secondary). The joint-Elo delta + the ranked Elo are reported as DIAGNOSTIC
+    ONLY — both endorse an intransitive counter and must never be the verdict."""
     from catan_rl.eval.wilson import wilson_interval
 
     out: dict[str, Any] = {"candidate": candidate, "baseline": baseline}
-    delta_ci = boot.get("delta_ci")
-    clause1 = bool(delta_ci is not None and delta_ci[0] > 0.0)
-    out["joint_elo_delta_ci"] = delta_ci
-    out["clause1_joint_elo_gain"] = clause1
+    out["joint_elo_delta_ci_DIAGNOSTIC_ONLY"] = boot.get("delta_ci")
+    mad = min_anchor_delta_dist(
+        matches,
+        candidate=candidate,
+        baseline=baseline,
+        anchors=anchors,
+        n_boot=n_boot,
+        rng_seed=rng_seed,
+    )
+    out["min_anchor_delta_ci"] = mad["ci"]
+    out["per_anchor_delta_elo"] = mad["per_anchor"]
+    clause1 = bool(mad["ci"] is not None and mad["ci"][0] > 0.0)
+    out["clause1_global_gain_vs_anchors"] = clause1
 
     reg: dict[str, Any] = {}
     clause2 = True
@@ -354,6 +412,10 @@ def main() -> None:
         )
         seed += 1
 
+    # Run fast policy matchups FIRST, the ~10-50x slower search@N matchups LAST, so the
+    # policy round-robin (which answers "is the candidate global?") completes early even
+    # if the search-referee matchups take hours.
+    tasks.sort(key=lambda t: t["a_kind"] == "search")
     print(f"[elo] {len(rungs)} rungs, {len(tasks)} matchups, {nps} games/seat", flush=True)
     t0 = time.time()
     with Pool(args.workers) as pool:
@@ -383,13 +445,19 @@ def main() -> None:
     search_rung = next((nm for nm in names if nm.startswith("search@")), None)
     if search_rung is not None and "v6_u1399" in ratings:
         joint_delta = ratings[search_rung] - ratings["v6_u1399"]
-        if not (20.0 <= joint_delta <= 90.0):
-            print(
-                f"[elo] WARNING: search referee Elo over v6_u1399 = {joint_delta:.1f} "
-                f"outside [20,90] — referee axis may have regressed (banked ~+55)."
-            )
-        else:
-            print(f"[elo] search-referee calibration OK: +{joint_delta:.1f} Elo over v6_u1399")
+        flag = " (joint-fit)" if 20.0 <= joint_delta <= 90.0 else " OUTSIDE [20,90] (joint-fit)"
+        # Tighter check: the raw HEAD-TO-HEAD search@N-vs-v6_u1399 WR converted to Elo,
+        # compared to the banked bake-off uplift +54.6 [23.9, 85.4]. This is the actual
+        # "did the referee reproduce the bake-off" test (the joint-fit delta is looser).
+        h2h = _candidate_wr_vs(results, search_rung, "v6_u1399")
+        h2h_msg = ""
+        if h2h is not None:
+            h2h_elo = elo_from_wr(h2h[0] / h2h[1])
+            ok = 23.9 <= h2h_elo <= 85.4
+            h2h_msg = f"  H2H +{h2h_elo:.1f} Elo ({'OK' if ok else 'OUT of [23.9,85.4]'})"
+        print(
+            f"[elo] search-referee calibration: +{joint_delta:.1f} Elo over v6_u1399{flag}{h2h_msg}"
+        )
 
     # Paired bootstrap CIs + the v8 promotion gate on the candidate.
     boot: dict[str, Any] = {}
@@ -410,9 +478,15 @@ def main() -> None:
         )
         print(
             f"[elo] promotion_check({cand} vs {base}): passed={gate['passed']} "
-            f"(joint_elo_gain={gate['clause1_joint_elo_gain']}, "
+            f"(global_gain_vs_anchors={gate['clause1_global_gain_vs_anchors']} "
+            f"min_anchor_delta_ci={gate['min_anchor_delta_ci']}, "
             f"non_regression={gate['clause2_non_regression']}, "
             f"residual_ok={gate['clause3_residual_non_increase']})"
+        )
+        print(
+            "[elo] NOTE: the ranked Elo + joint_elo_delta are DIAGNOSTIC ONLY — an "
+            "intransitive counter ranks ABOVE the baseline by design. The verdict is the "
+            "promotion gate above (global gain vs the un-gamed anchors), not the rank."
         )
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

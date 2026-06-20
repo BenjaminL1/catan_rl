@@ -87,6 +87,39 @@ def test_promotion_check_rejects_lateral_counter() -> None:
         ("cand", "v6_u1399", 695, n),  # cand ≈ v8 vs v6
     ]
     ratings = elo.fit_elo(matches, names)
+    # Audit finding: on these REAL ckpt_524 numbers BT ranks cand ABOVE v8 and the
+    # joint-Elo delta is strictly positive — so the gate must rest on the HARDENED
+    # clause-1 (min pairwise-Elo delta vs the un-gamed anchors), which is ~-5 here.
+    assert ratings["cand"] > ratings["v8_u243"], (
+        "sanity: BT does rank the counter above v8 (the trap)"
+    )
     boot = elo.bootstrap_elo_ci(matches, names, n_boot=200, candidate="cand", baseline="v8_u243")
     gate = elo.promotion_check(matches, names, ratings, boot, candidate="cand", baseline="v8_u243")
+    assert gate["clause1_global_gain_vs_anchors"] is False, (
+        "hardened clause-1 must reject a counter that's flat vs the un-gamed anchors"
+    )
     assert gate["passed"] is False, "a lateral v8-counter must NOT pass the global promotion gate"
+
+
+def test_promotion_check_accepts_global_gain() -> None:
+    # A GENUINE global step: cand beats v6/v7 by MORE than v8 does (not just v8 h2h).
+    names = ["heuristic", "v6_u1399", "v7_u399", "v8_u243", "cand"]
+    n = 1000
+    matches = [
+        ("v6_u1399", "heuristic", 900, n),
+        ("v7_u399", "heuristic", 920, n),
+        ("v8_u243", "heuristic", 940, n),
+        ("cand", "heuristic", 955, n),
+        ("v7_u399", "v6_u1399", 600, n),
+        ("v8_u243", "v7_u399", 668, n),
+        ("v8_u243", "v6_u1399", 700, n),
+        ("cand", "v7_u399", 730, n),  # beats v7 by MORE than v8 (0.668)
+        ("cand", "v6_u1399", 760, n),  # beats v6 by MORE than v8 (0.700)
+        ("cand", "v8_u243", 600, n),  # and beats v8 head-to-head
+    ]
+    ratings = elo.fit_elo(matches, names)
+    boot = elo.bootstrap_elo_ci(matches, names, n_boot=200, candidate="cand", baseline="v8_u243")
+    gate = elo.promotion_check(matches, names, ratings, boot, candidate="cand", baseline="v8_u243")
+    assert gate["clause1_global_gain_vs_anchors"] is True, (
+        "a genuine global gain (beats every un-gamed anchor by more than v8) must pass clause-1"
+    )
