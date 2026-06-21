@@ -6,7 +6,7 @@
 
 **Status**: Draft (revised after senior-RL review — adds a de-risk probe gate, second-head design, rescoped distillation)
 
-**Input**: Break the v8 strength plateau by sharpening the net's value evaluation — the confirmed root cause. The value head ranks states at only Spearman 0.69 vs outcome and is trained on a point-margin-inflated target (`±1 + vp_diff/15`, `catan_env.py:1024`), not win-probability, so raw V spans [−1.6,+1.8] (27% outside [−1,1]) and inference search bolts on a fitted `sigmoid(3.22V−1.14)` squash. **But the rank deficit may be a trunk/representation limit, not a value-target limit** (late-game Spearman is already ~0.86 — the drag is early/near-0.5 states), so this spec **de-risks that first** with a cheap probe before any training campaign.
+**Input**: Break the v8 strength plateau by sharpening the net's value evaluation — the confirmed root cause. The value head ranks states at only Spearman 0.69 vs outcome and is trained on a point-margin-inflated target (`±1 + vp_diff/15`, `catan_env.py:1024`), not win-probability, so raw V spans [−1.6,+1.8] (27% outside [−1,1]) and inference search bolts on a fitted `sigmoid(3.22V−1.14)` squash. **But it is unknown whether the rank deficit is a value-target limit (fixable by retargeting the head) or a trunk/representation limit (not) — no per-game-phase rank breakdown has ever been measured; only the aggregate 0.69 is recorded.** So this spec **de-risks that first** with a cheap probe (US0) that measures it before any training campaign.
 
 ## Prior Work *(context for the priority call)*
 
