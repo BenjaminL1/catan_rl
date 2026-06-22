@@ -180,11 +180,13 @@ def _build_human_env_class() -> type:
             human = self._human_player()
             board: Any = game.board
             if not self._use_gui():
-                # Auto-play (self-test): pick a legal setup vertex + road.
-                v = next(iter(board.get_setup_settlements(human).keys()))
-                human.build_settlement(v, board, is_free=True)
-                r = next(iter(board.get_setup_roads(human).keys()))
-                human.build_road(r[0], r[1], board, is_free=True)
+                # Not human-driven: delegate to the base hook. In an MCTS search
+                # clone the injected v8 snapshot plays this seat (the bot searches
+                # against the v8 self-model, identical to the deployed SearchAgent);
+                # on the live env / headless self-test it falls back to the
+                # heuristic initial_setup. NEVER auto-place a passive no-op here —
+                # that would make the bot plan against a do-nothing opponent.
+                super()._opponent_setup_placement()
                 return
             prev_setup = game.gameSetup
             game.gameSetup = True  # makes the view's setup-mode click loop apply
@@ -210,14 +212,12 @@ def _build_human_env_class() -> type:
             human = self._human_player()
             board: Any = game.board
             if not self._use_gui():
-                spots = board.get_robber_spots()
-                hex_i = next(iter(spots.keys()))
-                victims = board.get_players_to_rob(hex_i)
-                victim = next((p for p in victims if p is not human), None)
-                human.move_robber(hex_i, board, victim)
-                game.check_largest_army(human)
+                # Search clone (v8 snapshot) / self-test (heuristic) — see
+                # _opponent_setup_placement for why we delegate instead of auto.
+                super()._opponent_move_robber()
                 return
             with self._ViewWindow(self) as view:
+                view.displayDiceRoll(self.last_dice_roll)
                 print(
                     "\n[ROBBER] Move the robber: click a hex, then a player to steal from.",
                     flush=True,
@@ -232,15 +232,17 @@ def _build_human_env_class() -> type:
             assert game is not None
             human = self._human_player()
             if not self._use_gui():
-                # Engine's heuristic/plain discard works headless (no GUI calls).
-                human.discardResources(game)
+                # Search clone (v8 snapshot) / self-test (heuristic) — delegate
+                # instead of a hardcoded discard so the modelled seat plays its own.
+                super()._opponent_discard()
                 return
             n_before = sum(human.resources.values())
             print(
-                f"\n[DISCARD] You rolled into a 7 with {n_before} cards — discard half.",
+                f"\n[DISCARD] You rolled a 7 with {n_before} cards — discard half.",
                 flush=True,
             )
-            with self._ViewWindow(self):
+            with self._ViewWindow(self) as view:
+                view.displayDiceRoll(self.last_dice_roll)
                 # discardResources(self) drives game.boardView.get_resource_selection.
                 human.discardResources(game)
 
@@ -251,11 +253,17 @@ def _build_human_env_class() -> type:
             human = self._human_player()
             board: Any = game.board
             if not self._use_gui():
-                # Self-test: end the turn immediately (a legal no-op main turn).
-                game.check_longest_road(human)
-                game.check_largest_army(human)
+                # LOAD-BEARING: delegate, never auto-pass. In an MCTS search clone
+                # the injected v8 snapshot drives the full opponent turn (so the bot
+                # plans against the v8 self-model, identical to the deployed
+                # SearchAgent); on the live env / self-test it falls back to the
+                # heuristic opp.move. A hardcoded no-op here makes the bot search
+                # against a passive seat and play materially weaker.
+                super()._run_opponent_main_turn()
                 return
             with self._ViewWindow(self) as view:
+                view.displayDiceRoll(self.last_dice_roll)
+                print(f"\n[YOUR ROLL] You rolled {self.last_dice_roll}.", flush=True)
                 self._human_interactive_main_turn(view, human, board)
             game.check_longest_road(human)
             game.check_largest_army(human)
@@ -308,6 +316,8 @@ def _build_human_env_class() -> type:
                         human.initiate_trade(game, "BANK")
                     elif view.endTurn_button.collidepoint(e.pos):
                         turn_over = True
+                    if human.victoryPoints >= game.maxPoints:
+                        turn_over = True  # win ends the turn at once (cf. game.py playCatan)
                     view.displayGameScreen()
                     print(
                         f"  You: VP={human.victoryPoints} resources={dict(human.resources)}",
