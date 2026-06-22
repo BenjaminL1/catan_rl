@@ -36,6 +36,11 @@ class catanGameView:
 
         self.diceRoll = 0  # Initialize dice roll
 
+        # Optional whose-turn banner: (text, bg_color_name) or None. Drawn by
+        # displayGameScreen only when set (additive — engine paths leave it None
+        # so rendering is unchanged). Set by interactive harnesses.
+        self.turn_banner: tuple[str, str] | None = None
+
         return None
 
     # Function to display the initial board
@@ -150,6 +155,79 @@ class catanGameView:
             self.screen, pygame.Color("black"), (int(vertexCoord.x), int(vertexCoord.y)), 35, 5
         )
         return possiblePlayer
+
+    # ------------------------------------------------------------------
+    # Animated highlight helpers (Colonist-style pulsating glow on the
+    # spots the current player can act on). Additive: only used by the
+    # interactive picker loops below.
+    # ------------------------------------------------------------------
+
+    def _pulse(self) -> float:
+        """0..1 sine pulse keyed to the wall clock (≈0.8 Hz)."""
+        return (math.sin(pygame.time.get_ticks() * 0.006) + 1.0) / 2.0
+
+    def _blit_halo(self, x: int, y: int, radius: int, color: str, alpha: int) -> None:
+        """Blit a translucent filled circle (a soft glow) centered at (x, y)."""
+        radius = max(1, radius)
+        surf = pygame.Surface((radius * 2 + 4, radius * 2 + 4), pygame.SRCALPHA)
+        c = pygame.Color(color)
+        c.a = max(0, min(255, alpha))
+        pygame.draw.circle(surf, c, (radius + 2, radius + 2), radius)
+        self.screen.blit(surf, (x - radius - 2, y - radius - 2))
+
+    # Available-spot highlights use a bright gold glow (high contrast on the
+    # board and on the dark player colors) with a player-color accent ring. The
+    # returned click Rect is a STABLE size so clicks register regardless of pulse.
+    _GLOW = "gold"
+
+    def _glow_settlement(self, vertex, color, pulse):
+        x, y = int(vertex.x), int(vertex.y)
+        self._blit_halo(x, y, int(22 + 12 * pulse), self._GLOW, int(60 + 150 * pulse))
+        pygame.draw.circle(self.screen, pygame.Color(color), (x, y), 18, 4)
+        return pygame.draw.circle(self.screen, pygame.Color(self._GLOW), (x, y), 20, 3)
+
+    def _glow_city(self, vertex, color, pulse):
+        x, y = int(vertex.x), int(vertex.y)
+        self._blit_halo(x, y, int(27 + 13 * pulse), self._GLOW, int(60 + 150 * pulse))
+        pygame.draw.circle(self.screen, pygame.Color(color), (x, y), 23, 5)
+        return pygame.draw.circle(self.screen, pygame.Color(self._GLOW), (x, y), 25, 3)
+
+    def _glow_robber(self, vertexCoord, pulse):
+        x, y = int(vertexCoord.x), int(vertexCoord.y)
+        self._blit_halo(x, y, int(48 + 16 * pulse), self._GLOW, int(55 + 130 * pulse))
+        return pygame.draw.circle(self.screen, pygame.Color("black"), (x, y), 50, 5)
+
+    def _glow_road(self, edge, color, pulse):
+        p0, p1 = edge[0], edge[1]
+        glow_w = int(10 + 8 * pulse)  # pulsing bright underlay
+        rect = pygame.draw.line(self.screen, pygame.Color(self._GLOW), p0, p1, glow_w)
+        pygame.draw.line(self.screen, pygame.Color(color), p0, p1, max(2, glow_w // 2))
+        return rect
+
+    def _animated_pick(self, spots, draw_fn, allow_cancel):
+        """Render the base board once, then each frame restore it and draw a
+        pulsating glow on every ``spots`` entry (``draw_fn(spot, pulse)`` returns
+        the click Rect). Blocks until the user clicks a spot (returns it) or — if
+        ``allow_cancel`` — clicks empty space (returns None). QUIT exits.
+        """
+        self.displayGameScreen()
+        base = self.screen.copy()  # cache the static board for cheap per-frame redraws
+        clock = pygame.time.Clock()
+        while True:
+            self.screen.blit(base, (0, 0))
+            pulse = self._pulse()
+            rects = {spot: draw_fn(spot, pulse) for spot in spots}
+            pygame.display.update()
+            for e in pygame.event.get():
+                if e.type == pygame.QUIT:
+                    sys.exit(0)
+                if e.type == pygame.MOUSEBUTTONDOWN:
+                    for spot, rect in rects.items():
+                        if rect.collidepoint(e.pos):
+                            return spot
+                    if allow_cancel:
+                        return None
+            clock.tick(30)
 
     # Function to render basic gameplay buttons
 
@@ -293,6 +371,16 @@ class catanGameView:
             for cityCoord in player_i.buildGraph["CITIES"]:
                 self.draw_city(cityCoord, player_i.color)
 
+        # Whose-turn banner (top-center) — only when an interactive harness set it.
+        if self.turn_banner is not None:
+            text, bg_color = self.turn_banner
+            surf = self.font_menu.render(text, True, (255, 255, 255))
+            rect = surf.get_rect(center=(self.board.width // 2, 22))
+            bg_rect = rect.inflate(34, 16)
+            pygame.draw.rect(self.screen, pygame.Color(bg_color), bg_rect, border_radius=8)
+            pygame.draw.rect(self.screen, (0, 0, 0), bg_rect, 2, border_radius=8)
+            self.screen.blit(surf, rect)
+
         pygame.display.update()
         return
         # TO-DO Add screens for trades
@@ -340,122 +428,56 @@ class catanGameView:
         args: player, who is building road; roadsPossibleDict - possible roads
         returns: road edge of road to be built
         """
-        # Get all spots the player can build a road and display thin lines
-        # Get Rect representation of roads and draw possible roads
-        for roadEdge in roadsPossibleDict.keys():
-            if roadsPossibleDict[roadEdge]:
-                roadsPossibleDict[roadEdge] = self.draw_possible_road(roadEdge, currentPlayer.color)
-                # print("displaying road")
-
-        pygame.display.update()
-
-        mouseClicked = False
-        clock = pygame.time.Clock()
-        while mouseClicked == False:
-            if self.game.gameSetup:  # during gameSetup phase only exit if road is built
-                for e in pygame.event.get():
-                    if e.type == pygame.QUIT:
-                        sys.exit(0)
-                    if e.type == pygame.MOUSEBUTTONDOWN:
-                        for road, roadRect in roadsPossibleDict.items():
-                            if roadRect.collidepoint(e.pos):
-                                # currentPlayer.build_road(road[0], road[1], self.board)
-                                mouseClicked = True
-                                return road
-
-            else:
-                for e in pygame.event.get():
-                    if e.type == pygame.MOUSEBUTTONDOWN:  # Exit this loop on mouseclick
-                        for road, roadRect in roadsPossibleDict.items():
-                            if roadRect.collidepoint(e.pos):
-                                # currentPlayer.build_road(road[0], road[1], self.board)
-                                return road
-
-                        mouseClicked = True
-                        return None
-            clock.tick(30)
+        # Pulsating glow on every legal road edge; click one to build. Outside
+        # the setup phase a click on empty space cancels (returns None).
+        roads = [edge for edge in roadsPossibleDict if roadsPossibleDict[edge]]
+        return self._animated_pick(
+            roads,
+            lambda edge, pulse: self._glow_road(edge, currentPlayer.color, pulse),
+            allow_cancel=not self.game.gameSetup,
+        )
 
     def buildSettlement_display(self, currentPlayer, verticesPossibleDict):
         """Function to control build-settlement action with display
         args: player, who is building settlement; verticesPossibleDict - dictionary of possible settlement vertices
         returns: vertex of settlement to be built
         """
-        # Get all spots the player can build a settlement and display thin circles
-        # Add in the Rect representations of possible settlements
-        for v in verticesPossibleDict.keys():
-            if verticesPossibleDict[v]:
-                verticesPossibleDict[v] = self.draw_possible_settlement(v, currentPlayer.color)
-
-        pygame.display.update()
-
-        mouseClicked = False
-        clock = pygame.time.Clock()
-        while mouseClicked == False:
-            if self.game.gameSetup:  # during gameSetup phase only exit if settlement is built
-                for e in pygame.event.get():
-                    if e.type == pygame.QUIT:
-                        sys.exit(0)
-                    if e.type == pygame.MOUSEBUTTONDOWN:
-                        for vertex, vertexRect in verticesPossibleDict.items():
-                            if vertexRect.collidepoint(e.pos):
-                                mouseClicked = True
-                                return vertex
-            else:
-                for e in pygame.event.get():
-                    if e.type == pygame.MOUSEBUTTONDOWN:
-                        for vertex, vertexRect in verticesPossibleDict.items():
-                            if vertexRect.collidepoint(e.pos):
-                                return vertex
-                        mouseClicked = True
-                        return None
-            clock.tick(30)
+        # Pulsating glow on every legal settlement vertex (also reused for city
+        # upgrades); click one to build. Outside setup a miss cancels (None).
+        vertices = [v for v in verticesPossibleDict if verticesPossibleDict[v]]
+        return self._animated_pick(
+            vertices,
+            lambda v, pulse: self._glow_settlement(v, currentPlayer.color, pulse),
+            allow_cancel=not self.game.gameSetup,
+        )
 
     def buildCity_display(self, currentPlayer, verticesPossibleDict):
         """Function to control build-city action with display
         args: player, who is building city; verticesPossibleDict - dictionary of possible city vertices
         returns: city vertex of city to be built
         """
-        # Get all spots the player can build a city and display circles
-        # Get Rect representation of roads and draw possible roads
-        for c in verticesPossibleDict.keys():
-            if verticesPossibleDict[c]:
-                verticesPossibleDict[c] = self.draw_possible_city(c, currentPlayer.color)
-
-        pygame.display.update()
-
-        mouseClicked = False
-        clock = pygame.time.Clock()
-        while mouseClicked == False:
-            for e in pygame.event.get():
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    for vertex, vertexRect in verticesPossibleDict.items():
-                        if vertexRect.collidepoint(e.pos):
-                            return vertex
-                    mouseClicked = True
-                    return None
-            clock.tick(30)
+        # Pulsating glow on every legal city vertex; click one to upgrade, or
+        # click empty space to cancel (returns None).
+        vertices = [c for c in verticesPossibleDict if verticesPossibleDict[c]]
+        return self._animated_pick(
+            vertices,
+            lambda v, pulse: self._glow_city(v, currentPlayer.color, pulse),
+            allow_cancel=True,
+        )
 
     # Function to control the move-robber action with display
 
     def moveRobber_display(self, currentPlayer, possibleRobberDict):
-        for R in possibleRobberDict.keys():
-            hex_tile = possibleRobberDict[R]
-            possibleRobberDict[R] = self.draw_possible_robber(hex_tile.to_pixel(self.board.flat))
-
-        pygame.display.update()
-
-        mouseClicked = False
-        clock = pygame.time.Clock()
-        while mouseClicked == False:
-            for e in pygame.event.get():
-                if e.type == pygame.MOUSEBUTTONDOWN:
-                    for hexIndex, robberCircleRect in possibleRobberDict.items():
-                        if robberCircleRect.collidepoint(e.pos):
-                            possiblePlayerDict = self.board.get_players_to_rob(hexIndex)
-                            playerToRob = self.choosePlayerToRob_display(possiblePlayerDict)
-                            mouseClicked = True
-                            return hexIndex, playerToRob
-            clock.tick(30)
+        # Pulsating glow on every legal robber hex; click one, then pick a victim.
+        pix = {R: possibleRobberDict[R].to_pixel(self.board.flat) for R in possibleRobberDict}
+        hexIndex = self._animated_pick(
+            list(pix.keys()),
+            lambda R, pulse: self._glow_robber(pix[R], pulse),
+            allow_cancel=False,
+        )
+        possiblePlayerDict = self.board.get_players_to_rob(hexIndex)
+        playerToRob = self.choosePlayerToRob_display(possiblePlayerDict)
+        return hexIndex, playerToRob
 
     # Function to control the choice of player to rob with display
     # Returns the choice of player to rob

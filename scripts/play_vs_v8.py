@@ -162,6 +162,7 @@ def _build_human_env_class() -> type:
                 game.boardView = self.env._human_view
                 # Reflect whose turn it is for the stats panel + setup-mode input.
                 game.currentPlayer = self.env._human_player()
+                self.env._human_view.turn_banner = ("YOUR TURN", "forestgreen")
                 self.env._human_view.displayGameScreen()
                 return self.env._human_view
 
@@ -426,6 +427,11 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
     safety_cap = env.max_turns * 50
     n_steps = 0
     while not terminated and not truncated:
+        # Show a clear "bot thinking" flag before the (blocking) search so turns
+        # don't feel like they pass silently. The window can't animate during the
+        # search itself (it's a synchronous call); lower --sims for snappier turns.
+        view.turn_banner = ("BOT IS THINKING...", "gray30")
+        view.displayGameScreen()
         # Bot (agent seat) decides + applies its action; this also folds the
         # human's whole turn internally via the overridden _opponent_* hooks.
         action = agent.choose_action(env)
