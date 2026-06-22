@@ -84,18 +84,44 @@ def _build_human_env_class() -> type:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._human_view: Any = None
+            # Lazily builds a pygame view on first human-input need (interactive
+            # mode). None in headless self-test -> hooks auto-pick a legal action.
+            self._view_factory: Any = None
             # In self-test we have no GUI; auto-pick a legal action for the human.
             self._auto_human: bool = False
 
         def attach_human_view(self, view: Any) -> None:
             self._human_view = view
 
+        def set_view_factory(self, factory: Any) -> None:
+            """Register a ``game -> catanGameView`` builder for interactive play.
+
+            The view is built on FIRST human-input need rather than eagerly, so the
+            very-first snake-draft placement — which the env runs inside ``reset()``
+            when the human drafts first (``catan_env.py`` agent_seat==1 path) — is
+            still driven by the GUI instead of being auto-placed. The board already
+            exists by then, so the view can be constructed.
+            """
+            self._view_factory = factory
+
+        def _ensure_view(self) -> Any:
+            """Return the human view, building it via the factory on first need."""
+            if self._human_view is None and self._view_factory is not None:
+                self._human_view = self._view_factory(self.game)
+            return self._human_view
+
+        def _use_gui(self) -> bool:
+            """True iff this turn is driven by human GUI input (else auto-play)."""
+            return not self._auto_human and self._ensure_view() is not None
+
         def __deepcopy__(self, memo: dict[int, Any]) -> Any:
             # mcts.clone_env deep-copies the WHOLE env. The live pygame view holds
             # unpicklable Surfaces AND must not drive input inside a search clone, so
-            # clones carry NO view: _human_view -> None makes the _opponent_* hooks
-            # auto-play (exactly as in headless self-test). Defensively force the
-            # cloned game headless too, restoring the live view afterward.
+            # clones carry NEITHER the view NOR the view factory: both -> None makes
+            # the _opponent_* hooks auto-play (exactly as in headless self-test).
+            # Without nulling the factory, a clone's _ensure_view() would rebuild a
+            # real pygame view and block on human input mid-search. Defensively force
+            # the cloned game headless too, restoring the live view afterward.
             import copy as _copy
 
             cls = type(self)
@@ -107,7 +133,8 @@ def _build_human_env_class() -> type:
                 saved_bv, game.boardView = game.boardView, _HeadlessView()
             try:
                 for k, v in self.__dict__.items():
-                    setattr(new, k, None if k == "_human_view" else _copy.deepcopy(v, memo))
+                    drop = k in ("_human_view", "_view_factory")
+                    setattr(new, k, None if drop else _copy.deepcopy(v, memo))
             finally:
                 if saved_bv is not None:
                     game.boardView = saved_bv
@@ -152,7 +179,7 @@ def _build_human_env_class() -> type:
             assert game is not None
             human = self._human_player()
             board: Any = game.board
-            if self._auto_human or self._human_view is None:
+            if not self._use_gui():
                 # Auto-play (self-test): pick a legal setup vertex + road.
                 v = next(iter(board.get_setup_settlements(human).keys()))
                 human.build_settlement(v, board, is_free=True)
@@ -182,7 +209,7 @@ def _build_human_env_class() -> type:
             assert game is not None
             human = self._human_player()
             board: Any = game.board
-            if self._auto_human or self._human_view is None:
+            if not self._use_gui():
                 spots = board.get_robber_spots()
                 hex_i = next(iter(spots.keys()))
                 victims = board.get_players_to_rob(hex_i)
@@ -204,7 +231,7 @@ def _build_human_env_class() -> type:
             game: Any = self.game
             assert game is not None
             human = self._human_player()
-            if self._auto_human or self._human_view is None:
+            if not self._use_gui():
                 # Engine's heuristic/plain discard works headless (no GUI calls).
                 human.discardResources(game)
                 return
@@ -223,7 +250,7 @@ def _build_human_env_class() -> type:
             assert game is not None
             human = self._human_player()
             board: Any = game.board
-            if self._auto_human or self._human_view is None:
+            if not self._use_gui():
                 # Self-test: end the turn immediately (a legal no-op main turn).
                 game.check_longest_road(human)
                 game.check_largest_army(human)
@@ -371,12 +398,18 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
 
     agent = _load_search_agent(ckpt, sims, seed)
     env: Any = HumanVsBotEnv(opponent_type="heuristic", max_turns=400)
+    # Register the view builder BEFORE reset. When the human drafts first
+    # (bot_seat==1), the env places the human's FIRST settlement inside reset();
+    # the lazy factory makes that placement use the GUI instead of auto-picking,
+    # so NOTHING is auto-placed for either player (the bot's placements always
+    # come from search via the loop). The view is never stored on game.boardView
+    # except inside a human input window (deepcopy-safe for MCTS).
+    env.set_view_factory(lambda game: catanGameView(game.board, game))
     env.reset(seed=seed, options={"agent_seat": bot_seat})
-    # Build the real pygame view AFTER reset (board is fixed at reset). It is
-    # never stored on game.boardView except inside a human input window.
+    # Ensure a view exists for rendering (already built during reset if the human
+    # drafted first; built here otherwise — board is fixed at reset).
     assert env.game is not None
-    view: Any = catanGameView(env.game.board, env.game)
-    env.attach_human_view(view)
+    view: Any = env._ensure_view()
     view.displayGameScreen()
 
     terminated = truncated = False
