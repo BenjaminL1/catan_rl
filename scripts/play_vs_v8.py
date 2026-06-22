@@ -90,6 +90,29 @@ def _build_human_env_class() -> type:
         def attach_human_view(self, view: Any) -> None:
             self._human_view = view
 
+        def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+            # mcts.clone_env deep-copies the WHOLE env. The live pygame view holds
+            # unpicklable Surfaces AND must not drive input inside a search clone, so
+            # clones carry NO view: _human_view -> None makes the _opponent_* hooks
+            # auto-play (exactly as in headless self-test). Defensively force the
+            # cloned game headless too, restoring the live view afterward.
+            import copy as _copy
+
+            cls = type(self)
+            new = cls.__new__(cls)
+            memo[id(self)] = new
+            game: Any = self.__dict__.get("game")
+            saved_bv = None
+            if game is not None and not isinstance(game.boardView, _HeadlessView):
+                saved_bv, game.boardView = game.boardView, _HeadlessView()
+            try:
+                for k, v in self.__dict__.items():
+                    setattr(new, k, None if k == "_human_view" else _copy.deepcopy(v, memo))
+            finally:
+                if saved_bv is not None:
+                    game.boardView = saved_bv
+            return new
+
         # -- helpers -----------------------------------------------------------
 
         def _human_player(self) -> Any:
