@@ -47,6 +47,16 @@ class catanGameView:
         # Engine playCatan leaves it None -> unchanged behavior.
         self.human_player = None
 
+        # Optional: the bot/opponent player object. When set, displayPlayerStats
+        # also shows the OPPONENT's hand SIZE (resource + dev card counts only, not
+        # types — mirrors real Catan visibility). Engine playCatan leaves it None.
+        self.bot_player = None
+
+        # Optional: friendly display-name overrides keyed by player.name (e.g.
+        # {"Opponent": "You", "Agent": "Bot"}). Used by displayPlayerStats and
+        # displayBroadcastMessage. Engine playCatan leaves it empty -> raw names.
+        self.name_display: dict[str, str] = {}
+
         return None
 
     # Function to display the initial board
@@ -304,14 +314,18 @@ class catanGameView:
         x_offset = self.board.width - 160
         y_offset = 15
         line_height = 20
-        panel = pygame.Rect(x_offset - 12, y_offset - 8, 156, line_height * 15 + 20)
+        # Taller panel: base hand block (~15 lines) + the optional opponent
+        # hand-size block (~4 lines: blank, header, resources, dev cards).
+        panel_lines = 19 if self.bot_player is not None else 15
+        panel = pygame.Rect(x_offset - 12, y_offset - 8, 156, line_height * panel_lines + 20)
         backdrop = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
         backdrop.fill((245, 245, 235, 222))
         self.screen.blit(backdrop, (panel.x, panel.y))
         pygame.draw.rect(self.screen, (0, 0, 0), panel, 2, border_radius=6)
 
         # Display Player Name
-        nameText = self.font_resource.render(f"YOUR HAND ({player.name})", False, (0, 0, 0))
+        player_label = self.name_display.get(player.name, player.name)
+        nameText = self.font_resource.render(f"YOUR HAND ({player_label})", False, (0, 0, 0))
         self.screen.blit(nameText, (x_offset, y_offset))
         y_offset += line_height * 1.5
 
@@ -352,6 +366,23 @@ class catanGameView:
             count = total_dev_cards.get(card_type, 0)
             cardText = self.font_resource.render(f"{display_name}: {count}", False, (0, 0, 0))
             self.screen.blit(cardText, (x_offset, y_offset))
+            y_offset += line_height
+
+        # Opponent hand SIZE only (counts, not types — mirrors real Catan
+        # visibility: you can see how many cards an opponent holds, not which).
+        if self.bot_player is not None:
+            y_offset += line_height * 0.5
+            opp_label = self.name_display.get(self.bot_player.name, self.bot_player.name)
+            opp_res = sum(self.bot_player.resources.values())
+            opp_dev = sum(self.bot_player.devCards.values()) + len(self.bot_player.newDevCards)
+            headerText = self.font_resource.render(f"OPPONENT ({opp_label})", False, (0, 0, 0))
+            self.screen.blit(headerText, (x_offset, y_offset))
+            y_offset += line_height
+            resText = self.font_resource.render(f"Resource cards: {opp_res}", False, (0, 0, 0))
+            self.screen.blit(resText, (x_offset, y_offset))
+            y_offset += line_height
+            devText = self.font_resource.render(f"Dev cards: {opp_dev}", False, (0, 0, 0))
+            self.screen.blit(devText, (x_offset, y_offset))
             y_offset += line_height
 
     # Function to display the gameState board - use to display intermediate build screens
@@ -413,6 +444,7 @@ class catanGameView:
         event = self.game.last_broadcast_event
         event_type = event.get("type", "")
         player_name = event.get("player", "")
+        player_name = self.name_display.get(player_name, player_name)
 
         msg_text = ""
         text_color = (0, 0, 0)

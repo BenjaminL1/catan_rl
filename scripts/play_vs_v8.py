@@ -70,6 +70,7 @@ def _build_human_env_class() -> type:
     engine/RESOURCES_CW mapping) is inherited unchanged.
     """
     from catan_rl.engine.game import _HeadlessView
+    from catan_rl.engine.player import player as PlainPlayer
     from catan_rl.env.catan_env import CatanEnv
 
     class HumanVsBotEnv(CatanEnv):
@@ -108,8 +109,14 @@ def _build_human_env_class() -> type:
             """Return the human view, building it via the factory on first need."""
             if self._human_view is None and self._view_factory is not None:
                 self._human_view = self._view_factory(self.game)
+                human: Any = self.opponent_player
+                bot: Any = self.agent_player
                 # The human sits in the opponent seat — show THEIR hand always.
-                self._human_view.human_player = self.opponent_player
+                self._human_view.human_player = human
+                # The bot sits in the agent seat — show its hand SIZE (counts only).
+                self._human_view.bot_player = bot
+                # Friendly names in the stats panel + broadcast banner.
+                self._human_view.name_display = {human.name: "You", bot.name: "Bot"}
             return self._human_view
 
         def _use_gui(self) -> bool:
@@ -244,10 +251,92 @@ def _build_human_env_class() -> type:
                 f"\n[DISCARD] You rolled a 7 with {n_before} cards — discard half.",
                 flush=True,
             )
+            base_player: Any = PlainPlayer
             with self._ViewWindow(self) as view:
                 view.displayDiceRoll(self.last_dice_roll)
-                # discardResources(self) drives game.boardView.get_resource_selection.
-                human.discardResources(game)
+                # The human is a heuristicAIPlayer whose discardResources auto-discards
+                # with no GUI. Call the BASE player.discardResources, which drives
+                # game.boardView.get_resource_selection so the discard menu shows.
+                base_player.discardResources(human, game)
+
+        def _run_opponent_turn(self) -> None:
+            """Run the human's whole turn, with a pre-roll dev-card window.
+
+            KEEP IN SYNC with catan_env._run_opponent_turn — the only addition is
+            the ``_human_pre_roll()`` call before the dice roll (so the human can
+            play a dev card BEFORE rolling, e.g. a Knight to block a number). Clones
+            (MCTS) + the headless self-test never use the GUI, so they delegate to
+            the base method verbatim.
+            """
+            if not self._use_gui():  # clones + self-test: unchanged
+                super()._run_opponent_turn()
+                return
+            game: Any = self.game
+            assert game is not None
+            opp: Any = self.opponent_player
+            agent: Any = self.agent_player
+            assert opp is not None and agent is not None
+            game.currentPlayer = opp
+            opp.updateDevCards()
+            opp.devCardPlayedThisTurn = False
+            self._human_pre_roll()  # NEW: pre-roll dev-card window
+            dice = game.rollDice()
+            self.last_dice_roll = dice
+            if dice != 7:
+                game.update_playerResources(dice, opp)
+            else:
+                if sum(opp.resources.values()) > 9:
+                    self._opponent_discard()
+                if sum(agent.resources.values()) > 9:
+                    # Agent must discard before the opponent can place the robber.
+                    self._cards_to_discard = sum(agent.resources.values()) // 2
+                    self.discard_pending = True
+                    self._opp_pending_robber = True
+                    return
+                self._opponent_move_robber()
+            if opp.victoryPoints >= game.maxPoints:
+                return
+            self._run_opponent_main_turn()
+
+        def _human_pre_roll(self) -> None:
+            """Pre-roll window: let the human play a dev card before rolling dice.
+
+            Mirrors the button loop in ``_human_interactive_main_turn`` but limited
+            to PLAY DEV / ROLL DICE. ``updateDevCards`` + the single
+            ``devCardPlayedThisTurn`` reset already ran in ``_run_opponent_turn``;
+            the engine's ``play_devCard`` enforces one dev card per turn via that
+            flag and drives Knight robber-move / YOP / Monopoly through the GUI.
+            """
+            import pygame  # local import — only needed in the interactive path
+
+            game: Any = self.game
+            assert game is not None
+            human = self._human_player()
+            with self._ViewWindow(self) as view:
+                view.turn_banner = ("YOUR TURN - play a dev card or ROLL DICE", "forestgreen")
+                print(
+                    "\n[PRE-ROLL] Play a dev card now (PLAY DEV), or ROLL DICE to continue.",
+                    flush=True,
+                )
+                view.displayGameScreen()
+                clock = pygame.time.Clock()
+                rolled = False
+                while not rolled:
+                    clock.tick(60)
+                    for e in pygame.event.get():
+                        if e.type == pygame.QUIT:
+                            pygame.quit()
+                            sys.exit(0)
+                        if e.type != pygame.MOUSEBUTTONDOWN:
+                            continue
+                        if view.rollDice_button.collidepoint(e.pos):
+                            rolled = True
+                        elif view.playDevCard_button.collidepoint(e.pos):
+                            human.play_devCard(game)
+                            game.check_largest_army(human)
+                            game.check_longest_road(human)
+                        view.displayGameScreen()
+                    pygame.display.update()
 
         def _run_opponent_main_turn(self) -> None:
             """The human's full main turn (dice already rolled by the env caller)."""
@@ -281,8 +370,9 @@ def _build_human_env_class() -> type:
             """
             import pygame  # local import — only needed in the interactive path
 
-            human.updateDevCards()
-            human.devCardPlayedThisTurn = False
+            # NOTE: updateDevCards + the SINGLE devCardPlayedThisTurn reset happen
+            # once in _run_opponent_turn (before the pre-roll window). Re-resetting
+            # here would let the human play a 2nd dev card after a pre-roll play.
             game: Any = self.game
             assert game is not None
             print(
