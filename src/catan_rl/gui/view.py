@@ -310,80 +310,62 @@ class catanGameView:
             if player.isAI:
                 return
 
-        # Define starting position for stats (top-right) + a readable backdrop.
-        x_offset = self.board.width - 160
-        y_offset = 15
+        label = self.name_display.get(player.name, player.name)
+        title = f"YOUR HAND ({label})" if self.human_player is not None else f"Player: {label}"
+        self._draw_hand_panel(player, self.board.width - 160, 15, title)
+
+        # vs-bot ANALYSIS view: reveal the BOT's FULL hand (resources by type +
+        # hidden dev cards by type + VP) so the human can judge its decisions.
+        # Only shown when the harness sets bot_player; engine playCatan leaves it
+        # None (so normal play keeps the opponent's hand hidden).
+        if self.bot_player is not None:
+            bot_label = self.name_display.get(self.bot_player.name, self.bot_player.name)
+            self._draw_hand_panel(
+                self.bot_player, self.board.width - 160, 460, f"{bot_label} — FULL HAND"
+            )
+
+    def _draw_hand_panel(self, player, x, y, title):
+        """Render a full hand panel (resources by type, VP, dev cards by type) for
+        ``player`` at (x, y) with a readable backdrop. The dev-card counts include
+        hidden / just-bought cards (devCards + newDevCards)."""
         line_height = 20
-        # Taller panel: base hand block (~15 lines) + the optional opponent
-        # hand-size block (~4 lines: blank, header, resources, dev cards).
-        panel_lines = 19 if self.bot_player is not None else 15
-        panel = pygame.Rect(x_offset - 12, y_offset - 8, 156, line_height * panel_lines + 20)
+        panel = pygame.Rect(x - 12, y - 8, 156, line_height * 15 + 12)
         backdrop = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
         backdrop.fill((245, 245, 235, 222))
         self.screen.blit(backdrop, (panel.x, panel.y))
         pygame.draw.rect(self.screen, (0, 0, 0), panel, 2, border_radius=6)
 
-        # Display Player Name
-        player_label = self.name_display.get(player.name, player.name)
-        nameText = self.font_resource.render(f"YOUR HAND ({player_label})", False, (0, 0, 0))
-        self.screen.blit(nameText, (x_offset, y_offset))
-        y_offset += line_height * 1.5
-
-        # Display Resources
+        self.screen.blit(self.font_resource.render(title, False, (0, 0, 0)), (x, y))
+        y += line_height * 1.5
         for resource, count in player.resources.items():
-            resText = self.font_resource.render(f"{resource}: {count}", False, (0, 0, 0))
-            self.screen.blit(resText, (x_offset, y_offset))
-            y_offset += line_height
-
-        y_offset += line_height * 0.5
-
-        # Display Victory Points
-        vpText = self.font_resource.render(
-            f"Victory Points: {player.victoryPoints}", False, (0, 0, 0)
+            self.screen.blit(
+                self.font_resource.render(f"{resource}: {count}", False, (0, 0, 0)), (x, y)
+            )
+            y += line_height
+        y += line_height * 0.5
+        self.screen.blit(
+            self.font_resource.render(f"Victory Points: {player.victoryPoints}", False, (0, 0, 0)),
+            (x, y),
         )
-        self.screen.blit(vpText, (x_offset, y_offset))
-        y_offset += line_height * 1.5
-
-        # Display Dev Cards
-        devCardText = self.font_resource.render("Dev Cards:", False, (0, 0, 0))
-        self.screen.blit(devCardText, (x_offset, y_offset))
-        y_offset += line_height
-
-        devCardMap = {
+        y += line_height * 1.5
+        self.screen.blit(self.font_resource.render("Dev Cards:", False, (0, 0, 0)), (x, y))
+        y += line_height
+        total_dev_cards = player.devCards.copy()
+        for card in player.newDevCards:
+            total_dev_cards[card] += 1
+        dev_map = {
             "KNIGHT": "Knight",
             "VP": "VP",
             "MONOPOLY": "Mono",
             "ROADBUILDER": "RB",
             "YEAROFPLENTY": "YOP",
         }
-
-        # Calculate total dev cards (playable + new)
-        total_dev_cards = player.devCards.copy()
-        for card in player.newDevCards:
-            total_dev_cards[card] += 1
-
-        for card_type, display_name in devCardMap.items():
+        for card_type, display_name in dev_map.items():
             count = total_dev_cards.get(card_type, 0)
-            cardText = self.font_resource.render(f"{display_name}: {count}", False, (0, 0, 0))
-            self.screen.blit(cardText, (x_offset, y_offset))
-            y_offset += line_height
-
-        # Opponent hand SIZE only (counts, not types — mirrors real Catan
-        # visibility: you can see how many cards an opponent holds, not which).
-        if self.bot_player is not None:
-            y_offset += line_height * 0.5
-            opp_label = self.name_display.get(self.bot_player.name, self.bot_player.name)
-            opp_res = sum(self.bot_player.resources.values())
-            opp_dev = sum(self.bot_player.devCards.values()) + len(self.bot_player.newDevCards)
-            headerText = self.font_resource.render(f"OPPONENT ({opp_label})", False, (0, 0, 0))
-            self.screen.blit(headerText, (x_offset, y_offset))
-            y_offset += line_height
-            resText = self.font_resource.render(f"Resource cards: {opp_res}", False, (0, 0, 0))
-            self.screen.blit(resText, (x_offset, y_offset))
-            y_offset += line_height
-            devText = self.font_resource.render(f"Dev cards: {opp_dev}", False, (0, 0, 0))
-            self.screen.blit(devText, (x_offset, y_offset))
-            y_offset += line_height
+            self.screen.blit(
+                self.font_resource.render(f"{display_name}: {count}", False, (0, 0, 0)), (x, y)
+            )
+            y += line_height
 
     # Function to display the gameState board - use to display intermediate build screens
     # gameScreenState specifies which type of screen is to be shown
