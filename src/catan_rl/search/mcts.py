@@ -61,6 +61,49 @@ _DET_SEED_STRIDE = 1_000_003
 _N_ACTION_TYPES = 13
 #: END_TURN action fallback for a degenerate state with no legal actions.
 _END_TURN_ACTION: tuple[int, int, int, int, int, int] = (3, 0, 0, 0, 0, 0)
+#: Variance floor for the LCB stderr (avoids sqrt of a tiny-negative float from
+#: catastrophic cancellation, and a 0/0 for a single-visit child) — FR-002.
+_LCB_VAR_EPS = 1e-8
+
+
+def _lcb_select(
+    actions: list[ActionTuple],
+    agg_n: dict[ActionTuple, int],
+    agg_w: dict[ActionTuple, float],
+    agg_q2: dict[ActionTuple, float],
+    priors: dict[ActionTuple, float],
+    z: float,
+) -> ActionTuple:
+    """Pick the root child maximising the lower-confidence bound on its value.
+
+    ``lcb = mean_Q - z * stderr`` where ``mean_Q = W/N`` and
+    ``stderr = sqrt(max(eps, Q2/N - mean_Q²) / N)`` (sample variance / N, with an
+    eps variance floor). This favours moves that are BOTH high-value AND
+    well-explored: a many-times-visited high-Q child has stderr≈0 (LCB→mean_Q),
+    while a high-mean-but-rarely-visited child is penalised by its large stderr.
+
+    UNVISITED children (N==0) are non-competitive (assigned -inf). Tie-break by
+    (lcb, visits, prior) descending. Operates on the SAME aggregated root child
+    stats max-visit selects on (the determinization aggregation), so the two rules
+    differ only in the scoring function, not the data.
+    """
+    best_action: ActionTuple | None = None
+    best_key: tuple[float, int, float] = (-math.inf, -1, -math.inf)
+    for action in actions:
+        n = agg_n.get(action, 0)
+        if n <= 0:
+            continue  # unvisited -> non-competitive (lcb = -inf)
+        mean_q = agg_w.get(action, 0.0) / n
+        var = max(_LCB_VAR_EPS, agg_q2.get(action, 0.0) / n - mean_q * mean_q)
+        stderr = math.sqrt(var / n)
+        lcb = mean_q - z * stderr
+        key = (lcb, n, priors.get(action, 0.0))
+        if key > best_key:
+            best_key = key
+            best_action = action
+    # If every candidate was unvisited (no sims landed) fall back to the first
+    # action (the caller's max-visit path handles the empty-agg case before us).
+    return best_action if best_action is not None else actions[0]
 
 
 def clone_env(env: CatanEnv, opponent: SnapshotOpponent | None) -> CatanEnv:
@@ -239,6 +282,7 @@ class MCTS:
         total_sims = 0
         agg_n: dict[ActionTuple, int] = {}
         agg_w: dict[ActionTuple, float] = {}
+        agg_q2: dict[ActionTuple, float] = {}
 
         for d in range(n_det):
             root = self._make_node(clone_env(root_env, self.opponent), obs, terminal=False)
@@ -260,10 +304,15 @@ class MCTS:
             for action in root.legal_actions:
                 agg_n[action] = agg_n.get(action, 0) + root.child_N.get(action, 0)
                 agg_w[action] = agg_w.get(action, 0.0) + root.child_W.get(action, 0.0)
+                # Aggregate the second moment too (cheap, additive). Read ONLY by
+                # the "lcb" final-move path below — never feeds the max-visit math.
+                agg_q2[action] = agg_q2.get(action, 0.0) + root.child_Q2.get(action, 0.0)
 
         assert legal_actions is not None
         if forced or not agg_n:
             best = legal_actions[0] if legal_actions else _END_TURN_ACTION
+        elif self.cfg.final_move_mode == "lcb":
+            best = _lcb_select(legal_actions, agg_n, agg_w, agg_q2, priors, self.cfg.lcb_z)
         else:
             best = max(
                 legal_actions,
@@ -306,6 +355,11 @@ class MCTS:
             "visit_counts": dict(agg_n),
             "priors": dict(priors),
             "action_q": {a: agg_w[a] / n for a, n in agg_n.items() if n > 0},
+            # Aggregated per-action second moment Σ value² (additive diagnostic;
+            # NEW key only). Lets a consumer reconstruct the LCB pick from a SINGLE
+            # search (mean_Q from action_q + variance from action_q2) without a
+            # second search pass. Search-internal in-memory stats; never persisted.
+            "action_q2": {a: agg_q2[a] for a, n in agg_n.items() if n > 0},
         }
         return best, diagnostics
 

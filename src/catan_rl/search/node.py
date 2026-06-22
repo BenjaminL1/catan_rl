@@ -60,6 +60,13 @@ class SearchNode:
     children: dict[ActionTuple, SearchNode] = field(default_factory=dict)
     child_N: dict[ActionTuple, int] = field(default_factory=dict)
     child_W: dict[ActionTuple, float] = field(default_factory=dict)
+    #: IN-MEMORY per-child second moment Σ value² accumulated in lock-step with
+    #: ``child_W`` (spec 008 FR-002). Powers the LCB final-move rule's per-child
+    #: variance/stderr. Search-internal tree state ONLY — never persisted to any
+    #: checkpoint/state-dict (only the policy net is serialized). Computed always
+    #: (it is cheap) but read ONLY by the "lcb" final-move path, so its presence
+    #: leaves the value/visit math + RNG draws byte-identical to before.
+    child_Q2: dict[ActionTuple, float] = field(default_factory=dict)
     total_N: int = 0
 
     @property
@@ -76,6 +83,10 @@ class SearchNode:
     def record(self, action: ActionTuple, value: float) -> None:
         self.child_N[action] = self.child_N.get(action, 0) + 1
         self.child_W[action] = self.child_W.get(action, 0.0) + value
+        # Second-moment accumulator (LCB stderr). Parallel to child_W; does not
+        # feed into child_N / child_W / total_N, so it cannot perturb existing
+        # selection or backup math (byte-identity when final_move_mode="max_visit").
+        self.child_Q2[action] = self.child_Q2.get(action, 0.0) + value * value
         self.total_N += 1
 
 

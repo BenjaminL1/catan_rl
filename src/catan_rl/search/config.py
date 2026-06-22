@@ -68,6 +68,16 @@ class SearchConfig:
     fpu_mode: str = "zero"
     #: Optional hard depth cut for the simulation (None = no cut).
     max_depth: int | None = None
+    #: Final root-move rule (spec 008 US0(a) / FR-002). "max_visit" (default) =
+    #: the shipped behavior (most-visited root child). "lcb" = pick the root child
+    #: maximising the lower-confidence bound ``mean_Q - lcb_z * stderr``, which
+    #: favours moves that are BOTH high-value AND well-explored (low uncertainty);
+    #: a frozen-net evaluation-strengthening rule (KataGo precedent). Additive +
+    #: default-off: with "max_visit" the search is byte-identical to today.
+    final_move_mode: str = "max_visit"
+    #: z-multiplier on the per-child stderr for the "lcb" final-move rule (default
+    #: 1.96 ~ a one-sided 97.5% bound). Only consulted when final_move_mode="lcb".
+    lcb_z: float = 1.96
     #: RNG seed — search + uplift eval are reproducible at a fixed seed (FR-006).
     seed: int = 0
 
@@ -105,5 +115,11 @@ class SearchConfig:
             )
         if self.fpu_mode not in ("zero", "parent"):
             raise ValueError(f"fpu_mode must be 'zero' or 'parent', got {self.fpu_mode!r}")
+        if self.final_move_mode not in ("max_visit", "lcb"):
+            raise ValueError(
+                f"final_move_mode must be 'max_visit' or 'lcb', got {self.final_move_mode!r}"
+            )
+        if self.lcb_z < 0:
+            raise ValueError(f"lcb_z must be >= 0, got {self.lcb_z}")
         if self.max_depth is not None and self.max_depth < 1:
             raise ValueError(f"max_depth must be >= 1 or None, got {self.max_depth}")
