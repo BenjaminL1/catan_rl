@@ -108,6 +108,8 @@ def _build_human_env_class() -> type:
             """Return the human view, building it via the factory on first need."""
             if self._human_view is None and self._view_factory is not None:
                 self._human_view = self._view_factory(self.game)
+                # The human sits in the opponent seat — show THEIR hand always.
+                self._human_view.human_player = self.opponent_player
             return self._human_view
 
         def _use_gui(self) -> bool:

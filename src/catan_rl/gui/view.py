@@ -41,6 +41,12 @@ class catanGameView:
         # so rendering is unchanged). Set by interactive harnesses.
         self.turn_banner: tuple[str, str] | None = None
 
+        # Optional: the human's player object. When set, displayPlayerStats always
+        # shows THIS player's hand (the human sits in the AI-flagged opponent seat
+        # in the vs-bot harness, so the default current-non-AI logic would hide it).
+        # Engine playCatan leaves it None -> unchanged behavior.
+        self.human_player = None
+
         return None
 
     # Function to display the initial board
@@ -283,21 +289,29 @@ class catanGameView:
                 return
 
     def displayPlayerStats(self):
-        if not hasattr(self.game, "currentPlayer") or self.game.currentPlayer is None:
-            return
+        # Harness sets human_player so the human (who sits in the AI-flagged
+        # opponent seat) always sees their OWN hand. Engine playCatan leaves it
+        # None and falls back to the current non-AI player.
+        player = self.human_player
+        if player is None:
+            if not hasattr(self.game, "currentPlayer") or self.game.currentPlayer is None:
+                return
+            player = self.game.currentPlayer
+            if player.isAI:
+                return
 
-        player = self.game.currentPlayer
-
-        if player.isAI:
-            return
-
-        # Define starting position for stats
-        x_offset = self.board.width - 150
-        y_offset = 20
+        # Define starting position for stats (top-right) + a readable backdrop.
+        x_offset = self.board.width - 160
+        y_offset = 15
         line_height = 20
+        panel = pygame.Rect(x_offset - 12, y_offset - 8, 156, line_height * 15 + 20)
+        backdrop = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
+        backdrop.fill((245, 245, 235, 222))
+        self.screen.blit(backdrop, (panel.x, panel.y))
+        pygame.draw.rect(self.screen, (0, 0, 0), panel, 2, border_radius=6)
 
         # Display Player Name
-        nameText = self.font_resource.render(f"Player: {player.name}", False, (0, 0, 0))
+        nameText = self.font_resource.render(f"YOUR HAND ({player.name})", False, (0, 0, 0))
         self.screen.blit(nameText, (x_offset, y_offset))
         y_offset += line_height * 1.5
 
