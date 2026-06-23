@@ -286,6 +286,16 @@ def test_validate_enforces_rejection_truth_table() -> None:
         GameRecord.from_dict(payload)
 
 
+def test_validate_enforces_rejection_truth_table_converse() -> None:
+    # Symmetric partner: passed_crosscheck=False ⟹ rejection_reason must be set.
+    # A reasonless rejection corrupts the §5.6 per-archetype acceptance-rate audit.
+    payload = _sample_record().to_dict()
+    payload["passed_crosscheck"] = False
+    payload["rejection_reason"] = None
+    with pytest.raises(ValueError, match="passed_crosscheck=False but rejection_reason is None"):
+        GameRecord.from_dict(payload)
+
+
 def test_validate_allows_rejected_record_for_bias_audit() -> None:
     # A rejected record still emits features + reason (brief §5.6) — must load.
     payload = _sample_record().to_dict()

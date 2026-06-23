@@ -454,10 +454,23 @@ class GameRecord:
             )
 
         # --- cross-field truth table (brief §5.6 / §5.7) ---------------------
+        # Biconditional: rejection_reason is not None ⟺ not passed_crosscheck.
+        # Forward direction: a reason set with passed_crosscheck=True is a rejected
+        # record masquerading as accepted.
         if self.rejection_reason is not None and self.passed_crosscheck:
             raise ValueError(
                 "rejection_reason set but passed_crosscheck=True — a rejected record is "
                 "scoreboard-ineligible by definition and must have passed_crosscheck=False"
+            )
+        # Converse direction (brief §5.6): a failed cross-check with NO reason is a
+        # reasonless rejection — it lands in the bias-audit pool uncategorizable, so
+        # the per-archetype acceptance-rate audit (the whole point of §5.6) cannot
+        # bucket it. Every rejected game must carry its rejection_reason.
+        if not self.passed_crosscheck and self.rejection_reason is None:
+            raise ValueError(
+                "passed_crosscheck=False but rejection_reason is None — a rejected record "
+                "must carry a rejection_reason so the §5.6 per-archetype acceptance-rate "
+                "audit can bucket it"
             )
 
         # --- provenance orientation-binding (the cross-orientation firewall) --

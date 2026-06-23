@@ -10,6 +10,7 @@ deferred classifier is enforced by the scale-up hard gate.
 from __future__ import annotations
 
 from collections import Counter
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -121,6 +122,45 @@ def test_glyph_anchor_rejects_jointly_flipped_grants() -> None:
     assert not granted_multiset_matches_a_settlement("rayman147", bogus["rayman147"], rec, topo)
     with pytest.raises(ValueError, match="glyph-anchor mismatch"):
         assert_glyph_anchor(rec, bogus, topo)
+
+
+def test_glyph_anchor_rejects_a_REAL_d6_joint_flip() -> None:
+    """The load-bearing negative: a *real* D6 joint flip, not a fabricated multiset.
+
+    The wrong-orientation (desert=17) game-1 openings are the committed flipped IDs
+    (TP s[4,10], ray s[20,0]; see test_road_incidence_is_NOT_an_orientation_check).
+    The externally-read granted cards (the orientation-INDEPENDENT log glyphs) are
+    the true game-1 grants — TP SHEEP/ORE/ORE (v19), ray WHEAT/WOOD/BRICK (v11). A
+    joint flip moves both players' settlements onto hexes whose adjacency diverges
+    from the true grants, so the anchor must reject. This proves the anchor catches
+    an ACTUAL flip, not just garbage — including the near-miss where flipped ray-v20
+    grants SHEEP/ORE/ORE (colliding with the CORRECT *TP* grant): because each
+    player's grant is checked only against that player's own flipped settlements,
+    the collision does not sneak through.
+    """
+    topo = load_topology()
+    # Re-point the openings to the REJECTED desert=17 wrong-orientation IDs (a D6
+    # joint flip of the desert=11 openings) while the board stays the true read.
+    rec = replace(
+        _record(),
+        openings={
+            "ThePhantom": PlayerOpening(settlements=(4, 10), roads=(7, 20)),
+            "rayman147": PlayerOpening(settlements=(20, 0), roads=(34, 2)),
+        },
+    )
+    # The SAME externally-read true grants (TP v19, ray v11) the correct test uses.
+    true_grants = {
+        "ThePhantom": Counter({"SHEEP": 1, "ORE": 2}),
+        "rayman147": Counter({"WHEAT": 1, "WOOD": 1, "BRICK": 1}),
+    }
+    assert not granted_multiset_matches_a_settlement(
+        "ThePhantom", true_grants["ThePhantom"], rec, topo
+    )
+    assert not granted_multiset_matches_a_settlement(
+        "rayman147", true_grants["rayman147"], rec, topo
+    )
+    with pytest.raises(ValueError, match="glyph-anchor mismatch"):
+        assert_glyph_anchor(rec, true_grants, topo)
 
 
 # --- scale-up hard gate (FIX 4 deferred classifier + FIX 5 gates) -----------
