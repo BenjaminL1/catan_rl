@@ -133,6 +133,124 @@ def test_golden_fixtures_exist_and_load() -> None:
     assert "placed a Settlement" in text
 
 
+# --- contract firewall: GameRecord.validate (resolve pass) ------------------
+
+
+def test_validate_accepts_the_sample_record() -> None:
+    # The representative record must pass the firewall unchanged.
+    _sample_record().validate()
+
+
+def test_validate_rejects_illegal_resource() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["resource"] = "GOLD"
+    with pytest.raises(ValueError, match="GOLD"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_desert_with_number() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][-1]["number"] = 8  # desert must be None
+    with pytest.raises(ValueError, match="desert"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_nondesert_with_bad_number() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["number"] = 7  # robber-only, never a token
+    with pytest.raises(ValueError, match="number"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_hex_id_out_of_range() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["hex_id"] = 99
+    with pytest.raises(ValueError, match="hex_ids"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_duplicate_hex_ids() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][1]["hex_id"] = 0  # multiset no longer 0..18
+    with pytest.raises(ValueError, match="hex_ids"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_settlement_vertex_out_of_range() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["settlements"] = [4, 54]  # 54 == NUM_VERTICES
+    with pytest.raises(ValueError, match="settlement vertex"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_road_edge_out_of_range() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["roads"] = [7, 72]  # 72 == NUM_EDGES
+    with pytest.raises(ValueError, match="road edge"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_non_1v1_ruleset() -> None:
+    for bad in ({"num_players": 4, "win_vp": 15}, {"num_players": 2, "win_vp": 10}):
+        payload = _sample_record().to_dict()
+        payload["ruleset"] = bad
+        with pytest.raises(ValueError, match="1v1-locked"):
+            GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_unknown_winner() -> None:
+    payload = _sample_record().to_dict()
+    payload["winner"] = "somebody_else"
+    with pytest.raises(ValueError, match="winner"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_allows_null_winner() -> None:
+    payload = _sample_record().to_dict()
+    payload["winner"] = None  # resign / cutoff — valid, just scoreboard-ineligible
+    assert GameRecord.from_dict(payload).winner is None
+
+
+def test_validate_rejects_opening_key_not_a_player() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ghost"] = {"settlements": [1, 2], "roads": [3, 4]}
+    with pytest.raises(ValueError, match="opening key"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_bad_episode_source() -> None:
+    payload = _sample_record().to_dict()
+    payload["episode_source"] = "synthetic"
+    with pytest.raises(ValueError, match="episode_source"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_bad_opponent_strength_tier() -> None:
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"]["tier"] = "medium"
+    with pytest.raises(ValueError, match="tier"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_enforces_rejection_truth_table() -> None:
+    # rejection_reason set ⟹ passed_crosscheck must be False.
+    payload = _sample_record().to_dict()
+    payload["rejection_reason"] = "green_tile_subtraction_failed"
+    payload["passed_crosscheck"] = True
+    with pytest.raises(ValueError, match="rejection_reason set but passed_crosscheck"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_allows_rejected_record_for_bias_audit() -> None:
+    # A rejected record still emits features + reason (brief §5.6) — must load.
+    payload = _sample_record().to_dict()
+    payload["rejection_reason"] = "green_tile_subtraction_failed"
+    payload["passed_crosscheck"] = False
+    rec = GameRecord.from_dict(payload)
+    assert rec.rejection_reason == "green_tile_subtraction_failed"
+    assert rec.passed_crosscheck is False
+
+
 def test_resolve_ffmpeg_returns_a_usable_binary() -> None:
     """Resolves to a system or imageio-ffmpeg binary (both available in CI)."""
     path = resolve_ffmpeg()

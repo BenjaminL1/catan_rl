@@ -20,6 +20,7 @@ the build brief ``docs/plans/human_data_pipeline.md`` §5.8 (there is no
 
 from catan_rl.human_data.ffmpeg import FFmpegNotFoundError, resolve_ffmpeg
 from catan_rl.human_data.record import (
+    RESOURCE_LITERALS,
     SCHEMA_VERSION,
     GameRecord,
     OpponentStrength,
@@ -28,6 +29,7 @@ from catan_rl.human_data.record import (
 from catan_rl.human_data.topology import Topology, load_topology
 
 __all__ = [
+    "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
     "FFmpegNotFoundError",
     "GameRecord",
