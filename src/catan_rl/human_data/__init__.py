@@ -19,6 +19,15 @@ the build brief ``docs/plans/human_data_pipeline.md`` §5.8 (there is no
 """
 
 from catan_rl.human_data.ffmpeg import FFmpegNotFoundError, resolve_ffmpeg
+from catan_rl.human_data.orientation import (
+    MAX_AFFINE_RESIDUAL_PX,
+    MIN_RESOLUTION,
+    GlyphClassifierNotValidated,
+    assert_glyph_anchor,
+    assert_scale_up_orientation_gates,
+    granted_multiset_matches_a_settlement,
+    granted_resources_under_orientation,
+)
 from catan_rl.human_data.record import (
     RESOURCE_LITERALS,
     SCHEMA_VERSION,
@@ -30,14 +39,21 @@ from catan_rl.human_data.record import (
 from catan_rl.human_data.topology import Topology, load_topology
 
 __all__ = [
+    "MAX_AFFINE_RESIDUAL_PX",
+    "MIN_RESOLUTION",
     "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
     "FFmpegNotFoundError",
     "GameRecord",
+    "GlyphClassifierNotValidated",
     "OpponentStrength",
     "PlayerOpening",
     "Topology",
+    "assert_glyph_anchor",
+    "assert_scale_up_orientation_gates",
     "check_road_incidence",
+    "granted_multiset_matches_a_settlement",
+    "granted_resources_under_orientation",
     "load_topology",
     "resolve_ffmpeg",
 ]
