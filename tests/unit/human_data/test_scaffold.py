@@ -71,9 +71,13 @@ def _sample_record() -> GameRecord:
         ruleset={"num_players": 2, "win_vp": 15},
         hexes=_GAME1_HEXES,
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
+        # Openings RE-SNAPPED under the locked desert=11 affine (orient_lock2 PART A
+        # screen rule). The earlier desert=17 IDs (TP s[4,10] r[7,20]; ray s[20,0]
+        # r[34,2]) were snapped under a REJECTED D6 orientation and were physically
+        # wrong; see ``tests/fixtures/human_data/game1_resnap_overlay.png``.
         openings={
-            "ThePhantom": PlayerOpening(settlements=(4, 10), roads=(7, 20)),
-            "rayman147": PlayerOpening(settlements=(20, 0), roads=(34, 2)),
+            "ThePhantom": PlayerOpening(settlements=(1, 19), roads=(0, 35)),
+            "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
         },
         dice_log=(8, 6, 11, 4),
         winner="ThePhantom",
@@ -149,8 +153,12 @@ def test_golden_fixtures_exist_and_load() -> None:
         assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", png
 
     parsed = json.loads(openings.read_text(encoding="utf-8"))
-    assert parsed["openings"]["ThePhantom"]["settlements"] == [4, 10]
-    assert parsed["openings"]["rayman147"]["settlements"] == [20, 0]
+    # Golden IDs are the desert=11 re-snap (the desert=17 IDs were wrong).
+    assert parsed["fit"]["desert_hex"] == 11
+    assert parsed["openings"]["ThePhantom"]["settlements"] == [1, 19]
+    assert parsed["openings"]["ThePhantom"]["roads"] == [0, 35]
+    assert parsed["openings"]["rayman147"]["settlements"] == [11, 3]
+    assert parsed["openings"]["rayman147"]["roads"] == [19, 8]
 
     text = ocr.read_text(encoding="utf-8")
     # The real noisy OCR carries the "Happy settlingl" typo and setup events.
@@ -207,14 +215,14 @@ def test_validate_rejects_duplicate_hex_ids() -> None:
 
 def test_validate_rejects_settlement_vertex_out_of_range() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["settlements"] = [4, 54]  # 54 == NUM_VERTICES
+    payload["openings"]["ThePhantom"]["settlements"] = [1, 54]  # 54 == NUM_VERTICES
     with pytest.raises(ValueError, match="settlement vertex"):
         GameRecord.from_dict(payload)
 
 
 def test_validate_rejects_road_edge_out_of_range() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["roads"] = [7, 72]  # 72 == NUM_EDGES
+    payload["openings"]["ThePhantom"]["roads"] = [0, 72]  # 72 == NUM_EDGES
     with pytest.raises(ValueError, match="road edge"):
         GameRecord.from_dict(payload)
 
@@ -368,21 +376,21 @@ def test_validate_rejects_missing_player_opening() -> None:
 
 def test_validate_rejects_duplicate_settlement_vertex() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["settlements"] = [4, 4]  # double-snap
+    payload["openings"]["ThePhantom"]["settlements"] = [1, 1]  # double-snap
     with pytest.raises(ValueError, match="distinct"):
         GameRecord.from_dict(payload)
 
 
 def test_validate_rejects_duplicate_road_edge() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["roads"] = [7, 7]
+    payload["openings"]["ThePhantom"]["roads"] = [0, 0]
     with pytest.raises(ValueError, match="distinct"):
         GameRecord.from_dict(payload)
 
 
 def test_validate_rejects_shared_settlement_across_players() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["rayman147"]["settlements"] = [4, 0]  # 4 is ThePhantom's
+    payload["openings"]["rayman147"]["settlements"] = [1, 9]  # 1 is ThePhantom's
     with pytest.raises(ValueError, match="disjoint"):
         GameRecord.from_dict(payload)
 
@@ -406,14 +414,14 @@ def test_validate_rejects_float_hex_id() -> None:
 
 def test_validate_rejects_float_settlement_vertex() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["settlements"] = [4.7, 10]  # int(4.7)==4
+    payload["openings"]["ThePhantom"]["settlements"] = [1.7, 19]  # int(1.7)==1
     with pytest.raises(ValueError, match="vertex"):
         GameRecord.from_dict(payload)
 
 
 def test_validate_rejects_float_road_edge() -> None:
     payload = _sample_record().to_dict()
-    payload["openings"]["ThePhantom"]["roads"] = [7.2, 20]
+    payload["openings"]["ThePhantom"]["roads"] = [0.2, 35]
     with pytest.raises(ValueError, match="edge"):
         GameRecord.from_dict(payload)
 

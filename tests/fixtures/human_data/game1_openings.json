@@ -3,10 +3,11 @@
   "game": 1,
   "frame_used": "g_247.png (t=247s, post-setup, pre-first-roll)",
   "fit": {
-    "affine_resid_mean_px": 0.7067903201329698,
-    "affine_resid_max_px": 1.3788581557807251,
-    "desert_hex": 17
+    "affine_resid_mean_px": 0.7697,
+    "affine_resid_max_px": 1.379,
+    "desert_hex": 11
   },
+  "resnap_note": "openings RE-SNAPPED under the locked desert=11 affine (orient_lock2 PART A screen rule, refl=1 rot=0, screen-penalty gap 43.5x, resid 0.77px). The earlier desert=17 IDs (TP s[4,10] r[7,20]; ray s[20,0] r[34,2]) were snapped under a REJECTED D6 orientation and were physically wrong. All 8 re-snapped pieces verified on tests/fixtures/human_data/game1_resnap_overlay.png (snap err <0.35px, owner colours confirmed: v1/v19=BLACK=ThePhantom, v3/v11=GREEN=rayman147).",
   "player_colors": {
     "rayman147": "GREEN",
     "ThePhantom": "BLACK"
@@ -33,22 +34,22 @@
   "openings": {
     "rayman147": {
       "settlements": [
-        20,
-        0
+        11,
+        3
       ],
       "roads": [
-        34,
-        2
+        19,
+        8
       ]
     },
     "ThePhantom": {
       "settlements": [
-        4,
-        10
+        1,
+        19
       ],
       "roads": [
-        7,
-        20
+        0,
+        35
       ]
     }
   }
