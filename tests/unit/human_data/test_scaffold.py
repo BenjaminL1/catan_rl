@@ -83,7 +83,14 @@ def _sample_record() -> GameRecord:
         winner="ThePhantom",
         episode_source="natural",
         passed_crosscheck=True,
-        provenance={"resolution": 1080, "ts": 247},
+        # board + openings both locked under the desert=11 orientation (schema v2
+        # orientation-binding). board_desert_hex == openings_desert_hex == 11.
+        provenance={
+            "resolution": 1080,
+            "ts": 247,
+            "board_desert_hex": 11,
+            "openings_desert_hex": 11,
+        },
         rejection_reason=None,
     )
 
@@ -104,10 +111,10 @@ def test_game_record_roundtrip_via_json_line() -> None:
 
 def test_game_record_schema_version_present() -> None:
     rec = _sample_record()
-    assert rec.schema_version == SCHEMA_VERSION == 1
+    assert rec.schema_version == SCHEMA_VERSION == 2
     payload = rec.to_dict()
-    assert payload["schema_version"] == 1
-    assert json.loads(rec.to_json_line())["schema_version"] == 1
+    assert payload["schema_version"] == 2
+    assert json.loads(rec.to_json_line())["schema_version"] == 2
 
 
 def test_game_record_resources_are_string_literals() -> None:
@@ -286,6 +293,50 @@ def test_validate_allows_rejected_record_for_bias_audit() -> None:
     rec = GameRecord.from_dict(payload)
     assert rec.rejection_reason == "green_tile_subtraction_failed"
     assert rec.passed_crosscheck is False
+
+
+# --- provenance orientation-binding: the cross-orientation firewall (FIX 2) -
+
+
+def test_validate_rejects_welded_desert17_desert11_record() -> None:
+    """THE board-orientation bug: a correct desert=11 board welded with openings
+    snapped under the REJECTED desert=17 orientation. A D6 flip preserves the
+    resource/number multisets, so every other gate passes — only the
+    provenance-binding catches it."""
+    payload = _sample_record().to_dict()
+    payload["provenance"]["board_desert_hex"] = 11
+    payload["provenance"]["openings_desert_hex"] = 17
+    with pytest.raises(ValueError, match="orientation mismatch"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_requires_board_desert_provenance() -> None:
+    payload = _sample_record().to_dict()
+    del payload["provenance"]["board_desert_hex"]
+    with pytest.raises(ValueError, match="provenance must carry"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_requires_openings_desert_provenance() -> None:
+    payload = _sample_record().to_dict()
+    del payload["provenance"]["openings_desert_hex"]
+    with pytest.raises(ValueError, match="provenance must carry"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_desert_provenance_out_of_range() -> None:
+    payload = _sample_record().to_dict()
+    payload["provenance"]["board_desert_hex"] = 19  # 19 == NUM_HEXES, out of 0..18
+    payload["provenance"]["openings_desert_hex"] = 19
+    with pytest.raises(ValueError, match="out of 0"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_float_desert_provenance() -> None:
+    payload = _sample_record().to_dict()
+    payload["provenance"]["board_desert_hex"] = 11.0  # must be a true int
+    with pytest.raises(ValueError, match="board_desert_hex"):
+        GameRecord.from_dict(payload)
 
 
 # --- standard-board multiset gate (findings #1, #5) -------------------------

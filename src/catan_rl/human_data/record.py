@@ -31,9 +31,18 @@ from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
-#: Schema version of the ``GameRecord`` contract. Mirrors
-#: ``catan_rl.conformance.recorder.CONFORMANCE_SCHEMA_VERSION`` (both ``1``).
-SCHEMA_VERSION = 1
+#: Schema version of the ``GameRecord`` contract.
+#:
+#: v1 mirrored ``catan_rl.conformance.recorder.CONFORMANCE_SCHEMA_VERSION``.
+#: **v2** adds *provenance orientation-binding* (the board-orientation firewall):
+#: ``provenance.board_desert_hex`` and ``provenance.openings_desert_hex`` are now
+#: **required** and :meth:`GameRecord.validate` rejects a record whose two
+#: artifacts were locked under different D6 orientations. This is the only gate
+#: that catches the desert=17/desert=11 weld bug — a D6 flip preserves the
+#: resource/number multisets, so every other structural gate passes the wrong
+#: record. The conformance recorder schema is unrelated and stays at its own
+#: version.
+SCHEMA_VERSION = 2
 
 #: Resource string literals permitted on a hex (build brief §5.8). There is no
 #: ``RESOURCES`` enum in ``engine/``; these are the only stable values.
@@ -97,6 +106,17 @@ def _as_int(value: Any, label: str) -> int:
 #: players, 15 VP to win. A future 4-player generalization must consciously break
 #: the schema — it can never round-trip silently.
 RULESET_1V1: dict[str, int] = {"num_players": 2, "win_vp": 15}
+
+#: Provenance keys that bind each parsed artifact to the D6 board orientation it
+#: was locked under (schema v2). The board (hex resources/numbers) and the
+#: openings (vertex/edge IDs) are produced by *separate* CV stages; if they are
+#: snapped under different orientations the record is confidently wrong but
+#: passes every multiset/structural gate (a D6 flip permutes IDs while preserving
+#: the resource/number multisets). These two ints (the engine ``hex_id`` that the
+#: stage placed the desert at) must agree, and :meth:`GameRecord.validate`
+#: rejects on mismatch. This is the cross-orientation firewall.
+PROVENANCE_BOARD_DESERT = "board_desert_hex"
+PROVENANCE_OPENINGS_DESERT = "openings_desert_hex"
 
 #: ``episode_source`` values. ``"natural"`` = a real parsed game (scoreboard
 #: + eval/anchor eligible). ``"human_seed"`` = an opening used to seed exploration
@@ -209,6 +229,14 @@ class GameRecord:
           handles appearing exactly twice (``a != b``).
         - **Ruleset:** exactly ``{num_players: 2, win_vp: 15}`` (1v1-locked).
         - **Literals at runtime:** ``episode_source`` in its declared set.
+        - **Provenance orientation-binding (schema v2):** ``provenance`` must
+          carry both :data:`PROVENANCE_BOARD_DESERT` and
+          :data:`PROVENANCE_OPENINGS_DESERT` (the engine ``hex_id`` each CV stage
+          placed the desert at, ints in ``0..18``) and they must be **equal** —
+          the board and the openings must be locked under the same D6
+          orientation. This is the cross-orientation firewall (see below); it is
+          the only gate that catches a welded board/openings record because a D6
+          flip preserves the resource/number multisets.
         - **Cross-field truth table** (brief §5.6 / §5.7 — see below).
 
         **Truth table the contract enforces and every consumer must honour:**
@@ -387,6 +415,45 @@ class GameRecord:
             raise ValueError(
                 "rejection_reason set but passed_crosscheck=True — a rejected record is "
                 "scoreboard-ineligible by definition and must have passed_crosscheck=False"
+            )
+
+        # --- provenance orientation-binding (the cross-orientation firewall) --
+        # THE board-orientation bug: the board (resources/numbers) and the
+        # openings (vertex/edge IDs) are locked by *separate* CV stages. A D6
+        # flip between them permutes every ID while preserving the resource and
+        # number *multisets* — so the standard-board multiset gate, the
+        # snake-draft gate, the distinctness gates, and the road-incidence
+        # snap-sanity gate ALL pass the welded (board=desert11 / openings=desert17)
+        # record. The only signal is that the two stages disagree about which
+        # engine hex is the desert. Bind them here and reject on mismatch
+        # (schema v2). Pure value check — both are engine ``hex_id`` ints in
+        # 0..18 (no topology import; scope-lock brief §6).
+        board_desert = self.provenance.get(PROVENANCE_BOARD_DESERT)
+        openings_desert = self.provenance.get(PROVENANCE_OPENINGS_DESERT)
+        if board_desert is None or openings_desert is None:
+            raise ValueError(
+                f"provenance must carry both {PROVENANCE_BOARD_DESERT!r} and "
+                f"{PROVENANCE_OPENINGS_DESERT!r} (schema v{SCHEMA_VERSION} orientation-binding); "
+                f"got {self.provenance.get(PROVENANCE_BOARD_DESERT)!r} / "
+                f"{self.provenance.get(PROVENANCE_OPENINGS_DESERT)!r}"
+            )
+        board_desert = _as_int(board_desert, f"provenance.{PROVENANCE_BOARD_DESERT}")
+        openings_desert = _as_int(openings_desert, f"provenance.{PROVENANCE_OPENINGS_DESERT}")
+        for label, val in (
+            (PROVENANCE_BOARD_DESERT, board_desert),
+            (PROVENANCE_OPENINGS_DESERT, openings_desert),
+        ):
+            if not 0 <= val < NUM_HEXES:
+                raise ValueError(
+                    f"provenance.{label} {val} out of 0..{NUM_HEXES - 1} (must be an engine hex_id)"
+                )
+        if board_desert != openings_desert:
+            raise ValueError(
+                f"orientation mismatch: provenance.{PROVENANCE_BOARD_DESERT}={board_desert} but "
+                f"provenance.{PROVENANCE_OPENINGS_DESERT}={openings_desert} — the board and the "
+                "openings were locked under different D6 orientations (a D6 flip preserves the "
+                "resource/number multisets, so this is the only gate that catches the welded "
+                "desert17/desert11 record)"
             )
 
     def to_dict(self) -> dict[str, Any]:
