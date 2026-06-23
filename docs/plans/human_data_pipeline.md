@@ -66,7 +66,7 @@ stack. Resources are **string literals** (`"WOOD"`, `"BRICK"`, `"WHEAT"`, `"ORE"
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,   // v2 adds provenance orientation-binding (see §below / record.py)
   "video_id": "9Sm86ml04aI", "game_index": 2,
   "players": {"agent": "ThePhantom", "opponent": "rayman147"},
   "opponent_strength": {"tier": "high", "source": "rank_badge|known_window", "confidence": 0.x},
@@ -85,7 +85,11 @@ stack. Resources are **string literals** (`"WOOD"`, `"BRICK"`, `"WHEAT"`, `"ORE"
   "episode_source": "natural", // "natural" | "human_seed"  (load-bearing — see §5)
   "rejection_reason": null,    // set on rejected records (kept for the bias audit)
   "passed_crosscheck": true,
-  "provenance": {"resolution": 1080, "ts": 247}
+  // provenance.board_desert_hex / openings_desert_hex are REQUIRED in v2 and must
+  // be equal — the board-orientation firewall (a D6 flip preserves the
+  // resource/number multisets, so this is the only structural gate that catches a
+  // board/openings weld). See record.py validate() + orientation.py.
+  "provenance": {"resolution": 1080, "ts": 247, "board_desert_hex": 11, "openings_desert_hex": 11}
 }
 ```
 
@@ -181,7 +185,8 @@ These are *why the plan is the way it is*. Violating them produces a dataset tha
 - **Commit the game-1 frames** (post-setup `t=247`, empty-baseline `t=105`, a log crop) as a small
   **CI golden fixture**; add a deterministic test reproducing the game-1 `openings.json`; unit-test
   the log grammar against the real noisy `ocr_*.txt` (incl. the "Happy settlingl" typo).
-- Add `schema_version` (mirror `conformance/recorder.py` `CONFORMANCE_SCHEMA_VERSION`).
+- Add `schema_version` (v1 mirrored `conformance/recorder.py` `CONFORMANCE_SCHEMA_VERSION`;
+  **v2** diverges — adds the required `provenance.{board,openings}_desert_hex` orientation-binding).
 - ToS: retain only derived `GameRecord`s (no redistributed video beyond the tiny test fixture),
   rate-limit downloads, keep `video_id` for attribution. Research use.
 - ruff + mypy + pytest green; conventional commits; push to `origin/main` (solo, no PRs).

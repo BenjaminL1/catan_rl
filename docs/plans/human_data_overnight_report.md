@@ -7,6 +7,18 @@ review-and-resolve iterations, ending on **2 BLOCKERs + a red-team counterexampl
 point at one real defect. Per the gate-first rule, no Stage-1 or Stage-2 work was attempted.
 **Nothing here claims success the gates did not show — they did not.**
 
+> **RESOLVED (2026-06-23, follow-up task).** The orientation BLOCKER below is fixed.
+> Game-1 openings were RE-SNAPPED under the locked desert=11 affine (orient_lock2 PART A,
+> screen-penalty gap 43.5×, resid 0.77px; all 8 pieces verified on
+> `scripts/dev/human_data_spikes/opening_cv/game1_resnap_overlay.jpg`):
+> **ThePhantom s[1,19] r[0,35]; rayman147 s[11,3] r[19,8]** (was the wrong desert=17
+> s[4,10]/[20,0] r[7,20]/[34,2]). The firewall now binds orientation:
+> `provenance.board_desert_hex == openings_desert_hex` (schema **v2**) rejects the weld;
+> road-incidence is demoted to a labeled snap-sanity gate (it is D6-invariant); a glyph-anchor
+> CHECK + scale-up HARD GATE (`assert_scale_up_orientation_gates`) blocks the 300-game batch
+> until a validated log-glyph classifier is wired. Commits `a32560b`, `cbdc8f9`, `edae03d`,
+> `591bda5`.
+
 ---
 
 ## TL;DR for the 8am decision
