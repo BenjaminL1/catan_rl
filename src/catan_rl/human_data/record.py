@@ -134,6 +134,18 @@ StrengthTier = Literal["high", "unknown"]
 #: How opponent strength was established (build brief §5.5). ``"known_window"`` =
 #: the game falls in a known high-rank window of the channel; ``"rank_badge"`` =
 #: an objective on-screen rank/elo badge was read.
+#:
+#: **PLACEHOLDER — no backing window committed yet (review finding §1).** The
+#: scaffold only constrains the *shape* of the label (tier ∈ {high, unknown},
+#: source ∈ {rank_badge, known_window}); it does NOT yet anchor ``"known_window"``
+#: to any committed ``video_id``→window table or date range. Until Stage 1 commits
+#: that mapping as DATA and has ``segment.py`` DERIVE :class:`OpponentStrength`
+#: from it, a ``tier="high", source="known_window"`` label is **unfalsifiable** —
+#: any caller can stamp it by hand. For a calibration deliverable whose headline
+#: guarantee is "never pool across mixed strength" (§5.5), strength is the single
+#: most bias-inducing field, so this gap must be closed before the segment/strength
+#: filter lands. The eventual fix should also carry a ``window_id`` / provenance
+#: stamp so an audit can trace *which* window justified a given ``high``.
 StrengthSource = Literal["rank_badge", "known_window"]
 
 
@@ -143,6 +155,13 @@ class OpponentStrength:
 
     Never a handle guess. ``confidence`` is a coarse 0..1 self-assessment of the
     signal, not a calibrated probability.
+
+    **Provenance caveat (review finding §1):** this dataclass enforces the label's
+    *shape* only, not its *provenance*. ``source="known_window"`` is a placeholder
+    with no committed backing window — see :data:`StrengthSource`. Stage 1 must
+    derive strength from a committed window table before the §5.5
+    mixed-strength-pooling guarantee holds; a hand-set ``tier="high"`` is currently
+    unfalsifiable.
     """
 
     tier: StrengthTier
@@ -555,6 +574,23 @@ class GameRecord:
         seed-eligible ⟺ ``passed_crosscheck``. Eval/anchor consumers must
         *additionally* filter to ``episode_source == "natural"`` (that lives with
         the consumer, not the record).
+
+        **NECESSARY, NOT SUFFICIENT (review finding §2).** ``passed_crosscheck``
+        alone must NOT be read as "structurally legal opening". This predicate —
+        and :meth:`validate` — check distinctness, disjointness, in-range, and the
+        provenance orientation-binding, but they deliberately do **not** check the
+        engine's opening-legality rules (settlement 2-away spacing, road↔settlement
+        incidence as a hard rule, in-range under the *engine's* lattice). Those are
+        topology/engine-aware and live outside this pure value contract
+        (scope-lock, brief §6). §5.7 is explicit: every loaded seed MUST be re-run
+        through the engine's own opening-legality check at load time and illegal
+        ones HARD-rejected before any ``human_seed`` episode is emitted (the spike's
+        mid-game snap error was 15-24px - "never trust a snapped piece without the
+        legality re-check"). The seed loader (Stage 2/3) owns that mandatory gate;
+        a ``passed_crosscheck=True`` record can still encode a spacing-rule
+        violation and report ``True`` here. The topology-aware
+        :func:`check_road_incidence` helper is likewise a snap-sanity gate, NOT a
+        legality/orientation check (see its docstring).
         """
         return self.passed_crosscheck
 
