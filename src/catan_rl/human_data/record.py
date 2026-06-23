@@ -58,6 +58,11 @@ NUM_EDGES = 72
 #: Number tokens a non-desert hex may carry (2..12 minus the robber-only 7).
 VALID_HEX_NUMBERS: frozenset[int] = frozenset(set(range(2, 13)) - {7})
 
+#: Legal 2d6 roll outcomes for ``dice_log`` (the load-bearing dice-luck covariate,
+#: brief §5.4). Unlike a hex token, the **7 IS a legal roll** (it triggers the
+#: robber), so the range is the full 2..12 inclusive — the 7 is NOT excluded here.
+VALID_DICE_VALUES: frozenset[int] = frozenset(range(2, 13))
+
 #: Standard 19-tile board resource multiset (engine ``_random_resource_type_list``:
 #: 1 DESERT, 3 ORE, 3 BRICK, 4 WHEAT, 4 WOOD, 4 SHEEP). A board-CV resource
 #: misclassification yields a structurally-valid-but-wrong board with the wrong
@@ -229,14 +234,22 @@ class GameRecord:
           handles appearing exactly twice (``a != b``).
         - **Ruleset:** exactly ``{num_players: 2, win_vp: 15}`` (1v1-locked).
         - **Literals at runtime:** ``episode_source`` in its declared set.
+        - **dice_log:** every roll is a true ``int`` (no float / bool) in
+          ``2..12`` **inclusive** — the load-bearing dice-luck covariate (brief
+          §5.4); unlike a hex token the 7 IS a legal roll outcome here. An empty
+          ``dice_log`` is permitted only when ``winner is None`` (resign /
+          cutoff); a completed game with no rolls is a parse failure.
         - **Provenance orientation-binding (schema v2):** ``provenance`` must
           carry both :data:`PROVENANCE_BOARD_DESERT` and
           :data:`PROVENANCE_OPENINGS_DESERT` (the engine ``hex_id`` each CV stage
-          placed the desert at, ints in ``0..18``) and they must be **equal** —
-          the board and the openings must be locked under the same D6
-          orientation. This is the cross-orientation firewall (see below); it is
-          the only gate that catches a welded board/openings record because a D6
-          flip preserves the resource/number multisets.
+          placed the desert at, ints in ``0..18``); ``board_desert_hex`` must
+          equal the board's **own** unique ``DESERT`` ``hex_id`` (the free anchor
+          that rejects an internally-contradictory record and ties the firewall
+          to the board), and the two stamps must be **equal** — the board and the
+          openings must be locked under the same D6 orientation. This is the
+          cross-orientation firewall (see below); it is the only gate that
+          catches a welded board/openings record because a D6 flip preserves the
+          resource/number multisets.
         - **Cross-field truth table** (brief §5.6 / §5.7 — see below).
 
         **Truth table the contract enforces and every consumer must honour:**
@@ -247,10 +260,13 @@ class GameRecord:
         - **scoreboard-eligible** ⟺ ``winner is not None`` AND ``passed_crosscheck``
           AND ``opponent_strength.tier == "high"`` AND ``rejection_reason is None``
           (the §5.4 filter). Not asserted (eligibility is a *property*, not every
-          record must be eligible), but the predicate is fixed here so the
-          scoreboard filter and the audit can't drift.
-        - **seed-eligible** ⟺ ``passed_crosscheck`` (brief §5.7); eval/anchor see
-          only ``episode_source == "natural"`` seeds.
+          record must be eligible), but it is implemented as the exported
+          :meth:`is_scoreboard_eligible` — **that method is the single source of
+          truth**; the scoreboard builder and the rejection-bias audit must both
+          call it so the mixed-strength-pooling filter (§5.5) can't drift.
+        - **seed-eligible** ⟺ ``passed_crosscheck`` (brief §5.7), exported as
+          :meth:`is_seed_eligible`; eval/anchor additionally see only
+          ``episode_source == "natural"`` seeds.
         """
         # --- ruleset: 1v1-locked (CLAUDE.md / brief §1) ----------------------
         if self.ruleset != RULESET_1V1:
@@ -296,7 +312,8 @@ class GameRecord:
             )
         resource_counts: Counter[str] = Counter()
         number_bag: Counter[int] = Counter()
-        for h in self.hexes:
+        actual_desert_hex: int | None = None
+        for h, hid in zip(self.hexes, hex_ids, strict=True):
             resource = h["resource"]
             number = h.get("number")
             if resource not in RESOURCE_LITERALS:
@@ -305,6 +322,7 @@ class GameRecord:
                 )
             resource_counts[resource] += 1
             if resource == "DESERT":
+                actual_desert_hex = hid
                 if number is not None:
                     raise ValueError(
                         f"desert hex {h['hex_id']} must have number=None, got {number!r}"
@@ -410,6 +428,31 @@ class GameRecord:
                 f"{sorted(player_handles)}"
             )
 
+        # --- dice_log: the load-bearing dice-luck covariate (brief §5.4) -----
+        # dice_log is THE dice covariate the calibration scoreboard regresses
+        # against (v8 value vs realized result, dice marginalized). A
+        # confidently-wrong roll (a float OCR misread, a 13/1/0, or the
+        # robber-only sentinel) BIASES the calibration estimate rather than
+        # merely adding noise — exactly the §5 failure mode this contract blocks.
+        # Every other CV-sourced int is firewalled by ``_as_int``; close the gap.
+        # Range is the full 2..12 INCLUSIVE: unlike a hex token the 7 IS a legal
+        # roll outcome (it triggers the robber), so it is NOT excluded here.
+        for i, roll in enumerate(self.dice_log):
+            value = _as_int(roll, f"dice_log[{i}] {roll!r}")
+            if value not in VALID_DICE_VALUES:
+                raise ValueError(
+                    f"dice_log[{i}] {roll!r} not a legal 2d6 roll in "
+                    f"{sorted(VALID_DICE_VALUES)} (2..12 inclusive; the 7 is legal)"
+                )
+        # An empty dice_log is permitted ONLY for a non-finished game (resign /
+        # video cutoff, winner is None): a completed game (winner set) must have
+        # rolled, so a zero-length log there is a parse failure, not a short game.
+        if not self.dice_log and self.winner is not None:
+            raise ValueError(
+                "dice_log is empty but winner is set — a completed game must carry its rolls "
+                "(an empty log is only permitted on a resign / cutoff game, winner=None)"
+            )
+
         # --- cross-field truth table (brief §5.6 / §5.7) ---------------------
         if self.rejection_reason is not None and self.passed_crosscheck:
             raise ValueError(
@@ -447,6 +490,24 @@ class GameRecord:
                 raise ValueError(
                     f"provenance.{label} {val} out of 0..{NUM_HEXES - 1} (must be an engine hex_id)"
                 )
+        # FREE ANCHOR: the board's *own* desert position (the unique DESERT in
+        # ``self.hexes``, guaranteed to exist by the multiset gate above) is the
+        # ground truth the board stage's self-reported ``board_desert_hex`` must
+        # match. Asserting this (a) rejects an internally-contradictory record
+        # whose provenance disagrees with its own hexes, and (b) closes the
+        # welded-openings hole: the two stamps agreeing (11/11) no longer suffices
+        # if they disagree with the board — and the moment the openings stage
+        # honestly stamps the orientation it actually snapped under, a welded
+        # board=desert11 / openings-snapped-as-desert17 record surfaces as a
+        # 11-vs-17 mismatch below. Without this, the firewall trusts two
+        # self-reported ints with no tie to the board it is meant to bind.
+        assert actual_desert_hex is not None  # guaranteed by the multiset gate
+        if board_desert != actual_desert_hex:
+            raise ValueError(
+                f"provenance.{PROVENANCE_BOARD_DESERT}={board_desert} disagrees with the board's "
+                f"own desert hex_id {actual_desert_hex} (the unique DESERT in hexes) — the board "
+                "provenance must stamp the orientation the board was actually locked under"
+            )
         if board_desert != openings_desert:
             raise ValueError(
                 f"orientation mismatch: provenance.{PROVENANCE_BOARD_DESERT}={board_desert} but "
@@ -455,6 +516,34 @@ class GameRecord:
                 "resource/number multisets, so this is the only gate that catches the welded "
                 "desert17/desert11 record)"
             )
+
+    def is_scoreboard_eligible(self) -> bool:
+        """Whether this record may enter the opening calibration scoreboard.
+
+        The single source of truth for the §5.4 filter — the scoreboard builder
+        and the §5.6 rejection-bias audit must both call this so the predicate
+        can't drift between them. The ``tier == "high"`` clause is the
+        load-bearing one: dropping it silently pools ``"unknown"``-tier games
+        into the calibration number, the §5.5 mixed-strength-pooling bias.
+
+        scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
+        AND ``opponent_strength.tier == "high"`` AND ``rejection_reason is None``.
+        """
+        return (
+            self.winner is not None
+            and self.passed_crosscheck
+            and self.opponent_strength.tier == "high"
+            and self.rejection_reason is None
+        )
+
+    def is_seed_eligible(self) -> bool:
+        """Whether this record may seed exploration (brief §5.7).
+
+        seed-eligible ⟺ ``passed_crosscheck``. Eval/anchor consumers must
+        *additionally* filter to ``episode_source == "natural"`` (that lives with
+        the consumer, not the record).
+        """
+        return self.passed_crosscheck
 
     def to_dict(self) -> dict[str, Any]:
         """Plain-dict (JSON-serializable) form matching the brief §3 layout."""
@@ -512,7 +601,11 @@ class GameRecord:
             hexes=tuple(dict(h) for h in board["hexes"]),
             draft_order=tuple(payload["draft_order"]),
             openings=openings,
-            dice_log=tuple(int(d) for d in payload["dice_log"]),
+            # No ``int(d)`` coercion: dice_log is the load-bearing dice-luck
+            # covariate (brief §5.4), so it gets the same reject-don't-coerce
+            # firewall as the board IDs — values pass through unchanged and
+            # ``validate()`` rejects a float / out-of-range roll up front.
+            dice_log=tuple(payload["dice_log"]),
             winner=payload["winner"],
             episode_source=payload["episode_source"],
             rejection_reason=payload.get("rejection_reason"),

@@ -545,6 +545,110 @@ def test_emitted_jsonl_has_no_float_ids() -> None:
             assert isinstance(v, int) and not isinstance(v, bool)
 
 
+# --- dice_log: the load-bearing dice-luck covariate (SHOULD-FIX) ------------
+
+
+def test_validate_rejects_float_dice_value() -> None:
+    # int(6.0)==6 used to silently coerce a float roll; reject like a hex token.
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = [8, 6.0, 11, 4]
+    with pytest.raises(ValueError, match="dice_log"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_truncating_float_dice_value() -> None:
+    # int(6.9)==6 would silently truncate a misread roll into a valid one.
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = [8, 6.9, 11, 4]
+    with pytest.raises(ValueError, match="dice_log"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_bool_dice_value() -> None:
+    # bool is an int subclass — True must not masquerade as the roll 1.
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = [8, True, 11, 4]
+    with pytest.raises(ValueError, match="dice_log"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_out_of_range_dice_value() -> None:
+    for bad in (1, 13, 0, 99, -3):
+        payload = _sample_record().to_dict()
+        payload["dice_log"] = [8, bad, 11, 4]
+        with pytest.raises(ValueError, match="dice_log"):
+            GameRecord.from_dict(payload)
+
+
+def test_validate_allows_seven_in_dice_log() -> None:
+    # Unlike a hex token, 7 IS a legal roll outcome (it triggers the robber).
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = [8, 7, 11, 4]
+    assert GameRecord.from_dict(payload).dice_log == (8, 7, 11, 4)
+
+
+def test_validate_rejects_empty_dice_log_on_finished_game() -> None:
+    # A completed game (winner set) must carry its rolls.
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = []
+    with pytest.raises(ValueError, match="dice_log is empty"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_allows_empty_dice_log_on_cutoff_game() -> None:
+    # A resign / cutoff game (winner=None) may have a zero-length log.
+    payload = _sample_record().to_dict()
+    payload["dice_log"] = []
+    payload["winner"] = None
+    assert GameRecord.from_dict(payload).dice_log == ()
+
+
+# --- free anchor: board provenance must match the board's own desert --------
+
+
+def test_validate_rejects_provenance_desert_disagreeing_with_board() -> None:
+    """Probe B: provenance board/openings desert both agree (=5) but the board's
+    actual unique DESERT is hex 11 — an internally-contradictory record that the
+    two-stamp comparison alone would accept. The free anchor rejects it."""
+    payload = _sample_record().to_dict()
+    payload["provenance"]["board_desert_hex"] = 5
+    payload["provenance"]["openings_desert_hex"] = 5
+    with pytest.raises(ValueError, match="disagrees with the board's own desert"):
+        GameRecord.from_dict(payload)
+
+
+# --- scoreboard-eligibility predicate exported as code (SHOULD-FIX) ---------
+
+
+def test_is_scoreboard_eligible_true_for_sample() -> None:
+    assert _sample_record().is_scoreboard_eligible() is True
+
+
+def test_is_scoreboard_eligible_false_when_tier_not_high() -> None:
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"]["tier"] = "unknown"
+    assert GameRecord.from_dict(payload).is_scoreboard_eligible() is False
+
+
+def test_is_scoreboard_eligible_false_when_winner_null() -> None:
+    payload = _sample_record().to_dict()
+    payload["winner"] = None
+    assert GameRecord.from_dict(payload).is_scoreboard_eligible() is False
+
+
+def test_is_scoreboard_eligible_false_when_rejected() -> None:
+    payload = _sample_record().to_dict()
+    payload["rejection_reason"] = "green_tile_subtraction_failed"
+    payload["passed_crosscheck"] = False
+    rec = GameRecord.from_dict(payload)
+    assert rec.is_scoreboard_eligible() is False
+    assert rec.is_seed_eligible() is False
+
+
+def test_is_seed_eligible_tracks_passed_crosscheck() -> None:
+    assert _sample_record().is_seed_eligible() is True
+
+
 def test_resolve_ffmpeg_returns_a_usable_binary() -> None:
     """Resolves to a system or imageio-ffmpeg binary (both available in CI)."""
     path = resolve_ffmpeg()
