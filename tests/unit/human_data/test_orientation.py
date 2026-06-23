@@ -10,6 +10,7 @@ deferred classifier is enforced by the scale-up hard gate.
 from __future__ import annotations
 
 from collections import Counter
+from typing import Any
 
 import pytest
 
@@ -27,7 +28,7 @@ from catan_rl.human_data import (
 
 # The re-snapped game-1 board (desert=11) + openings, mirrored from the scaffold
 # sample. ThePhantom s[1,19], rayman147 s[11,3].
-_GAME1_HEXES: tuple[dict[str, object], ...] = (
+_GAME1_HEXES: tuple[dict[str, Any], ...] = (
     {"hex_id": 0, "resource": "SHEEP", "number": 11},
     {"hex_id": 1, "resource": "BRICK", "number": 9},
     {"hex_id": 2, "resource": "WHEAT", "number": 10},
