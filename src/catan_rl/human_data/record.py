@@ -27,6 +27,7 @@ Conventions baked in here (build brief §5, §6):
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
@@ -47,6 +48,50 @@ NUM_EDGES = 72
 
 #: Number tokens a non-desert hex may carry (2..12 minus the robber-only 7).
 VALID_HEX_NUMBERS: frozenset[int] = frozenset(set(range(2, 13)) - {7})
+
+#: Standard 19-tile board resource multiset (engine ``_random_resource_type_list``:
+#: 1 DESERT, 3 ORE, 3 BRICK, 4 WHEAT, 4 WOOD, 4 SHEEP). A board-CV resource
+#: misclassification yields a structurally-valid-but-wrong board with the wrong
+#: counts (brief §5.6) — the multiset gate is the cheapest CV-relevant defense.
+#: Kept a local constant (no engine import) to preserve the scope-lock (brief §6).
+STANDARD_RESOURCE_COUNTS: dict[str, int] = {
+    "DESERT": 1,
+    "ORE": 3,
+    "BRICK": 3,
+    "WHEAT": 4,
+    "WOOD": 4,
+    "SHEEP": 4,
+}
+
+#: Standard 18-token number bag (engine ``SPIRAL_CHIP_SEQUENCE``): one each of 2
+#: and 12, two each of 3..6 and 8..11 (no 7 — that is the robber).
+STANDARD_NUMBER_BAG: dict[int, int] = {
+    2: 1,
+    3: 2,
+    4: 2,
+    5: 2,
+    6: 2,
+    8: 2,
+    9: 2,
+    10: 2,
+    11: 2,
+    12: 1,
+}
+
+
+def _as_int(value: Any, label: str) -> int:
+    """Return ``value`` iff it is a true (non-bool) ``int``; else raise.
+
+    The CV/OCR upstream stages are float-producing (pip-count number reader,
+    affine-snap vertex/edge mapper). Coerce-and-range-check (``int(8.5) == 8``)
+    silently admits out-of-domain floats that then survive into the emitted JSONL
+    row (brief §3 guarantees engine *integer* IDs). Reject non-integers up front;
+    ``bool`` is an ``int`` subclass and must not masquerade as a 0/1 token.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{label} must be an int, got {value!r} ({type(value).__name__})")
+    return value
+
 
 #: The 1v1 Colonist ruleset is hard-locked (CLAUDE.md / brief §1): exactly two
 #: players, 15 VP to win. A future 4-player generalization must consciously break
@@ -145,11 +190,23 @@ class GameRecord:
 
         Invariants enforced:
 
+        - **Players:** exactly the keys ``{"agent", "opponent"}`` with two
+          distinct non-empty handle strings (no name-OCR collision).
         - **Resources / numbers:** every hex resource in :data:`RESOURCE_LITERALS`;
-          ``DESERT`` ⟺ ``number is None``, non-desert ⟺ ``number`` in 2..12 \\ {7}.
+          ``DESERT`` ⟺ ``number is None``, non-desert ⟺ ``number`` in 2..12 \\ {7};
+          all hex numbers / IDs are true ``int`` s (no float survives the snap).
+        - **Standard-board multisets:** non-desert resource counts ==
+          :data:`STANDARD_RESOURCE_COUNTS` and the number-token bag ==
+          :data:`STANDARD_NUMBER_BAG` — a CV resource/number misclassification is
+          a confidently-wrong board (brief §5.6) and is rejected here.
         - **Board IDs:** ``hex_id`` multiset is exactly ``{0..18}``; all opening
-          vertices in ``0..53``, edges in ``0..71``; exactly 2 settlements + 2
-          roads per player.
+          vertices in ``0..53``, edges in ``0..71``; exactly 2 *distinct*
+          settlements + 2 *distinct* roads per player; settlement vertices are
+          disjoint across the two players (no double-snap / shared vertex).
+        - **Openings completeness:** exactly the two player handles have an
+          opening (both present, no extras).
+        - **draft_order:** a length-4 snake ``[a, b, b, a]`` with both player
+          handles appearing exactly twice (``a != b``).
         - **Ruleset:** exactly ``{num_players: 2, win_vp: 15}`` (1v1-locked).
         - **Literals at runtime:** ``episode_source`` in its declared set.
         - **Cross-field truth table** (brief §5.6 / §5.7 — see below).
@@ -180,13 +237,37 @@ class GameRecord:
                 f"episode_source {self.episode_source!r} not in {get_args(EpisodeSource)}"
             )
 
-        # --- hexes: multiset exactly {0..18}; resources / numbers ------------
-        hex_ids = [int(h["hex_id"]) for h in self.hexes]
+        # --- players: exactly {agent, opponent}, two distinct non-empty -------
+        # The 1v1 ruleset guarantees two distinct seats (brief §1). A name-OCR
+        # collision (both seats read as the same string) collapses the handle set
+        # to size 1, after which every downstream subset check (openings,
+        # draft_order, winner) still passes — silently breaking colour→player
+        # labelling and the per-game scoreboard pairing (finding §3).
+        if set(self.players.keys()) != {"agent", "opponent"}:
+            raise ValueError(
+                f"players keys must be exactly {{'agent', 'opponent'}}, got {sorted(self.players)}"
+            )
+        agent_handle = self.players["agent"]
+        opponent_handle = self.players["opponent"]
+        for role, handle in (("agent", agent_handle), ("opponent", opponent_handle)):
+            if not isinstance(handle, str) or not handle.strip():
+                raise ValueError(f"{role} handle {handle!r} must be a non-empty string")
+        if agent_handle == opponent_handle:
+            raise ValueError(
+                f"agent and opponent share the handle {agent_handle!r}; the two 1v1 seats "
+                "must be distinct (likely a name-OCR collision)"
+            )
+        player_handles = {agent_handle, opponent_handle}
+
+        # --- hexes: ids are true ints, multiset exactly {0..18} --------------
+        hex_ids = [_as_int(h["hex_id"], f"hex_id {h.get('hex_id')!r}") for h in self.hexes]
         if set(hex_ids) != set(range(NUM_HEXES)) or len(hex_ids) != NUM_HEXES:
             raise ValueError(
                 f"hex_ids must be exactly the multiset {{0..{NUM_HEXES - 1}}}, "
                 f"got {sorted(hex_ids)}"
             )
+        resource_counts: Counter[str] = Counter()
+        number_bag: Counter[int] = Counter()
         for h in self.hexes:
             resource = h["resource"]
             number = h.get("number")
@@ -194,45 +275,105 @@ class GameRecord:
                 raise ValueError(
                     f"hex {h['hex_id']} resource {resource!r} not in {sorted(RESOURCE_LITERALS)}"
                 )
+            resource_counts[resource] += 1
             if resource == "DESERT":
                 if number is not None:
                     raise ValueError(
                         f"desert hex {h['hex_id']} must have number=None, got {number!r}"
                     )
             else:
-                if number is None or int(number) not in VALID_HEX_NUMBERS:
+                num = _as_int(number, f"hex {h['hex_id']} ({resource}) number {number!r}")
+                if num not in VALID_HEX_NUMBERS:
                     raise ValueError(
                         f"hex {h['hex_id']} ({resource}) number {number!r} not in "
                         f"{sorted(VALID_HEX_NUMBERS)}"
                     )
+                number_bag[num] += 1
 
-        # --- openings: keys ⊆ player handles; 2 settlements + 2 roads in range
-        player_handles = set(self.players.values())
+        # --- standard-board multisets (brief §5.2 / §5.6, finding §1/§5) -----
+        if dict(resource_counts) != STANDARD_RESOURCE_COUNTS:
+            raise ValueError(
+                f"board resource counts {dict(sorted(resource_counts.items()))} are not the "
+                f"standard 19-tile multiset {STANDARD_RESOURCE_COUNTS} — a CV resource "
+                "misclassification yields a structurally-valid-but-wrong board"
+            )
+        if dict(number_bag) != STANDARD_NUMBER_BAG:
+            raise ValueError(
+                f"board number-token bag {dict(sorted(number_bag.items()))} is not the standard "
+                f"18-token bag {STANDARD_NUMBER_BAG}"
+            )
+
+        # --- openings: exactly the two handles, each 2 distinct s + 2 distinct r
+        # Completeness (both present, no extras) — a partial parse that detects
+        # only one colour's pieces must not validate as complete (finding §4).
+        if set(self.openings.keys()) != player_handles:
+            raise ValueError(
+                f"openings keys {sorted(self.openings)} must be exactly the two player handles "
+                f"{sorted(player_handles)} (both present, no extras)"
+            )
+        settlement_sets: dict[str, set[int]] = {}
         for name, opening in self.openings.items():
-            if name not in player_handles:
-                raise ValueError(
-                    f"opening key {name!r} not in player handles {sorted(player_handles)}"
-                )
             if len(opening.settlements) != 2 or len(opening.roads) != 2:
                 raise ValueError(
                     f"opening for {name!r} must have 2 settlements + 2 roads, "
                     f"got {len(opening.settlements)} / {len(opening.roads)}"
                 )
-            for v in opening.settlements:
-                if not 0 <= int(v) < NUM_VERTICES:
+            settlements = [
+                _as_int(v, f"settlement vertex {v!r} for {name!r}") for v in opening.settlements
+            ]
+            roads = [_as_int(e, f"road edge {e!r} for {name!r}") for e in opening.roads]
+            for v in settlements:
+                if not 0 <= v < NUM_VERTICES:
                     raise ValueError(
                         f"settlement vertex {v} for {name!r} out of 0..{NUM_VERTICES - 1}"
                     )
-            for e in opening.roads:
-                if not 0 <= int(e) < NUM_EDGES:
+            for e in roads:
+                if not 0 <= e < NUM_EDGES:
                     raise ValueError(f"road edge {e} for {name!r} out of 0..{NUM_EDGES - 1}")
+            # A double-snap (two pieces rounded to one ID) is the literal output
+            # of the §5.7 snap error — duplicate vertices/edges must be rejected.
+            if len(set(settlements)) != 2:
+                raise ValueError(
+                    f"opening for {name!r} has duplicate settlement vertices {settlements} — "
+                    "must be 2 distinct vertices (likely a double-snap)"
+                )
+            if len(set(roads)) != 2:
+                raise ValueError(
+                    f"opening for {name!r} has duplicate road edges {roads} — "
+                    "must be 2 distinct edges (likely a double-snap)"
+                )
+            settlement_sets[name] = set(settlements)
+        # Two players cannot occupy the same settlement vertex (cross-player snap).
+        shared = settlement_sets[agent_handle] & settlement_sets[opponent_handle]
+        if shared:
+            raise ValueError(
+                f"settlement vertices {sorted(shared)} are shared across both players; "
+                "openings must be disjoint (likely a cross-player snap collision)"
+            )
 
-        # --- draft_order: names ⊆ player handles -----------------------------
+        # --- draft_order: length-4 snake [a, b, b, a], each handle twice ------
+        # Load-bearing: colour→player assignment is cross-checked against the
+        # snake order (brief §2, §5.14). An OCR-corrupted / partial draft order
+        # that silently validates can mislabel which opening belongs to whom
+        # (finding §2). The 1v1 snake draft is exactly [a, b, b, a].
+        if len(self.draft_order) != 4:
+            raise ValueError(
+                f"draft_order must be the length-4 snake draft, got {list(self.draft_order)}"
+            )
         for name in self.draft_order:
             if name not in player_handles:
                 raise ValueError(
                     f"draft_order name {name!r} not in player handles {sorted(player_handles)}"
                 )
+        draft_counts = Counter(self.draft_order)
+        a, b, c, d = self.draft_order
+        if dict(draft_counts) != {agent_handle: 2, opponent_handle: 2} or not (
+            a == d and b == c and a != b
+        ):
+            raise ValueError(
+                f"draft_order {list(self.draft_order)} is not a valid snake draft [a, b, b, a] "
+                "with each of the two players appearing exactly twice"
+            )
 
         # --- winner: null or one of the player handles -----------------------
         if self.winner is not None and self.winner not in player_handles:

@@ -34,17 +34,42 @@ from catan_rl.human_data.topology import (
 FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "human_data"
 
 
+# The real game-1 board (spike artifact
+# ``blockers/board/locked_board_240.json``): a legal standard 19-tile board, so
+# ``_sample_record()`` is itself a valid board (not the old all-ORE stub which the
+# multiset gate now correctly rejects). Desert is hex 11.
+_GAME1_HEXES: tuple[dict[str, object], ...] = (
+    {"hex_id": 0, "resource": "SHEEP", "number": 11},
+    {"hex_id": 1, "resource": "BRICK", "number": 9},
+    {"hex_id": 2, "resource": "WHEAT", "number": 10},
+    {"hex_id": 3, "resource": "WHEAT", "number": 3},
+    {"hex_id": 4, "resource": "BRICK", "number": 6},
+    {"hex_id": 5, "resource": "SHEEP", "number": 5},
+    {"hex_id": 6, "resource": "ORE", "number": 4},
+    {"hex_id": 7, "resource": "WOOD", "number": 6},
+    {"hex_id": 8, "resource": "SHEEP", "number": 2},
+    {"hex_id": 9, "resource": "WOOD", "number": 5},
+    {"hex_id": 10, "resource": "BRICK", "number": 8},
+    {"hex_id": 11, "resource": "DESERT", "number": None},
+    {"hex_id": 12, "resource": "SHEEP", "number": 4},
+    {"hex_id": 13, "resource": "WOOD", "number": 11},
+    {"hex_id": 14, "resource": "WHEAT", "number": 12},
+    {"hex_id": 15, "resource": "ORE", "number": 9},
+    {"hex_id": 16, "resource": "ORE", "number": 10},
+    {"hex_id": 17, "resource": "WOOD", "number": 8},
+    {"hex_id": 18, "resource": "WHEAT", "number": 3},
+)
+
+
 def _sample_record() -> GameRecord:
     """A representative ``GameRecord`` built from the game-1 spike result."""
-    hexes = [{"hex_id": i, "resource": "ORE", "number": 8} for i in range(18)]
-    hexes.append({"hex_id": 18, "resource": "DESERT", "number": None})
     return GameRecord(
         video_id="9Sm86ml04aI",
         game_index=1,
         players={"agent": "ThePhantom", "opponent": "rayman147"},
         opponent_strength=OpponentStrength(tier="high", source="known_window", confidence=0.8),
         ruleset={"num_players": 2, "win_vp": 15},
-        hexes=tuple(hexes),
+        hexes=_GAME1_HEXES,
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
         openings={
             "ThePhantom": PlayerOpening(settlements=(4, 10), roads=(7, 20)),
@@ -84,7 +109,7 @@ def test_game_record_schema_version_present() -> None:
 def test_game_record_resources_are_string_literals() -> None:
     """Resources are bare strings (no enum) — desert carries number=None."""
     payload = _sample_record().to_dict()
-    desert = payload["board"]["hexes"][-1]
+    desert = next(h for h in payload["board"]["hexes"] if h["resource"] == "DESERT")
     assert desert["resource"] == "DESERT"
     assert desert["number"] is None
     assert isinstance(payload["board"]["hexes"][0]["resource"], str)
@@ -150,7 +175,11 @@ def test_validate_rejects_illegal_resource() -> None:
 
 def test_validate_rejects_desert_with_number() -> None:
     payload = _sample_record().to_dict()
-    payload["board"]["hexes"][-1]["number"] = 8  # desert must be None
+    # Hex 11 is the game-1 desert; a desert must carry number=None. Drop the
+    # paired non-desert token so only the desert-with-number rule fires (the
+    # multiset gate would otherwise mask it).
+    desert = next(h for h in payload["board"]["hexes"] if h["resource"] == "DESERT")
+    desert["number"] = 7  # robber-only token, never a real chip → unambiguous
     with pytest.raises(ValueError, match="desert"):
         GameRecord.from_dict(payload)
 
@@ -214,7 +243,7 @@ def test_validate_allows_null_winner() -> None:
 def test_validate_rejects_opening_key_not_a_player() -> None:
     payload = _sample_record().to_dict()
     payload["openings"]["ghost"] = {"settlements": [1, 2], "roads": [3, 4]}
-    with pytest.raises(ValueError, match="opening key"):
+    with pytest.raises(ValueError, match="openings keys"):
         GameRecord.from_dict(payload)
 
 
@@ -249,6 +278,167 @@ def test_validate_allows_rejected_record_for_bias_audit() -> None:
     rec = GameRecord.from_dict(payload)
     assert rec.rejection_reason == "green_tile_subtraction_failed"
     assert rec.passed_crosscheck is False
+
+
+# --- standard-board multiset gate (findings #1, #5) -------------------------
+
+
+def test_validate_rejects_wrong_resource_multiset() -> None:
+    # An all-ORE board is structurally valid per-hex (every literal legal, ids
+    # 0..18) but is NOT the standard 19-tile board — the CV "confidently wrong"
+    # failure mode. The multiset gate must reject it.
+    hexes = [{"hex_id": i, "resource": "ORE", "number": 8} for i in range(18)]
+    hexes.append({"hex_id": 18, "resource": "DESERT", "number": None})
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"] = hexes
+    with pytest.raises(ValueError, match="resource"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_wrong_number_token_bag() -> None:
+    # Keep the standard resource multiset but corrupt the number-token bag
+    # (swap a 6 to a 10 → three 10s, one 6): not the standard board.
+    payload = _sample_record().to_dict()
+    for h in payload["board"]["hexes"]:
+        if h["resource"] != "DESERT" and h["number"] == 6:
+            h["number"] = 10
+            break
+    with pytest.raises(ValueError, match="number-token"):
+        GameRecord.from_dict(payload)
+
+
+# --- players dict: exactly two distinct seats (finding #3) ------------------
+
+
+def test_validate_rejects_players_collision() -> None:
+    payload = _sample_record().to_dict()
+    payload["players"] = {"agent": "ThePhantom", "opponent": "ThePhantom"}
+    with pytest.raises(ValueError, match="distinct"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_players_wrong_keys() -> None:
+    payload = _sample_record().to_dict()
+    payload["players"] = {"p1": "ThePhantom", "p2": "rayman147"}
+    with pytest.raises(ValueError, match="players"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_empty_handle() -> None:
+    payload = _sample_record().to_dict()
+    payload["players"] = {"agent": "ThePhantom", "opponent": ""}
+    with pytest.raises(ValueError, match="handle"):
+        GameRecord.from_dict(payload)
+
+
+# --- draft_order: snake-draft of length 4 (finding #2) ----------------------
+
+
+def test_validate_rejects_short_draft_order() -> None:
+    payload = _sample_record().to_dict()
+    payload["draft_order"] = ["ThePhantom", "rayman147"]
+    with pytest.raises(ValueError, match="draft_order"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_one_player_draft_order() -> None:
+    payload = _sample_record().to_dict()
+    payload["draft_order"] = ["ThePhantom"] * 4
+    with pytest.raises(ValueError, match="draft_order"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_non_snake_draft_order() -> None:
+    # [a, a, b, b] is length-4 with each handle twice but not a snake [a,b,b,a].
+    payload = _sample_record().to_dict()
+    payload["draft_order"] = ["rayman147", "rayman147", "ThePhantom", "ThePhantom"]
+    with pytest.raises(ValueError, match="snake"):
+        GameRecord.from_dict(payload)
+
+
+# --- openings: completeness + distinctness + cross-player (findings #4, #6) -
+
+
+def test_validate_rejects_missing_player_opening() -> None:
+    payload = _sample_record().to_dict()
+    del payload["openings"]["rayman147"]
+    with pytest.raises(ValueError, match="openings"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_duplicate_settlement_vertex() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["settlements"] = [4, 4]  # double-snap
+    with pytest.raises(ValueError, match="distinct"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_duplicate_road_edge() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["roads"] = [7, 7]
+    with pytest.raises(ValueError, match="distinct"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_shared_settlement_across_players() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["rayman147"]["settlements"] = [4, 0]  # 4 is ThePhantom's
+    with pytest.raises(ValueError, match="disjoint"):
+        GameRecord.from_dict(payload)
+
+
+# --- float hole (BLOCKER): coerce-and-check must reject non-integers --------
+
+
+def test_validate_rejects_float_hex_number() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["number"] = 8.5  # int(8.5)==8 used to pass
+    with pytest.raises(ValueError, match="number"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_float_hex_id() -> None:
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["hex_id"] = 0.0  # must be a true int
+    with pytest.raises(ValueError, match="hex_id"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_float_settlement_vertex() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["settlements"] = [4.7, 10]  # int(4.7)==4
+    with pytest.raises(ValueError, match="vertex"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_float_road_edge() -> None:
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["roads"] = [7.2, 20]
+    with pytest.raises(ValueError, match="edge"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_bool_hex_number() -> None:
+    # bool is an int subclass — True must not masquerade as the token 1/0.
+    payload = _sample_record().to_dict()
+    payload["board"]["hexes"][0]["number"] = True
+    with pytest.raises(ValueError, match="number"):
+        GameRecord.from_dict(payload)
+
+
+def test_emitted_jsonl_has_no_float_ids() -> None:
+    # End-to-end: a float that slipped through used to survive into the JSONL
+    # row. Now construction rejects it, so a valid record's row is all-int.
+    line = _sample_record().to_json_line()
+    row = json.loads(line)
+    for h in row["board"]["hexes"]:
+        assert isinstance(h["hex_id"], int) and not isinstance(h["hex_id"], bool)
+        assert h["number"] is None or (
+            isinstance(h["number"], int) and not isinstance(h["number"], bool)
+        )
+    for op in row["openings"].values():
+        for v in op["settlements"] + op["roads"]:
+            assert isinstance(v, int) and not isinstance(v, bool)
 
 
 def test_resolve_ffmpeg_returns_a_usable_binary() -> None:
