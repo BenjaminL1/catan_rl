@@ -1,0 +1,43 @@
+OPENING-PLACEMENT SPIKE — VERDICT: GO (with one caveat to harden)
+Video: https://www.youtube.com/watch?v=9Sm86ml04aI  | Game 1, 1v1 ThePhantom vs rayman147
+
+RESULT (engine ids), eyeball-confirmed against overlay_openings_zoom.png + verify_center.png:
+  rayman147 (GREEN): settlements [20, 0]  roads [34, 2]
+  ThePhantom (BLACK): settlements [4, 10] roads [7, 20]
+All 8 placements land on real pieces. All 4 roads incident to own settlement. 2+2 per player.
+
+LOG SETUP SEQUENCE (OCR, exact + ordered) — snake draft 1->2->2->1:
+  rayman147 S, rayman147 R, ThePhantom S, ThePhantom R,
+  ThePhantom S (+starting resources), ThePhantom R,
+  rayman147 S (+starting resources), rayman147 R, then "rayman147 rolled" (=setup done)
+Player colors read from bottom HUD (t=120): rayman147=GREEN, ThePhantom=BLACK.
+  NOTE: prior board_cv/pieces.py comment claimed GREEN=ThePhantom — that is WRONG. HUD is authoritative.
+
+METHOD: post-setup single frame t=247 (last frame after 8th piece, BEFORE first roll => robber still on desert).
+  - affine fit (board_cv/spike.py) on t=247: resid mean 0.71px / max 1.38px. Snapping is the easy, solved part.
+  - GREEN pieces: tile-green subtraction (green present in EMPTY frame t=105 = forest/pasture TILE, not piece).
+  - BLACK pieces: dark low-V mask; gray robber excluded by V band + hex-center test. (mask_black.png is perfectly clean.)
+  - settlement = solid blob -> nearest vertex; road = blob shaft direction -> incident edge.
+
+CAVEATS / ERROR SOURCES (honest):
+  1. GREEN-piece vs GREEN-TILE color collision is the real difficulty. Plain color seg FAILS (forest/pasture
+     tiles == player green). Tile-subtraction from the empty baseline fixes it but needs the empty frame.
+  2. Affine orientation is NON-deterministic across frames (hex symmetry => greedy match lands on different
+     rotations/reflections per frame; residual stays <2px but engine-IDs flip). MUST lock ONE verified-orientation
+     fit (desert==hex17 here) and reuse it (board is pixel-static during setup). This bit the prior board_cv fits too.
+  3. Naive frame-DIFF (incremental) FAILED: dominated by the play-GUI "available-spots" pulsing-glow highlight +
+     timers, not by the new piece. Post-setup single-frame + color was far cleaner. Incremental diff NOT recommended.
+  4. Road disambiguation for the straight-down black road (e7 vs e9/e10) needed a geometry tiebreak (which incident
+     edge is most vertical). One ambiguous case out of four — resolved, but a real pipeline needs the tiebreak coded.
+
+ACCURACY ESTIMATE (this game): 8/8 placements correct (settlements 4/4, roads 4/4) after the fixes above.
+  Confidence is high here because the opening is the easy case (near-empty board, known count from log).
+
+KEY ARTIFACTS:
+  overlay_openings.png / overlay_openings_zoom.png  — annotated result (eyeball this)
+  verify_center.png / verify_blackupper.png         — close-ups of trickiest pieces
+  mask_black.png / mask_green.png                   — segmentation (shows the 2 clean black + 2 green solid pieces)
+  groundtruth_lattice_247.png, gt_TR/CTR/UC/CL.png  — lattice + per-region zooms for independent ID checking
+  openings.json                                     — machine-readable result + log sequence + cross-check meta
+  fit_247.json                                      — locked verified-orientation affine (desert=hex17)
+  final_detect.py / make_final.py                   — the detector

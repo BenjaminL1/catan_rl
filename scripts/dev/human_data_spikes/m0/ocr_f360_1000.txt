@@ -1,0 +1,8 @@
+# source=f360_1000.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+relrd MZ
+Crnii_JC
+K
+Tamank7 7
+Wetntnlur
+auntt

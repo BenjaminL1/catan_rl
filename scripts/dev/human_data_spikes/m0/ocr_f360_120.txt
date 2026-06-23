@@ -1,0 +1,6 @@
+# source=f360_120.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+uttlnrlum harioELene
+[4olcemtun Adp
+Rnnitt [Hocoueaigtt
+umnani4y pira 4Apli

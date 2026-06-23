@@ -1,0 +1,228 @@
+{
+  "frame_t": 500,
+  "hexes": [
+    {
+      "hex_id": 0,
+      "resource": "SHEEP",
+      "number": 11
+    },
+    {
+      "hex_id": 1,
+      "resource": "WHEAT",
+      "number": 10
+    },
+    {
+      "hex_id": 2,
+      "resource": "BRICK",
+      "number": 9
+    },
+    {
+      "hex_id": 3,
+      "resource": "ORE",
+      "number": 4
+    },
+    {
+      "hex_id": 4,
+      "resource": "SHEEP",
+      "number": 5
+    },
+    {
+      "hex_id": 5,
+      "resource": "BRICK",
+      "number": 6
+    },
+    {
+      "hex_id": 6,
+      "resource": "WHEAT",
+      "number": 3
+    },
+    {
+      "hex_id": 7,
+      "resource": "WOOD",
+      "number": 5
+    },
+    {
+      "hex_id": 8,
+      "resource": "SHEEP",
+      "number": 2
+    },
+    {
+      "hex_id": 9,
+      "resource": "WOOD",
+      "number": 6
+    },
+    {
+      "hex_id": 10,
+      "resource": "WHEAT",
+      "number": 3
+    },
+    {
+      "hex_id": 11,
+      "resource": "WOOD",
+      "number": 8
+    },
+    {
+      "hex_id": 12,
+      "resource": "ORE",
+      "number": 10
+    },
+    {
+      "hex_id": 13,
+      "resource": "ORE",
+      "number": 9
+    },
+    {
+      "hex_id": 14,
+      "resource": "WHEAT",
+      "number": 12
+    },
+    {
+      "hex_id": 15,
+      "resource": "WOOD",
+      "number": 11
+    },
+    {
+      "hex_id": 16,
+      "resource": "SHEEP",
+      "number": 4
+    },
+    {
+      "hex_id": 17,
+      "resource": "DESERT",
+      "number": null
+    },
+    {
+      "hex_id": 18,
+      "resource": "BRICK",
+      "number": 8
+    }
+  ],
+  "ports": [
+    {
+      "slot": 0,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 1,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 2,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 3,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 4,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 5,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 6,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 7,
+      "type": "UNKNOWN"
+    },
+    {
+      "slot": 8,
+      "type": "UNKNOWN"
+    }
+  ],
+  "pieces": [
+    {
+      "player": "GREEN",
+      "kind": "city",
+      "vertex_id": 8,
+      "px": [
+        934.4716459197787,
+        376.63208852005533
+      ],
+      "area": 723,
+      "snap_err": 20.843415655116793
+    },
+    {
+      "player": "GREEN",
+      "kind": "city",
+      "vertex_id": 14,
+      "px": [
+        526.457805907173,
+        511.5548523206751
+      ],
+      "area": 948,
+      "snap_err": 15.117213957405104
+    },
+    {
+      "player": "BLACK",
+      "kind": "city",
+      "vertex_id": 3,
+      "px": [
+        850.3523969722456,
+        479.08662741799833
+      ],
+      "area": 3567,
+      "snap_err": 18.036853564498244
+    },
+    {
+      "player": "BLACK",
+      "kind": "road",
+      "edge_id": 26,
+      "px": [
+        487.8888888888889,
+        638.4907407407408
+      ],
+      "area": 108,
+      "snap_err": 24.529360329946392
+    },
+    {
+      "player": "BLACK",
+      "kind": "road",
+      "edge_id": 28,
+      "px": [
+        589.2460063897763,
+        700.0415335463259
+      ],
+      "area": 313,
+      "snap_err": 23.831885531108043
+    },
+    {
+      "player": "BLACK",
+      "kind": "road",
+      "edge_id": 56,
+      "px": [
+        462.7789855072464,
+        700.195652173913
+      ],
+      "area": 276,
+      "snap_err": 24.115401271671935
+    },
+    {
+      "player": "BLACK",
+      "kind": "road",
+      "edge_id": 33,
+      "px": [
+        670.0413793103448,
+        841.6413793103449
+      ],
+      "area": 290,
+      "snap_err": 24.49880748214761
+    },
+    {
+      "player": "BLACK",
+      "kind": "road",
+      "edge_id": 58,
+      "px": [
+        542.1282051282051,
+        839.6196581196581
+      ],
+      "area": 234,
+      "snap_err": 21.207047474300666
+    }
+  ]
+}

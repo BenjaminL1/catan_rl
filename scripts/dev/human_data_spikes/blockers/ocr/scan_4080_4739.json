@@ -1,0 +1,556 @@
+{
+  "4080": {
+    "log": [
+      "rayman147 used Knight",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4095": {
+    "log": [
+      "rayman147 used KnightB",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "you",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "from"
+    ],
+    "hits": []
+  },
+  "4110": {
+    "log": [
+      "rayman147 gave bank",
+      "and",
+      "took",
+      "rayman147 bought",
+      "ThePhantom rolled",
+      "ThePhantom moved Robber",
+      "to",
+      "You stole",
+      "from rayman147"
+    ],
+    "hits": []
+  },
+  "4125": {
+    "log": [
+      "Largest",
+      "passed from ThePhantom to",
+      "rayman147 (+2 VPs)",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "Army"
+    ],
+    "hits": []
+  },
+  "4140": {
+    "log": [
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4155": {
+    "log": [
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom used Monopoly",
+      "ThePhantom stole 3",
+      "ThePhantom built a",
+      "(+1",
+      "City \"",
+      "VP)"
+    ],
+    "hits": []
+  },
+  "4170": {
+    "log": [
+      "ThePhantom gave bank",
+      "took",
+      "ThePhantom built a Road",
+      "rayman147 rolled",
+      "rayman147 discarded",
+      "rayman147 moved Robber",
+      "rayman147 stole",
+      "from you",
+      "and"
+    ],
+    "hits": []
+  },
+  "4185": {
+    "log": [
+      "ThePhantom moved Robber",
+      "You stole",
+      "from rayman147",
+      "ThePhantom built a Road",
+      "rayman147 used Knight ",
+      "rayman147 moved Robber",
+      "Player has no cards"
+    ],
+    "hits": []
+  },
+  "4200": {
+    "log": [
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom used Year of Plenty",
+      "ThePhantom took from bank",
+      "ThePhantom built a",
+      "(+1 VP)",
+      "rayman147 rolled",
+      "City \""
+    ],
+    "hits": []
+  },
+  "4215": {
+    "log": [
+      "8 Inernantom rollea",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "rayman147 rolled [ I",
+      "ThePhantom rolled"
+    ],
+    "hits": []
+  },
+  "4230": {
+    "log": [
+      "ThePhantom got",
+      "rayman147 rolled",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4245": {
+    "log": [
+      "ThePhantom bought_",
+      "rayman147 rolled",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4260": {
+    "log": [
+      "ThePhantom got",
+      "ThePhantom rolled",
+      "D",
+      "rayman147 got",
+      "ThePhantom built a Settlement",
+      "(+1 VP)",
+      "raymani47 rolled",
+      "Open Stats",
+      "rayman147: gg",
+      "ThePhantom: gg"
+    ],
+    "hits": []
+  },
+  "4275": {
+    "log": [
+      "ThePhantom rolled",
+      "rayman147 got",
+      "rayman147 rolled",
+      "rayman147 moved Robber",
+      "to",
+      "You stole",
+      "from ThePhantom",
+      "raymani47 built a",
+      "'(+1 VP)",
+      "Open Stats",
+      "rayman147: gg",
+      "ThePhantom: gg",
+      "City"
+    ],
+    "hits": []
+  },
+  "4290": {
+    "log": [
+      "ThePhantom got",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom built a Settlement",
+      "(+1 VP)",
+      "rayman|47 rolled",
+      "Open Stats",
+      "rayman147: gg",
+      "ThePhantom: gg"
+    ],
+    "hits": []
+  },
+  "4305": {
+    "log": [
+      "Happy settlingl Learn how to play in the",
+      "rulebook",
+      "List of commands: /help"
+    ],
+    "hits": [
+      "happy settling",
+      "settling"
+    ]
+  },
+  "4320": {
+    "log": [
+      "Happy settlingl Learn how to play in the",
+      "rulebook",
+      "List of commands: /help"
+    ],
+    "hits": [
+      "happy settling",
+      "settling"
+    ]
+  },
+  "4335": {
+    "log": [
+      "Happy settlingl Learn how to play in the",
+      "rulebook",
+      "List of commands: /help"
+    ],
+    "hits": [
+      "happy settling",
+      "settling"
+    ]
+  },
+  "4350": {
+    "log": [
+      "Happy settlingl Learn how to play in the",
+      "rulebook",
+      "List of commands: /help",
+      "ThePhantom placed a Settlement"
+    ],
+    "hits": [
+      "happy settling",
+      "settling"
+    ]
+  },
+  "4365": {
+    "log": [
+      "rayman147 placed a Settlement",
+      "rayman147 placed a Road",
+      "rayman147 placed a Settlement",
+      "rayman147 received starting resources",
+      "rayman147 placed a Road"
+    ],
+    "hits": []
+  },
+  "4380": {
+    "log": [
+      "rayman147 placed a Settlement",
+      "rayman147 placed a Road",
+      "rayman147 placed a Settlement",
+      "rayman147 received starting resources",
+      "rayman147 placed a Road"
+    ],
+    "hits": []
+  },
+  "4395": {
+    "log": [
+      "ThePhantom placed a Settlement",
+      "ThePhantom received starting resources",
+      "ThePhantom placed a Road",
+      "ThePhantom rolled",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4410": {
+    "log": [
+      "\"0yiomt",
+      "6Ut",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "rayman147 rolled",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4425": {
+    "log": [
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4440": {
+    "log": [
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4455": {
+    "log": [
+      "ThePhantom got",
+      "rayman147 rolled",
+      "Friendly Robber is active, tiles available to",
+      "block are limited",
+      "rayman147 moved Robber",
+      "No player to steal from"
+    ],
+    "hits": []
+  },
+  "4470": {
+    "log": [
+      "ThePhantom rolled",
+      "rayman147 got",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "rayman147 built a",
+      "'(+1 VP)",
+      "City \""
+    ],
+    "hits": []
+  },
+  "4485": {
+    "log": [
+      "ThePhantom moved Robber",
+      "to",
+      "You stole",
+      "from rayman147",
+      "ThePhantom",
+      "bank",
+      "and took",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "gave"
+    ],
+    "hits": []
+  },
+  "4500": {
+    "log": [
+      "ThePhantom rolled",
+      "JOis blocked by the Robber. No resources",
+      "produced",
+      "8 ThePhantom got",
+      "ThePhantom built a Settlement",
+      "(+1 VP)",
+      "rayman147 rolled"
+    ],
+    "hits": []
+  },
+  "4515": {
+    "log": [
+      "ThePhantom moved Robber",
+      "You stole",
+      "from rayman147",
+      "ThePhantom rolled",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4530": {
+    "log": [
+      "rayman147 got",
+      "rayman147 gave bank_",
+      "and took",
+      "rayman147 built a Settlement",
+      "(+1 VP)",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4545": {
+    "log": [
+      "Tayiait",
+      "Ulicu@]",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "ThePhantom rolled",
+      "ThePhantom moved Robber",
+      "to",
+      "You stole",
+      "from rayman147"
+    ],
+    "hits": []
+  },
+  "4560": {
+    "log": [
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "ThePhantom rolled",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got"
+    ],
+    "hits": []
+  },
+  "4575": {
+    "log": [
+      "rayman147 rolled",
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "ThePhantom got",
+      "rayman147 bought"
+    ],
+    "hits": []
+  },
+  "4590": {
+    "log": [
+      "rayman147 used Knight",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4605": {
+    "log": [
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4620": {
+    "log": [
+      "rayman147 rolled [",
+      "rayman147 got",
+      "rayman147 used Road Building",
+      "rayman147 placed a Road",
+      "rayman147 placed a Road",
+      "rayman147 built a Settlement",
+      "(+1 VP)"
+    ],
+    "hits": []
+  },
+  "4635": {
+    "log": [
+      "is blocked by the Robber. No resources",
+      "produced",
+      "rayman147 got",
+      "rayman147 rolled",
+      "rayman147 got",
+      "ThePhantom got"
+    ],
+    "hits": []
+  },
+  "4650": {
+    "log": [
+      "rayman147 got",
+      "rayman147 bought",
+      "ThePhantom rolled",
+      "is blocked by the Robber: No resources",
+      "produced",
+      "rayman147 got"
+    ],
+    "hits": []
+  },
+  "4665": {
+    "log": [
+      "\"0yioit",
+      "UUU5' IL",
+      "ThePhantom rolled",
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom gave bank",
+      "and took",
+      "ThePhantom bought "
+    ],
+    "hits": []
+  },
+  "4680": {
+    "log": [
+      "rayman147 got",
+      "ThePhantom got",
+      "ThePhantom used Monopoly",
+      "ThePhantom stole 2",
+      "ThePhantom built a Road |",
+      "ThePhantom built a Settlement",
+      "(+1 VP)"
+    ],
+    "hits": []
+  },
+  "4695": {
+    "log": [
+      "You stole",
+      "from rayman147",
+      "rayman147 used Knight [",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "rayman147 rolled",
+      "rayman147 got"
+    ],
+    "hits": []
+  },
+  "4710": {
+    "log": [
+      "rayman147 rolled",
+      "rayman147 got",
+      "+2 VPs",
+      "ThePhantom got",
+      "rayman147 bought",
+      "rayman147 built a Road",
+      "rayman147 received Longest Road",
+      "(+2 VPs)"
+    ],
+    "hits": []
+  },
+  "4725": {
+    "log": [
+      "rayman147 rolled",
+      "rayman147 discarded",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you",
+      "rayman147 used Knight ",
+      "rayman147 moved Robber",
+      "to",
+      "rayman147 stole",
+      "from you"
+    ],
+    "hits": []
+  }
+}

@@ -1,0 +1,8 @@
+# source=f1080_350.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+ThePhantom rolled
+rayman147 got
+rayman147 rolled
+is blocked by the Robber: No resources
+produced
+rayman147 got

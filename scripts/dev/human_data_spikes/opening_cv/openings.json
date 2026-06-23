@@ -1,0 +1,55 @@
+{
+  "video": "https://www.youtube.com/watch?v=9Sm86ml04aI",
+  "game": 1,
+  "frame_used": "g_247.png (t=247s, post-setup, pre-first-roll)",
+  "fit": {
+    "affine_resid_mean_px": 0.7067903201329698,
+    "affine_resid_max_px": 1.3788581557807251,
+    "desert_hex": 17
+  },
+  "player_colors": {
+    "rayman147": "GREEN",
+    "ThePhantom": "BLACK"
+  },
+  "draft_order": [
+    "rayman147",
+    "ThePhantom",
+    "ThePhantom",
+    "rayman147"
+  ],
+  "log_setup_sequence": [
+    "rayman147 placed a Settlement",
+    "rayman147 placed a Road",
+    "ThePhantom placed a Settlement",
+    "ThePhantom placed a Road",
+    "ThePhantom placed a Settlement",
+    "ThePhantom received starting resources",
+    "ThePhantom placed a Road",
+    "rayman147 placed a Settlement",
+    "rayman147 received starting resources",
+    "rayman147 placed a Road",
+    "rayman147 rolled (= setup complete)"
+  ],
+  "openings": {
+    "rayman147": {
+      "settlements": [
+        20,
+        0
+      ],
+      "roads": [
+        34,
+        2
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        4,
+        10
+      ],
+      "roads": [
+        7,
+        20
+      ]
+    }
+  }
+}

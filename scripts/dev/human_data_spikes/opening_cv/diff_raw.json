@@ -1,0 +1,398 @@
+{
+  "settlements": {
+    "17": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 17,
+      "area": 38365,
+      "snap": 23.0,
+      "seen": 140
+    },
+    "25": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 25,
+      "area": 794,
+      "snap": 32.7,
+      "seen": 140
+    },
+    "3": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 3,
+      "area": 399,
+      "snap": 23.7,
+      "seen": 140
+    },
+    "29": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 29,
+      "area": 389,
+      "snap": 24.6,
+      "seen": 140
+    },
+    "12": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 12,
+      "area": 299,
+      "snap": 25.7,
+      "seen": 140
+    },
+    "11": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 11,
+      "area": 289,
+      "snap": 23.4,
+      "seen": 140
+    },
+    "4": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 4,
+      "area": 274,
+      "snap": 10.2,
+      "seen": 140
+    },
+    "36": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 36,
+      "area": 249,
+      "snap": 24.6,
+      "seen": 140
+    },
+    "10": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 10,
+      "area": 237,
+      "snap": 29.2,
+      "seen": 140
+    },
+    "27": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "vertex_id": 27,
+      "area": 130,
+      "snap": 27.6,
+      "seen": 140
+    },
+    "0": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 0,
+      "area": 316,
+      "snap": 11.7,
+      "seen": 160
+    },
+    "15": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 15,
+      "area": 224,
+      "snap": 22.3,
+      "seen": 160
+    },
+    "2": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 2,
+      "area": 327,
+      "snap": 8.3,
+      "seen": 180
+    },
+    "48": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 48,
+      "area": 126,
+      "snap": 29.4,
+      "seen": 180
+    },
+    "45": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 45,
+      "area": 2174,
+      "snap": 14.1,
+      "seen": 240
+    },
+    "14": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 14,
+      "area": 791,
+      "snap": 15.5,
+      "seen": 240
+    },
+    "8": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "vertex_id": 8,
+      "area": 390,
+      "snap": 23.9,
+      "seen": 240
+    },
+    "42": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "vertex_id": 42,
+      "area": 316,
+      "snap": 20.4,
+      "seen": 240
+    },
+    "37": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "vertex_id": 37,
+      "area": 270,
+      "snap": 19.3,
+      "seen": 240
+    },
+    "47": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "vertex_id": 47,
+      "area": 197,
+      "snap": 21.9,
+      "seen": 240
+    },
+    "38": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "vertex_id": 38,
+      "area": 157,
+      "snap": 17.5,
+      "seen": 240
+    }
+  },
+  "roads": {
+    "24": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 24,
+      "area": 1318,
+      "snap": 15.4,
+      "seen": 140
+    },
+    "48": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 48,
+      "area": 529,
+      "snap": 26.2,
+      "seen": 140
+    },
+    "27": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 27,
+      "area": 520,
+      "snap": 29.2,
+      "seen": 140
+    },
+    "49": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 49,
+      "area": 417,
+      "snap": 12.5,
+      "seen": 140
+    },
+    "52": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 52,
+      "area": 391,
+      "snap": 23.4,
+      "seen": 140
+    },
+    "6": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 6,
+      "area": 373,
+      "snap": 22.7,
+      "seen": 140
+    },
+    "22": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 22,
+      "area": 277,
+      "snap": 21.4,
+      "seen": 140
+    },
+    "16": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 16,
+      "area": 256,
+      "snap": 7.4,
+      "seen": 140
+    },
+    "25": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 25,
+      "area": 245,
+      "snap": 19.7,
+      "seen": 140
+    },
+    "3": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 3,
+      "area": 241,
+      "snap": 38.3,
+      "seen": 140
+    },
+    "67": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 67,
+      "area": 228,
+      "snap": 8.4,
+      "seen": 140
+    },
+    "58": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 58,
+      "area": 199,
+      "snap": 22.0,
+      "seen": 140
+    },
+    "54": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 54,
+      "area": 185,
+      "snap": 21.3,
+      "seen": 140
+    },
+    "33": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 33,
+      "area": 183,
+      "snap": 6.6,
+      "seen": 140
+    },
+    "45": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 45,
+      "area": 182,
+      "snap": 5.6,
+      "seen": 140
+    },
+    "15": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 15,
+      "area": 176,
+      "snap": 21.8,
+      "seen": 140
+    },
+    "4": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 4,
+      "area": 139,
+      "snap": 38.0,
+      "seen": 140
+    },
+    "69": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 69,
+      "area": 121,
+      "snap": 20.1,
+      "seen": 140
+    },
+    "19": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 19,
+      "area": 137,
+      "snap": 5.6,
+      "seen": 160
+    },
+    "29": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 29,
+      "area": 133,
+      "snap": 38.9,
+      "seen": 160
+    },
+    "20": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 20,
+      "area": 9761,
+      "snap": 20.0,
+      "seen": 180
+    },
+    "13": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 13,
+      "area": 324,
+      "snap": 30.6,
+      "seen": 180
+    },
+    "44": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 44,
+      "area": 153,
+      "snap": 39.7,
+      "seen": 180
+    },
+    "10": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 10,
+      "area": 68636,
+      "snap": 19.5,
+      "seen": 240
+    },
+    "41": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 41,
+      "area": 2108,
+      "snap": 20.8,
+      "seen": 240
+    },
+    "64": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 64,
+      "area": 883,
+      "snap": 11.5,
+      "seen": 240
+    },
+    "65": {
+      "player": "BLACK",
+      "owner": "ThePhantom",
+      "edge_id": 65,
+      "area": 288,
+      "snap": 12.9,
+      "seen": 240
+    },
+    "2": {
+      "player": "GREEN",
+      "owner": "rayman147",
+      "edge_id": 2,
+      "area": 3751,
+      "snap": 31.0,
+      "seen": 247
+    }
+  }
+}

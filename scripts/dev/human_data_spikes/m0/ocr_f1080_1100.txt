@@ -1,0 +1,9 @@
+# source=f1080_1100.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+ThePhantom got
+rayman147 built a City
+'(+1 VP)
+ThePhantom rolled
+rayman147 got
+ThePhantom got
+ThePhantom bought _

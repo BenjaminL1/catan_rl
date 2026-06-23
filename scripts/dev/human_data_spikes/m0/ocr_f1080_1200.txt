@@ -1,0 +1,7 @@
+# source=f1080_1200.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+Happy settlingl Learn how to play in the
+rulebook:
+List of commands: /help
+rayman147 placed a Settlement
+rayman147 placed a Road

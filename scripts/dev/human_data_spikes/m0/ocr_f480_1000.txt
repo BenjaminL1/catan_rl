@@ -1,0 +1,10 @@
+# source=f480_1000.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+ThcPhuantom fOeu~
+00yiani4? gotDn
+Tna Phantom Rot
+aymin147
+roecd_m
+Qymjn147
+Tineenaniom Fot
+DDD

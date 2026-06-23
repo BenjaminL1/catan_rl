@@ -1,0 +1,26 @@
+BLOCKER 2 — cross-frame board agreement (GAME A, orientation-locked)
+Frames: t=240, t=350, t=450, t=500, t=540
+
+hex  t=240     t=350     t=450     t=500     t=540     AGREE
+H0   SHEE#11   SHEE#11   SHEE#11   SHEE#11   SHEE#11   OK
+H1   BRIC#9    BRIC#9    BRIC#9    BRIC#9    BRIC#9    OK
+H2   WHEA#10   WHEA#10   WHEA#10   WHEA#10   WHEA#10   OK
+H3   WHEA#3    WHEA#3    WHEA#3    WHEA#3    WHEA#3    OK
+H4   BRIC#6    BRIC#6    BRIC#6    BRIC#6    BRIC#6    OK
+H5   SHEE#5    SHEE#5    SHEE#5    SHEE#5    SHEE#5    OK
+H6   ORE#4     ORE#4     ORE#4     ORE#4     ORE#4     OK
+H7   WOOD#6    WOOD#6    WOOD#6    WOOD#6    WOOD#6    OK
+H8   SHEE#2    SHEE#2    SHEE#2    SHEE#2    SHEE#2    OK
+H9   WOOD#5    WOOD#5    WOOD#5    WOOD#5    WOOD#5    OK
+H10  BRIC#8    BRIC#8    BRIC#8    BRIC#8    BRIC#8    OK
+H11  DESE#None DESE#None DESE#None DESE#None DESE#None OK
+H12  SHEE#4    SHEE#4    SHEE#4    SHEE#4    SHEE#4    OK
+H13  WOOD#11   WOOD#11   WOOD#11   WOOD#11   WOOD#11   OK
+H14  WHEA#12   WHEA#12   WHEA#12   WHEA#12   WHEA#12   OK
+H15  ORE#9     ORE#9     ORE#9     ORE#9     ORE#9     OK
+H16  ORE#10    ORE#10    ORE#10    ORE#10    ORE#10    OK
+H17  WOOD#8    WOOD#8    WOOD#8    WOOD#8    WOOD#8    OK
+H18  WHEA#3    WHEA#3    WHEA#3    WHEA#3    WHEA#3    OK
+
+ALL 19 HEXES IDENTICAL ACROSS 5 FRAMES: True
+desert hex_id per frame: {240: [11], 350: [11], 450: [11], 500: [11], 540: [11]}

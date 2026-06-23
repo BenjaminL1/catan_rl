@@ -89,6 +89,9 @@ features = ["extension-module"]
 line-length = 100
 target-version = "py311"
 src = ["src", "tests", "scripts"]
+# Banked de-risk spike code (human-data pipeline): single-frame, hard-coded
+# throwaways kept verbatim as reference only. Not lint-scope; never imported.
+extend-exclude = ["scripts/dev/human_data_spikes"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]

@@ -8,6 +8,10 @@ repos:
       - id: check-toml
       - id: check-added-large-files
         args: [--maxkb=500]
+        # The two 1080p game-1 golden frames are required CI fixtures for the
+        # human-data board-CV / openings tests (build brief §6); 1080p is
+        # mandatory (360-480p OCRs to garbage). Keep the guard everywhere else.
+        exclude: ^tests/fixtures/human_data/game1_(postsetup_t247|empty_baseline_t105)\.png$
       - id: check-merge-conflict
       - id: mixed-line-ending
   - repo: https://github.com/astral-sh/ruff-pre-commit

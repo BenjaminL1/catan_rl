@@ -1,0 +1,8 @@
+# source=f1080_300.png crop_box_frac=(0.645,0.0,1.0,0.3)
+# --- OCR on raw color crop ---
+rayman147 got
+ThePhantom got
+rayman147 built a Road
+ThePhantom rolled
+rayman147 got
+ThePhantom got

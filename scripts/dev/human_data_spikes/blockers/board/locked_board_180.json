@@ -1,0 +1,100 @@
+{
+  "frame_t": 180,
+  "hexes": [
+    {
+      "hex_id": 0,
+      "resource": "SHEEP",
+      "number": 11
+    },
+    {
+      "hex_id": 1,
+      "resource": "BRICK",
+      "number": 9
+    },
+    {
+      "hex_id": 2,
+      "resource": "WHEAT",
+      "number": 10
+    },
+    {
+      "hex_id": 3,
+      "resource": "WHEAT",
+      "number": 3
+    },
+    {
+      "hex_id": 4,
+      "resource": "BRICK",
+      "number": 6
+    },
+    {
+      "hex_id": 5,
+      "resource": "SHEEP",
+      "number": 5
+    },
+    {
+      "hex_id": 6,
+      "resource": "ORE",
+      "number": null
+    },
+    {
+      "hex_id": 7,
+      "resource": "WOOD",
+      "number": 6
+    },
+    {
+      "hex_id": 8,
+      "resource": "SHEEP",
+      "number": 2
+    },
+    {
+      "hex_id": 9,
+      "resource": "WOOD",
+      "number": 5
+    },
+    {
+      "hex_id": 10,
+      "resource": "BRICK",
+      "number": 8
+    },
+    {
+      "hex_id": 11,
+      "resource": "WHEAT",
+      "number": null
+    },
+    {
+      "hex_id": 12,
+      "resource": "SHEEP",
+      "number": 4
+    },
+    {
+      "hex_id": 13,
+      "resource": "WOOD",
+      "number": 11
+    },
+    {
+      "hex_id": 14,
+      "resource": "WHEAT",
+      "number": 12
+    },
+    {
+      "hex_id": 15,
+      "resource": "ORE",
+      "number": 9
+    },
+    {
+      "hex_id": 16,
+      "resource": "ORE",
+      "number": 10
+    },
+    {
+      "hex_id": 17,
+      "resource": "WOOD",
+      "number": 8
+    },
+    {
+      "hex_id": 18,
+      "resource": "WHEAT",
+      "number": 3
+    }
+  ]
+}
