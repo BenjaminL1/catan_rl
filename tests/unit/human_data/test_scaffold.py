@@ -260,14 +260,21 @@ def test_resolve_ffmpeg_returns_a_usable_binary() -> None:
 def test_resolve_ffmpeg_fail_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     """With no system ffmpeg and no imageio-ffmpeg, raise with install guidance."""
     import builtins
+    from collections.abc import Mapping, Sequence
 
     monkeypatch.setattr("catan_rl.human_data.ffmpeg.shutil.which", lambda _: None)
     real_import = builtins.__import__
 
-    def _no_imageio(name: str, *args: object, **kwargs: object) -> object:
+    def _no_imageio(
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: Sequence[str] = (),
+        level: int = 0,
+    ) -> object:
         if name == "imageio_ffmpeg":
             raise ImportError("simulated absence")
-        return real_import(name, *args, **kwargs)
+        return real_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", _no_imageio)
     with pytest.raises(FFmpegNotFoundError, match="ffmpeg not found"):
