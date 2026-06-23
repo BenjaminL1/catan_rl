@@ -25,6 +25,7 @@ from catan_rl.human_data.record import (
     GameRecord,
     OpponentStrength,
     PlayerOpening,
+    check_road_incidence,
 )
 from catan_rl.human_data.topology import Topology, load_topology
 
@@ -36,6 +37,7 @@ __all__ = [
     "OpponentStrength",
     "PlayerOpening",
     "Topology",
+    "check_road_incidence",
     "load_topology",
     "resolve_ffmpeg",
 ]

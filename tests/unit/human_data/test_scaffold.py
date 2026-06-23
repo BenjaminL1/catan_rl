@@ -21,6 +21,7 @@ from catan_rl.human_data import (
     GameRecord,
     OpponentStrength,
     PlayerOpening,
+    check_road_incidence,
     load_topology,
     resolve_ffmpeg,
 )
@@ -337,6 +338,50 @@ def test_validate_rejects_float_desert_provenance() -> None:
     payload["provenance"]["board_desert_hex"] = 11.0  # must be a true int
     with pytest.raises(ValueError, match="board_desert_hex"):
         GameRecord.from_dict(payload)
+
+
+# --- road-incidence: snap-sanity ONLY, NOT an orientation check (FIX 3) -----
+
+
+def test_road_incidence_clean_for_the_resnapped_record() -> None:
+    # The re-snapped game-1 record: every road touches an owner settlement.
+    topo = load_topology()
+    offenders = check_road_incidence(_sample_record(), topo.edge_vertices)
+    assert offenders == {"ThePhantom": [], "rayman147": []}
+
+
+def test_road_incidence_catches_an_isolated_snap_error() -> None:
+    # An isolated bad snap (a road nowhere near its settlement) IS caught — this
+    # is all the gate is for.
+    topo = load_topology()
+    payload = _sample_record().to_dict()
+    payload["openings"]["ThePhantom"]["roads"] = [0, 50]  # 50 touches neither v1 nor v19
+    rec = GameRecord.from_dict(payload)
+    offenders = check_road_incidence(rec, topo.edge_vertices)
+    assert offenders["ThePhantom"] == [50]
+
+
+def test_road_incidence_is_NOT_an_orientation_check() -> None:
+    """The load-bearing negative: road-incidence is D6-invariant, so all 4
+    wrong-orientation (desert=17) game-1 roads PASS it. This is why it is NOT the
+    cross-orientation firewall — the provenance-binding (FIX 2) is. We assert the
+    wrong-orientation openings are clean under road-incidence, so nobody mistakes
+    this gate for the orientation defense."""
+    topo = load_topology()
+    # The REJECTED desert=17 IDs — physically wrong, but self-consistent under the
+    # flipped lattice, so road↔settlement incidence holds for all 4 roads.
+    wrong_openings = {
+        "ThePhantom": PlayerOpening(settlements=(4, 10), roads=(7, 20)),
+        "rayman147": PlayerOpening(settlements=(20, 0), roads=(34, 2)),
+    }
+    ev = topo.edge_vertices
+    for name, opening in wrong_openings.items():
+        sset = set(opening.settlements)
+        for edge_id in opening.roads:
+            a, b = ev[edge_id]
+            assert a in sset or b in sset, (
+                f"{name} wrong-orientation road e{edge_id} unexpectedly fails incidence"
+            )
 
 
 # --- standard-board multiset gate (findings #1, #5) -------------------------

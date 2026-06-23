@@ -528,3 +528,35 @@ class GameRecord:
     def from_json_line(cls, line: str) -> GameRecord:
         """Parse one JSONL row back into a :class:`GameRecord`."""
         return cls.from_dict(json.loads(line))
+
+
+def check_road_incidence(
+    record: GameRecord, edge_vertices: tuple[tuple[int, int], ...]
+) -> dict[str, list[int]]:
+    """Generic snap-sanity gate: each opening road must touch one of its owner's
+    opening settlements. Returns ``{player: [offending edge_ids]}`` (empty values
+    ⟹ clean). Topology-aware, so it lives **outside** the pure
+    :meth:`GameRecord.validate` (scope-lock, brief §6); call it with
+    ``load_topology().edge_vertices``.
+
+    **NOT an orientation check.** A D6 board+openings flip relabels the settlement
+    *and* the road IDs by the same lattice permutation, so road↔settlement
+    incidence is **D6-invariant**: it passes the welded desert17/desert11 record
+    just as readily as the correct one (all 4 wrong-orientation game-1 roads pass
+    it — verified in the test below). It only catches an *isolated* snap error (a
+    road blob that snapped to an edge nowhere near its settlement). The
+    cross-orientation firewall is the provenance orientation-binding in
+    :meth:`GameRecord.validate` (board_desert == openings_desert) plus the FIX 4
+    glyph anchor — **not** this gate. Do not present this as the orientation
+    defense.
+    """
+    offenders: dict[str, list[int]] = {}
+    for name, opening in record.openings.items():
+        sset = set(opening.settlements)
+        bad: list[int] = []
+        for edge_id in opening.roads:
+            a, b = edge_vertices[edge_id]
+            if a not in sset and b not in sset:
+                bad.append(edge_id)
+        offenders[name] = bad
+    return offenders
