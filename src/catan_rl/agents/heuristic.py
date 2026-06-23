@@ -137,7 +137,7 @@ class heuristicAIPlayer(player):
             ):  # heuristic to trade if a player has more than 5 of a particular resource
                 for r2, r2_amount in self.resources.items():
                     if r2_amount < 1:
-                        self.trade_with_bank(r1, r2)
+                        self.trade_with_bank(r1, r2, self.game.board)  # spec 009
                         break
 
     # Choose which player to rob
@@ -275,6 +275,7 @@ class heuristicAIPlayer(player):
             discarded_resources = []
             for res in discarded:
                 self.resources[res] -= 1
+                game.board.bank_recirculate({res: 1})  # spec 009: discard -> bank
                 discarded_resources.append(res)
                 # print("AI Discarded:", res)
 

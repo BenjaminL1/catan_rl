@@ -71,6 +71,9 @@ class player:
                     # Update player resources
                     self.resources["BRICK"] -= 1
                     self.resources["WOOD"] -= 1
+                    # spec 009: a PAID road returns its cost to the finite bank
+                    # (a free Road-Builder road recirculates nothing).
+                    board.bank_recirculate({"BRICK": 1, "WOOD": 1})
                     # Emit resource change event if game/broadcast is available
                     if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                         self.game.broadcast.resource_change(
@@ -134,6 +137,8 @@ class player:
                     self.resources["WOOD"] -= 1
                     self.resources["SHEEP"] -= 1
                     self.resources["WHEAT"] -= 1
+                    # spec 009: settlement cost returns to the finite bank.
+                    board.bank_recirculate({"BRICK": 1, "WOOD": 1, "SHEEP": 1, "WHEAT": 1})
                     if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                         self.game.broadcast.resource_change(
                             self.name,
@@ -186,6 +191,8 @@ class player:
                 # Update player resources
                 self.resources["ORE"] -= 3
                 self.resources["WHEAT"] -= 2
+                # spec 009: city cost returns to the finite bank.
+                board.bank_recirculate({"ORE": 3, "WHEAT": 2})
                 if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                     self.game.broadcast.resource_change(
                         self.name,
@@ -358,6 +365,9 @@ class player:
             self.resources["ORE"] -= 1
             self.resources["WHEAT"] -= 1
             self.resources["SHEEP"] -= 1
+            # spec 009: dev-card resource cost returns to the finite bank (the
+            # dev card itself comes from the separate devCardStack supply).
+            board.bank_recirculate({"ORE": 1, "WHEAT": 1, "SHEEP": 1})
             if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                 self.game.broadcast.resource_change(
                     self.name,
@@ -440,12 +450,17 @@ class player:
             self.yopPlayed += 1
             # print("Resources available:", resource_list)
             if self.isAI:
-                # AI Logic for YOP - Pick 2 random resources
+                # AI Logic for YOP - Pick 2 random resources. The np.random.choice
+                # call is over the full list (RNG-identical to pre-bank); a pick
+                # the bank cannot supply is simply not granted (spec 009; matches
+                # the TS reject, and never fires in non-depleting games).
                 resources_picked = np.random.choice(resource_list, 2, replace=True)
                 yop_resources = []
                 for res in resources_picked:
-                    self.resources[res] += 1
-                    yop_resources.append(res)
+                    if game.board.resourceBank.get(res, 0) > 0:
+                        self.resources[res] += 1
+                        game.board.bank_draw({res: 1})
+                        yop_resources.append(res)
                     # print("AI chose YOP resource:", res)
                 game.log_yop(self, yop_resources)
             else:
@@ -504,12 +519,20 @@ class player:
 
     # Function to basic trade 4:1 with bank, or use ports to trade
 
-    def trade_with_bank(self, r1, r2):
+    def trade_with_bank(self, r1, r2, board):
         """Function to implement trading with bank
         r1: resource player wants to trade away
         r2: resource player wants to receive
         Automatically give player the best available trade ratio
+
+        ``board`` carries the finite resource bank (spec 009): the give side
+        (r1 x ratio) recirculates into the bank and the receive side (r2 x 1)
+        is drawn from it. If the bank cannot supply ``r2`` the trade is a no-op,
+        mirroring the TS ``applyBankTrade`` reject-on-empty-receive.
         """
+        # spec 009 apply-time gate: cannot receive a resource the bank lacks.
+        if board.resourceBank.get(r2, 0) <= 0:
+            return
 
         def _emit_trade_delta(give: int) -> None:
             # Build the delta as a sum so r1 == r2 trades (degenerate but
@@ -535,6 +558,8 @@ class player:
             self.resources[r1] -= 2
             self.resources[r2] += 1
             _emit_trade_delta(2)
+            board.bank_recirculate({r1: 2})  # spec 009: give side -> bank
+            board.bank_draw({r2: 1})  # spec 009: receive side <- bank
             # print("Traded 2 {} for 1 {} using {} Port".format(r1, r2, r1))
             return
 
@@ -543,6 +568,8 @@ class player:
             self.resources[r1] -= 3
             self.resources[r2] += 1
             _emit_trade_delta(3)
+            board.bank_recirculate({r1: 3})  # spec 009: give side -> bank
+            board.bank_draw({r2: 1})  # spec 009: receive side <- bank
             # print("Traded 3 {} for 1 {} using 3:1 Port".format(r1, r2))
             return
 
@@ -551,6 +578,8 @@ class player:
             self.resources[r1] -= 4
             self.resources[r2] += 1
             _emit_trade_delta(4)
+            board.bank_recirculate({r1: 4})  # spec 009: give side -> bank
+            board.bank_draw({r2: 1})  # spec 009: receive side <- bank
             # print("Traded 4 {} for 1 {}".format(r1, r2))
             return
 
@@ -574,7 +603,7 @@ class player:
         if trade_result:
             resourceToTrade, resourceToReceive = trade_result
             # Try and trade with Bank
-            self.trade_with_bank(resourceToTrade, resourceToReceive)
+            self.trade_with_bank(resourceToTrade, resourceToReceive, game.board)
 
         return
 

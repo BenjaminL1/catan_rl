@@ -342,7 +342,9 @@ def _hand_total(player: Any) -> int:
     return int(sum(player.resources.values()))
 
 
-def record_game(seed: int, *, max_main_turns: int = 200) -> dict[str, Any]:
+def record_game(
+    seed: int, *, max_main_turns: int = 200, assert_conservation: bool = False
+) -> dict[str, Any]:
     """Play one full reference game under a random-legal policy and return
     the conformance replay-log as a JSON-safe dict.
 
@@ -391,6 +393,12 @@ def record_game(seed: int, *, max_main_turns: int = 200) -> dict[str, Any]:
                 "state_after": _snapshot(game, ctx),
             }
         )
+        if assert_conservation:
+            # spec 009 cross-driver guard: every recorder step drives the
+            # engine + recorder mutation paths; the finite-bank invariant must
+            # hold after each one. Off by default (the produced log never
+            # serializes the bank, so this changes no fixture output).
+            game.board.assert_conservation(ctx.players)
 
     # --- Setup snake (1 -> 2 -> 2 -> 1) ------------------------------------
     p0, p1 = ctx.players[0], ctx.players[1]
@@ -413,6 +421,7 @@ def record_game(seed: int, *, max_main_turns: int = 200) -> dict[str, Any]:
                 res = game.board.hexTileDict[adj_hex].resource_type
                 if res != "DESERT":
                     player.resources[res] += 1
+                    game.board.bank_draw({res: 1})  # spec 009: setup grant draws from bank
         emit(seat, {"kind": "BuildSettlement", "args": {"vertex": ctx.vertex_idx(v_px)}}, {})
         # Road incident to the just-placed settlement.
         legal_r = list(game.board.get_setup_roads(player).keys())
@@ -499,6 +508,7 @@ def _resolve_seven(
             discarded = _pick_discard(p, n, rng)
             for res, cnt in discarded.items():
                 p.resources[res] -= cnt
+                game.board.bank_recirculate({res: cnt})  # spec 009: discard -> bank
             emit(seat, {"kind": "Discard", "args": {"resources": discarded}}, {})
 
     # Robber move + steal (current seat).
@@ -683,8 +693,14 @@ def _apply_main_choice(
         give = rng.choice(
             [r for r in RESOURCES_CW if player.resources[r] >= _best_ratio(player, r)]
         )
-        recv = rng.choice([r for r in RESOURCES_CW if r != give])
-        player.trade_with_bank(give, recv)
+        # spec 009 (S3): only receive a resource the bank can supply, so the
+        # recorder never emits a TS-illegal trade. In non-depleting games every
+        # bank is > 0, so this candidate list equals [r != give] and the
+        # rng.choice draw is byte-identical to pre-bank.
+        recv = rng.choice(
+            [r for r in RESOURCES_CW if r != give and board.resourceBank.get(r, 0) > 0]
+        )
+        player.trade_with_bank(give, recv, board)
         emit(
             turn_seat,
             {"kind": "BankTrade", "args": {"give": give, "receive": recv}},
@@ -697,10 +713,19 @@ def _apply_main_choice(
     elif choice == "PlayYearOfPlenty":
         player.devCards["YEAROFPLENTY"] -= 1
         player.devCardPlayedThisTurn = True
-        first = rng.choice(RESOURCES_CW)
-        second = rng.choice(RESOURCES_CW)
+        # spec 009 (S3): gate the random YoP pick on current bank availability so
+        # the recorder never emits a TS-illegal YoP (incl. the doubled-pick rule:
+        # picking the same resource twice needs >= 2 in the bank). In a
+        # non-depleting game every bank is large, so both candidate lists equal
+        # RESOURCES_CW and the rng.choice draws are byte-identical to pre-bank.
+        first = rng.choice([r for r in RESOURCES_CW if board.resourceBank.get(r, 0) > 0])
+        second = rng.choice(
+            [r for r in RESOURCES_CW if board.resourceBank.get(r, 0) > (1 if r == first else 0)]
+        )
         player.resources[first] += 1
         player.resources[second] += 1
+        board.bank_draw({first: 1})  # spec 009: YoP draws from the finite bank
+        board.bank_draw({second: 1})
         emit(
             turn_seat,
             {"kind": "PlayYearOfPlenty", "args": {"first": first, "second": second}},

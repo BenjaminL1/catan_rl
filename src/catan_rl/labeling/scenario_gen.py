@@ -352,5 +352,6 @@ def _grant_setup_resources(game: catanGame, p: Any) -> None:
         res = game.board.hexTileDict[adj_hex].resource_type
         if res != "DESERT":
             p.resources[res] = p.resources.get(res, 0) + 1
+            game.board.bank_draw({res: 1})  # spec 009: setup grant draws from bank
             if hasattr(game, "broadcast"):
                 game.broadcast.resource_change(p.name, {res: 1}, "SETUP")

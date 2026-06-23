@@ -163,6 +163,6 @@ current stage's go/no-go gate result is in.
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current feature spec
-at specs/005-exploiter-probe-gate/spec.md
+shell commands, and other important information, read the current feature plan
+at specs/009-finite-resource-bank/plan.md
 <!-- SPECKIT END -->
