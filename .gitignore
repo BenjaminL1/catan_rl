@@ -74,3 +74,8 @@ src/catan_engine/*.pyd
 # by ``make rust-setup``. Each contributor's miniconda/homebrew
 # libpython path goes in here; never committed.
 .cargo/config.toml
+
+# Strength-manifest audit frames — large PNGs, re-derivable from the
+# timestamp-anchored evidence links in strength_manifest.json.
+data/human/frames/
+data/human/*.json.tmp
