@@ -358,9 +358,9 @@ def classify_ranked(video_id: str, reader: Any, keep_frame: Path) -> dict[str, A
     return {"strength": "unknown", "source": "none", "evidence": {"reason": reason}}
 
 
-def load_manifest(rebuild: bool) -> dict[str, Any]:
-    if MANIFEST.exists() and not rebuild:
-        return cast("dict[str, Any]", json.loads(MANIFEST.read_text()))
+def load_manifest(rebuild: bool, path: Path) -> dict[str, Any]:
+    if path.exists() and not rebuild:
+        return cast("dict[str, Any]", json.loads(path.read_text()))
     return {
         "schema_version": 1,
         "generated_from": CHANNEL,
@@ -369,12 +369,12 @@ def load_manifest(rebuild: bool) -> dict[str, Any]:
     }
 
 
-def save_manifest(m: dict[str, Any]) -> None:
+def save_manifest(m: dict[str, Any], path: Path) -> None:
     """Atomic write so a crash mid-save can't corrupt the resume file."""
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = MANIFEST.with_suffix(".json.tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(m, indent=2))
-    os.replace(tmp, MANIFEST)
+    os.replace(tmp, path)
 
 
 def main() -> int:
@@ -387,9 +387,22 @@ def main() -> int:
     )
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--rebuild", action="store_true")
+    ap.add_argument(
+        "--shard",
+        type=str,
+        default=None,
+        help="'I/N' — process only channel videos where index %% N == I (parallel workers)",
+    )
+    ap.add_argument(
+        "--out",
+        type=str,
+        default=None,
+        help="output manifest path (default data/human/strength_manifest.json)",
+    )
     args = ap.parse_args()
 
-    manifest = load_manifest(args.rebuild)
+    out_path = Path(args.out) if args.out else MANIFEST
+    manifest = load_manifest(args.rebuild, out_path)
     done = {v["video_id"] for v in manifest["videos"]}
 
     if args.sample:
@@ -399,6 +412,9 @@ def main() -> int:
         videos = [(i, all_titles.get(i, "")) for i in ids]
     else:
         videos = list_videos()
+        if args.shard:
+            i, n = (int(x) for x in args.shard.split("/"))
+            videos = [v for idx, v in enumerate(videos) if idx % n == i]
         if args.limit:
             videos = videos[: args.limit]
 
@@ -444,14 +460,14 @@ def main() -> int:
             )
 
         manifest["videos"].append(row)
-        save_manifest(manifest)  # incremental: crash-safe
+        save_manifest(manifest, out_path)  # incremental: crash-safe
 
     # summary
     counts: dict[str, int] = {}
     for v in manifest["videos"]:
         counts[v["strength"]] = counts.get(v["strength"], 0) + 1
     print(f"\nDONE. total={len(manifest['videos'])} counts={counts}", flush=True)
-    print(f"manifest: {MANIFEST}", flush=True)
+    print(f"manifest: {out_path}", flush=True)
     return 0
 
 
