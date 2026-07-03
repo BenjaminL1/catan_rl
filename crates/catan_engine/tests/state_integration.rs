@@ -268,3 +268,108 @@ fn build_road_in_setup_must_be_adjacent_to_just_placed_settlement() {
     let r = state.apply_action([ActionType::BuildRoad as u8, 0, far, 0, 0, 0]);
     assert!(matches!(r, Err(EngineError::IllegalEdge(_))));
 }
+
+/// spec 009: the finite-bank conservation invariant (`bank[R] + sum hands[R]
+/// == 19`) must hold after EVERY applied action across a full game driven
+/// through setup, production rolls, builds, discards, robber moves and
+/// road-builder placement — the Rust mirror of the Python cross-driver guard.
+#[test]
+fn finite_bank_conservation_holds_across_a_full_game() {
+    fn conserved(s: &GameState) {
+        for r in 0..N_RESOURCES {
+            let held: u32 = s.players.iter().map(|p| p.resources[r] as u32).sum();
+            assert_eq!(
+                s.bank[r] as u32 + held,
+                19,
+                "conservation broken for resource index {} (bank={}, held={})",
+                r,
+                s.bank[r],
+                held
+            );
+        }
+    }
+
+    let mut state = GameState::new(123);
+    conserved(&state);
+
+    // Setup snake (4 placements: settlement + road + end each).
+    for _ in 0..4 {
+        let v = pick_any_empty_vertex_with_road_targets(&state);
+        state
+            .apply_action([ActionType::BuildSettlement as u8, v, 0, 0, 0, 0])
+            .unwrap();
+        conserved(&state);
+        let e = pick_edge_adjacent_to_vertex(&state, v);
+        state
+            .apply_action([ActionType::BuildRoad as u8, 0, e, 0, 0, 0])
+            .unwrap();
+        conserved(&state);
+        state
+            .apply_action([ActionType::EndTurn as u8, 0, 0, 0, 0, 0])
+            .unwrap();
+        conserved(&state);
+    }
+
+    // Main turns: roll + advance through whatever phase results, asserting
+    // conservation after every apply_action (an Err leaves state unchanged,
+    // so the invariant holds regardless).
+    for _ in 0..400 {
+        match state.phase {
+            GamePhase::GameOver | GamePhase::Setup => break,
+            GamePhase::Roll => {
+                let _ = state.apply_action([ActionType::RollDice as u8, 0, 0, 0, 0, 0]);
+            }
+            GamePhase::Main => {
+                let _ = state.apply_action([ActionType::EndTurn as u8, 0, 0, 0, 0, 0]);
+            }
+            GamePhase::Discard => {
+                let p = state.current_player as usize;
+                let mut cw = 0u8;
+                for c in 0..5u8 {
+                    let m = match c {
+                        0 => IDX_WOOD,
+                        1 => IDX_BRICK,
+                        2 => IDX_WHEAT,
+                        3 => IDX_ORE,
+                        _ => IDX_SHEEP,
+                    };
+                    if state.players[p].resources[m] > 0 {
+                        cw = c;
+                        break;
+                    }
+                }
+                let _ = state.apply_action([ActionType::Discard as u8, 0, 0, 0, cw, 0]);
+            }
+            GamePhase::Robber => {
+                let mut done = false;
+                for hex in 0..19u8 {
+                    if hex != state.robber_hex
+                        && state
+                            .apply_action([ActionType::MoveRobber as u8, 0, 0, hex, 0, 0])
+                            .is_ok()
+                    {
+                        done = true;
+                        break;
+                    }
+                }
+                conserved(&state);
+                if !done {
+                    break;
+                }
+                continue;
+            }
+            GamePhase::RoadBuilder => {
+                let mut e = 0u8;
+                for cand in 0..72u8 {
+                    if state.edge_owner[cand as usize] == 0 {
+                        e = cand;
+                        break;
+                    }
+                }
+                let _ = state.apply_action([ActionType::BuildRoad as u8, 0, e, 0, 0, 0]);
+            }
+        }
+        conserved(&state);
+    }
+    conserved(&state);
+}

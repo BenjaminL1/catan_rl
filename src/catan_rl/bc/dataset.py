@@ -285,14 +285,14 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         _record_decision(ctx, action, "main")
         return orig_draw_dev(board)
 
-    def patched_trade_bank(r1, r2):
+    def patched_trade_bank(r1, r2, board):
         action = _make_action(
             ActionType.BANK_TRADE,
             resource1_idx=RESOURCES_CW.index(r1) if r1 in RESOURCES_CW else 0,
             resource2_idx=RESOURCES_CW.index(r2) if r2 in RESOURCES_CW else 0,
         )
         _record_decision(ctx, action, "main")
-        return orig_trade_bank(r1, r2)
+        return orig_trade_bank(r1, r2, board)
 
     def patched_move_robber(hexIndex, board, player_robbed):
         action = _make_action(ActionType.MOVE_ROBBER, tile_idx=int(hexIndex))
@@ -329,6 +329,7 @@ def _grant_setup_resources(game: catanGame, p: Any) -> None:
         res = game.board.hexTileDict[adj_hex].resource_type
         if res != "DESERT":
             p.resources[res] += 1
+            game.board.bank_draw({res: 1})  # spec 009: setup grant draws from bank
             game.broadcast.resource_change(p.name, {res: 1}, "SETUP")
 
 

@@ -73,6 +73,7 @@ class RandomAIPlayer(player):
                     break
                 res = available[np.random.randint(len(available))]
                 self.resources[res] -= 1
+                game.board.bank_recirculate({res: 1})  # spec 009: discard -> bank
                 discarded_resources.append(res)
 
             if discarded_resources:

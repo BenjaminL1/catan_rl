@@ -30,6 +30,7 @@ eval).
 | Dice | **`StackedDice`** — shuffled bag of 36 outcomes + 1 noise swap + 20% Karma forced-7 if opponent rolled the previous 7 | independent 2d6 |
 | Setup | snake draft (1 → 2 → 2 → 1); 2nd settlement yields starting resources | same |
 | Board / resources / ports | standard 19 tiles, 54 vertices, 72 edges; standard counts; 5×2:1 + 4×3:1 ports | identical |
+| **Resource bank** | **finite 19 per resource** + official depletion (bank short & one player owed → sole claimant takes the remainder; bank short & both owed → neither receives) | same (finite 19) |
 | Largest Army / Longest Road | 3 knights / 5 roads | same |
 
 **Implications baked into the engine (`src/catan_rl/engine/`) — do not undo without flagging:**
@@ -38,6 +39,16 @@ eval).
 - `player.initiate_trade` early-returns on any non-`'BANK'` mode — **P2P trading hard-disabled** (`engine/player.py`).
 - `catanBoard.get_robber_spots` filters Friendly-Robber-protected hexes (`engine/board.py`).
 - `StackedDice` (`engine/dice.py`) replaces independent 2d6.
+- **Finite resource bank** (`catanBoard.resourceBank`, 19 each; spec 009): dice
+  production is metered by `resolve_bank_production` (the official depletion
+  rule), and build / dev-buy / bank-trade-give / discard costs **recirculate**
+  into the bank while setup-grant / YoP / bank-trade-receive **draw** from it.
+  Conservation invariant: `resourceBank[R] + Σ hands[R] == 19` for every R. The
+  bank is **engine state only — NOT in the obs** (no policy-shape change). All
+  mutation paths (engine, env, recorder, heuristic, random_ai, bc.dataset,
+  labeling) route through `bank_recirculate` / `bank_draw`. Mirrors the Torevan
+  TS `resourceBank`; the conformance harness pins parity (seeds 7/8/15 are a
+  no-op; depletion is exercised by a dedicated fixture + cross-engine tests).
 - `BroadcastHandTracker` (`engine/broadcast.py` / `tracker.py`) does **perfect** opponent hand-tracking — valid only in 1v1 with no P2P trade.
 - Action space has **no P2P-trade actions**; `BankTrade` is the only trade type.
 - Obs models exactly **one opponent**; no opponent-set encoder.
@@ -163,6 +174,6 @@ current stage's go/no-go gate result is in.
 
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
-shell commands, and other important information, read the current feature spec
-at specs/005-exploiter-probe-gate/spec.md
+shell commands, and other important information, read the current feature plan
+at specs/009-finite-resource-bank/plan.md
 <!-- SPECKIT END -->

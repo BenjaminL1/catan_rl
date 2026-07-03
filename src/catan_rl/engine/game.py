@@ -17,6 +17,34 @@ from catan_rl.engine.dice import StackedDice
 from catan_rl.engine.player import *
 from catan_rl.engine.tracker import ResourceTracker
 
+#: Canonical engine resource order for deterministic bank iteration (alphabetical,
+#: matching tracker.all_resources and the Rust IDX_* constants).
+_BANK_RESOURCES = ("BRICK", "ORE", "SHEEP", "WHEAT", "WOOD")
+
+
+def resolve_bank_production(avail: int, d0: int, d1: int) -> tuple[int, int, int]:
+    """Official Catan depletion rule for ONE resource on ONE production roll.
+
+    Ported verbatim from the Torevan TS ``resolveBankProduction`` (spec 009).
+    ``avail`` is the remaining bank for the resource; ``d0`` / ``d1`` are the
+    amounts the two seats are owed. Returns ``(g0, g1, remaining)`` — what each
+    seat is actually granted and the bank's new level. The branch order and the
+    implicit final ``else`` are significant and must match TS exactly. The rule
+    is seat-symmetric (a sole claimant always takes the remainder), so the only
+    caller requirement is that ``d0``/``g0`` and ``d1``/``g1`` refer to the same
+    player consistently.
+    """
+    total = d0 + d1
+    if total == 0:
+        return (0, 0, avail)
+    if total <= avail:
+        return (d0, d1, avail - total)
+    if d0 > 0 and d1 > 0:
+        return (0, 0, avail)  # both owed, supply short -> neither receives
+    if d0 > 0:
+        return (avail, 0, 0)  # sole claimant seat 0 takes the remainder
+    return (0, avail, 0)  # implicit else: sole claimant seat 1 takes the remainder
+
 
 class _HeadlessView:
     """No-op stand-in for the pygame boardView when running headless.
@@ -194,6 +222,10 @@ class catanGame:
                 resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
                 if resourceGenerated != "DESERT":
                     player_i.resources[resourceGenerated] += 1
+                    # spec 009: the setup 2nd-settlement grant draws from the
+                    # finite bank (flat -1 per adjacent non-desert hex; never
+                    # routed through the production-depletion rule).
+                    self.board.bank_draw({resourceGenerated: 1})
                     initial_resources.append(resourceGenerated)
                     # print("{} collects 1 {} from Settlement".format(
                     #     player_i.name, resourceGenerated))
@@ -307,47 +339,55 @@ class catanGame:
             hexResourcesRolled = self.board.getHexResourceRolled(diceRoll)
             # print('Resources rolled this turn:', hexResourcesRolled)
 
-            # Check for each player
-            for player_i in list(self.playerQueue.queue):
-                per_player_delta = {}
-                # Check each settlement the player has
-                for settlementCoord in player_i.buildGraph["SETTLEMENTS"]:
-                    # check each adjacent hex to a settlement
-                    for adjacentHex in self.board.boardGraph[settlementCoord].adjacent_hex_indices:
-                        # This player gets a resource if hex is adjacent and no robber
-                        if (
-                            adjacentHex in hexResourcesRolled
-                            and self.board.hexTileDict[adjacentHex].has_robber == False
-                        ):
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
-                            player_i.resources[resourceGenerated] += 1
-                            per_player_delta[resourceGenerated] = (
-                                per_player_delta.get(resourceGenerated, 0) + 1
-                            )
-                            # print("{} collects 1 {} from Settlement".format(
-                            #     player_i.name, resourceGenerated))
+            # Finite-bank production (spec 009): the per-vertex incremental grant
+            # cannot express the official all-or-nothing-per-resource depletion
+            # rule, so this is a TWO-PASS resolution.
+            #
+            # Pass 1 — tally each seat's owed amount per resource WITHOUT
+            # mutating. ``seat`` is the player's position in the queue; demand
+            # and the grant below refer to the same player, so the depletion
+            # rule (which is seat-symmetric) is correct regardless of turn
+            # rotation.
+            players = list(self.playerQueue.queue)
+            demand: list[dict[str, int]] = [{} for _ in players]
+            for seat, player_i in enumerate(players):
+                for build_coords, yield_amt in (
+                    (player_i.buildGraph["SETTLEMENTS"], 1),
+                    (player_i.buildGraph["CITIES"], 2),
+                ):
+                    for coord in build_coords:
+                        for adjacentHex in self.board.boardGraph[coord].adjacent_hex_indices:
+                            if (
+                                adjacentHex in hexResourcesRolled
+                                and self.board.hexTileDict[adjacentHex].has_robber == False
+                            ):
+                                res = self.board.hexTileDict[adjacentHex].resource_type
+                                demand[seat][res] = demand[seat].get(res, 0) + yield_amt
 
-                # Check each City the player has
-                for cityCoord in player_i.buildGraph["CITIES"]:
-                    # check each adjacent hex to a settlement
-                    for adjacentHex in self.board.boardGraph[cityCoord].adjacent_hex_indices:
-                        # This player gets a resource if hex is adjacent and no robber
-                        if (
-                            adjacentHex in hexResourcesRolled
-                            and self.board.hexTileDict[adjacentHex].has_robber == False
-                        ):
-                            resourceGenerated = self.board.hexTileDict[adjacentHex].resource_type
-                            player_i.resources[resourceGenerated] += 2
-                            per_player_delta[resourceGenerated] = (
-                                per_player_delta.get(resourceGenerated, 0) + 2
-                            )
-                            # print("{} collects 2 {} from City".format(
-                            #     player_i.name, resourceGenerated))
+            # Pass 2 — apply the official depletion rule per resource against
+            # the finite bank, decrement the supply, and accumulate grants.
+            grant: list[dict[str, int]] = [{} for _ in players]
+            for res in _BANK_RESOURCES:
+                d0 = demand[0].get(res, 0) if len(demand) > 0 else 0
+                d1 = demand[1].get(res, 0) if len(demand) > 1 else 0
+                if d0 == 0 and d1 == 0:
+                    continue
+                g0, g1, remaining = resolve_bank_production(self.board.resourceBank[res], d0, d1)
+                self.board.resourceBank[res] = remaining
+                if g0:
+                    grant[0][res] = g0
+                if g1:
+                    grant[1][res] = g1
 
-                # Emit a RESOURCE_CHANGE broadcast for this player, if any deltas
+            # Apply grants to hands and emit the per-player aggregated DICE event
+            # (same shape as before — one RESOURCE_CHANGE per player).
+            for seat, player_i in enumerate(players):
+                per_player_delta = grant[seat]
                 if per_player_delta:
+                    for res, amt in per_player_delta.items():
+                        player_i.resources[res] += amt
                     self.broadcast.resource_change(
-                        player_i.name, delta=per_player_delta, source="DICE"
+                        player_i.name, delta=dict(per_player_delta), source="DICE"
                     )
 
         # Logic for a 7 roll

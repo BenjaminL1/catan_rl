@@ -197,7 +197,64 @@ class catanBoard:
             "YEAROFPLENTY": 2,
         }
 
+        # Finite per-resource bank (spec 009 — Colonist 1v1 has a 19-of-each
+        # supply with an official depletion rule; mirrors the Torevan TS
+        # GameState.resourceBank). Keyed by ENGINE resource names. Conservation
+        # invariant: resourceBank[R] + sum(players' hands[R]) == 19 for every R.
+        self.resourceBank: dict[str, int] = {
+            "BRICK": 19,
+            "ORE": 19,
+            "SHEEP": 19,
+            "WHEAT": 19,
+            "WOOD": 19,
+        }
+
         return None
+
+    # ------------------------------------------------------------------
+    # Finite resource bank helpers (spec 009)
+    # ------------------------------------------------------------------
+    def bank_recirculate(self, delta: dict[str, int]) -> None:
+        """Return spent resources to the bank (build / dev-buy / bank-trade
+        give side / discard). ``delta`` maps an ENGINE resource name to the
+        positive count returned. Cards are never created — they move from a
+        hand back into the supply."""
+        for res, amt in delta.items():
+            if amt:
+                self.resourceBank[res] += amt
+
+    def bank_draw(self, delta: dict[str, int]) -> None:
+        """Remove resources from the bank (setup grant / Year of Plenty /
+        bank-trade receive side). ``delta`` maps an ENGINE resource name to
+        the positive count drawn. The caller MUST have confirmed availability
+        (dice production uses :func:`resolve_bank_production` instead, which
+        clamps to the supply). The non-negativity assertion surfaces a missed
+        wiring as a loud failure rather than a silent conservation break."""
+        for res, amt in delta.items():
+            if amt:
+                self.resourceBank[res] -= amt
+                assert self.resourceBank[res] >= 0, (
+                    f"resource bank underflow for {res}: {self.resourceBank[res]} "
+                    "(drew more than the supply held — caller must gate availability)"
+                )
+
+    def bank_can_supply(self, delta: dict[str, int]) -> bool:
+        """True iff the bank can currently supply every (resource, count) in
+        ``delta`` (used by apply-time gating for YoP / bank-trade receive)."""
+        return all(self.resourceBank[res] >= amt for res, amt in delta.items())
+
+    def assert_conservation(self, players: list) -> None:
+        """Assert the finite-bank conservation invariant (spec 009):
+        ``resourceBank[R] + sum(players' hands[R]) == 19`` for every resource.
+        Used by the cross-driver conservation tests as the global correctness
+        gate that catches any un-rerouted mutation site."""
+        for res in self.resourceBank:
+            held = sum(int(p.resources.get(res, 0)) for p in players)
+            total = self.resourceBank[res] + held
+            assert total == 19, (
+                f"resource-bank conservation broken for {res}: "
+                f"bank={self.resourceBank[res]} + hands={held} = {total} (expected 19)"
+            )
 
     def getHexCoords(self, hexInd):
         # Dictionary to store Axial Coordinates (q, r) by hexIndex

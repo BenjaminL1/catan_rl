@@ -72,6 +72,28 @@ pub fn resource_to_idx(r: Resource) -> Option<usize> {
     }
 }
 
+/// Official Catan depletion rule for ONE resource on ONE production roll
+/// (spec 009). Ported verbatim from the Torevan TS `resolveBankProduction` /
+/// the Python `resolve_bank_production`. Returns `(g0, g1, remaining)`. The
+/// branch order and implicit final `else` are significant; the rule is
+/// seat-symmetric (a sole claimant always takes the remainder).
+fn resolve_bank_production(avail: u8, d0: u8, d1: u8) -> (u8, u8, u8) {
+    let total = d0 + d1;
+    if total == 0 {
+        return (0, 0, avail);
+    }
+    if total <= avail {
+        return (d0, d1, avail - total);
+    }
+    if d0 > 0 && d1 > 0 {
+        return (0, 0, avail); // both owed, supply short -> neither receives
+    }
+    if d0 > 0 {
+        return (avail, 0, 0); // sole claimant seat 0 takes the remainder
+    }
+    (0, avail, 0) // implicit else: sole claimant seat 1
+}
+
 // ---------------------------------------------------------------------------
 // Dev card indexing (matches Python's devCards dict)
 // ---------------------------------------------------------------------------
@@ -302,6 +324,11 @@ pub struct GameState {
     pub setup_step: u8,
     /// Dev card deck — counts remaining (KNIGHT, VP, MONOPOLY, ROADBUILDER, YEAROFPLENTY).
     pub dev_deck: [u8; N_DEV_TYPES],
+    /// Finite per-resource bank (spec 009): 19 of each at game start, indexed
+    /// by `IDX_*` (alpha order). Conservation: `bank[R] + sum players' hands[R]
+    /// == 19`. Mirrors the Python `catanBoard.resourceBank` / Torevan
+    /// `GameState.resourceBank`.
+    pub bank: [u8; N_RESOURCES],
     /// Last 7 roller (None if no 7 has been rolled yet).
     pub last_seven_roller: Option<u8>,
     /// Cards remaining to discard for the current discarding player.
@@ -358,6 +385,8 @@ impl GameState {
                 d[DEV_YEAROFPLENTY] = 2;
                 d
             },
+            // Finite resource bank: 19 of each (spec 009).
+            bank: [19; N_RESOURCES],
             last_seven_roller: None,
             discard_cards_remaining: 0,
             road_builder_left: 0,
@@ -473,6 +502,11 @@ impl GameState {
             self.players[p].resources[IDX_WOOD] -= 1;
             self.players[p].resources[IDX_SHEEP] -= 1;
             self.players[p].resources[IDX_WHEAT] -= 1;
+            // spec 009: settlement cost recirculates to the finite bank.
+            self.bank[IDX_BRICK] += 1;
+            self.bank[IDX_WOOD] += 1;
+            self.bank[IDX_SHEEP] += 1;
+            self.bank[IDX_WHEAT] += 1;
             // Emit the resource debit. Python emits one
             // RESOURCE_CHANGE per build (player.py:133).
             let mut delta = [0i8; N_RESOURCES];
@@ -534,6 +568,9 @@ impl GameState {
         self.players[p].settlements_left += 1;
         self.players[p].resources[IDX_WHEAT] -= 2;
         self.players[p].resources[IDX_ORE] -= 3;
+        // spec 009: city cost recirculates to the finite bank.
+        self.bank[IDX_WHEAT] += 2;
+        self.bank[IDX_ORE] += 3;
         self.players[p].victory_points += 1;
         let mut delta = [0i8; N_RESOURCES];
         delta[IDX_WHEAT] = -2;
@@ -624,6 +661,10 @@ impl GameState {
         if !is_free {
             self.players[p].resources[IDX_BRICK] -= 1;
             self.players[p].resources[IDX_WOOD] -= 1;
+            // spec 009: a PAID road's cost recirculates to the finite bank
+            // (a free Road-Builder road recirculates nothing).
+            self.bank[IDX_BRICK] += 1;
+            self.bank[IDX_WOOD] += 1;
             let mut delta = [0i8; N_RESOURCES];
             delta[IDX_BRICK] = -1;
             delta[IDX_WOOD] = -1;
@@ -744,6 +785,9 @@ impl GameState {
                         if let Some(idx) = resource_to_idx(hex.resource) {
                             self.players[player as usize].resources[idx] =
                                 self.players[player as usize].resources[idx].saturating_add(1);
+                            // spec 009: setup 2nd-settlement grant draws from the
+                            // finite bank (flat -1 per adjacent non-desert hex).
+                            self.bank[idx] = self.bank[idx].saturating_sub(1);
                         }
                     }
                     break;
@@ -872,6 +916,11 @@ impl GameState {
         self.players[p].resources[IDX_WHEAT] -= 1;
         self.players[p].resources[IDX_SHEEP] -= 1;
         self.players[p].resources[IDX_ORE] -= 1;
+        // spec 009: dev-card resource cost recirculates to the finite bank
+        // (the dev card itself is drawn from the separate dev_deck supply).
+        self.bank[IDX_WHEAT] += 1;
+        self.bank[IDX_SHEEP] += 1;
+        self.bank[IDX_ORE] += 1;
         // Draw one uniformly-weighted card from the deck.
         let pick = self.rng.gen_range_u32(total_remaining);
         let mut acc = 0u32;
@@ -955,8 +1004,19 @@ impl GameState {
                 _ => IDX_BRICK,
             }
         };
-        self.players[p].resources[mapped(res1)] += 1;
-        self.players[p].resources[mapped(res2)] += 1;
+        // spec 009: draw each YoP card from the finite bank; a pick the bank
+        // cannot supply is not granted (apply-time gate, mirrors the Python env
+        // / TS reject). Sequential checks handle the doubled-pick res1 == res2.
+        let m1 = mapped(res1);
+        let m2 = mapped(res2);
+        if self.bank[m1] > 0 {
+            self.players[p].resources[m1] += 1;
+            self.bank[m1] -= 1;
+        }
+        if self.bank[m2] > 0 {
+            self.players[p].resources[m2] += 1;
+            self.bank[m2] -= 1;
+        }
         self.events.push(Event::YearOfPlenty {
             player: p as u8,
             resources: [res1, res2],
@@ -1104,8 +1164,16 @@ impl GameState {
         if self.players[p].resources[give] < ratio {
             return Err(EngineError::InsufficientResources);
         }
+        // spec 009: cannot receive a resource the finite bank lacks (mirrors
+        // the TS applyBankTrade throw-on-empty-receive).
+        if self.bank[recv] == 0 {
+            return Err(EngineError::InsufficientResources);
+        }
         self.players[p].resources[give] -= ratio;
         self.players[p].resources[recv] += 1;
+        // give side recirculates into the bank; receive side is drawn from it.
+        self.bank[give] += ratio;
+        self.bank[recv] -= 1;
         Ok(())
     }
 
@@ -1130,6 +1198,8 @@ impl GameState {
             return Err(EngineError::InsufficientResources);
         }
         self.players[p].resources[mapped] -= 1;
+        // spec 009: discarded cards recirculate to the finite bank.
+        self.bank[mapped] += 1;
         self.events.push(Event::Discard {
             player: p as u8,
             resources: vec![res_cw],
@@ -1175,10 +1245,16 @@ impl GameState {
     }
 
     fn distribute_resources(&mut self, roll: u8) {
-        // For each hex matching the roll AND not blocked by the robber,
-        // grant resources to each adjacent owner. Emit one
-        // RESOURCE_CHANGE per (player, hex) tuple — the Python engine
-        // emits per resource grant.
+        // spec 009: two-pass finite-bank production. Pass 1 tallies per-(player,
+        // resource) demand WITHOUT mutating; pass 2 applies the official
+        // depletion rule per resource, decrements the finite bank, and grants
+        // to hands. The per-vertex incremental grant cannot express the
+        // all-or-nothing-per-resource rule, so the restructure is required.
+        // Grant events are emitted per (player, resource) post-tally; the named
+        // consumers (hand_tracker/obs/env) read canonical state, not event
+        // granularity (review N1), and this is closer to the Python per-player
+        // aggregation than the old per-(player, hex) shape.
+        let mut demand = [[0u8; N_RESOURCES]; 2];
         for hex in &self.board.hexes {
             if hex.number_token != Some(roll) {
                 continue;
@@ -1199,13 +1275,31 @@ impl GameState {
                     continue;
                 }
                 // 1, 2 = settle; 3, 4 = city
-                let amount = if owner <= 2 { 1 } else { 2 };
-                let owner_player = if owner == 1 || owner == 3 { 0 } else { 1 };
-                self.players[owner_player as usize].resources[res_idx] += amount;
+                let amount = if owner <= 2 { 1u8 } else { 2u8 };
+                let owner_player = if owner == 1 || owner == 3 {
+                    0usize
+                } else {
+                    1usize
+                };
+                demand[owner_player][res_idx] += amount;
+            }
+        }
+        for res_idx in 0..N_RESOURCES {
+            let (g0, g1, remaining) =
+                resolve_bank_production(self.bank[res_idx], demand[0][res_idx], demand[1][res_idx]);
+            if g0 == 0 && g1 == 0 {
+                continue;
+            }
+            self.bank[res_idx] = remaining;
+            for (player, g) in [(0usize, g0), (1usize, g1)] {
+                if g == 0 {
+                    continue;
+                }
+                self.players[player].resources[res_idx] += g;
                 let mut delta = [0i8; N_RESOURCES];
-                delta[res_idx] = amount as i8;
+                delta[res_idx] = g as i8;
                 self.events.push(Event::ResourceChange {
-                    player: owner_player,
+                    player: player as u8,
                     delta_alpha: delta,
                     source: ResourceChangeSource::Roll,
                 });
@@ -1462,5 +1556,30 @@ mod tests {
     #[test]
     fn max_vp_is_15() {
         assert_eq!(MAX_VP, 15);
+    }
+
+    // ------------------------------------------------------------------
+    // Finite resource bank (spec 009)
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn bank_initialised_to_19_each() {
+        let state = GameState::new(1);
+        assert_eq!(state.bank, [19u8; N_RESOURCES]);
+        assert_eq!(state.bank.iter().map(|&b| b as u32).sum::<u32>(), 95);
+    }
+
+    #[test]
+    fn depletion_rule_matches_ts_verbatim() {
+        // nobody owed -> no-op
+        assert_eq!(resolve_bank_production(5, 0, 0), (0, 0, 5));
+        // supply covers -> both paid in full
+        assert_eq!(resolve_bank_production(5, 2, 2), (2, 2, 1));
+        assert_eq!(resolve_bank_production(4, 2, 2), (2, 2, 0)); // exact fit
+                                                                 // both owed, short -> NEITHER, bank unchanged
+        assert_eq!(resolve_bank_production(3, 2, 2), (0, 0, 3));
+        // sole claimant takes the remainder (seat-asymmetric, catches a swap)
+        assert_eq!(resolve_bank_production(2, 3, 0), (2, 0, 0));
+        assert_eq!(resolve_bank_production(2, 0, 3), (0, 2, 0));
     }
 }

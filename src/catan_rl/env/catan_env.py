@@ -434,6 +434,7 @@ class CatanEnv(gym.Env):
             res_name = RESOURCES_CW[res1_idx]
             if agent.resources.get(res_name, 0) > 0:
                 agent.resources[res_name] -= 1
+                self.game.board.bank_recirculate({res_name: 1})  # spec 009: discard -> bank
                 self.game.log_discard(agent, [res_name])
                 self._cards_to_discard -= 1
             if self._cards_to_discard <= 0:
@@ -587,9 +588,15 @@ class CatanEnv(gym.Env):
                 player.yopPlayed += 1
                 player.devCardPlayedThisTurn = True
                 r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
-                player.resources[r1] += 1
-                player.resources[r2] += 1
-                self.game.log_yop(player, [r1, r2])
+                # spec 009: draw each YoP card from the finite bank; a pick the
+                # bank cannot supply is not granted (apply-time gate, matches TS).
+                granted = []
+                for r in (r1, r2):
+                    if board.resourceBank.get(r, 0) > 0:
+                        player.resources[r] += 1
+                        board.bank_draw({r: 1})
+                        granted.append(r)
+                self.game.log_yop(player, granted)
         elif action_type == ActionType.PLAY_MONOPOLY:
             if player.devCards.get("MONOPOLY", 0) > 0 and not player.devCardPlayedThisTurn:
                 player.devCards["MONOPOLY"] -= 1
@@ -625,12 +632,13 @@ class CatanEnv(gym.Env):
                 ts.road_building_roads_left = 2
         elif action_type == ActionType.BANK_TRADE:
             r1, r2 = RESOURCES_CW[res1_idx], RESOURCES_CW[res2_idx]
-            player.trade_with_bank(r1, r2)
+            player.trade_with_bank(r1, r2, board)
         elif action_type == ActionType.DISCARD:
             # Fallback path (discard_pending branch is normally taken).
             res_name = RESOURCES_CW[res1_idx]
             if player.resources.get(res_name, 0) > 0:
                 player.resources[res_name] -= 1
+                board.bank_recirculate({res_name: 1})  # spec 009: discard -> bank
                 self.game.log_discard(player, [res_name])
         # ROLL_DICE outside roll_pending is a no-op (mask should prevent it).
 
@@ -715,6 +723,8 @@ class CatanEnv(gym.Env):
             res_type = self.game.board.hexTileDict[adj_hex].resource_type
             if res_type != "DESERT":
                 p.resources[res_type] += 1
+                # spec 009: setup 2nd-settlement grant draws from the finite bank.
+                self.game.board.bank_draw({res_type: 1})
                 self.game.broadcast.resource_change(p.name, {res_type: 1}, "SETUP")
 
     # ------------------------------------------------------------------
@@ -872,6 +882,7 @@ class CatanEnv(gym.Env):
             res_name = RESOURCES_CW[int(action[4])]
             if opp.resources.get(res_name, 0) > 0:
                 opp.resources[res_name] -= 1
+                self.game.board.bank_recirculate({res_name: 1})  # spec 009: discard -> bank
                 self.game.log_discard(opp, [res_name])
                 discarded += 1
 

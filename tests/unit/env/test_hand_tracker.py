@@ -252,7 +252,7 @@ def test_trade_with_same_give_and_receive_resource_emits_correct_delta() -> None
     tracker.subscribe(game.broadcast)
     tracker.seed_from_player(agent)
 
-    agent.trade_with_bank("WHEAT", "WHEAT")  # degenerate but legal
+    agent.trade_with_bank("WHEAT", "WHEAT", game.board)  # degenerate but legal
 
     # Actual: -4 + 1 = -3 → 4 - 3 = 1 WHEAT
     assert agent.resources["WHEAT"] == 1
