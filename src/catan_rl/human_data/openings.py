@@ -102,7 +102,10 @@ class OpeningResult:
     - ``"settlement_double_snap:{color}"`` — the two settlement blobs snapped to one
       vertex (a §5.7 double-snap).
     - ``"road_unresolved:{color}:{settlement}"`` — a settlement had no resolvable
-      incident road (§5.7).
+      incident road (§5.7): no incident edge collected at least
+      :data:`_MIN_ROAD_PIXELS` road-mask pixels (an honest rejection rather than
+      snapping to a leaked/stray-pixel runner-up — review finding: red-team
+      counterexample).
     """
 
     openings: dict[str, PlayerOpening] | None
@@ -199,6 +202,20 @@ _MIN_HEAD_VOTES = 10
 _ROAD_SPAN_LO = 0.2
 _ROAD_SPAN_HI = 0.8
 _ROAD_PERP_PX = 10.0
+
+#: Minimum midsection road-mask pixels the winning incident edge must collect for
+#: :func:`_road_for_settlement` to accept it — the road analogue of
+#: :data:`_MIN_HEAD_VOTES` (review finding: red-team counterexample). WITHOUT this
+#: floor ``best_count`` starts at 0 and ``count > best_count`` accepts ANY incident
+#: edge holding even a single road-mask pixel, so a stray subtraction artefact / a
+#: few settlement-body/tile-bleed pixels leaked onto a wrong-but-incident edge is
+#: emitted as a confidently-wrong road (and the §5.7 road-incidence re-check passes
+#: it, since a leaked edge IS incident). On the game-1 frame the leaked wrong edges
+#: collect ~11-34px while every TRUE opening road collects >=29px (the weakest is
+#: settlement 3's edge 8 at 29); this floor sits between them, so an occluded true
+#: road falls to ``road_unresolved`` (an honest rejection) instead of snapping to
+#: the leaked runner-up. Mirrors the settlement guard: reject below the floor.
+_MIN_ROAD_PIXELS = 20
 
 
 def _color_masks(
@@ -307,9 +324,14 @@ def _road_for_settlement(
     """The opening road for one settlement (§5.7 road tiebreak): among the edges
     incident to ``settlement`` and not already claimed, pick the one collecting the
     most colour road-mask pixels along its midsection perpendicular band. Returns
-    ``None`` if no incident edge collects any road pixels."""
+    ``None`` when the best incident edge collects fewer than :data:`_MIN_ROAD_PIXELS`
+    pixels — the road analogue of the settlement head-vote guard (review finding:
+    red-team counterexample). WITHOUT this floor any incident edge with even one
+    stray/leaked road-mask pixel is accepted as the road; the floor turns that
+    fabrication (an occluded true road snapping to a leaked runner-up) into an
+    honest ``road_unresolved`` rejection."""
     best: int | None = None
-    best_count = 0
+    best_count = _MIN_ROAD_PIXELS - 1
     for edge_id, (a, b) in enumerate(edge_vertices):
         if settlement not in (a, b) or edge_id in used:
             continue

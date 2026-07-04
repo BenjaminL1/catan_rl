@@ -95,6 +95,46 @@ def test_road_tiebreak_none_when_no_road_pixels() -> None:
     assert _road_for_settlement(empty, 3, vertex_px, topo.edge_vertices, used=set()) is None
 
 
+def test_road_tiebreak_rejects_single_stray_pixel() -> None:
+    """BLOCKER (red-team §openings): mirror the settlement head-vote guard on the
+    road path. WITHOUT a minimum-pixel floor, ``best_count`` starts at 0 and any
+    incident edge with even ONE road-mask pixel wins — the exact "fabricated from
+    stray pixels" class guarded for settlements but left unguarded for roads.
+
+    A single road-mask pixel on the midsection of edge 7 (verts 3,4), incident to
+    settlement 3, must NOT be accepted as that settlement's road; the correct
+    output is ``None`` (road_unresolved), not edge 7."""
+    from catan_rl.human_data.openings import _MIN_ROAD_PIXELS
+
+    assert _MIN_ROAD_PIXELS > 1
+    topo = load_topology()
+    vertex_px = _synthetic_lattice()
+    p1, p2 = vertex_px[3], vertex_px[4]  # edge 7
+    stray = np.array([p1 + 0.5 * (p2 - p1)])  # one pixel on the midsection
+    got = _road_for_settlement(stray, 3, vertex_px, topo.edge_vertices, used=set())
+    assert got is None
+
+
+def test_road_tiebreak_rejects_below_floor_leaked_pixels() -> None:
+    """BLOCKER (red-team §openings): a handful of leaked settlement-body/tile-bleed
+    pixels on a WRONG incident edge (finding: edge 5 collects ~11px on the real
+    frame when the true road is occluded) is below the floor, so the detector
+    rejects (``None``) rather than confidently assigning the wrong road. A cloud at
+    or above the floor is still resolved."""
+    from catan_rl.human_data.openings import _MIN_ROAD_PIXELS
+
+    topo = load_topology()
+    vertex_px = _synthetic_lattice()
+    p1, p2 = vertex_px[2], vertex_px[3]  # edge 5 (verts 2,3), a WRONG incident edge
+    ts = np.linspace(0.3, 0.7, _MIN_ROAD_PIXELS - 1)  # below the floor
+    leaked = np.array([p1 + t * (p2 - p1) for t in ts])
+    assert _road_for_settlement(leaked, 3, vertex_px, topo.edge_vertices, used=set()) is None
+    # At the floor it resolves.
+    ts_ok = np.linspace(0.3, 0.7, _MIN_ROAD_PIXELS)
+    at_floor = np.array([p1 + t * (p2 - p1) for t in ts_ok])
+    assert _road_for_settlement(at_floor, 3, vertex_px, topo.edge_vertices, used=set()) == 5
+
+
 def test_detect_openings_rejects_bad_player_colors() -> None:
     from catan_rl.human_data import detect_openings
     from catan_rl.human_data.board_cv import BoardRead
