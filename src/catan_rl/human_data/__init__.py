@@ -68,6 +68,14 @@ from catan_rl.human_data.record import (
     check_road_incidence,
     derive_opponent_strength,
 )
+from catan_rl.human_data.segment import (
+    GameSegment,
+    load_strength_manifest,
+    manifest_entry,
+    ruleset_ok,
+    segment_games,
+    segment_opponent_strength,
+)
 from catan_rl.human_data.topology import Topology, load_topology
 
 __all__ = [
@@ -84,6 +92,7 @@ __all__ = [
     "DecodedFrame",
     "FFmpegNotFoundError",
     "GameRecord",
+    "GameSegment",
     "GlyphClassifierNotValidated",
     "LogEvent",
     "OpponentStrength",
@@ -106,11 +115,16 @@ __all__ = [
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
     "ingest_video",
+    "load_strength_manifest",
     "load_topology",
+    "manifest_entry",
     "ocr_log_crop",
     "parse_log",
     "probe_resolution",
     "resolve_ffmpeg",
     "resolve_ffprobe",
+    "ruleset_ok",
     "schedule_ocr_eta_s",
+    "segment_games",
+    "segment_opponent_strength",
 ]
