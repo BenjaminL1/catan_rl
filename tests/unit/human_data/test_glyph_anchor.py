@@ -387,3 +387,15 @@ def test_consensus_all_unreadable_is_none() -> None:
     dark = np.zeros((14, 14, 3), np.uint8)
     frames = [(dark, [(0, 0, 14, 14)]) for _ in range(3)]
     assert consensus_granted_glyphs(frames) is None
+
+
+def test_consensus_rejects_contradictory_readable_reads() -> None:
+    # RED-TEAM: two distinct multisets each backed by >= MIN_GRANT_CONSENSUS_FRAMES
+    # readable frames. A plurality/tie-break would emit one CONFIDENTLY; full
+    # agreement must reject (None) like read_board_stable does on any disagreement.
+    a = Counter({"WOOD": 1, "BRICK": 1})
+    b = Counter({"WHEAT": 1, "ORE": 1})
+    frames = [_grant_crop(a), _grant_crop(b), _grant_crop(a), _grant_crop(b)]
+    assert consensus_granted_glyphs(frames) is None
+    # Order-independence: reversing the reads must not flip the reject to an accept.
+    assert consensus_granted_glyphs(list(reversed(frames))) is None

@@ -461,11 +461,16 @@ def consensus_granted_glyphs(
     The ``"received starting resources"`` line persists across several sampled
     frames; trusting a single crop lets one mid-animation / compression-artefact
     frame drive the multiset the joint-flip firewall compares against. This mirrors
-    the board's >=2-frame agreement rule (orientation.py / brief §5.2): read the
+    the board's byte-identical agreement rule
+    (:func:`~catan_rl.human_data.board_cv.read_board_stable`, brief §5.2): read the
     grant crop on EVERY frame it is visible, drop the ``None`` (unreadable) reads,
-    and require the modal multiset to be backed by >= :data:`MIN_GRANT_CONSENSUS_FRAMES`
-    agreeing frames. Returns that agreed multiset, or ``None`` (honest reject) when
-    too few frames agree.
+    and require the non-``None`` reads to ALL agree on one multiset backed by
+    >= :data:`MIN_GRANT_CONSENSUS_FRAMES` frames. ANY disagreement among the
+    readable reads is an honest reject (``None``) — like ``read_board_stable``,
+    consensus never tie-breaks a bimodal read, because a wrong-but-confident grant
+    multiset would either false-accept or false-reject the joint-D6-flip firewall
+    (:func:`~catan_rl.human_data.orientation.assert_glyph_anchor`). Returns the
+    agreed multiset, or ``None`` when reads disagree or too few agree.
     """
     reads = [
         r
@@ -474,12 +479,15 @@ def consensus_granted_glyphs(
     ]
     if not reads:
         return None
-    # Mode over the frozen (resource, count) views of each read multiset.
-    tally: Counter[tuple[tuple[str, int], ...]] = Counter(tuple(sorted(r.items())) for r in reads)
-    best_key, best_n = tally.most_common(1)[0]
-    if best_n < MIN_GRANT_CONSENSUS_FRAMES:
-        return None  # no multiset seen on enough frames — unreliable, fail closed
-    return Counter(dict(best_key))
+    # Full agreement, not a plurality: every readable frame must read the SAME
+    # multiset. A single disagreeing frame is exactly the instability the multi-
+    # frame gate exists to catch — fail closed rather than tie-break a coin flip.
+    distinct = {tuple(sorted(r.items())) for r in reads}
+    if len(distinct) > 1:
+        return None  # readable reads disagree → bimodal/unstable, fail closed
+    if len(reads) < MIN_GRANT_CONSENSUS_FRAMES:
+        return None  # unanimous but too few frames agree — unreliable, fail closed
+    return Counter(dict(distinct.pop()))
 
 
 @dataclass(frozen=True, slots=True)
