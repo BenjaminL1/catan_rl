@@ -171,6 +171,117 @@ def test_actor_does_not_cross_bind_to_the_wrong_handle() -> None:
     assert parsed2.events[0].actor == "rayman147"
 
 
+# --- chat is NOT a log event: winner never latches on chat (§5.1 firewall) ---
+
+
+def test_winner_never_latches_on_chat_lines_quoting_won_the_game() -> None:
+    # BLOCKER regression: Colonist chat renders in the SAME top-right crop as the
+    # log. A chat line quoting "won the game" must NEVER set a winner (the whole
+    # §5.1 rationale: only the exact victory LOG line may set the winner).
+    for chat in (
+        "ThePhantom: i won the game last time",
+        "rayman147: you almost won the game",
+        "ThePhantom: gg you won the game",
+    ):
+        parsed = parse_log([chat], _HANDLES)
+        assert parsed.winner is None, chat
+        # A chat line classifies as unknown with no actor, never victory.
+        assert parsed.events[0].kind == "unknown"
+        assert parsed.events[0].actor is None
+
+
+def test_real_spike_chat_lines_stay_winnerless_and_actorless() -> None:
+    # The exact chat lines captured in the spike end-screen crop (blockers/ocr):
+    # 'gg', 'stop hacking please sir', 'lol still dead lost'. None may set a
+    # winner or fabricate an actor.
+    chat_lines = [
+        "ThePhantom: gg",
+        "ThePhantom: stop hacking please sir",
+        "rayman147: lol still dead lost",
+        "rayman147: gg",
+    ]
+    parsed = parse_log(chat_lines, _HANDLES)
+    assert parsed.winner is None
+    assert all(e.kind == "unknown" and e.actor is None for e in parsed.events)
+
+
+def test_bare_won_the_game_without_leading_handle_fails_closed() -> None:
+    # A non-chat line where "won the game" is not the leading predicate (leading
+    # token "you", no POV handle) fails closed — winner None, actor None.
+    parsed = parse_log(["you almost won the game"], _HANDLES)
+    assert parsed.winner is None
+    assert parsed.events[0].kind == "victory"
+    assert parsed.events[0].actor is None
+
+
+# --- actor is the LEADING handle, not a whole-line argmax (§14 attribution) ---
+
+
+def test_actor_binds_leading_handle_on_two_handle_steal_line() -> None:
+    # BLOCKER regression: Colonist renders the opponent's robber steal with full
+    # names ("<stealer> stole N from <victim>"). The actor is the LEADING
+    # (stealer) handle, NOT the trailing victim. A whole-line argmax mis-binds
+    # the victim (both handles score 1.0; the trailing one won the >= tie).
+    p1 = parse_log(["rayman147 stole 1 card from ThePhantom"], _HANDLES)
+    assert p1.events[0].actor == "rayman147"
+    p2 = parse_log(["ThePhantom stole 1 card from rayman147"], _HANDLES)
+    assert p2.events[0].actor == "ThePhantom"
+    p3 = parse_log(["ThePhantom stole 1 Wheat from rayman147"], _HANDLES)
+    assert p3.events[0].actor == "ThePhantom"
+
+
+def test_actor_leading_handle_generalises_to_any_pair() -> None:
+    for a, b in (("Alice", "Bob"), ("foo", "bar")):
+        parsed = parse_log([f"{a} stole 1 card from {b}"], (a, b))
+        assert parsed.events[0].actor == a, (a, b)
+
+
+# --- garbage OCR fragments must not fabricate an actor (§5.6 bias audit) ------
+
+
+def test_garbage_ocr_fragments_resolve_actor_none() -> None:
+    # The committed real fixture ocr_f1080_500.txt leads with pure-noise lines
+    # ('aymam', 'i', 'Sluic', 'UI', 'yuu'). 'aymam' scores exactly 0.50 to
+    # 'rayman147'; at threshold 0.6 it (and the others) must NOT bind a handle.
+    lines = _fixture_lines("ocr_f1080_500.txt")
+    assert any("aymam" in line for line in lines), "fixture lost its garbage line"
+    parsed = parse_log(lines, _HANDLES)
+    noise = {"aymam", "i", "sluic", "ui", "yuu", "and took"}
+    for event in parsed.events:
+        if event.text.lower() in noise:
+            assert event.actor is None, event.text
+    # The real handle lines in the same fixture still resolve correctly.
+    rayman_rolls = [e for e in parsed.events if e.kind == "roll" and e.actor == "rayman147"]
+    assert rayman_rolls, "real rayman147 lines should still bind"
+
+
+def test_mangled_handle_still_binds_at_raised_threshold() -> None:
+    # Raising the threshold to 0.6 must NOT regress the real OCR handle noise:
+    # "raymani47"/"rayman|47" (≥0.75) still bind to rayman147.
+    for mangled in ("rayman|47 rolled", "raymani47 built a Road"):
+        parsed = parse_log([mangled], _HANDLES)
+        assert parsed.events[0].actor == "rayman147", mangled
+
+
+# --- POV seat logs as "You"; pov_handle maps it (§14) ------------------------
+
+
+def test_pov_handle_maps_leading_you_to_pov_seat() -> None:
+    # The POV seat renders its own events as "You ..." (build brief §14). With
+    # pov_handle supplied, a leading "You" attributes to the POV handle.
+    parsed = parse_log(["You stole"], _HANDLES, pov_handle="ThePhantom")
+    assert parsed.events[0].actor == "ThePhantom"
+    assert parsed.events[0].kind == "stole"
+
+
+def test_pov_handle_default_none_leaves_you_unresolved() -> None:
+    # Default (no pov_handle) keeps prior behaviour: a leading "You" is
+    # unresolved (actor None), never guessed.
+    parsed = parse_log(["You stole"], _HANDLES)
+    assert parsed.events[0].actor is None
+    assert parsed.events[0].kind == "stole"
+
+
 # --- grammar coverage over the real gameplay verbs ---------------------------
 
 

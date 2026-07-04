@@ -156,28 +156,61 @@ def _handle_similarity(candidate: str, handle: str) -> float:
 
 
 #: Minimum bigram similarity for an OCR handle token to bind to a known handle.
-#: 0.5 accepts ``"raymani47"``/``"rayman|47"``→``"rayman147"`` while rejecting
-#: the other player's handle.
-_HANDLE_MATCH_THRESHOLD = 0.5
+#: 0.6 accepts ``"raymani47"``/``"rayman|47"``→``"rayman147"`` (both ≥0.75) while
+#: rejecting a garbage OCR fragment: the mangled ``"aymam"`` scores exactly 0.50
+#: to ``"rayman147"`` and must NOT fabricate an actor (build brief §5.6 bias
+#: audit — a garbage line resolving to a real handle poisons the per-player
+#: attribution stream).
+_HANDLE_MATCH_THRESHOLD = 0.6
+
+#: A chat line renders in the SAME top-right crop as the game log and takes the
+#: shape ``"<handle>: <message>"`` — the ``:`` immediately after a handle is the
+#: chat marker (``"ThePhantom: gg"``). Real Colonist LOG events never use the
+#: ``<handle>:`` colon form, so a line matching this shape is chat, not a log
+#: event, and must never latch a winner or an actor (build brief §5.1 — the
+#: whole reason winner comes from the exact victory LOG line is that everything
+#: else, chat included, is a confidently-wrong outcome source).
+_CHAT_LINE = re.compile(r"^[a-z0-9|]+\s*:")
 
 
-def _resolve_actor(line: str, handles: Sequence[str]) -> str | None:
-    """Bind the leading OCR handle token(s) of a line to a known player handle.
-
-    Colonist log lines lead with the acting player's handle. This scans the line
-    for the token most similar to one of the two supplied ``handles`` (fuzzy, to
-    absorb OCR handle noise) and returns that canonical handle, or ``None`` if no
-    token clears :data:`_HANDLE_MATCH_THRESHOLD`.
+def _is_chat_line(low: str) -> bool:
+    """True if a normalised, lowercased line is a Colonist CHAT line, not a log
+    event. Chat is ``"<handle>: <message>"``; log events never use ``<handle>:``.
     """
-    best_handle: str | None = None
-    best_score = _HANDLE_MATCH_THRESHOLD
+    return _CHAT_LINE.match(low) is not None
+
+
+def _resolve_actor(line: str, handles: Sequence[str], pov_handle: str | None = None) -> str | None:
+    """Bind the LEADING OCR handle token of a line to a known player handle.
+
+    Colonist log lines lead with the acting player's handle
+    (``"<actor> stole 1 card from <victim>"``, ``"<actor> built a Road"``). This
+    honours that leading-handle convention: it walks the line's tokens in order
+    and returns the FIRST token that clears :data:`_HANDLE_MATCH_THRESHOLD` — NOT
+    a whole-line argmax. A whole-line argmax mis-attributes any line naming both
+    players (both full handles score 1.0, so the trailing VICTIM handle would win
+    the tie) — the actor is line-initial, so the first match is the actor.
+
+    The POV seat renders its own events as ``"You ..."`` (never the handle). When
+    ``pov_handle`` is supplied (the per-game HUD seat row, build brief §14), a
+    leading ``"you"`` token maps to it. ``pov_handle=None`` keeps the default (a
+    leading ``"You"`` stays unresolved → ``actor=None``).
+
+    Returns the canonical handle, or ``None`` if the leading token is neither a
+    resolvable handle nor the POV ``"you"`` marker.
+    """
     for token in _tokens(line):
+        if pov_handle is not None and token == "you":
+            return pov_handle
         for handle in handles:
-            score = _handle_similarity(token, handle)
-            if score >= best_score:
-                best_score = score
-                best_handle = handle
-    return best_handle
+            if _handle_similarity(token, handle) >= _HANDLE_MATCH_THRESHOLD:
+                return handle
+        # The leading token is not a handle; only the LEADING actor is trusted,
+        # so stop rather than scan mid/trailing tokens (which would re-introduce
+        # the victim-misattribution + garbage-fragment-binding bugs). A leading
+        # non-handle token (e.g. "You" with no pov_handle) → actor unresolved.
+        return None
+    return None
 
 
 # --- grammar -----------------------------------------------------------------
@@ -218,7 +251,11 @@ _GRAMMAR: tuple[tuple[re.Pattern[str], LogEventKind], ...] = (
 )
 
 
-def parse_log(lines: Iterable[str], handles: Sequence[str]) -> ParsedLog:
+def parse_log(
+    lines: Iterable[str],
+    handles: Sequence[str],
+    pov_handle: str | None = None,
+) -> ParsedLog:
     """Parse raw OCR log lines into an ordered event stream + the winner.
 
     ``lines`` are raw easyocr crop lines (comment lines beginning with ``#`` — the
@@ -227,10 +264,22 @@ def parse_log(lines: Iterable[str], handles: Sequence[str]) -> ParsedLog:
     event's ``actor`` are resolved **against these two handles only** (build brief
     §5.5, §14 — never an arbitrary OCR name).
 
-    Winner rule (build brief §5.1): the winner is the handle on the FIRST
-    ``"<player> won the game!"`` line (OCR-noise-tolerant), resolved to one of
-    ``handles``. If no victory line is seen — resign, cutoff, or simply not
-    sampled — the winner is ``None``. A victory line whose handle cannot be
+    ``pov_handle`` (optional) is the per-game POV seat's handle (from the HUD seat
+    row, build brief §14). The POV seat renders its own events as ``"You ..."``;
+    when supplied, a leading ``"You"`` token attributes those events to the POV
+    handle. Default ``None`` leaves a leading ``"You"`` unresolved (``actor=None``).
+
+    **Chat is not a log event.** Colonist chat renders in the SAME top-right crop
+    and takes the shape ``"<handle>: <message>"`` (``"ThePhantom: gg"``). Such a
+    line is classified ``"unknown"`` with ``actor=None`` and can NEVER latch a
+    winner or an actor — this is the §5.1 firewall: a chat line like
+    ``"you almost won the game"`` must not fabricate an outcome.
+
+    Winner rule (build brief §5.1): the winner is the handle on the FIRST victory
+    LOG line — a line that LEADS with a resolvable handle immediately followed by
+    the ``"won the game"`` predicate (OCR-noise-tolerant), never a chat line
+    quoting that phrase. If no victory line is seen — resign, cutoff, or simply
+    not sampled — the winner is ``None``. A victory line whose handle cannot be
     resolved to either known handle also yields ``None`` (fail closed rather than
     fabricate an outcome).
     """
@@ -246,15 +295,23 @@ def parse_log(lines: Iterable[str], handles: Sequence[str]) -> ParsedLog:
             continue
         low = line.lower()
 
+        # Chat line ("<handle>: <message>") — same crop as the log, but NOT a log
+        # event. It can never set a winner or an actor (§5.1 firewall against
+        # "gg you won the game" flipping the outcome). Kept as unknown for §5.6.
+        if _is_chat_line(low):
+            events.append(LogEvent(kind="unknown", actor=None, text=line))
+            continue
+
         # Reset placeholder — actor-less segment boundary (checked first).
         if _RESET.search(low):
             events.append(LogEvent(kind="game_reset", actor=None, text=line))
             continue
 
-        # Victory line — the ONLY winner signal (§5.1). Record the event AND, on
-        # the first resolvable victory line, latch the winner.
+        # Victory line — the ONLY winner signal (§5.1). It must LEAD with the
+        # winner's handle (a chat line was already dropped above), so resolving
+        # the leading token attributes the win to the right player.
         if _VICTORY.search(low):
-            actor = _resolve_actor(line, handles)
+            actor = _resolve_actor(line, handles, pov_handle)
             events.append(LogEvent(kind="victory", actor=actor, text=line))
             if winner is None and actor is not None:
                 winner = actor
@@ -263,7 +320,7 @@ def parse_log(lines: Iterable[str], handles: Sequence[str]) -> ParsedLog:
         # Resign / left — ends the game with NO winner (§5.1: never infer the
         # other player won).
         if _RESIGN.search(low):
-            actor = _resolve_actor(line, handles)
+            actor = _resolve_actor(line, handles, pov_handle)
             events.append(LogEvent(kind="resign", actor=actor, text=line))
             continue
 
@@ -272,7 +329,7 @@ def parse_log(lines: Iterable[str], handles: Sequence[str]) -> ParsedLog:
             if pattern.search(low):
                 kind = candidate_kind
                 break
-        actor = _resolve_actor(line, handles)
+        actor = _resolve_actor(line, handles, pov_handle)
         events.append(LogEvent(kind=kind, actor=actor, text=line))
 
     return ParsedLog(events=tuple(events), winner=winner)
