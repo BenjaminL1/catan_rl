@@ -885,6 +885,49 @@ def test_is_seed_eligible_tracks_passed_crosscheck() -> None:
     assert _sample_record().is_seed_eligible() is True
 
 
+# --- strong-opponent (tournament-only) scoreboard predicate (finding §1) -----
+
+
+def test_strong_opponent_scoreboard_true_only_for_tournament_high() -> None:
+    # The primary, defensible scoreboard: opponent genuinely strong ⟺ tournament
+    # source (both seats in a 1v1 tournament). The golden sample already carries
+    # source="tournament"; a real victory winner exercises every clause.
+    payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
+    rec = GameRecord.from_dict(payload)
+    assert rec.opponent_strength.source == "tournament"
+    assert rec.is_strong_opponent_scoreboard_eligible() is True
+
+
+def test_strong_opponent_scoreboard_false_for_rank_badge_high() -> None:
+    # A rank_badge high is opponent-UNCONTROLLED (labelled off ThePhantom's own
+    # rank, not the adversary's) — it is broad-scoreboard-eligible but must be
+    # EXCLUDED from the strong-opponent scoreboard so the §5.5 mixed-strength
+    # pooling can't sneak a weak opponent into the headline calibration number.
+    payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
+    payload["opponent_strength"] = {"tier": "high", "source": "rank_badge", "confidence": 0.9}
+    rec = GameRecord.from_dict(payload)
+    assert rec.is_scoreboard_eligible() is True
+    assert rec.is_strong_opponent_scoreboard_eligible() is False
+
+
+def test_strong_opponent_scoreboard_is_a_subset_of_broad_scoreboard() -> None:
+    # The strong-opponent predicate is a strict subset: it can never be True where
+    # the broad predicate is False (winner null / rejected / not high).
+    for override in (
+        {"winner": None},
+        {"rejection_reason": "green_tile_subtraction_failed", "passed_crosscheck": False},
+        {"opponent_strength": {"tier": "unknown", "source": "rank_badge", "confidence": 0.0}},
+    ):
+        payload = _sample_record().to_dict()
+        payload["winner"] = "ThePhantom"
+        payload.update(override)
+        rec = GameRecord.from_dict(payload)
+        assert rec.is_scoreboard_eligible() is False
+        assert rec.is_strong_opponent_scoreboard_eligible() is False
+
+
 def test_resolve_ffmpeg_returns_a_usable_binary() -> None:
     """Resolves to a system or imageio-ffmpeg binary (both available in CI)."""
     path = resolve_ffmpeg()

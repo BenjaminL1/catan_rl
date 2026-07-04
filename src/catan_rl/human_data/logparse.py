@@ -185,11 +185,19 @@ def _resolve_actor(line: str, handles: Sequence[str], pov_handle: str | None = N
 
     Colonist log lines lead with the acting player's handle
     (``"<actor> stole 1 card from <victim>"``, ``"<actor> built a Road"``). This
-    honours that leading-handle convention: it walks the line's tokens in order
-    and returns the FIRST token that clears :data:`_HANDLE_MATCH_THRESHOLD` — NOT
-    a whole-line argmax. A whole-line argmax mis-attributes any line naming both
-    players (both full handles score 1.0, so the trailing VICTIM handle would win
-    the tie) — the actor is line-initial, so the first match is the actor.
+    honours that leading-handle convention: it takes the LEADING token and binds
+    it to the **argmax** (highest-similarity) known handle over
+    :data:`_HANDLE_MATCH_THRESHOLD` — NOT the first handle in iteration order that
+    merely clears the threshold. A first-over-threshold bind is confidently wrong
+    when one handle is a bigram-subset/prefix of the other: for the leading token
+    ``"sammy"`` with handles ``("Sam", "Sammy")``, ``"sam"`` scores 0.80 ≥ 0.6 and
+    would short-circuit before the exact ``"sammy"`` (score 1.0) is ever tested —
+    binding the wrong player, and order-dependently so. Argmax over the two known
+    handles (ties broken deterministically toward the longer/exact handle) is
+    order-independent and picks the true actor. A *whole-line* argmax would still
+    be wrong (it mis-binds the trailing victim on a two-handle line, both scoring
+    1.0); the actor is line-initial, so this argmaxes over handles for the LEADING
+    token only.
 
     The POV seat renders its own events as ``"You ..."`` (never the handle). When
     ``pov_handle`` is supplied (the per-game HUD seat row, build brief §14), a
@@ -202,14 +210,29 @@ def _resolve_actor(line: str, handles: Sequence[str], pov_handle: str | None = N
     for token in _tokens(line):
         if pov_handle is not None and token == "you":
             return pov_handle
+        # Argmax over the two known handles for the LEADING token, not the first
+        # handle over threshold: when one handle is a bigram-prefix of the other
+        # ("Sam" vs "Sammy"), first-over-threshold binds the shorter handle before
+        # the exact-match longer one is tested. Ties break deterministically toward
+        # the longer handle (then lexicographic) so argument/OCR order can't flip
+        # the winner. Only the LEADING actor is trusted, so we resolve this token
+        # or give up — scanning mid/trailing tokens would re-introduce the
+        # victim-misattribution + garbage-fragment-binding bugs.
+        best_handle: str | None = None
+        best_score = _HANDLE_MATCH_THRESHOLD
         for handle in handles:
-            if _handle_similarity(token, handle) >= _HANDLE_MATCH_THRESHOLD:
-                return handle
-        # The leading token is not a handle; only the LEADING actor is trusted,
-        # so stop rather than scan mid/trailing tokens (which would re-introduce
-        # the victim-misattribution + garbage-fragment-binding bugs). A leading
-        # non-handle token (e.g. "You" with no pov_handle) → actor unresolved.
-        return None
+            score = _handle_similarity(token, handle)
+            if score < best_score:
+                continue
+            if (
+                best_handle is None
+                or score > best_score
+                or (len(handle), handle) > (len(best_handle), best_handle)
+            ):
+                best_handle = handle
+                best_score = score
+        # A leading non-handle token (e.g. "You" with no pov_handle) → unresolved.
+        return best_handle
     return None
 
 

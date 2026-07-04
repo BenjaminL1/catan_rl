@@ -236,6 +236,43 @@ def test_actor_leading_handle_generalises_to_any_pair() -> None:
         assert parsed.events[0].actor == a, (a, b)
 
 
+def test_winner_argmaxes_over_handles_for_prefix_handle_pairs() -> None:
+    # BLOCKER red-team regression: when one handle is a bigram-prefix of the
+    # other ("Sam" vs "Sammy"), a first-over-threshold bind picks the SHORTER
+    # handle (score 0.80 >= 0.6) before the exact-match longer one is tested,
+    # attributing the win to the wrong player. The resolver must argmax over the
+    # two known handles so the exact ("Sammy", score 1.0) handle wins.
+    for a, b in (("Sam", "Sammy"), ("Max", "Maxi"), ("Alex", "Alexa"), ("Cat", "Catan")):
+        parsed = parse_log([f"{b} won the game!"], (a, b))
+        assert parsed.winner == b, (a, b)
+
+
+def test_actor_resolution_is_order_independent_for_prefix_handles() -> None:
+    # The same victory line must yield the same winner regardless of the
+    # handle-tuple order (OCR / HUD-row order is not guaranteed). A
+    # first-over-threshold bind was nondeterministic in the tuple order.
+    assert parse_log(["Sammy won the game!"], ("Sam", "Sammy")).winner == "Sammy"
+    assert parse_log(["Sammy won the game!"], ("Sammy", "Sam")).winner == "Sammy"
+
+
+def test_prefix_handle_pair_attributes_ordinary_events_correctly() -> None:
+    # The argmax fix also fixes per-player actor attribution on ordinary lines
+    # (setup placements / rolls / steals feed the openings + draft order), not
+    # just the winner.
+    parsed = parse_log(
+        [
+            "Sammy placed a Settlement",
+            "Sammy rolled",
+            "Sammy stole 1 card from Sam",
+        ],
+        ("Sam", "Sammy"),
+    )
+    assert [e.actor for e in parsed.events] == ["Sammy", "Sammy", "Sammy"]
+    # Sam's own lines still bind to Sam (the shorter handle is not shadowed).
+    sam = parse_log(["Sam placed a Settlement", "Sam rolled"], ("Sam", "Sammy"))
+    assert [e.actor for e in sam.events] == ["Sam", "Sam"]
+
+
 # --- garbage OCR fragments must not fabricate an actor (§5.6 bias audit) ------
 
 

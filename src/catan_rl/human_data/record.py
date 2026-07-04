@@ -22,6 +22,36 @@ Conventions baked in here (build brief §5, §6):
   may still be seeds).
 - ``rejection_reason`` is kept on rejected records for the rejection-bias audit.
 - Ports are **omitted in v1** (never extracted in any spike).
+
+.. warning::
+
+   **``opponent_strength`` is a MATCH-strength proxy, NOT the adversary's rank
+   (review finding §1).** :func:`derive_opponent_strength` reads the committed
+   strength manifest (``data/human/strength_manifest.json``), which measures the
+   **channel owner** ThePhantom's world rank off HIS leaderboard row (see
+   ``scripts/build_strength_manifest.py`` — ``_phantom_rank_from_toks`` /
+   ``_is_phantom`` match only ``"thephantom"``; ``source="ranked_rank"`` carries
+   HIS rank, ``source="tournament"`` means HE entered a tournament). Colonist
+   ranked matchmaking pairs by rating, so a high ThePhantom rank is only a **weak
+   proxy** for the *opponent's* strength — a rank-10 ThePhantom vs a rank-9000
+   beginner is still labelled ``tier="high"``. Because ThePhantom is near-always
+   high-rank, the ``ranked_rank`` signal is near-constant on the agent seat and
+   carries almost no information about the adversary, so pooling all 204 ``high``
+   games into one "vs humans" calibration number is exactly the mixed-opponent
+   pooling the build brief §5.5 forbids.
+
+   Consequences baked into this module:
+
+   - The **only defensibly strong-vs-strong bucket** is the ``tournament`` subset
+     (both seats entered a 1v1 tournament). It is exposed as the *primary*
+     scoreboard predicate :meth:`GameRecord.is_strong_opponent_scoreboard_eligible`.
+   - :meth:`GameRecord.is_scoreboard_eligible` remains the broad
+     "ThePhantom-high-or-tournament" predicate, but its result is
+     **opponent-uncontrolled** for the ``rank_badge`` games; a downstream
+     scoreboard builder MUST split its ``n`` by ``opponent_strength.source`` and
+     report the ``tournament`` (strong-vs-strong) games separately from the
+     ``rank_badge`` (ThePhantom-high, opponent-uncontrolled) games — it must never
+     collapse the two provenances into a single vs-humans number.
 """
 
 from __future__ import annotations
@@ -270,6 +300,19 @@ def derive_opponent_strength(manifest_entry: dict[str, Any]) -> OpponentStrength
     """Derive the record's :class:`OpponentStrength` from a strength-manifest video
     entry (``data/human/strength_manifest.json`` — see
     ``scripts/build_strength_manifest.py`` for its shape).
+
+    .. warning::
+
+       **This encodes ThePhantom's-MATCH-strength, not the adversary's rank
+       (review finding §1).** The manifest measures the channel owner's
+       (ThePhantom's) own leaderboard rank / tournament entry, NOT the opponent's.
+       A ``tier="high"`` label therefore means "ThePhantom was high-rank (or in a
+       tournament) for this match", which under Colonist rating-based matchmaking
+       is only a weak proxy for the opponent being strong. The ``tournament``
+       source is the only bucket where both seats are genuinely strong; a
+       downstream scoreboard must not pool the ``rank_badge`` (opponent-uncontrolled)
+       games into a single vs-humans calibration number. See the module docstring
+       and :meth:`GameRecord.is_strong_opponent_scoreboard_eligible`.
 
     **This is THE high/unknown/excluded gate**, moved out of the §5.5 docstring
     prose into a pure, testable helper (review finding §1). It gates on the
@@ -755,6 +798,17 @@ class GameRecord:
         check. The 15 tournament highs (of 204) are 1v1-tournament title matches,
         NOT frame-verified.
 
+        **This is a MATCH-strength predicate, NOT an opponent-rank one (review
+        finding §1).** ``tier == "high"`` is derived from ThePhantom's OWN rank /
+        tournament entry, so the ``rank_badge`` games admitted here are
+        **opponent-uncontrolled** (Colonist matches by rating, so ThePhantom's
+        rank is a weak proxy for the adversary's). A scoreboard builder MUST split
+        its ``n`` by ``opponent_strength.source`` and report the ``tournament``
+        (strong-vs-strong) games separately from the ``rank_badge`` ones — never
+        collapse them into a single vs-humans number. The tournament-only subset
+        is the defensible primary scoreboard and is exposed as
+        :meth:`is_strong_opponent_scoreboard_eligible`.
+
         scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
         AND ``opponent_strength.tier == "high"`` AND
         ``opponent_strength.source in {"rank_badge", "tournament"}`` AND
@@ -767,6 +821,28 @@ class GameRecord:
             and self.opponent_strength.source in ("rank_badge", "tournament")
             and self.rejection_reason is None
         )
+
+    def is_strong_opponent_scoreboard_eligible(self) -> bool:
+        """Whether this record may enter the **strong-opponent** calibration
+        scoreboard — the primary, defensible scoreboard (review finding §1).
+
+        This is the strict subset of :meth:`is_scoreboard_eligible` whose opponent
+        is genuinely strong: the ``tournament`` source (both seats entered a 1v1
+        tournament). The broad :meth:`is_scoreboard_eligible` also admits
+        ``rank_badge`` games, but those are labelled ``high`` off *ThePhantom's*
+        own rank, which under Colonist rating-based matchmaking is only a weak
+        proxy for the *opponent's* strength — pooling them into one calibration
+        number is the §5.5 mixed-opponent-strength bias the build brief forbids.
+
+        A scoreboard builder should report this tournament-only number as its
+        headline and the broader :meth:`is_scoreboard_eligible` number only as a
+        source-split robustness check, never collapsed into a single vs-humans
+        figure.
+
+        strong-opponent-eligible ⟺ :meth:`is_scoreboard_eligible` AND
+        ``opponent_strength.source == "tournament"``.
+        """
+        return self.is_scoreboard_eligible() and self.opponent_strength.source == "tournament"
 
     def is_seed_eligible(self) -> bool:
         """Whether this record may seed exploration (brief §5.7).

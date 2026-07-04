@@ -34,6 +34,11 @@ def _fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]
         template = cmd[cmd.index("-o") + 1]
         Path(template.replace("%(ext)s", "mp4")).write_bytes(b"\x00" * 2048)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    if cmd[0] == "ffprobe":
+        # Resolution firewall probe: report 1080p so the decoded frame payload
+        # (FRAME_WIDTH*FRAME_HEIGHT below) matches the probed geometry.
+        geometry = f"{FRAME_WIDTH}x{FRAME_HEIGHT}\n"
+        return subprocess.CompletedProcess(cmd, 0, stdout=geometry, stderr="")
     # ffmpeg decode branch
     ts = float(cmd[cmd.index("-ss") + 1])
     payload = bytes([int(ts) % 256]) * _FRAME_NBYTES
@@ -44,8 +49,10 @@ def test_ingest_reports_ocr_eta_formula(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    # decode is subprocess-mocked; stub the binary resolver so no real ffmpeg is needed.
+    # decode is subprocess-mocked; stub the binary resolvers so no real ffmpeg /
+    # ffprobe is needed (the resolution firewall calls resolve_ffprobe()).
     monkeypatch.setattr(ingest_mod, "resolve_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(ingest_mod, "resolve_ffprobe", lambda: "ffprobe")
 
     rc = mine.main(["ingest", "vid42", "--duration", "12", "--sparse-interval", "4"])
     out = capsys.readouterr().out
@@ -63,6 +70,7 @@ def test_ingest_eta_scales_with_n_videos_and_procs(
 ) -> None:
     monkeypatch.setattr(subprocess, "run", _fake_run)
     monkeypatch.setattr(ingest_mod, "resolve_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(ingest_mod, "resolve_ffprobe", lambda: "ffprobe")
     rc = mine.main(
         [
             "ingest",
