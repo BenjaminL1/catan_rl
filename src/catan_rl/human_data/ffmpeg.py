@@ -15,6 +15,7 @@ CPU-only, no ``gui/`` or training-path imports.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 
 class FFmpegNotFoundError(RuntimeError):
@@ -41,3 +42,32 @@ def resolve_ffmpeg() -> str:
         ) from None
 
     return str(imageio_ffmpeg.get_ffmpeg_exe())
+
+
+def resolve_ffprobe() -> str:
+    """Return an absolute path to a usable ``ffprobe`` binary, or fail fast.
+
+    ``ffprobe`` is needed to read a downloaded stream's *true* native resolution
+    before decoding (the resolution firewall — brief §2 / FIX-5 — must key off the
+    honest source height, never an upscaled buffer). Resolution order:
+
+    1. a system ``ffprobe`` on ``PATH`` (ships alongside ``brew install ffmpeg``);
+    2. the ``ffprobe`` binary sitting next to a resolved ``ffmpeg`` (both a system
+       ffmpeg dir and the ``imageio-ffmpeg`` wheel co-locate the two).
+
+    Raises :class:`FFmpegNotFoundError` with install guidance if neither exists.
+    """
+    system = shutil.which("ffprobe")
+    if system is not None:
+        return system
+
+    ffmpeg_path = Path(resolve_ffmpeg())
+    sibling = ffmpeg_path.with_name(ffmpeg_path.name.replace("ffmpeg", "ffprobe"))
+    if sibling.exists() and sibling != ffmpeg_path:
+        return str(sibling)
+
+    raise FFmpegNotFoundError(
+        "ffprobe not found (needed to read a stream's native resolution before "
+        "decoding). Install a system ffmpeg (`brew install ffmpeg`, which ships "
+        "ffprobe) so the resolution firewall can key off the honest source height."
+    )

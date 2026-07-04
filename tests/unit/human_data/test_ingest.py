@@ -20,9 +20,11 @@ import pytest
 from catan_rl.human_data.ingest import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
+    MIN_RESOLUTION,
     OCR_SECONDS_PER_CROP,
     DecodedFrame,
     ScheduledFrame,
+    SubResolutionError,
     TimeWindow,
     VideoDownloadError,
     build_sampling_schedule,
@@ -30,10 +32,19 @@ from catan_rl.human_data.ingest import (
     download_video,
     estimate_ocr_wall_clock_s,
     ingest_video,
+    probe_resolution,
     schedule_ocr_eta_s,
 )
 
 _FRAME_NBYTES = FRAME_WIDTH * FRAME_HEIGHT * 3
+
+
+def _frame_nbytes(width: int, height: int) -> int:
+    return width * height * 3
+
+
+def _native_frame_bytes(fill: int, width: int, height: int) -> bytes:
+    return bytes([fill]) * _frame_nbytes(width, height)
 
 
 # --- sampling-schedule math ----------------------------------------------------
@@ -207,7 +218,7 @@ def test_download_video_falls_back_across_formats(
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         fmt = cmd[cmd.index("-f") + 1]
         calls.append(fmt)
-        if fmt != "best[height<=1080]":  # only the last fallback "succeeds"
+        if fmt != "best[height>=1080]":  # only the last fallback "succeeds"
             raise subprocess.CalledProcessError(1, cmd, stderr="format unavailable")
         template = cmd[cmd.index("-o") + 1]
         Path(template.replace("%(ext)s", "mp4")).write_bytes(b"\x00" * 512)
@@ -230,6 +241,84 @@ def test_download_video_raises_when_all_formats_fail(
         download_video("dead", tmp_path)
 
 
+# --- native-resolution probe + firewall (BLOCKER fix) --------------------------
+
+
+def _mock_ffprobe(monkeypatch: pytest.MonkeyPatch, width: int, height: int) -> None:
+    """Route the ffprobe branch to report ``width``x``height`` and the ffmpeg
+    branch to emit a native-geometry raw frame filled from the seek timestamp."""
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        if "ffprobe" in cmd[0]:
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{width}x{height}\n", stderr="")
+        ts = float(cmd[cmd.index("-ss") + 1])
+        payload = _native_frame_bytes(int(ts) % 256, width, height)
+        return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr=b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+
+def test_probe_resolution_parses_width_and_height(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        assert "ffprobe" in cmd[0]
+        return subprocess.CompletedProcess(cmd, 0, stdout="1920x1080\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    width, height = probe_resolution(tmp_path / "v.mp4", ffprobe="ffprobe")
+    assert (width, height) == (1920, 1080)
+
+
+def test_decode_probes_native_resolution_and_does_not_upscale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A genuine >=1080p source that is NOT exactly 1920x1080 (e.g. a 1440p 16:9
+    # or a wider crop) must be decoded at its TRUE geometry, not stretched.
+    _mock_ffprobe(monkeypatch, width=2560, height=1440)
+    schedule = [ScheduledFrame(ts=1.0, pass_name="sparse")]
+    frames = list(
+        decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg", ffprobe="ffprobe")
+    )
+    assert len(frames) == 1
+    # decoded at native geometry, NOT force-scaled to 1080p.
+    assert frames[0].frame.shape == (1440, 2560, 3)
+    assert frames[0].native_resolution == 1440
+
+
+def test_decode_rejects_sub_1080p_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # The resolution firewall (brief §2 / FIX-5): a 854x480 source OCRs to garbage
+    # and must NOT be admitted (previously it was silently upscaled to 1080p).
+    _mock_ffprobe(monkeypatch, width=854, height=480)
+    schedule = [ScheduledFrame(ts=1.0, pass_name="sparse")]
+    with pytest.raises(SubResolutionError, match="480"):
+        list(decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg", ffprobe="ffprobe"))
+
+
+def test_decode_frame_never_stamps_1080_for_a_480p_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Regression for the red-team counterexample: an 854x480 source must not be
+    # decodable-and-stamped as 1080p. Rejection is the firewall; the caller can
+    # never read an honest-but-wrong 1080 off a downgraded stream.
+    _mock_ffprobe(monkeypatch, width=854, height=480)
+    schedule = [ScheduledFrame(ts=1.0, pass_name="sparse")]
+    with pytest.raises(SubResolutionError):
+        list(decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg", ffprobe="ffprobe"))
+
+
+def test_min_resolution_is_1080() -> None:
+    assert MIN_RESOLUTION == 1080
+
+
+def test_ingest_min_resolution_agrees_with_orientation_firewall() -> None:
+    # The ingest-side reject bar and the record/orientation FIX-5 gate must never
+    # drift apart, or ingest could admit a source the record layer then rejects.
+    from catan_rl.human_data.orientation import MIN_RESOLUTION as ORIENTATION_MIN
+
+    assert MIN_RESOLUTION == ORIENTATION_MIN
+
+
 # --- mocked decode + full ingest orchestration ---------------------------------
 
 
@@ -244,16 +333,14 @@ def test_decode_frames_at_yields_frames_in_schedule_order(
         ScheduledFrame(ts=1.0, pass_name="sparse"),
         ScheduledFrame(ts=2.0, pass_name="dense"),
     ]
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        ts = float(cmd[cmd.index("-ss") + 1])
-        return subprocess.CompletedProcess(cmd, 0, stdout=_fake_frame_bytes(int(ts)), stderr=b"")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    frames = list(decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg"))
+    _mock_ffprobe(monkeypatch, width=FRAME_WIDTH, height=FRAME_HEIGHT)
+    frames = list(
+        decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg", ffprobe="ffprobe")
+    )
     assert [f.ts for f in frames] == [1.0, 2.0]
     assert [f.pass_name for f in frames] == ["sparse", "dense"]
     assert frames[0].frame.shape == (FRAME_HEIGHT, FRAME_WIDTH, 3)
+    assert frames[0].native_resolution == FRAME_HEIGHT
     assert int(frames[0].frame[0, 0, 0]) == 1
 
 
@@ -265,20 +352,26 @@ def test_decode_skips_partial_frame_without_raising(
         ScheduledFrame(ts=2.0, pass_name="sparse"),
     ]
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[Any]:
+        if "ffprobe" in cmd[0]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"{FRAME_WIDTH}x{FRAME_HEIGHT}\n", stderr=""
+            )
         ts = float(cmd[cmd.index("-ss") + 1])
         # ts=2.0 returns a truncated buffer (seek past EOF) -> skipped.
         payload = _fake_frame_bytes(7) if ts == 1.0 else b"\x00" * 10
         return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr=b"")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    frames = list(decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg"))
+    frames = list(
+        decode_frames_at(tmp_path / "v.mp4", schedule, ffmpeg="ffmpeg", ffprobe="ffprobe")
+    )
     assert [f.ts for f in frames] == [1.0]
 
 
 def test_decode_empty_schedule_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="empty schedule"):
-        list(decode_frames_at(tmp_path / "v.mp4", [], ffmpeg="ffmpeg"))
+        list(decode_frames_at(tmp_path / "v.mp4", [], ffmpeg="ffmpeg", ffprobe="ffprobe"))
 
 
 def test_ingest_video_downloads_decodes_then_deletes(
@@ -293,6 +386,10 @@ def test_ingest_video_downloads_decodes_then_deletes(
             produced.write_bytes(b"\x00" * 2048)
             created.append(produced)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "ffprobe" in cmd[0]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"{FRAME_WIDTH}x{FRAME_HEIGHT}\n", stderr=""
+            )
         # ffmpeg decode branch
         ts = float(cmd[cmd.index("-ss") + 1])
         payload = _fake_frame_bytes(int(ts) % 256)
@@ -306,6 +403,7 @@ def test_ingest_video_downloads_decodes_then_deletes(
             duration_s=8.0,
             sparse_interval_s=4.0,
             ffmpeg="ffmpeg",
+            ffprobe="ffprobe",
         )
     )
     # schedule = 0,4,8 -> 3 decoded frames
@@ -330,13 +428,19 @@ def test_ingest_video_cleans_up_even_if_consumer_stops_early(
             produced.write_bytes(b"\x00" * 2048)
             created.append(produced)
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if "ffprobe" in cmd[0]:
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout=f"{FRAME_WIDTH}x{FRAME_HEIGHT}\n", stderr=""
+            )
         ts = float(cmd[cmd.index("-ss") + 1])
         payload = _fake_frame_bytes(int(ts) % 256)
         return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr=b"")
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    gen = ingest_video("vidEarly", duration_s=40.0, sparse_interval_s=4.0, ffmpeg="ffmpeg")
+    gen = ingest_video(
+        "vidEarly", duration_s=40.0, sparse_interval_s=4.0, ffmpeg="ffmpeg", ffprobe="ffprobe"
+    )
     first = next(gen)  # consume one frame then abandon the generator
     assert first.ts == 0.0
     gen.close()  # triggers the finally-block cleanup

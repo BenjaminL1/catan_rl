@@ -18,7 +18,11 @@ the build brief ``docs/plans/human_data_pipeline.md`` §5.8 (there is no
 ``RESOURCES`` enum in ``engine/``).
 """
 
-from catan_rl.human_data.ffmpeg import FFmpegNotFoundError, resolve_ffmpeg
+from catan_rl.human_data.ffmpeg import (
+    FFmpegNotFoundError,
+    resolve_ffmpeg,
+    resolve_ffprobe,
+)
 from catan_rl.human_data.ingest import (
     DEFAULT_DENSE_INTERVAL_S,
     DEFAULT_SPARSE_INTERVAL_S,
@@ -27,6 +31,7 @@ from catan_rl.human_data.ingest import (
     OCR_SECONDS_PER_CROP,
     DecodedFrame,
     ScheduledFrame,
+    SubResolutionError,
     TimeWindow,
     VideoDownloadError,
     build_sampling_schedule,
@@ -34,6 +39,7 @@ from catan_rl.human_data.ingest import (
     download_video,
     estimate_ocr_wall_clock_s,
     ingest_video,
+    probe_resolution,
     schedule_ocr_eta_s,
 )
 from catan_rl.human_data.orientation import (
@@ -73,6 +79,7 @@ __all__ = [
     "OpponentStrength",
     "PlayerOpening",
     "ScheduledFrame",
+    "SubResolutionError",
     "TimeWindow",
     "Topology",
     "VideoDownloadError",
@@ -88,6 +95,8 @@ __all__ = [
     "granted_resources_under_orientation",
     "ingest_video",
     "load_topology",
+    "probe_resolution",
     "resolve_ffmpeg",
+    "resolve_ffprobe",
     "schedule_ocr_eta_s",
 ]

@@ -17,10 +17,18 @@ without keeping the downloaded video around after the frames are read (brief
 2. **Acquisition** — :func:`download_video` (yt-dlp 1080p video-only DASH,
    download-then-delete, retries / sleep-interval / format-fallback, network
    concurrency capped to 1—2 by the batch driver) and :func:`decode_frames_at`
-   (ffmpeg → raw RGB24 over stdout → numpy, one frame per requested timestamp).
+   (ffprobe the TRUE native resolution → reject sub-1080p → ffmpeg → raw RGB24
+   over stdout → numpy at native geometry, one frame per requested timestamp).
    :func:`ingest_video` composes them: download → decode the scheduled frames →
    delete. Reuses the ffmpeg / yt-dlp patterns proven in
    ``scripts/build_strength_manifest.py``.
+
+   The resolution firewall (brief §2 / FIX-5) lives here: frames are decoded at
+   the source's native geometry (never anisotropically force-scaled to 1080p) and
+   a sub-1080p source is rejected outright, so a downgraded stream can neither
+   distort board geometry nor masquerade as a valid 1080p record. Each
+   :class:`DecodedFrame` carries the honest ``native_resolution`` the caller
+   stamps into ``provenance.resolution``.
 
 CPU-only, no ``gui/`` or training-path imports (brief §6). ``node`` satisfies
 yt-dlp's nsig JS runtime (brief §5.11); ffmpeg is resolved via
@@ -38,13 +46,19 @@ from typing import Literal
 
 import numpy as np
 
-from catan_rl.human_data.ffmpeg import resolve_ffmpeg
+from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 
-#: 1080p frame geometry (brief §2: 360—480p OCR is garbage, must pull 1080p).
+#: Canonical 1080p frame geometry (brief §2: 360—480p OCR is garbage, must pull
+#: 1080p). This is the *expected* geometry of a well-formed source, NOT a size
+#: frames are force-scaled to — decoding happens at the true native resolution so
+#: board geometry / the fixed log crop are never anisotropically distorted.
 FRAME_WIDTH = 1920
 FRAME_HEIGHT = 1080
-#: Bytes per decoded RGB24 frame (3 channels x 8-bit).
-_FRAME_NBYTES = FRAME_WIDTH * FRAME_HEIGHT * 3
+
+#: Minimum admissible native source height (brief §2 / FIX-5). A stream shorter
+#: than this OCRs number tokens and log glyphs to garbage; it is rejected at
+#: ingest so a downgraded stream can never be upscaled and masquerade as 1080p.
+MIN_RESOLUTION = 1080
 
 #: Default sparse-pass cadence — one frame every 4 s (brief §5.10: "1 frame /
 #: 3—5 s"). The dense pass runs an order of magnitude finer inside the setup
@@ -84,12 +98,22 @@ class ScheduledFrame:
 
 @dataclass(frozen=True, slots=True)
 class DecodedFrame:
-    """A decoded 1080p frame with its source timestamp and pass tag."""
+    """A decoded frame with its source timestamp, pass tag, and TRUE native height.
+
+    The frame is decoded at the source's native geometry (never force-scaled), so
+    ``frame.shape[:2]`` is the honest ``(height, width)`` of the upload.
+    ``native_resolution`` (the source height in px, ``>= MIN_RESOLUTION``) is the
+    value the caller must stamp into ``provenance.resolution`` — the resolution
+    firewall (brief §2 / FIX-5, ``record.py`` / ``orientation.py``) is only as
+    honest as this value, so it is surfaced here rather than hardcoded to 1080.
+    """
 
     ts: float
     pass_name: PassName
-    #: ``(FRAME_HEIGHT, FRAME_WIDTH, 3)`` ``uint8`` RGB array (in-memory, brief §5.12).
+    #: ``(height, width, 3)`` ``uint8`` RGB array at NATIVE geometry (in-memory, brief §5.12).
     frame: np.ndarray
+    #: True native source height in px (``>= MIN_RESOLUTION``) — the honest resolution stamp.
+    native_resolution: int
 
 
 def _cadence(start_s: float, end_s: float, interval_s: float) -> list[float]:
@@ -218,13 +242,26 @@ class VideoDownloadError(RuntimeError):
     """Raised when yt-dlp cannot download a video after its retries."""
 
 
+class SubResolutionError(RuntimeError):
+    """Raised when a downloaded stream's native height is below :data:`MIN_RESOLUTION`.
+
+    The resolution firewall (brief §2 / FIX-5): a sub-1080p source OCRs number
+    tokens and log glyphs to garbage. Rather than silently upscale it (which would
+    let it masquerade as a valid 1080p record), ingest rejects the whole source so
+    a downgraded stream never enters the pipeline.
+    """
+
+
 #: yt-dlp format selectors, tried in order (brief §5.11): a 1080p video-only DASH
 #: stream first (~0.22 GB, no audio needed for CV/OCR), falling back to the best
-#: <=1080p muxed stream if the split streams are unavailable for a video.
+#: muxed stream. Each selector pins ``height>=1080`` (defense-in-depth for the
+#: resolution firewall — the authoritative check is the post-download ffprobe in
+#: :func:`decode_frames_at`, since a muxed ``best`` could still fall short) with a
+#: ``height<=1080`` ceiling to avoid pulling needlessly-large 4K streams.
 _FORMAT_FALLBACK: tuple[str, ...] = (
-    "bestvideo[height<=1080][ext=mp4]",
-    "bestvideo[height<=1080]",
-    "best[height<=1080]",
+    "bestvideo[height>=1080][height<=1080][ext=mp4]",
+    "bestvideo[height>=1080][height<=1080]",
+    "best[height>=1080]",
 )
 
 
@@ -283,10 +320,14 @@ def download_video(
             last_err = f"timeout after {timeout_s}s"
             continue
 
-        produced = sorted(dest_dir.glob(f"{video_id}.*"))
-        produced = [p for p in produced if p.stat().st_size > 0]
+        # Pick the most-recently-modified match, NOT the lexicographically-first:
+        # a pre-existing stale artifact whose extension sorts before mp4 (e.g. a
+        # leftover ``{id}.m4a``) would otherwise be returned instead of the file
+        # yt-dlp just wrote. Not reachable via ``ingest_video`` (fresh mkdtemp per
+        # call) but bites a batch driver that reuses a dest dir.
+        produced = [p for p in dest_dir.glob(f"{video_id}.*") if p.stat().st_size > 0]
         if produced:
-            return produced[0]
+            return max(produced, key=lambda p: p.stat().st_mtime)
         last_err = "yt-dlp reported success but produced no file"
 
     raise VideoDownloadError(
@@ -294,27 +335,100 @@ def download_video(
     )
 
 
+def probe_resolution(
+    video_path: Path,
+    *,
+    ffprobe: str | None = None,
+    timeout_s: float = 60.0,
+) -> tuple[int, int]:
+    """Return the ``(width, height)`` of ``video_path``'s first video stream.
+
+    Reads the TRUE native geometry via ``ffprobe`` (``-show_entries
+    stream=width,height``) so the resolution firewall can key off the honest
+    source height instead of a decoded/upscaled buffer. Raises
+    :class:`VideoDownloadError` if ffprobe fails or returns an unparseable size.
+    """
+    ffprobe_bin = ffprobe if ffprobe is not None else resolve_ffprobe()
+    cmd = [
+        ffprobe_bin,
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=s=x:p=0",
+        str(video_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=timeout_s,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise VideoDownloadError(f"ffprobe could not read {video_path}: {exc}") from exc
+
+    token = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() else ""
+    parts = token.split("x")
+    if len(parts) != 2:
+        raise VideoDownloadError(
+            f"ffprobe returned unparseable resolution {token!r} for {video_path}"
+        )
+    try:
+        width, height = int(parts[0]), int(parts[1])
+    except ValueError as exc:
+        raise VideoDownloadError(
+            f"ffprobe returned non-integer resolution {token!r} for {video_path}"
+        ) from exc
+    if width <= 0 or height <= 0:
+        raise VideoDownloadError(
+            f"ffprobe returned non-positive resolution {token!r} for {video_path}"
+        )
+    return width, height
+
+
 def decode_frames_at(
     video_path: Path,
     schedule: Sequence[ScheduledFrame],
     *,
     ffmpeg: str | None = None,
+    ffprobe: str | None = None,
     timeout_s: float = 120.0,
 ) -> Iterator[DecodedFrame]:
     """Decode exactly the scheduled frames from ``video_path``, one per timestamp.
 
-    Each frame is grabbed by a seek-then-single-frame ffmpeg call (``-ss <ts> -i
-    <file> -frames:v 1``) piping **raw RGB24 to stdout** (brief §5.12 — never a
-    PNG on disk), scaled to the fixed 1080p geometry, and reshaped to a
-    ``(H, W, 3)`` ``uint8`` array. Frames are yielded lazily in schedule order.
+    First probes the source's **true native resolution** (:func:`probe_resolution`)
+    and **rejects a sub-1080p source** (:class:`SubResolutionError`) — a downgraded
+    stream OCRs to garbage and must never be silently upscaled to masquerade as
+    1080p (brief §2 / FIX-5). Each frame is then grabbed by a seek-then-single-frame
+    ffmpeg call (``-ss <ts> -i <file> -frames:v 1``) piping **raw RGB24 to stdout**
+    (brief §5.12 — never a PNG on disk) **at the native geometry** (no ``scale``
+    filter, so board geometry and the fixed log crop are never anisotropically
+    distorted), reshaped to a ``(height, width, 3)`` ``uint8`` array. Each
+    :class:`DecodedFrame` carries the honest ``native_resolution`` the caller must
+    stamp. Frames are yielded lazily in schedule order.
 
     Skips (does not raise on) a timestamp ffmpeg cannot decode — e.g. a seek past
     a truncated download — so one bad frame never aborts a whole video; the caller
-    tolerates missing samples. Raises only if ``schedule`` requests nothing.
+    tolerates missing samples. Raises :class:`ValueError` if ``schedule`` requests
+    nothing and :class:`SubResolutionError` on a sub-1080p source.
     """
     if not schedule:
         raise ValueError("empty schedule — nothing to decode")
     ffmpeg_bin = ffmpeg if ffmpeg is not None else resolve_ffmpeg()
+
+    width, height = probe_resolution(video_path, ffprobe=ffprobe)
+    if height < MIN_RESOLUTION:
+        raise SubResolutionError(
+            f"native source height {height}px < required {MIN_RESOLUTION}px for {video_path} — "
+            "a sub-1080p source OCRs number tokens and log glyphs to garbage; rejecting rather "
+            "than upscaling it into a confidently-wrong record (brief §2 / FIX-5)"
+        )
+    expected_nbytes = width * height * 3
 
     for scheduled in schedule:
         cmd = [
@@ -328,8 +442,6 @@ def decode_frames_at(
             str(video_path),
             "-frames:v",
             "1",
-            "-vf",
-            f"scale={FRAME_WIDTH}:{FRAME_HEIGHT}",
             "-pix_fmt",
             "rgb24",
             "-f",
@@ -347,11 +459,16 @@ def decode_frames_at(
             continue
 
         raw = proc.stdout
-        if len(raw) != _FRAME_NBYTES:
+        if len(raw) != expected_nbytes:
             # partial/empty decode (seek past EOF, corrupt GOP) — skip this sample.
             continue
-        frame = np.frombuffer(raw, dtype=np.uint8).reshape(FRAME_HEIGHT, FRAME_WIDTH, 3)
-        yield DecodedFrame(ts=scheduled.ts, pass_name=scheduled.pass_name, frame=frame)
+        frame = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
+        yield DecodedFrame(
+            ts=scheduled.ts,
+            pass_name=scheduled.pass_name,
+            frame=frame,
+            native_resolution=height,
+        )
 
 
 def ingest_video(
@@ -362,6 +479,7 @@ def ingest_video(
     sparse_interval_s: float = DEFAULT_SPARSE_INTERVAL_S,
     dense_interval_s: float = DEFAULT_DENSE_INTERVAL_S,
     ffmpeg: str | None = None,
+    ffprobe: str | None = None,
     work_dir: Path | None = None,
 ) -> Generator[DecodedFrame, None, None]:
     """Ingest one video end-to-end: download → decode scheduled frames → delete.
@@ -382,12 +500,13 @@ def ingest_video(
         dense_interval_s=dense_interval_s,
     )
     ffmpeg_bin = ffmpeg if ffmpeg is not None else resolve_ffmpeg()
+    ffprobe_bin = ffprobe if ffprobe is not None else resolve_ffprobe()
 
     tmp = tempfile.mkdtemp(prefix=f"phantom_{video_id}_", dir=str(work_dir) if work_dir else None)
     tmp_path = Path(tmp)
     try:
         video_path = download_video(video_id, tmp_path)
-        yield from decode_frames_at(video_path, schedule, ffmpeg=ffmpeg_bin)
+        yield from decode_frames_at(video_path, schedule, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin)
     finally:
         for child in tmp_path.glob("*"):
             child.unlink(missing_ok=True)
