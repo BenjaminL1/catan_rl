@@ -232,19 +232,19 @@ def segment_games(
     #     its OCR text repeats the previous reset verbatim; OR
     #   * this reset's text has NOT already appeared in the current window AND new
     #     gameplay has appeared since the last reset — a genuinely different reset
-    #     line separated from the opener by real play; OR
-    #   * BOTH players have rolled since this window's start — the game demonstrably
-    #     LEFT its opening setup phase into full rounds, so a repeated (even
-    #     byte-identical) reset now marks a genuine restart, NOT a lingering re-OCR
-    #     of the setup screen. This is the §5.1 "cutoff" separator: when game N's
-    #     terminal is missed (Pass-A sparse sampling routinely misses the few-second
-    #     victory modal, or it OCRs below the `won the game` regex) and game N+1's
-    #     reset text is byte-identical, neither the terminal nor the new-text branch
-    #     fires; without this signal the two games weld. A lingering setup-screen
-    #     re-OCR never has both seats rolling yet (the opening draft precedes the
-    #     first full round), so this cannot mis-split a single game (verified: the
-    #     scrolling-panel re-OCR dedup tests show ≤1 distinct roller before the
-    #     lingering reset).
+    #     line separated from the opener by real play.
+    # A BYTE-IDENTICAL reset with NO terminal seen is DELIBERATELY NOT split (design
+    # decision — favour merge-then-discard over a guessed cut). Such a reset is
+    # ambiguous: it is EITHER a lingering re-OCR of this game's own opener (mid-game,
+    # once both seats have rolled) OR a genuine back-to-back game N+1 whose terminal
+    # for game N was missed. The event stream alone cannot tell these apart, and a
+    # wrong SPLIT fabricates a winnerless seed + a hollow terminal (§5.1
+    # confidently-wrong), whereas a wrong MERGE yields a 2-game window that fails the
+    # record firewall (>4 setup placements) and is safely DROPPED. So we never open
+    # on the identical-reset signal; genuine back-to-back games with a missed terminal
+    # merge into one window that downstream rejects. (A previous `>=2 rollers`
+    # separator was removed: both seats roll in the FIRST round of every game, so it
+    # false-split a single game on any spurious mid-game reset re-OCR.)
     # Everything else (a consecutive reset run — easyocr splitting "Happy settling"
     # / "/help"; a same-text reset re-shown across frames while the game is still
     # unfolding, even interleaved with dribbled-in setup lines) collapses onto the
@@ -255,20 +255,17 @@ def segment_games(
     reset_texts_in_window: set[str] = set()
     terminal_since_start = False
     new_gameplay_since_reset = False
-    rollers_since_start: set[str] = set()
     for i, event in enumerate(events):
         if event.kind == "game_reset":
             opens = (
                 not starts
                 or terminal_since_start
                 or (event.text not in reset_texts_in_window and new_gameplay_since_reset)
-                or len(rollers_since_start) >= 2
             )
             if opens:
                 starts.append(i)
                 reset_texts_in_window = {event.text}
                 terminal_since_start = False
-                rollers_since_start = set()
             else:
                 reset_texts_in_window.add(event.text)
             new_gameplay_since_reset = False
@@ -277,8 +274,6 @@ def segment_games(
                 terminal_since_start = True
             elif event.kind in _GAMEPLAY_KINDS:
                 new_gameplay_since_reset = True
-            if event.kind == "roll" and event.actor is not None:
-                rollers_since_start.add(event.actor)
 
     if not starts:
         return []

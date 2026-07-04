@@ -378,16 +378,16 @@ def test_same_winner_weld_without_reset_is_weld_not_scoreboard_terminal() -> Non
     assert welded.is_scoreboard_terminal() is False
 
 
-def test_missing_terminal_then_identical_reset_splits_into_two_games() -> None:
-    # RED-TEAM (BLOCKER, finding: cutoff/weld counterexample). Game N's terminal is
-    # NOT sampled (Pass-A sparse sampling misses the few-second victory modal, or it
-    # OCRs below the `won the game` regex — a legitimate §5.1 'cutoff' end-cause) AND
-    # game N+1 opens with the byte-identical reset text ("Happy settling ...").
-    # Neither the terminal branch nor the new-reset-text branch fires, so the naive
-    # segmenter welds the two games into one clean victory. The "both players have
-    # rolled since window start" separator (the game demonstrably LEFT setup into a
-    # full round) must open a NEW game at the repeated reset → TWO segments:
-    # game N ends by cutoff (winner=None), game N+1 by victory.
+def test_missing_terminal_then_identical_reset_merges_not_split() -> None:
+    # DESIGN DECISION (user: "throw it out over guessing a cut"). Game N's terminal is
+    # NOT sampled AND game N+1 opens with byte-identical reset text. This is
+    # indistinguishable from a lingering mid-game re-OCR of a SINGLE game's opener, so
+    # we DELIBERATELY do NOT split on it (the old `>=2 rollers` separator false-split a
+    # single game on any spurious mid-game reset — the worse, confidently-wrong error).
+    # The two games merge into ONE window; game N is folded in and lost (the accepted
+    # cost of the safer default). Catching this merged weld's mixed setup is downstream:
+    # the record firewall requires exactly 2 setup settlements per player read from the
+    # post-setup FRAME, so a mixed-setup window is dropped rather than mispaired.
     parsed = parse_log(
         [
             # game N: full round of play, but NO victory/resign captured (cutoff)
@@ -406,13 +406,31 @@ def test_missing_terminal_then_identical_reset_splits_into_two_games() -> None:
         _HANDLES,
     )
     segs = segment_games(parsed.events, handles=_HANDLES)
-    assert len(segs) == 2
-    assert segs[0].winner is None
-    assert segs[0].ended_by == "cutoff"
-    assert segs[0].is_scoreboard_terminal() is False
-    assert segs[1].winner == "rayman147"
-    assert segs[1].ended_by == "victory"
-    assert segs[1].is_scoreboard_terminal() is True
+    # merged — we do not guess a boundary we cannot see
+    assert len(segs) == 1
+
+
+def test_spurious_midgame_reset_does_not_false_split_one_game() -> None:
+    # The primary BLOCKER the merge-favouring design fixes: a single game whose opener
+    # reset re-OCRs mid-game (after both seats have rolled) must stay ONE game — never
+    # split into a winnerless seed + a hollow terminal.
+    parsed = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            "Happy settling! Learn how to play in the",  # spurious mid-game re-OCR
+            "ThePhantom rolled",
+            "ThePhantom won the game!",
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 1
+    assert segs[0].winner == "ThePhantom"
+    assert segs[0].ended_by == "victory"
 
 
 def test_same_winner_thrice_and_with_reocrd_tail_gameplay_is_one_victory() -> None:
