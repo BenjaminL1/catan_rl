@@ -67,19 +67,36 @@ const REDTEAM = { type: 'object', properties: {
 const journal = []
 function note(m) { log(m); journal.push(m) }
 
+// A schema agent() can intermittently THROW (StructuredOutput tool-call malformation, ~5-10%/agent)
+// which would otherwise kill the whole run. Retry up to 3x (the flake is per-invocation, so a fresh
+// attempt almost always succeeds); return null only if all fail (callers already handle null).
+const rawAgent = agent
+async function safeAgent(prompt, opts) {
+  for (let a = 0; a < 3; a++) {
+    try {
+      const r = await rawAgent(prompt, opts)
+      if (r !== null && r !== undefined) return r
+      note(`safeAgent ${opts && opts.label ? opts.label : '?'} attempt ${a}: null (agent died) -> retry`)
+    } catch (e) {
+      note(`safeAgent ${opts && opts.label ? opts.label : '?'} attempt ${a} threw: ${String(e).slice(0, 90)} -> retry`)
+    }
+  }
+  return null
+}
+
 // ============================ the per-slice loop ============================
 async function buildSlice(slice, phase) {
   let findings = []
   for (let iter = 0; iter < MAX_ITERS; iter++) {
     const tag = `${slice.module}#${iter}`
-    const impl = await agent(
+    const impl = await safeAgent(
       `${COMMON}\n\nSLICE: implement \`${slice.module}\`. ${slice.what}\nTEST-FIRST requirements: ${slice.tests}\n` +
       (iter > 0 ? `This is a RESOLVE pass — fix EXACTLY these open findings and nothing else:\n${JSON.stringify(findings, null, 2)}\n` : '') +
       `Re-green ruff + mypy --strict + pytest, then commit (conventional message, push origin/main). Report the commit sha.`,
       { label: `impl:${tag}`, phase, schema: SLICE_OUT, effort: 'high' })
     if (!impl) { note(`HALT ${slice.module}: implement agent died iter ${iter}`); return { module: slice.module, ready: false, halted: 'impl-died' } }
 
-    const ver = await agent(
+    const ver = await safeAgent(
       `${COMMON}\n\nINDEPENDENTLY VERIFY slice \`${slice.module}\` (do NOT trust the implementer). Actually RUN: \`ruff check\`, \`mypy --strict\` (project config), \`pytest\` on the new tests; reproduce the committed game-1 golden fixture exactly; run the deterministic invariants for this slice (${slice.invariants}). Check \`git diff\` for any edited/loosened/deleted golden fixture or test (that = fixture_untampered:false). Be adversarial; green only if truly green. Put the KEY pass/fail lines in evidence.`,
       { label: `verify:${tag}`, phase, schema: VERIFY, effort: 'high' })
     if (!ver) { note(`HALT ${slice.module}: verify agent died iter ${iter}`); return { module: slice.module, ready: false, halted: 'verify-died' } }
@@ -94,12 +111,12 @@ async function buildSlice(slice, phase) {
     if (slice.verifyOnly) { note(`READY ${slice.module} (verify-only, iter ${iter}, commit ${impl.commit})`); return { module: slice.module, ready: true, iters: iter + 1, commit: impl.commit, notes: impl.notes, shouldfix: [] } }
 
     const lenses = (await parallel([
-      () => agent(`${COMMON}\n\nREVIEW \`${slice.module}\` — LENS A DATA/MEASUREMENT CORRECTNESS. Read the actual files. Does it avoid every §5 trap relevant to this slice? Would it yield a dataset that is CONFIDENTLY WRONG (biased/mislabeled) rather than merely noisy? Severity-tag findings (BLOCKER/SHOULD-FIX/NIT) with concrete fixes.`,
+      () => safeAgent(`${COMMON}\n\nREVIEW \`${slice.module}\` — LENS A DATA/MEASUREMENT CORRECTNESS. Read the actual files. Does it avoid every §5 trap relevant to this slice? Would it yield a dataset that is CONFIDENTLY WRONG (biased/mislabeled) rather than merely noisy? Severity-tag findings (BLOCKER/SHOULD-FIX/NIT) with concrete fixes.`,
         { label: `revA:${tag}`, phase, schema: REVIEW, effort: 'high' }),
-      () => agent(`${COMMON}\n\nREVIEW \`${slice.module}\` — LENS B CV/OCR ROBUSTNESS + SWE/ADDITIVITY. Read the actual files. Does it GENERALIZE beyond the single spike frame (per-game calibration, orientation/residual gates, cross-frame stability)? Compute/ETA realism, schema/fixture additivity, scope-lock (no engine/gui/training touch). Severity-tag findings with fixes.`,
+      () => safeAgent(`${COMMON}\n\nREVIEW \`${slice.module}\` — LENS B CV/OCR ROBUSTNESS + SWE/ADDITIVITY. Read the actual files. Does it GENERALIZE beyond the single spike frame (per-game calibration, orientation/residual gates, cross-frame stability)? Compute/ETA realism, schema/fixture additivity, scope-lock (no engine/gui/training touch). Severity-tag findings with fixes.`,
         { label: `revB:${tag}`, phase, schema: REVIEW, effort: 'high' }),
     ])).filter(Boolean)
-    const rt = await agent(
+    const rt = await safeAgent(
       `${COMMON}\n\nRED-TEAM \`${slice.module}\`: your ONLY job is to find a case where its output is WRONG. Sample real games/frames, reconstruct the engine board from the record and compare to the source frame, probe the deterministic invariants and edge cases (occlusion, non-default palette, animation frames, video cutoff). Report broke=true + a concrete counterexample if you find one.`,
       { label: `redteam:${tag}`, phase, schema: REDTEAM, effort: 'high' })
 
@@ -152,7 +169,7 @@ if (!scaffold.ready) {
   // Stage 1 gate: run on 5 real games, check log/winner accuracy
   let g1 = { ok: false, skipped: true }
   if (s1.allReady) {
-    const gate = await agent(`${COMMON}\n\nSTAGE-1 GATE: run the Stage-1 pipeline (ingest+logparse+segment) on 5 real high-rank ThePhantom games end-to-end (pick 'high' videos from data/human/strength_manifest.json). Report whether games segment correctly, the winner reads from the victory line, ruleset filter fires, opponent_strength.tier matches the manifest, and log accuracy looks right. Put evidence in the evidence field. Return tools_green=overall-pass, gold_reproduced (winner correct on a known game), invariants_pass, fixture_untampered, evidence, blockers.`, { label: 'gate:stage1', phase: 'Stage1 log-spine', schema: VERIFY, effort: 'high' })
+    const gate = await safeAgent(`${COMMON}\n\nSTAGE-1 GATE: run the Stage-1 pipeline (ingest+logparse+segment) on 5 real high-rank ThePhantom games end-to-end (pick 'high' videos from data/human/strength_manifest.json). Report whether games segment correctly, the winner reads from the victory line, ruleset filter fires, opponent_strength.tier matches the manifest, and log accuracy looks right. Put evidence in the evidence field. Return tools_green=overall-pass, gold_reproduced (winner correct on a known game), invariants_pass, fixture_untampered, evidence, blockers.`, { label: 'gate:stage1', phase: 'Stage1 log-spine', schema: VERIFY, effort: 'high' })
     g1 = { ok: !!gate && gate.tools_green && gate.invariants_pass && gate.fixture_untampered, gate }
     note(g1.ok ? 'Stage-1 GATE PASSED' : `Stage-1 GATE FAILED: ${gate ? gate.blockers : 'gate died'}`)
   } else note(`Stage-1 GATE SKIPPED — blocked modules: ${s1.blocked.join(',')}`)
@@ -172,9 +189,9 @@ if (!scaffold.ready) {
     let g2 = { ok: false, skipped: true }
     if (s1.allReady && g1.ok && s2.allReady) {
       // tiered run: 5-game integration then 30-game gold gate
-      const t5 = await agent(`${COMMON}\n\nTIER-5 INTEGRATION: run the FULL pipeline (download->log->board->openings->validate->batch) on 5 real high-rank games end-to-end. Confirm it produces well-formed GameRecords + a rejected.jsonl, no crashes, invariants hold, opponent_strength.tier attached from the manifest. Put evidence in the evidence field. Return the VERIFY schema.`, { label: 'tier:5', phase: 'Stage2 board+openings', schema: VERIFY, effort: 'high' })
+      const t5 = await safeAgent(`${COMMON}\n\nTIER-5 INTEGRATION: run the FULL pipeline (download->log->board->openings->validate->batch) on 5 real high-rank games end-to-end. Confirm it produces well-formed GameRecords + a rejected.jsonl, no crashes, invariants hold, opponent_strength.tier attached from the manifest. Put evidence in the evidence field. Return the VERIFY schema.`, { label: 'tier:5', phase: 'Stage2 board+openings', schema: VERIFY, effort: 'high' })
       if (t5 && t5.tools_green && t5.invariants_pass && t5.fixture_untampered) {
-        const gold = await agent(`${COMMON}\n\nGOLD GATE: hand-verify the pipeline on ~30 games against the PRE-REGISTERED bars (board layout >=98%, openings >=95%, winner ~100%) using the committed gold set + spot-rendering record-vs-frame. ALSO run the rejection-bias audit (per-archetype acceptance rate) and report it. Return VERIFY (tools_green=bars-met) + put the audit + per-field accuracy in evidence.`, { label: 'gate:gold', phase: 'Stage2 board+openings', schema: VERIFY, effort: 'high' })
+        const gold = await safeAgent(`${COMMON}\n\nGOLD GATE: hand-verify the pipeline on ~30 games against the PRE-REGISTERED bars (board layout >=98%, openings >=95%, winner ~100%) using the committed gold set + spot-rendering record-vs-frame. ALSO run the rejection-bias audit (per-archetype acceptance rate) and report it. Return VERIFY (tools_green=bars-met) + put the audit + per-field accuracy in evidence.`, { label: 'gate:gold', phase: 'Stage2 board+openings', schema: VERIFY, effort: 'high' })
         g2 = { ok: !!gold && gold.tools_green && gold.invariants_pass && gold.fixture_untampered, t5, gold }
         note(g2.ok ? 'Stage-2 GOLD GATE PASSED' : `Stage-2 GOLD GATE FAILED: ${gold ? gold.blockers : 'gate died'}`)
       } else { note(`Tier-5 integration FAILED: ${t5 ? t5.blockers : 'died'}`); g2 = { ok: false, t5 } }
@@ -186,7 +203,7 @@ if (!scaffold.ready) {
     const glyphReady = s2.results.find((r) => r.module === 'glyph_anchor')?.ready === true
     if (g2.ok && glyphReady) {
       phase('Stage3 harvest')
-      const h = await agent(`${COMMON}\n\nFULL HARVEST: the gold gate PASSED and the glyph firewall is validated, so scaling is safe. Run scripts/mine_phantom.py over the manifest 'high' (scoreboard) + 'unknown' (seed) 1v1 corpus via batch.py — resumable (per-(video,game) ledger, atomic appends), firewall-protected (provenance-binding + cross-check + glyph anchor reject bad games). Process as many games as you can (resumable; partial is fine). Report #games harvested into the JSONL, #rejected + the rejection-bias audit (per-archetype acceptance rate), and the resume command. Return tools_green=ran-without-crash, gold_reproduced=true, invariants_pass, fixture_untampered, evidence(counts+audit), blockers.`, { label: 'harvest:full', phase: 'Stage3 harvest', schema: VERIFY, effort: 'high' })
+      const h = await safeAgent(`${COMMON}\n\nFULL HARVEST: the gold gate PASSED and the glyph firewall is validated, so scaling is safe. Run scripts/mine_phantom.py over the manifest 'high' (scoreboard) + 'unknown' (seed) 1v1 corpus via batch.py — resumable (per-(video,game) ledger, atomic appends), firewall-protected (provenance-binding + cross-check + glyph anchor reject bad games). Process as many games as you can (resumable; partial is fine). Report #games harvested into the JSONL, #rejected + the rejection-bias audit (per-archetype acceptance rate), and the resume command. Return tools_green=ran-without-crash, gold_reproduced=true, invariants_pass, fixture_untampered, evidence(counts+audit), blockers.`, { label: 'harvest:full', phase: 'Stage3 harvest', schema: VERIFY, effort: 'high' })
       harvest = { ran: !!h, result: h }
       note(h ? 'FULL HARVEST ran (gold + glyph green) — counts in evidence' : 'FULL HARVEST agent died')
     } else {
@@ -199,7 +216,7 @@ if (!scaffold.ready) {
 
 // ===================== Morning report =====================
 phase('Morning report')
-report = await agent(
+report = await safeAgent(
   `Write the MORNING REPORT for an autonomous overnight build of the human_data opening-extraction pipeline (the human reads this at 8am; they did NOT watch, and they explicitly asked me to build this phase overnight while they slept). Be honest and concrete. Use the run journal + stage results below. State: what shipped (which modules are READY + commits), every GATE result with numbers, the rejection-bias audit if reached, exactly WHERE it halted and WHY, the single-command resume state, the HARVEST status (full corpus harvested — with #games + #rejected + the rejection-bias audit — OR gated, saying exactly which gate and what is needed to unblock it), and the human-decision items (esp. the glyph-classifier status, which hard-gates the safe full harvest). Also write this report to docs/plans/human_data_overnight_report.md and commit+push it. Do NOT claim success that the gates did not show.\n\nJOURNAL:\n${JSON.stringify(journal, null, 2)}\n\nSTAGE RESULTS:\n${JSON.stringify({ scaffold, stage1: typeof stage1 !== 'undefined' ? stage1 : null, stage2: typeof stage2 !== 'undefined' ? stage2 : null }, null, 2)}`,
   { label: 'morning-report', phase: 'Morning report', effort: 'high' })
 
