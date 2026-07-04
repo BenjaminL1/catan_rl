@@ -71,6 +71,18 @@ DEFAULT_DENSE_INTERVAL_S = 1.0
 #: constant the ETA formula multiplies by.
 OCR_SECONDS_PER_CROP = 0.58
 
+#: Number of per-hex number-token OCR calls a single ACCEPTED board frame issues
+#: (``board_cv.read_board`` OCRs one digit per non-desert hex = 19 - 1 desert = 18).
+#: Folded into the ETA as a per-accepted-board term (review finding: the ETA
+#: previously modelled only the one log crop per frame and left Stage-2 board OCR
+#: unbudgeted). Only ACCEPTED setup-window board frames pay this, so it is bounded.
+BOARD_OCR_CALLS_PER_ACCEPTED_FRAME = 18
+
+#: easyocr wall-clock cost per token-digit crop (a small ~66px crop, cheaper than
+#: the wide log crop). Conservatively modelled at half the log-crop cost; used
+#: only for the optional Stage-2 board-OCR ETA term.
+BOARD_OCR_SECONDS_PER_DIGIT = 0.29
+
 PassName = Literal["sparse", "dense"]
 
 
@@ -176,6 +188,8 @@ def estimate_ocr_wall_clock_s(
     *,
     n_procs: int = 1,
     seconds_per_crop: float = OCR_SECONDS_PER_CROP,
+    accepted_board_frames_per_video: float = 0.0,
+    board_ocr_seconds_per_digit: float = BOARD_OCR_SECONDS_PER_DIGIT,
 ) -> float:
     """Estimate corpus OCR wall-clock, in seconds, per brief §5.10.
 
@@ -198,6 +212,19 @@ def estimate_ocr_wall_clock_s(
     reports (brief §5.10) and the number a human reads to decide whether to
     parallelize / launch detached.
 
+    **Stage-2 board OCR (review finding).** The base term above models one crop per
+    sampled frame (the log crop). Each ACCEPTED setup-window board frame
+    additionally issues ``BOARD_OCR_CALLS_PER_ACCEPTED_FRAME`` (18) per-hex
+    number-token OCR calls in ``board_cv.read_board`` — previously unbudgeted. Pass
+    ``accepted_board_frames_per_video`` (the count of accepted board frames per
+    video, bounded by the dense setup window) to fold that in::
+
+        + accepted_board_frames_per_video x 18 x board_ocr_seconds_per_digit
+          x n_videos / n_procs
+
+    It defaults to ``0.0`` so the base log-OCR estimate is unchanged when a caller
+    does not model Stage-2.
+
     Pure arithmetic — no I/O. Raises :class:`ValueError` on a non-positive count or
     a ``n_procs < 1``.
     """
@@ -209,7 +236,20 @@ def estimate_ocr_wall_clock_s(
         raise ValueError(f"seconds_per_crop {seconds_per_crop} must be > 0")
     if n_procs < 1:
         raise ValueError(f"n_procs {n_procs} must be >= 1")
-    return frames_per_video * seconds_per_crop * n_videos / n_procs
+    if accepted_board_frames_per_video < 0.0:
+        raise ValueError(
+            f"accepted_board_frames_per_video {accepted_board_frames_per_video} must be >= 0"
+        )
+    if board_ocr_seconds_per_digit <= 0.0:
+        raise ValueError(f"board_ocr_seconds_per_digit {board_ocr_seconds_per_digit} must be > 0")
+    log_ocr = frames_per_video * seconds_per_crop * n_videos
+    board_ocr = (
+        accepted_board_frames_per_video
+        * BOARD_OCR_CALLS_PER_ACCEPTED_FRAME
+        * board_ocr_seconds_per_digit
+        * n_videos
+    )
+    return (log_ocr + board_ocr) / n_procs
 
 
 def schedule_ocr_eta_s(

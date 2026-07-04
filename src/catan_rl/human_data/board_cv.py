@@ -3,7 +3,7 @@
 The Stage-2 ``board_cv`` slice (build brief §4). Given a decoded **RGB** frame
 (an :class:`~catan_rl.human_data.ingest.DecodedFrame` ``.frame``), it:
 
-1. **Detects the 19 number-token disks** (white blobs in the board region) and
+1. **Detects the 16-18 number-token disks** (white blobs in the board region) and
    fits an **affine** from the committed engine board template (render-space hex
    pixels, :func:`load_engine_template`) to the frame.
 2. **Locks the D6 orientation deterministically** (build brief §5.2 / BLOCKER-2).
@@ -12,30 +12,41 @@ The Stage-2 ``board_cv`` slice (build brief §4). Given a decoded **RGB** frame
    orientation on floating-point noise and silently relabels every engine ID.
    The lock therefore uses a **screen-space rule** (engine H8 → top-center hex,
    H11 → rightmost hex) that is content-free and frame-stable, corroborated by
-   **≥2 OCR content anchors** (a number token AND its resource must land on the
-   engine ID the affine predicts — and NOT on the desert, which moves per game).
-   A frame is **rejected** (returns ``None``) if the screen rule is ambiguous, if
-   the content anchors disagree, or if the affine residual exceeds
-   :data:`~catan_rl.human_data.orientation.MAX_AFFINE_RESIDUAL_PX`.
+   **≥2 content anchors** derived from the screen-space token extremes (the
+   pixel-topmost and pixel-rightmost detected token disks,
+   :func:`derive_screen_anchors`): the anchor's engine ID is fixed by *where a
+   token lands on screen* and its number is **re-OCR'd independently at that
+   screen pixel**, then required to equal what the affine predicts at that engine
+   ID. A mis-oriented affine that satisfied the geometric rule only degenerately
+   puts a different token topmost/rightmost, so its independent number disagrees
+   and the frame is rejected. A frame is **rejected** (returns ``None``) if the
+   screen rule is ambiguous (the best/second-best penalty gap is below
+   :data:`MIN_SCREEN_RULE_GAP`), if fewer than 2 independent anchors are
+   available, if a content anchor disagrees, if a resource hue cluster overlaps
+   its neighbour (:data:`MIN_HUE_CLUSTER_MARGIN`), or if the affine residual
+   exceeds :data:`~catan_rl.human_data.orientation.MAX_AFFINE_RESIDUAL_PX`.
 3. **Reads each hex per-game-calibrated** (build brief §2 / §5.13). The desert is
-   the unique **token-less** hex (orientation-independent, per-game robust — no
-   colour threshold). The 18 token hexes are classified by **per-game clustering**
-   of their own sampled colours (ORE = the 3 lowest-saturation hexes; the rest
-   ordered by hue → BRICK/WHEAT/SHEEP/WOOD) — the palette is never hardcoded. Each
-   number is OCR'd and **independently corroborated by a pip-count** (§5.6), the
-   non-tautological CV cross-check the resource-multiset gate cannot be (see
-   :data:`catan_rl.human_data.record.STANDARD_RESOURCE_COUNTS`).
+   the unique **token-less** hex, detected by a **relative** white-coverage split
+   (the 18 token hexes all rank high, the desert alone ranks low; rejected if the
+   split is not bimodal with a clear margin — no fixed colour threshold). The 18
+   token hexes are classified by **per-game clustering** of their own sampled
+   colours (ORE = the 3 lowest-saturation hexes; the rest ordered by hue →
+   BRICK/WHEAT/SHEEP/WOOD) — the palette is never hardcoded. Each number is OCR'd
+   and **independently corroborated by a pip-count** (§5.6).
 
-**Resource-multiset tautology (record.py finding, resolved here).** This module
-assigns the 18 non-desert hexes to resources by *forcing the standard 4/4/4/3/3
-multiset* from the per-game colour clusters, so the record contract's
-``STANDARD_RESOURCE_COUNTS`` gate is tautological for the resource dimension. Per
-the record.py contract that is only acceptable **because** an independent signal
-replaces it: :func:`read_board` returns per-hex ``pip_ok`` (OCR-digit vs
-pip-count agreement) and requires it on every token hex, and the number-token
-bag is a genuine (non-forced) cross-check. A multiset-preserving resource swap
-still surfaces via a wrong hue-cluster ordering only if it also breaks the
-number-adjacency corroboration; the glyph anchor
+**Resource-multiset gate is NOT a resource cross-check (record.py finding).**
+This module assigns the 18 non-desert hexes to resources by *forcing the standard
+4/4/4/3/3 multiset* from the per-game colour clusters, so the record contract's
+``STANDARD_RESOURCE_COUNTS`` gate is **tautological** for the resource dimension
+and cannot catch an in-multiset swap. The pip cross-check corroborates the
+NUMBER, not the resource — a resource swap between two hexes carrying valid
+numbers passes both the multiset gate AND ``pip_ok``. The two genuine resource
+firewalls this module owns are therefore: (a) a **hue-cluster-margin gate**
+(:func:`hue_cluster_margin`) — a rank-sliced assignment is only accepted when
+each assigned class's hue span is clearly separated from the neighbouring class,
+so a near-boundary WHEAT/SHEEP frame is *rejected* rather than confidently
+mislabelled — and (b) the **independent screen-space content anchors** (which
+cover a real resource read). The glyph anchor
 (:mod:`catan_rl.human_data.orientation`) remains the joint-flip firewall.
 
 CPU-only. ``cv2`` and ``easyocr`` are imported lazily inside the reader functions
@@ -48,6 +59,7 @@ from __future__ import annotations
 
 import json
 import math
+from collections import Counter
 from dataclasses import dataclass
 from importlib.resources import files
 from typing import TYPE_CHECKING, Any
@@ -62,14 +74,42 @@ if TYPE_CHECKING:  # pragma: no cover - import only for type-checking
 
 #: Non-desert resource → standard board count (the 18 token hexes). ORE/BRICK x3,
 #: WOOD/SHEEP/WHEAT x4. The per-game cluster assignment forces exactly these
-#: counts, so the resource-multiset gate is corroborated by the pip cross-check,
-#: not relied on (see module docstring / record.py finding).
+#: counts, so the resource-multiset gate is tautological for the resource
+#: dimension; the real resource firewalls are the hue-cluster-margin gate and the
+#: independent screen anchors (see module docstring / record.py finding).
 _NONDESERT_COUNTS: dict[str, int] = {"ORE": 3, "BRICK": 3, "WHEAT": 4, "SHEEP": 4, "WOOD": 4}
 
 #: Number-token → pip-dot count (the independent OCR cross-check, §5.6). The
 #: rendered token carries this many pips under its digit; OCR digit and pip count
 #: must agree on every token hex or the read is rejected.
 _PIP_FOR: dict[int, int] = {2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 8: 5, 9: 4, 10: 3, 11: 2, 12: 1}
+
+#: Minimum OpenCV-hue margin (in the 0..180 hue scale) required between any two
+#: ADJACENT resource hue-clusters (BRICK<WHEAT<SHEEP<WOOD) for a rank-sliced
+#: assignment to be accepted. Below this, a per-game palette drift could swap a
+#: WHEAT↔SHEEP (or BRICK↔WHEAT) while the standard multiset stays exactly 4/4, so
+#: the frame is REJECTED (an honest rejection, not a confident mislabel). The
+#: game-1 fixture inter-cluster gaps are wide (BRICK≈9 | WHEAT≈21 | SHEEP≈36 |
+#: WOOD≈65: min neighbour gap ~12), so this margin passes the golden board with
+#: room while catching a near-boundary drift.
+MIN_HUE_CLUSTER_MARGIN = 4.0
+
+#: Minimum ratio ``second_best_penalty / best_penalty`` of the D6 screen-rule
+#: scores for the orientation lock to be accepted. The spike proved the 12 D6
+#: orientations are near-degenerate on residual; the screen rule breaks the tie
+#: but only cleanly when the runner-up scores materially worse. Below this ratio
+#: the frame is ambiguous (partial board off-screen, mid-animation pan, an
+#: occluding piece skewing the token centroid) and is REJECTED rather than a
+#: coin-flip orientation emitted. The game-1 fixture margin is ~30x, far above
+#: this floor.
+MIN_SCREEN_RULE_GAP = 3.0
+
+#: Minimum separation, in white-coverage fraction, between the lowest-covered
+#: TOKEN hex and the (single) token-LESS desert hex for the relative desert
+#: split to be accepted. The desert has no white number-token disk, so its
+#: centre white-coverage is far below every token hex; a bimodal split with at
+#: least this margin distinguishes it per-game without a fixed colour threshold.
+MIN_DESERT_COVERAGE_MARGIN = 0.20
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,27 +148,16 @@ class ContentAnchor:
 
     ``resource`` must be a non-``DESERT`` literal (the desert moves per game, so it
     is never a valid anchor). ``number`` is the token digit at that engine ID.
+
+    In the batch path these are **derived per-frame from the screen-space token
+    extremes** (:func:`derive_screen_anchors`) — an independent read at a fixed
+    screen landmark, NOT a hardcoded constant. A caller may also pass explicit
+    anchors (e.g. a test asserting a mis-oriented ground truth is rejected).
     """
 
     engine_id: int
     resource: str
     number: int
-
-
-#: The two default content anchors for the orientation lock (build brief §5.2:
-#: "≥2 OCR anchors: a number token AND its resource"). Chosen at orientation-
-#: discriminating engine IDs that carry a token (never the desert): the
-#: top-center hex (H8) and a distinctive edge hex (H0). Their (resource, number)
-#: is read INDEPENDENTLY from the frame and must equal what the affine predicts.
-#:
-#: NOTE these are the *game-1 fixture* anchor values; a general batch establishes
-#: per-game anchors from an independent read (the same read the full board uses at
-#: a fixed screen landmark). They are committed here so the game-1 lock is
-#: reproducible and a deliberately mis-oriented fit is rejected against them.
-_GAME1_ANCHORS: tuple[ContentAnchor, ...] = (
-    ContentAnchor(engine_id=8, resource="SHEEP", number=2),
-    ContentAnchor(engine_id=0, resource="SHEEP", number=11),
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,7 +201,9 @@ def _candidate_affines(
     Each of the 6 rotations x 2 reflections is greedily matched token→hex and
     refined by least-squares. Returns ``(refl, rot_deg, affine, residual_px)`` for
     every candidate — by D6 symmetry they share a residual, so orientation is
-    resolved by the screen rule + content anchors, NOT the residual.
+    resolved by the screen rule + content anchors, NOT the residual. A candidate
+    whose RANSAC affine fit fails (``estimateAffine2D`` returns ``None``) is
+    skipped rather than crashing the batch.
     """
     import cv2  # lazy: heavy optional dep, keeps the pure surface import-light
 
@@ -207,6 +238,8 @@ def _candidate_affines(
                 method=cv2.RANSAC,
                 ransacReprojThreshold=12,
             )
+            if affine is None:
+                continue  # RANSAC found no model for this candidate — skip it
             proj = (affine[:, :2] @ src.T).T + affine[:, 2]
             residual = float(np.linalg.norm(proj - dst, axis=1).mean())
             out.append((refl, 60 * k, affine.astype(np.float64), residual))
@@ -297,20 +330,67 @@ def _sample_hex_hsv(
     return np.asarray(np.median(arr[keep], 0), dtype=np.float64)
 
 
-def _hex_has_token(
+def _hex_white_coverage(
     frame_rgb: npt.NDArray[np.uint8], center: npt.NDArray[np.float64], diam: float
-) -> bool:
-    """True iff a white number-token disk sits at this hex center. The desert is
-    the unique token-LESS hex — this is the orientation-independent, per-game
-    desert detector (no colour threshold, brief §2)."""
+) -> float:
+    """White-coverage fraction at a hex center (the number-token-disk signal).
+
+    High on a token hex (the white disk), ~0 on the token-LESS desert. The desert
+    is found by a RELATIVE bimodal split of these 19 values (:func:`_desert_hex`),
+    not a fixed absolute threshold — per-game / per-skin robust (brief §2)."""
     import cv2
 
     r = int(diam * 0.35)
     cx, cy = int(center[0]), int(center[1])
     patch = frame_rgb[max(0, cy - r) : cy + r, max(0, cx - r) : cx + r]
+    if patch.size == 0:
+        return 0.0
     hsv = cv2.cvtColor(patch, cv2.COLOR_RGB2HSV)
     white = (hsv[..., 2] > 175) & (hsv[..., 1] < 60)
-    return bool(white.mean() > 0.35)
+    return float(white.mean())
+
+
+def _desert_hex(coverages: npt.NDArray[np.float64]) -> int | None:
+    """Return the engine hex_id of the token-LESS desert, or ``None`` if the split
+    is ambiguous. Detected RELATIVELY (brief §2 / review finding): rank the 19
+    hex-centre white-coverages and take the single lowest as the desert only when
+    it is separated from the next-lowest (the lowest-covered TOKEN hex) by at least
+    :data:`MIN_DESERT_COVERAGE_MARGIN` — a clear bimodal split (1 low, 18 high). A
+    two-way tie or a per-skin brightness shift that fails to isolate exactly one
+    low hex is rejected (returns ``None``) rather than silently stamping the wrong
+    desert (which moves the orientation-binding provenance)."""
+    order = np.argsort(coverages)
+    lowest = int(order[0])
+    second = int(order[1])
+    if coverages[second] - coverages[lowest] < MIN_DESERT_COVERAGE_MARGIN:
+        return None
+    return lowest
+
+
+def hue_cluster_margin(samples: npt.NDArray[np.float64], desert_hex: int) -> float:
+    """Minimum OpenCV-hue gap between ADJACENT resource hue-clusters after the
+    rank-slice (BRICK<WHEAT<SHEEP<WOOD), i.e. ``min over neighbouring classes of
+    (min hue of the higher class minus max hue of the lower class)``.
+
+    This is the genuine resource cross-check the multiset gate cannot be
+    (record.py finding). :func:`classify_resources` forces the standard multiset
+    by slicing the hue-sorted non-ORE hexes at FIXED rank boundaries, so a
+    per-game palette drift near a boundary silently swaps a WHEAT↔SHEEP while the
+    multiset stays 4/4. :func:`read_board` rejects the frame when this margin is
+    below :data:`MIN_HUE_CLUSTER_MARGIN` — turning a confident mislabel into an
+    honest rejection. Returns ``-inf`` if the ORE cluster cannot be isolated (the
+    same degenerate case :func:`classify_resources` labels). Pure numpy."""
+    if not 0 <= desert_hex < NUM_HEXES:
+        raise ValueError(f"desert_hex {desert_hex} out of 0..{NUM_HEXES - 1}")
+    idxs = [i for i in range(NUM_HEXES) if i != desert_hex]
+    sats = np.array([samples[i][1] for i in idxs])
+    ore = {idxs[j] for j in np.argsort(sats)[:3].tolist()}
+    rest = sorted((i for i in idxs if i not in ore), key=lambda i: float(samples[i][0]))
+    hues = [float(samples[i][0]) for i in rest]
+    # rank-slice boundaries: BRICK[0:3] | WHEAT[3:7] | SHEEP[7:11] | WOOD[11:15]
+    boundaries = (3, 7, 11)
+    gaps = [hues[b] - hues[b - 1] for b in boundaries]
+    return min(gaps)
 
 
 def classify_resources(samples: npt.NDArray[np.float64], desert_hex: int) -> list[str]:
@@ -325,9 +405,13 @@ def classify_resources(samples: npt.NDArray[np.float64], desert_hex: int) -> lis
       BRICK x3 (red, lowest hue) → WHEAT x4 (gold) → SHEEP x4 (yellow-green) →
       WOOD x4 (forest green, highest hue).
 
-    This forces the standard 4/4/4/3/3 multiset, which is why the read is
-    corroborated by the independent pip cross-check (see module docstring). Pure
-    numpy — no cv2 — so it is unit-testable without the heavy CV dependency.
+    This FORCES the standard 4/4/4/3/3 multiset — so the ``STANDARD_RESOURCE_COUNTS``
+    gate is tautological for the resource dimension and a near-boundary WHEAT↔SHEEP
+    swap stays in-multiset. The real resource firewall is :func:`hue_cluster_margin`
+    (an inter-cluster-margin gate that :func:`read_board` enforces), NOT this
+    forced assignment and NOT the pip cross-check (which corroborates the number,
+    not the resource). Pure numpy — no cv2 — so it is unit-testable without the
+    heavy CV dependency.
     """
     if not 0 <= desert_hex < NUM_HEXES:
         raise ValueError(f"desert_hex {desert_hex} out of 0..{NUM_HEXES - 1}")
@@ -418,48 +502,115 @@ def _easyocr_reader() -> _EasyOcrReader:
     return _READER
 
 
+# ------------------------------------------------------------- screen anchors
+
+
+def derive_screen_anchors(
+    hexes: list[dict[str, Any]],
+    hex_px: npt.NDArray[np.float64],
+    frame_rgb: npt.NDArray[np.uint8],
+    diam: float,
+) -> tuple[ContentAnchor, ...]:
+    """Derive >=2 orientation anchors from the screen-space token extremes (build
+    brief §5.2 / review finding).
+
+    The anchor's engine_id is a pure SCREEN fact — the engine hex the affine places
+    pixel-topmost and the one it places pixel-rightmost — chosen by *where a token
+    lands on screen*, not by a hardcoded id. Its ``number`` is OCR'd **straight from
+    the frame at that screen pixel** here (a fresh, independent read). ``read_board``
+    then asserts the board's own value at that engine_id equals this independent
+    read: a mis-oriented affine that satisfied the geometric screen rule only
+    degenerately places a DIFFERENT token at the topmost/rightmost position, so its
+    independently-OCR'd number disagrees and the frame is rejected — this is the
+    §5.2 orientation corroboration this module owns.
+
+    Independence scope: the NUMBER is re-read independently at the screen landmark;
+    the anchor's ``resource`` is the board's per-game palette classification
+    (there is no palette-free single-hex resource read). The independent RESOURCE
+    firewall is the hue-cluster-margin gate (:func:`hue_cluster_margin`), not this
+    anchor. Skips the desert (``number is None``); returns the two extremes (top,
+    right). A caller with fewer than 2 non-desert anchors must fail closed.
+    """
+    # Screen extremes among the NON-desert (token-bearing) hexes.
+    token_ids = [int(h["hex_id"]) for h in hexes if h["resource"] != "DESERT"]
+    if len(token_ids) < 2:
+        return ()
+    ys = {e: float(hex_px[e][1]) for e in token_ids}
+    xs = {e: float(hex_px[e][0]) for e in token_ids}
+    top_id = min(token_ids, key=lambda e: ys[e])
+    right_id = max(token_ids, key=lambda e: xs[e])
+    by_id = {int(h["hex_id"]): h for h in hexes}
+    anchors: list[ContentAnchor] = []
+    for e in (top_id, right_id):
+        if e in {a.engine_id for a in anchors}:
+            continue  # top and right coincided — only one independent extreme
+        number = _ocr_number(frame_rgb, hex_px[e], diam)
+        if number is None:
+            continue
+        anchors.append(
+            ContentAnchor(engine_id=e, resource=str(by_id[e]["resource"]), number=number)
+        )
+    return tuple(anchors)
+
+
 # ------------------------------------------------------------------- the reader
 
 
 def read_board(
     frame_rgb: npt.NDArray[np.uint8],
     *,
-    content_anchors: tuple[ContentAnchor, ...] = _GAME1_ANCHORS,
+    content_anchors: tuple[ContentAnchor, ...] | None = None,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
+    min_screen_rule_gap: float = MIN_SCREEN_RULE_GAP,
 ) -> BoardRead | None:
     """Parse the orientation-locked 19-hex board from a native-geometry **RGB**
     frame, or ``None`` if the frame is rejected (build brief §4 / §5.2).
 
     Rejection (returns ``None``) — the frame is skipped rather than emitting a
-    silently mis-oriented board:
+    silently mis-oriented / mislabelled board:
 
-    - **not exactly 18 tokens** detected (the 19-hex board minus the token-less
-      desert; a different count means a board animation dropped/added a disk),
+    - **fewer than 16 or more than 18 tokens** detected (a board animation
+      dropped/added several disks; a small deficit is tolerated so a single
+      occluded token does not reject an otherwise-good frame),
+    - **no candidate affine** could be fit (RANSAC failed on every D6 candidate),
+    - the **screen-rule gap** (second-best / best penalty) is below
+      ``min_screen_rule_gap`` — a near-tied, ambiguous orientation,
     - **affine residual > ``max_residual_px``** (a mis-snapped lattice, §5.2),
-    - **not exactly one token-less hex** (the desert detector is ambiguous),
-    - the read board is **not the standard resource / number multiset**, or
-    - any **content anchor disagrees** with the screen-locked orientation, or any
-      token hex's **OCR digit ≠ pip count** (§5.6 corroboration fails).
+    - the **desert split is not bimodal** (not exactly one clearly-token-less hex),
+    - two adjacent resource hue clusters are **not separated by**
+      :data:`MIN_HUE_CLUSTER_MARGIN` (a near-boundary WHEAT/SHEEP swap risk),
+    - the read board is **not the standard resource / number multiset**,
+    - any token hex's **OCR digit ≠ pip count** (§5.6 corroboration fails),
+    - **fewer than 2 independent content anchors** are available, or
+    - any **content anchor disagrees** with the screen-locked orientation.
 
-    ``content_anchors`` are the ≥2 independent ground-truth reads the geometric
-    screen-rule lock is cross-checked against; they must not be the desert.
+    ``content_anchors`` — when ``None`` (the batch default) the anchors are derived
+    per-frame from the screen-space token extremes (:func:`derive_screen_anchors`),
+    an INDEPENDENT read; there is no game-1 fallback. A caller may pass explicit
+    anchors (e.g. a test asserting a mis-oriented ground truth is rejected). At
+    least 2 non-desert anchors are required either way (fail closed).
     """
     template = load_engine_template()
     topology = load_topology()
     hcv = topology.hex_corner_to_vertex
 
-    # Exactly 18 number-token disks are expected: the 19-hex board minus the
-    # unique token-less desert. A different count means a board animation
-    # dropped/added a disk (skip the frame rather than fit a broken lattice).
+    # 16-18 number-token disks are expected: the 19-hex board minus the token-less
+    # desert (18), tolerating up to two occluded/animating tokens. Fewer than 16
+    # (or more than 18) means the board is mid-animation — skip the frame.
     tokens = _detect_tokens(frame_rgb)
-    if len(tokens) != NUM_HEXES - 1:
+    if not NUM_HEXES - 3 <= len(tokens) <= NUM_HEXES - 1:
         return None
 
     token_xy = np.array([[x, y] for x, y, _ in tokens], float)
     candidates = _candidate_affines(token_xy, template.hex_centers)
+    if not candidates:
+        return None  # RANSAC failed on every D6 candidate
     scored = _score_screen_rule(candidates, token_xy, template.hex_centers)
     best_penalty, _refl, _rot, affine, residual = scored[0]
-    second_penalty = scored[1][0]
+    second_penalty = scored[1][0] if len(scored) > 1 else float("inf")
+    screen_rule_gap = float(second_penalty / best_penalty) if best_penalty > 0 else float("inf")
+    if screen_rule_gap < min_screen_rule_gap:
+        return None  # ambiguous / near-tied orientation — reject, do not coin-flip
     if residual > max_residual_px:
         return None
 
@@ -473,20 +624,23 @@ def read_board(
     diam = float(np.median([d for _, _, d in tokens]))
 
     samples = np.zeros((NUM_HEXES, 3))
-    token_present: list[bool] = []
+    coverages = np.zeros(NUM_HEXES)
     for e in range(NUM_HEXES):
         corners = [vertex_px[hcv[e][c]] for c in range(6)]
         samples[e] = _sample_hex_hsv(hsv, hex_px[e], corners)
-        token_present.append(_hex_has_token(frame_rgb, hex_px[e], diam))
+        coverages[e] = _hex_white_coverage(frame_rgb, hex_px[e], diam)
 
-    tokenless = [e for e in range(NUM_HEXES) if not token_present[e]]
-    if len(tokenless) != 1:
+    desert = _desert_hex(coverages)
+    if desert is None:
+        return None  # desert white-coverage split not bimodal — ambiguous
+    desert_hex = desert
+
+    # Resource firewall (a): reject a rank-sliced assignment whose adjacent hue
+    # clusters are not clearly separated (a near-boundary WHEAT/SHEEP swap risk).
+    if hue_cluster_margin(samples, desert_hex) < MIN_HUE_CLUSTER_MARGIN:
         return None
-    desert_hex = tokenless[0]
 
     resources = classify_resources(samples, desert_hex)
-    from collections import Counter
-
     if dict(Counter(r for r in resources if r != "DESERT")) != _NONDESERT_COUNTS:
         return None
 
@@ -508,12 +662,20 @@ def read_board(
     if not pip_ok or Counter(numbers) != Counter(_STANDARD_NUMBER_BAG_EXPANDED):
         return None
 
-    # Content-anchor cross-check (§5.2): the resource + number the affine predicts
-    # at each anchor's engine id must equal the independently-known ground truth,
-    # and the anchor must not be the desert. Rejects a deliberately mis-oriented
-    # fit that satisfied the screen rule only degenerately.
+    # Content-anchor cross-check (§5.2): resource firewall (b) + the independent
+    # orientation corroboration. When the caller passes no anchors, derive them
+    # per-frame from the screen-space token extremes (an INDEPENDENT read at a
+    # fixed screen landmark — never a game-1 constant). Fail closed if fewer than
+    # 2 anchors are available.
+    anchors = (
+        content_anchors
+        if content_anchors is not None
+        else derive_screen_anchors(hexes, hex_px, frame_rgb, diam)
+    )
+    if len(anchors) < 2:
+        return None
     by_id = {int(h["hex_id"]): h for h in hexes}
-    for anchor in content_anchors:
+    for anchor in anchors:
         if anchor.resource == "DESERT":
             raise ValueError("content anchor must not be the desert (it moves per game)")
         got = by_id[anchor.engine_id]
@@ -526,9 +688,43 @@ def read_board(
         vertex_px=vertex_px,
         desert_hex=desert_hex,
         residual_px=residual,
-        screen_rule_gap=float(second_penalty / best_penalty) if best_penalty > 0 else float("inf"),
+        screen_rule_gap=screen_rule_gap,
         pip_ok=pip_ok,
     )
+
+
+def read_board_stable(
+    frames_rgb: list[npt.NDArray[np.uint8]],
+    *,
+    max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
+    min_screen_rule_gap: float = MIN_SCREEN_RULE_GAP,
+) -> BoardRead | None:
+    """Cross-frame board-stability gate (build brief §5.2, mandatory).
+
+    Runs :func:`read_board` on ``≥2`` setup-window frames of the SAME game and
+    returns the board only if it **agrees byte-identical** across every accepted
+    frame — the hexes (resource + number per engine id) AND the ``desert_hex``.
+    Returns ``None`` if fewer than 2 frames were accepted or any two disagree. A
+    single-frame orientation flip (the exact failure §5.2 targets) produces a
+    disagreement and is caught here; the batch/validate path MUST use this rather
+    than a bare single-frame :func:`read_board`.
+    """
+    if len(frames_rgb) < 2:
+        raise ValueError("read_board_stable requires >= 2 frames of the same game")
+    reads: list[BoardRead] = []
+    for frame in frames_rgb:
+        result = read_board(
+            frame, max_residual_px=max_residual_px, min_screen_rule_gap=min_screen_rule_gap
+        )
+        if result is not None:
+            reads.append(result)
+    if len(reads) < 2:
+        return None  # not enough accepted frames to corroborate stability
+    first = reads[0]
+    for other in reads[1:]:
+        if list(other.hexes) != list(first.hexes) or other.desert_hex != first.desert_hex:
+            return None  # cross-frame disagreement — an orientation flip; reject
+    return first
 
 
 #: The standard 18-token number bag expanded to a flat list (for the Counter

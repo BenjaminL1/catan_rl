@@ -23,8 +23,11 @@ from catan_rl.human_data.board_cv import (
     ContentAnchor,
     EngineTemplate,
     classify_resources,
+    derive_screen_anchors,
+    hue_cluster_margin,
     load_engine_template,
     read_board,
+    read_board_stable,
 )
 from catan_rl.human_data.ffmpeg import (
     FFmpegNotFoundError,
@@ -32,6 +35,8 @@ from catan_rl.human_data.ffmpeg import (
     resolve_ffprobe,
 )
 from catan_rl.human_data.ingest import (
+    BOARD_OCR_CALLS_PER_ACCEPTED_FRAME,
+    BOARD_OCR_SECONDS_PER_DIGIT,
     DEFAULT_DENSE_INTERVAL_S,
     DEFAULT_SPARSE_INTERVAL_S,
     FRAME_HEIGHT,
@@ -87,6 +92,8 @@ from catan_rl.human_data.segment import (
 from catan_rl.human_data.topology import Topology, load_topology
 
 __all__ = [
+    "BOARD_OCR_CALLS_PER_ACCEPTED_FRAME",
+    "BOARD_OCR_SECONDS_PER_DIGIT",
     "DEFAULT_DENSE_INTERVAL_S",
     "DEFAULT_SPARSE_INTERVAL_S",
     "FRAME_HEIGHT",
@@ -122,10 +129,12 @@ __all__ = [
     "crop_log",
     "decode_frames_at",
     "derive_opponent_strength",
+    "derive_screen_anchors",
     "download_video",
     "estimate_ocr_wall_clock_s",
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
+    "hue_cluster_margin",
     "ingest_video",
     "load_engine_template",
     "load_strength_manifest",
@@ -135,6 +144,7 @@ __all__ = [
     "parse_log",
     "probe_resolution",
     "read_board",
+    "read_board_stable",
     "resolve_ffmpeg",
     "resolve_ffprobe",
     "ruleset_ok",

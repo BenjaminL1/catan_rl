@@ -18,6 +18,8 @@ from typing import Any
 import pytest
 
 from catan_rl.human_data.ingest import (
+    BOARD_OCR_CALLS_PER_ACCEPTED_FRAME,
+    BOARD_OCR_SECONDS_PER_DIGIT,
     FRAME_HEIGHT,
     FRAME_WIDTH,
     MIN_RESOLUTION,
@@ -171,6 +173,39 @@ def test_estimate_ocr_wall_clock_rejects_bad_args() -> None:
         estimate_ocr_wall_clock_s(1.0, 1.0, n_procs=0)
     with pytest.raises(ValueError, match="seconds_per_crop"):
         estimate_ocr_wall_clock_s(1.0, 1.0, seconds_per_crop=0.0)
+
+
+def test_board_ocr_term_defaults_to_zero() -> None:
+    # The Stage-2 board-OCR term is additive and off by default, so the base
+    # log-OCR estimate is unchanged when a caller does not model board frames.
+    base = estimate_ocr_wall_clock_s(500.0, 100.0, n_procs=4)
+    with_zero_boards = estimate_ocr_wall_clock_s(
+        500.0, 100.0, n_procs=4, accepted_board_frames_per_video=0.0
+    )
+    assert with_zero_boards == pytest.approx(base)
+
+
+def test_board_ocr_term_adds_18_digit_ocrs_per_accepted_frame() -> None:
+    # Each accepted board frame adds 18 per-hex digit OCRs (review finding: the
+    # previously-unbudgeted Stage-2 board OCR).
+    assert BOARD_OCR_CALLS_PER_ACCEPTED_FRAME == 18
+    frames_per_video, n_videos, n_procs = 500.0, 100.0, 4
+    boards = 6.0
+    base = frames_per_video * OCR_SECONDS_PER_CROP * n_videos
+    board_ocr = boards * BOARD_OCR_CALLS_PER_ACCEPTED_FRAME * BOARD_OCR_SECONDS_PER_DIGIT * n_videos
+    expected = (base + board_ocr) / n_procs
+    got = estimate_ocr_wall_clock_s(
+        frames_per_video, n_videos, n_procs=n_procs, accepted_board_frames_per_video=boards
+    )
+    assert got == pytest.approx(expected)
+    assert got > base / n_procs  # the board term strictly increases the ETA
+
+
+def test_board_ocr_term_rejects_bad_args() -> None:
+    with pytest.raises(ValueError, match="accepted_board_frames_per_video"):
+        estimate_ocr_wall_clock_s(1.0, 1.0, accepted_board_frames_per_video=-1.0)
+    with pytest.raises(ValueError, match="board_ocr_seconds_per_digit"):
+        estimate_ocr_wall_clock_s(1.0, 1.0, board_ocr_seconds_per_digit=0.0)
 
 
 def test_schedule_ocr_eta_is_total_frames_wall_clock() -> None:

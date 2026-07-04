@@ -31,11 +31,16 @@ import pytest
 from catan_rl.human_data import (
     ContentAnchor,
     classify_resources,
+    hue_cluster_margin,
     load_engine_template,
     load_topology,
 )
 from catan_rl.human_data.board_cv import (
+    MIN_DESERT_COVERAGE_MARGIN,
+    MIN_HUE_CLUSTER_MARGIN,
+    MIN_SCREEN_RULE_GAP,
     _candidate_affines,
+    _desert_hex,
     _score_screen_rule,
 )
 
@@ -255,3 +260,100 @@ def test_read_board_rejects_mis_oriented_content_anchor() -> None:
         ContentAnchor(engine_id=0, resource="ORE", number=4),
     )
     assert read_board(rgb, content_anchors=bogus) is None
+
+
+# --- resource hue-cluster-margin gate (the real resource firewall) ----------
+
+
+def test_hue_cluster_margin_wide_on_game1() -> None:
+    """The game-1 palette has wide inter-cluster hue gaps (BRICK≈9 | WHEAT≈21 |
+    SHEEP≈36 | WOOD≈65), so the margin clears :data:`MIN_HUE_CLUSTER_MARGIN` with
+    room — the golden board is accepted."""
+    margin = hue_cluster_margin(_game1_hsv_samples(), desert_hex=11)
+    assert margin > MIN_HUE_CLUSTER_MARGIN
+
+
+def test_hue_cluster_margin_rejects_near_boundary_swap() -> None:
+    """Collapse the WHEAT/SHEEP hue gap (drift a SHEEP hex down to a WHEAT hue) so
+    the two clusters touch: the rank-slice would still force a 4/4 multiset (a
+    silent WHEAT↔SHEEP swap), but the margin drops below the gate, so
+    :func:`read_board` REJECTS the frame rather than confidently mislabel it. This
+    is the resource firewall the multiset gate cannot be (BLOCKER)."""
+    samples = _game1_hsv_samples()
+    # H5 is a real SHEEP (hue 36); pull it down to a WHEAT-ish hue (22) so the
+    # WHEAT and SHEEP clusters are no longer separated.
+    samples[5, 0] = 22.0
+    margin = hue_cluster_margin(samples, desert_hex=11)
+    assert margin < MIN_HUE_CLUSTER_MARGIN
+
+
+def test_hue_cluster_margin_rejects_bad_desert() -> None:
+    with pytest.raises(ValueError, match="desert_hex"):
+        hue_cluster_margin(_game1_hsv_samples(), desert_hex=19)
+
+
+# --- relative desert split (no fixed white threshold) -----------------------
+
+
+def test_desert_hex_relative_bimodal_split() -> None:
+    """The desert is the single lowest-white-coverage hex when the split is
+    bimodal (18 high, 1 low with a clear margin) — a RELATIVE detector, no fixed
+    threshold. Even under a global brightness shift (all coverages scaled) the
+    relative split still isolates the same desert."""
+    cov = np.full(19, 0.6)
+    cov[11] = 0.05  # the token-less desert
+    assert _desert_hex(cov) == 11
+    # a darker skin lowers every token hex's white coverage, but the desert is
+    # still the clear minimum — relative, not absolute.
+    darker = cov * 0.5
+    assert _desert_hex(darker) == 11
+
+
+def test_desert_hex_rejects_ambiguous_split() -> None:
+    """When no single hex is clearly token-less (two hexes tie low, within
+    :data:`MIN_DESERT_COVERAGE_MARGIN`), the detector returns ``None`` — the
+    desert stamp (orientation-binding provenance) is rejected rather than guessed."""
+    cov = np.full(19, 0.6)
+    cov[11] = 0.05
+    cov[3] = 0.05 + MIN_DESERT_COVERAGE_MARGIN / 2.0  # a second near-low hex
+    assert _desert_hex(cov) is None
+
+
+# --- screen-rule gap is load-bearing (rejects a near-tie) -------------------
+
+
+def test_screen_rule_gap_gate_threshold_is_conservative() -> None:
+    """The game-1 fixture's screen-rule margin is far above the gate floor, so the
+    gate never spuriously rejects the golden board (the slow decode asserts the
+    realised ratio > 5.0; the floor is 3.0)."""
+    assert MIN_SCREEN_RULE_GAP < 5.0
+
+
+# --- cross-frame stability gate (§5.2, mandatory) ---------------------------
+
+
+@pytest.mark.slow
+def test_read_board_stable_agrees_across_two_frames() -> None:
+    """The mandatory §5.2 cross-frame stability gate: :func:`read_board_stable`
+    accepts the game-1 board only because both committed 1080p frames decode to
+    the byte-identical map, and returns that shared board."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import read_board_stable
+
+    frames = []
+    for name in _GAME1_FRAMES:
+        bgr = cv2.imread(str(_FIXTURES / name))
+        assert bgr is not None
+        frames.append(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    result = read_board_stable(frames)
+    assert result is not None
+    assert list(result.hexes) == list(_GAME1_HEXES)
+    assert result.desert_hex == 11
+
+
+def test_read_board_stable_requires_two_frames() -> None:
+    from catan_rl.human_data import read_board_stable
+
+    with pytest.raises(ValueError, match=">= 2 frames"):
+        read_board_stable([np.zeros((4, 4, 3), np.uint8)])
