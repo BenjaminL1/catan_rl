@@ -19,6 +19,20 @@ the build brief ``docs/plans/human_data_pipeline.md`` §5.8 (there is no
 """
 
 from catan_rl.human_data.ffmpeg import FFmpegNotFoundError, resolve_ffmpeg
+from catan_rl.human_data.ingest import (
+    DEFAULT_DENSE_INTERVAL_S,
+    DEFAULT_SPARSE_INTERVAL_S,
+    FRAME_HEIGHT,
+    FRAME_WIDTH,
+    DecodedFrame,
+    ScheduledFrame,
+    TimeWindow,
+    VideoDownloadError,
+    build_sampling_schedule,
+    decode_frames_at,
+    download_video,
+    ingest_video,
+)
 from catan_rl.human_data.orientation import (
     MAX_AFFINE_RESIDUAL_PX,
     MIN_RESOLUTION,
@@ -40,22 +54,34 @@ from catan_rl.human_data.record import (
 from catan_rl.human_data.topology import Topology, load_topology
 
 __all__ = [
+    "DEFAULT_DENSE_INTERVAL_S",
+    "DEFAULT_SPARSE_INTERVAL_S",
+    "FRAME_HEIGHT",
+    "FRAME_WIDTH",
     "MAX_AFFINE_RESIDUAL_PX",
     "MIN_RESOLUTION",
     "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
+    "DecodedFrame",
     "FFmpegNotFoundError",
     "GameRecord",
     "GlyphClassifierNotValidated",
     "OpponentStrength",
     "PlayerOpening",
+    "ScheduledFrame",
+    "TimeWindow",
     "Topology",
+    "VideoDownloadError",
     "assert_glyph_anchor",
     "assert_scale_up_orientation_gates",
+    "build_sampling_schedule",
     "check_road_incidence",
+    "decode_frames_at",
     "derive_opponent_strength",
+    "download_video",
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
+    "ingest_video",
     "load_topology",
     "resolve_ffmpeg",
 ]
