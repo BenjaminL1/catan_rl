@@ -79,3 +79,8 @@ src/catan_engine/*.pyd
 # timestamp-anchored evidence links in strength_manifest.json.
 data/human/frames/
 data/human/*.json.tmp
+# Intermediate shard files + review snapshot/preview (the merged
+# strength_manifest.json is the committed source of truth).
+data/human/strength_manifest.shard*.json
+data/human/strength_manifest.sample.json
+data/human/strength_manifest_preview.md
