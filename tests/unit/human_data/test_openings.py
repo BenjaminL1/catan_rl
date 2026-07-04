@@ -266,6 +266,83 @@ def test_detect_settlements_rejects_single_stray_pixel_blob() -> None:
     assert reason == "shortfall"
 
 
+def _spread_lattice_multi(placements: dict[int, tuple[float, float]]) -> np.ndarray:
+    """A 54-vertex lattice with each named vertex at its given pixel and every
+    other vertex far away, so a blob near a placed vertex votes only for it."""
+    lattice = np.zeros((54, 2), float)
+    for i in range(54):
+        lattice[i] = (5000.0 + 13 * i, 5000.0 + 13 * i)
+    for vertex, at in placements.items():
+        lattice[vertex] = at
+    return lattice
+
+
+def test_detect_settlements_rejects_leak_displacing_occluded_settlement() -> None:
+    """BLOCKER (red-team §openings): the head-vote floor does NOT distinguish a real
+    settlement from a green-tile-subtraction-leak blob — both collect tens-to-
+    hundreds of votes. The detector's only remaining discriminator is that a real
+    settlement towers in area over every leak. When a real settlement is occluded a
+    leak floats into the top-2, indistinguishable in area from the next leak.
+
+    Two real settlements (v3, v11) are big solid disks; several leaks (v18, v19)
+    are small vote-passing blobs of similar area. Occluding the v3 real settlement
+    leaves top-2 = {v11 real (big), v18 leak (small)}; the accepted-min area (v18)
+    does NOT dominate the next rejected leak (v19), so the area-margin guard fires
+    and the detector rejects (``None``, ``"ambiguous"``) instead of emitting the
+    confidently-wrong ``[11, 18]`` opening the finding names."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import _MIN_SETTLEMENT_AREA_MARGIN, _detect_settlements
+
+    assert _MIN_SETTLEMENT_AREA_MARGIN > 1.0
+    vertex_px = _spread_lattice_multi({11: (200.0, 200.0), 18: (200.0, 400.0), 19: (400.0, 200.0)})
+    hex_px = np.array([[9000.0, 9000.0]])  # no hex near any blob
+    mask = np.zeros((600, 600), np.uint8)
+    cv2.circle(mask, (200, 200), 20, 255, -1)  # v11 real settlement (big)
+    cv2.circle(mask, (200, 400), 11, 255, -1)  # v18 leak (small, vote-passing)
+    cv2.circle(mask, (400, 200), 11, 255, -1)  # v19 leak (small, vote-passing)
+    # v11 (big) + v18 (small) survive as top-2 by area, but v18 does not dominate
+    # v19 -> the leak may have displaced an occluded real settlement -> reject.
+    heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
+    assert heads is None
+    assert reason == "ambiguous"
+
+
+def test_detect_settlements_accepts_when_settlements_dominate() -> None:
+    """The area-margin guard must NOT over-reject: two real settlements that tower
+    over every leak in area (the intact-frame case, ~5x margin) are accepted. Two
+    big disks (v3, v11) plus a small leak (v18) -> the min accepted area dominates
+    the leak by well over the margin -> accept [3, 11]."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import _detect_settlements
+
+    vertex_px = _spread_lattice_multi({3: (200.0, 200.0), 11: (400.0, 400.0), 18: (200.0, 400.0)})
+    hex_px = np.array([[9000.0, 9000.0]])
+    mask = np.zeros((600, 600), np.uint8)
+    cv2.circle(mask, (200, 200), 24, 255, -1)  # v3 real (big)
+    cv2.circle(mask, (400, 400), 22, 255, -1)  # v11 real (big)
+    cv2.circle(mask, (200, 400), 10, 255, -1)  # v18 leak (small)
+    heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
+    assert reason is None
+    assert set(heads or []) == {3, 11}
+
+
+def test_detect_settlements_accepts_exactly_two_vote_passing_blobs() -> None:
+    """When exactly ``count`` blobs pass the vote floor there is no rejected
+    candidate, so the area-margin is vacuous and both are accepted (the BLACK-seat
+    case: two real settlements, no green-tile leaks)."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import _detect_settlements
+
+    vertex_px = _spread_lattice_multi({7: (200.0, 200.0), 33: (400.0, 400.0)})
+    hex_px = np.array([[9000.0, 9000.0]])
+    mask = np.zeros((600, 600), np.uint8)
+    cv2.circle(mask, (200, 200), 14, 255, -1)
+    cv2.circle(mask, (400, 400), 14, 255, -1)
+    heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
+    assert reason is None
+    assert set(heads or []) == {7, 33}
+
+
 # --- integration: real frame decode (slow, cv2) -----------------------------
 
 
@@ -297,6 +374,71 @@ def test_detect_openings_reproduces_game1_exactly() -> None:
     for handle in _GAME1_PLAYER_COLORS:
         assert set(got[handle].settlements) == set(golden["openings"][handle]["settlements"])
         assert set(got[handle].roads) == set(golden["openings"][handle]["roads"])
+
+
+@pytest.mark.slow
+def test_detect_settlements_rejects_occluded_green_on_real_frame() -> None:
+    """BLOCKER (red-team §openings), on the real unmodified game-1 GREEN frame:
+    occlude the real v3 settlement blob (a winning-spot glow / card overlay /
+    robber-over-piece — the spike's named failure modes) plus the v15 leak blob and
+    confirm the detector does NOT emit the confidently-wrong ``[11, 18]`` opening
+    the finding names, but rejects with ``"ambiguous"``. WITHOUT the area-margin
+    guard the surviving top-2 by area would be {v11 real, v18 green-tile leak}, both
+    past the head-vote floor, yielding a fully-legal but WRONG opening."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import read_board
+    from catan_rl.human_data.board_cv import load_engine_template
+    from catan_rl.human_data.openings import (
+        _HEAD_VOTE_RADIUS_PX,
+        _HEX_CENTER_EXCLUSION_PX,
+        _MIN_PIECE_AREA,
+        PALETTE,
+        _color_masks,
+        _detect_settlements,
+    )
+
+    frame = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_FRAME)), cv2.COLOR_BGR2RGB)
+    baseline = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_BASELINE)), cv2.COLOR_BGR2RGB)
+    board = read_board(frame)
+    assert board is not None and board.desert_hex == 11
+    vertex_px = board.vertex_px
+    affine = board.affine
+    hex_px = (affine[:, :2] @ load_engine_template().hex_centers.T).T + affine[:, 2]
+
+    h, w = frame.shape[:2]
+    hull = cv2.convexHull(vertex_px.astype(np.float32)).astype(np.int32)
+    hull_mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(hull_mask, hull, 255)
+    board_mask = cv2.erode(hull_mask, np.ones((8, 8), np.uint8))
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+    piece_mask, _road = _color_masks(frame_hsv, baseline_hsv, board_mask, PALETTE["GREEN"])
+
+    # Intact: the two real GREEN settlements are v3 and v11.
+    heads, reason = _detect_settlements(piece_mask, vertex_px, hex_px, count=2)
+    assert reason is None
+    assert set(heads or []) == {3, 11}
+
+    # Occlude the real v3 blob and the v15 leak (models the finding's break).
+    n, labels, stats, centroids = cv2.connectedComponentsWithStats(piece_mask)
+    occluded = piece_mask.copy()
+    for i in range(1, n):
+        if int(stats[i, cv2.CC_STAT_AREA]) < _MIN_PIECE_AREA:
+            continue
+        cx, cy = centroids[i]
+        if float(np.linalg.norm(hex_px - [cx, cy], axis=1).min()) < _HEX_CENTER_EXCLUSION_PX:
+            continue
+        ys, xs = np.where(labels == i)
+        pts = np.stack([xs, ys], 1).astype(float)
+        dv = np.linalg.norm(vertex_px[:, None, :] - pts[None, :, :], axis=2)
+        head = int((dv < _HEAD_VOTE_RADIUS_PX).sum(1).argmax())
+        if head in (3, 15):
+            occluded[labels == i] = 0
+
+    broke_heads, broke_reason = _detect_settlements(occluded, vertex_px, hex_px, count=2)
+    assert broke_heads is None, f"emitted a confidently-wrong opening {broke_heads}"
+    assert broke_reason == "ambiguous"
 
 
 @pytest.mark.slow

@@ -101,6 +101,12 @@ class OpeningResult:
       green-tile-collision suppression from a genuine count shortfall.
     - ``"settlement_double_snap:{color}"`` — the two settlement blobs snapped to one
       vertex (a §5.7 double-snap).
+    - ``"settlement_ambiguous:{color}"`` — the two accepted settlement blobs did not
+      dominate the largest rejected candidate blob in area (review finding: red-team
+      counterexample), so a green-tile-subtraction-leak blob may have displaced an
+      occluded real settlement; rejected honestly rather than emit a confidently-
+      wrong opening. Distinct from a count shortfall (there were enough vote-passing
+      blobs, but the top-2-by-area invariant was not safely satisfied).
     - ``"road_unresolved:{color}:{settlement}"`` — a settlement had no resolvable
       incident road (§5.7): no incident edge collected at least
       :data:`_MIN_ROAD_PIXELS` road-mask pixels (an honest rejection rather than
@@ -195,6 +201,30 @@ _HEAD_VOTE_RADIUS_PX = 16.0
 #: turning "confidently wrong" into an honest rejection (``None``).
 _MIN_HEAD_VOTES = 10
 
+#: Minimum area-dominance margin between the accepted settlement blobs and the
+#: largest REJECTED (but still vote-passing) candidate blob (review finding:
+#: red-team counterexample). The head-vote floor (:data:`_MIN_HEAD_VOTES`) alone
+#: does NOT discriminate a real settlement from a green-tile-subtraction-leak blob
+#: — on the real game-1 GREEN frame SIX leak blobs snap to real lattice vertices
+#: with 81-126 head votes (v15/v18/v19/v51/v26/v24), well past the vote floor. The
+#: detector's only remaining discriminator is that the two REAL settlements tower
+#: in area over every leak (2739-3677px vs a top leak of 555px, a ~5x gap), but
+#: that "the 2 real settlements are the 2 largest blobs" invariant INVERTS the
+#: moment a real settlement is occluded (a winning-spot glow / card overlay /
+#: robber over the piece — the spike's named failure modes): a leak floats into
+#: the top-2 and, because leaks cluster tightly in area (~300-555px), it is
+#: indistinguishable in area from the NEXT leak. This guard converts that
+#: signature into an honest rejection: the two accepted blobs' *minimum* area must
+#: exceed the largest rejected candidate's area by at least this factor. On the
+#: intact frame the margin is ~4.9x (accept); under the finding's v3+v15 occlusion
+#: the top-2 collapse to 1.01x and under v3-only to 1.26x (both reject) — 2.0x sits
+#: cleanly between, so the confidently-wrong ``[11, 18]`` opening becomes an honest
+#: ``settlement_ambiguous`` rejection instead. When exactly ``count`` blobs pass
+#: the vote floor (no rejected candidate to compare against — e.g. the BLACK seat,
+#: which yields exactly its 2 real settlements and no leaks) the margin is vacuous
+#: and the blobs are accepted.
+_MIN_SETTLEMENT_AREA_MARGIN = 2.0
+
 #: Road tiebreak band: along an incident edge's [lo, hi]·L midsection, count the
 #: colour's road-mask pixels within ``_ROAD_PERP_PX`` of the edge line. The
 #: midsection (skipping the settlement-fused ends) + perp band isolates the road
@@ -277,11 +307,23 @@ def _detect_settlements(
     Such a blob is dropped from candidacy (it is not a piece), so it can never be
     snapped to a confidently-wrong vertex.
 
-    Reasons (suffix ``:double_snap`` is disambiguated by the caller via the
-    :class:`OpeningResult` reason strings): ``"shortfall"`` — fewer than ``count``
-    real settlement blobs survived (the guard turned a fabricated/occluded piece
-    into an honest count shortfall); ``"double_snap"`` — the ``count`` largest
-    survivors snapped to fewer than ``count`` distinct vertices (§5.7)."""
+    A further guard (review finding: red-team counterexample) rejects the case
+    where the vote floor is passed by green-tile-subtraction-leak blobs that snap
+    to real lattice vertices with tens-to-hundreds of votes: the two accepted
+    blobs' minimum area must dominate the largest REJECTED candidate's area by at
+    least :data:`_MIN_SETTLEMENT_AREA_MARGIN`. A real settlement towers ~5x over
+    every leak in area; when a real settlement is occluded a leak floats into the
+    top-2 and is indistinguishable in area from the next leak (margin collapses to
+    ~1x), so the detector honestly rejects instead of emitting the confidently-
+    wrong opening the leak would produce.
+
+    Reasons (disambiguated by the caller via the :class:`OpeningResult` reason
+    strings): ``"shortfall"`` — fewer than ``count`` real settlement blobs survived
+    (the vote guard turned a fabricated/occluded piece into an honest count
+    shortfall); ``"double_snap"`` — the ``count`` largest survivors snapped to fewer
+    than ``count`` distinct vertices (§5.7); ``"ambiguous"`` — the accepted blobs do
+    not dominate the largest rejected candidate in area, so a leak blob may have
+    displaced an occluded real settlement (the area-margin guard)."""
     import cv2
 
     _n, labels, stats, centroids = cv2.connectedComponentsWithStats(piece_mask)
@@ -308,7 +350,21 @@ def _detect_settlements(
     if len(blobs) < count:
         return None, "shortfall"
     blobs.sort(key=lambda z: -z[0])
-    heads = [head for _area, head in blobs[:count]]
+    accepted = blobs[:count]
+    # Area-dominance guard (review finding: red-team counterexample). If any blob
+    # was rejected below the accepted set, the smallest accepted blob must tower
+    # over the largest rejected candidate in area; otherwise a green-tile-leak blob
+    # (which clusters tightly in area with the other leaks) may have displaced an
+    # occluded real settlement, and the top-2-by-area invariant no longer holds.
+    # Reject honestly rather than emit the leak's confidently-wrong opening. When
+    # exactly ``count`` blobs survive the vote floor there is no rejected candidate
+    # and the margin is vacuous (accept).
+    if len(blobs) > count:
+        min_accepted_area = accepted[-1][0]
+        top_rejected_area = blobs[count][0]
+        if min_accepted_area < _MIN_SETTLEMENT_AREA_MARGIN * top_rejected_area:
+            return None, "ambiguous"
+    heads = [head for _area, head in accepted]
     if len(set(heads)) != count:
         return None, "double_snap"  # two blobs snapped to one vertex, reject
     return heads, None
@@ -487,6 +543,12 @@ def detect_openings_result(
         if settlements is None:
             if seat_reason == "double_snap":
                 return OpeningResult(None, f"settlement_double_snap:{color}")
+            if seat_reason == "ambiguous":
+                # The area-dominance guard fired: a green-tile-leak blob may have
+                # displaced an occluded real settlement (review finding: red-team
+                # counterexample). Reject with a distinct reason so the §5.6 audit
+                # separates this occlusion/leak ambiguity from a count shortfall.
+                return OpeningResult(None, f"settlement_ambiguous:{color}")
             # A shortfall for a tile_subtract colour (GREEN) is flagged distinctly
             # so the §5.6 audit can separate a green-tile-collision suppression
             # (asymmetric, feature-correlated) from a generic count shortfall.
