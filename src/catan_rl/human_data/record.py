@@ -131,22 +131,31 @@ EpisodeSource = Literal["natural", "human_seed"]
 #: Coarse opponent-strength tier. The scoreboard never pools across mixed tiers.
 StrengthTier = Literal["high", "unknown"]
 
-#: How opponent strength was established (build brief §5.5). ``"known_window"`` =
-#: the game falls in a known high-rank window of the channel; ``"rank_badge"`` =
-#: an objective on-screen rank/elo badge was read.
+#: How opponent strength was established (build brief §5.5). Values:
 #:
-#: **PLACEHOLDER — no backing window committed yet (review finding §1).** The
-#: scaffold only constrains the *shape* of the label (tier ∈ {high, unknown},
-#: source ∈ {rank_badge, known_window}); it does NOT yet anchor ``"known_window"``
-#: to any committed ``video_id``→window table or date range. Until Stage 1 commits
-#: that mapping as DATA and has ``segment.py`` DERIVE :class:`OpponentStrength`
-#: from it, a ``tier="high", source="known_window"`` label is **unfalsifiable** —
-#: any caller can stamp it by hand. For a calibration deliverable whose headline
-#: guarantee is "never pool across mixed strength" (§5.5), strength is the single
-#: most bias-inducing field, so this gap must be closed before the segment/strength
-#: filter lands. The eventual fix should also carry a ``window_id`` / provenance
-#: stamp so an audit can trace *which* window justified a given ``high``.
-StrengthSource = Literal["rank_badge", "known_window"]
+#: - ``"rank_badge"`` — an objective on-screen rank/elo badge was read. This is
+#:   the reconciled name for the committed strength manifest's
+#:   (``data/human/strength_manifest.json``) ``source="ranked_rank"`` entries
+#:   (top-N world rank read off a leaderboard frame). ``segment.py`` maps
+#:   manifest ``ranked_rank`` → ``rank_badge`` when it derives
+#:   :class:`OpponentStrength` from the manifest.
+#: - ``"tournament"`` — the game is a 1v1 tournament match (the manifest's
+#:   ``source="tournament"``); the opponent is high by tournament participation
+#:   rather than a read rank badge. Carried through 1:1 from the manifest.
+#: - ``"known_window"`` — the game falls in a known high-rank window of the
+#:   channel. **PLACEHOLDER — no backing window committed (review finding §1);
+#:   the committed manifest is now the source of truth and uses ``ranked_rank`` /
+#:   ``tournament`` / ``none``, not a window.** Retained in the literal for
+#:   backwards compatibility (never remove an existing source value), but the
+#:   manifest-driven ``segment.py`` never emits it. A hand-set
+#:   ``tier="high", source="known_window"`` remains unfalsifiable, so it must not
+#:   feed the scoreboard's mixed-strength-pooling filter (§5.5).
+#:
+#: The manifest's third source, ``"none"`` (strength unknown / excluded), is NOT
+#: a valid :class:`OpponentStrength.source`: an unknown-strength game gets
+#: ``tier="unknown"`` (with whatever source the record carries — never a fake
+#: ``high``), and an ``excluded`` manifest video never becomes a record at all.
+StrengthSource = Literal["rank_badge", "known_window", "tournament"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,12 +165,14 @@ class OpponentStrength:
     Never a handle guess. ``confidence`` is a coarse 0..1 self-assessment of the
     signal, not a calibrated probability.
 
-    **Provenance caveat (review finding §1):** this dataclass enforces the label's
-    *shape* only, not its *provenance*. ``source="known_window"`` is a placeholder
-    with no committed backing window — see :data:`StrengthSource`. Stage 1 must
-    derive strength from a committed window table before the §5.5
-    mixed-strength-pooling guarantee holds; a hand-set ``tier="high"`` is currently
-    unfalsifiable.
+    **Provenance (review finding §1, now resolved for the manifest sources):**
+    ``segment.py`` derives this from the committed strength manifest
+    (``data/human/strength_manifest.json``), mapping manifest ``ranked_rank`` →
+    ``source="rank_badge"`` and ``tournament`` → ``source="tournament"`` (both
+    ``tier="high"``), and manifest ``none`` → ``tier="unknown"``. The dataclass
+    still enforces the label's *shape* only; ``source="known_window"`` remains a
+    placeholder with no committed backing window (see :data:`StrengthSource`) and
+    the manifest-driven path never emits it.
     """
 
     tier: StrengthTier

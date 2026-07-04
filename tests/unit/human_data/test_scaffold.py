@@ -277,6 +277,38 @@ def test_validate_rejects_bad_opponent_strength_tier() -> None:
         GameRecord.from_dict(payload)
 
 
+def test_opponent_strength_accepts_tournament_source() -> None:
+    # Manifest reconciliation: the strength manifest's ``source="tournament"``
+    # is carried through 1:1 as an OpponentStrength.source (additive to the
+    # existing rank_badge/known_window set). A tournament game is tier="high".
+    rec = _sample_record()
+    payload = rec.to_dict()
+    payload["opponent_strength"] = {"tier": "high", "source": "tournament", "confidence": 0.9}
+    restored = GameRecord.from_dict(payload)
+    assert restored.opponent_strength.source == "tournament"
+    assert restored.opponent_strength.tier == "high"
+
+
+def test_opponent_strength_accepts_rank_badge_source() -> None:
+    # Manifest reconciliation: manifest ``source="ranked_rank"`` maps to
+    # ``source="rank_badge"`` (segment.py owns that mapping); the reconciled
+    # literal must validate.
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"] = {"tier": "high", "source": "rank_badge", "confidence": 0.85}
+    restored = GameRecord.from_dict(payload)
+    assert restored.opponent_strength.source == "rank_badge"
+
+
+def test_validate_rejects_manifest_none_source() -> None:
+    # The manifest's third source, "none" (unknown/excluded), is NOT a valid
+    # OpponentStrength.source — an unknown-strength game gets tier="unknown", it
+    # must not carry a raw "none" source string through the firewall.
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"] = {"tier": "unknown", "source": "none", "confidence": 0.0}
+    with pytest.raises(ValueError, match="source"):
+        GameRecord.from_dict(payload)
+
+
 def test_validate_enforces_rejection_truth_table() -> None:
     # rejection_reason set ⟹ passed_crosscheck must be False.
     payload = _sample_record().to_dict()
