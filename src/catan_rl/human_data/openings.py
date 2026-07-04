@@ -17,10 +17,16 @@ play-GUI available-spot glow; the post-setup single frame + colour is far cleane
 Correctness constraints honoured (build brief §5):
 
 - **§5.14 player→colour from the per-game HUD, never a global constant.**
-  :func:`read_hud_seat_colors` reads the two HUD seat-avatar ring colours (top →
-  bottom) for THIS game; :func:`detect_openings` validates the two detected piece
-  colours match the passed per-game ``player_colors`` binding and rejects a
-  mismatch (returns ``None``) rather than mislabelling ownership.
+  :func:`read_hud_seat_colors` reads the HUD seat-avatar ring colours (top →
+  bottom) for THIS game. :func:`detect_openings_result` requires the HUD to yield
+  exactly two DISTINCT seat colours (else ``hud_unreadable``) and that they equal
+  the two bound colours as a SET (else ``hud_set_mismatch``). When the caller
+  supplies the ``seat_order`` (the top→bottom handle order), it *also* validates
+  the handle→colour **assignment** positionally (else ``hud_assignment_mismatch``)
+  — a swapped ``{handle: colour}`` binding is set-equal to the truth and would
+  otherwise silently invert ownership. Without ``seat_order`` only the set is
+  validated (the weaker legacy check), so callers that know the seat order must
+  pass it.
 - **§5.7 road tiebreak.** A setup settlement + its road fuse into one blob whose
   pixel mass bleeds onto several incident edges; the road is resolved among the
   edges *incident to the owner's settlement* by a colour-specific road mask (the
@@ -28,16 +34,35 @@ Correctness constraints honoured (build brief §5):
   — the correct edge wins, the thin subtraction artefact / adjacent tile loses.
 - **§5.7 never trust a snapped piece.** Each opening is exactly 2 settlements + 2
   roads per player (known from the log); a detection yielding a different count,
-  or whose two colours do not match the HUD binding, is rejected (``None``).
+  a double-snap, an un-voted blob (see :data:`_MIN_HEAD_VOTES`), or a binding that
+  disagrees with the HUD is **rejected with a typed reason** (see
+  :class:`OpeningResult`), never emitted as a confidently-wrong opening.
+- **§5.6 the green-tile subtraction bias is MEASURED, not hidden.** Only GREEN
+  pieces collide with a same-hued tile, so a GREEN settlement on a green tile can
+  be eaten by the (minimal-kernel) tile subtraction while a BLACK one never is —
+  an asymmetric, feature-correlated rejection. This bias is inherent to the same-
+  hue collision and cannot be fully removed at the mask level (on real frames
+  piece-green and tile-green are near-colocated in HSV), so a shortfall for a
+  ``tile_subtract`` colour carries the distinct ``:green_tile_suppressed`` reason
+  so the §5.6 per-archetype acceptance-rate audit (batch.py / validate.py) can
+  separate it from a generic count shortfall.
 
-The palette is a **per-colour table** (:data:`PALETTE`), not a two-colour
-hardcode; the two active colours are the ones the HUD shows for this game.
+**Palette precondition.** The palette is a **per-colour table** (:data:`PALETTE`),
+not a two-colour hardcode, but only the calibrated colours (currently
+``GREEN``/``BLACK``, the committed spike game's seats) are populated. A game whose
+seats use other Colonist colours is **rejected with a named reason**
+(``player_colors_invalid`` if the binding names a non-palette colour, or
+``hud_unreadable`` if the HUD shows none of the palette colours) — never a silent
+mislabel — so the §5.6 audit surfaces the palette-coverage yield limit. Extend
+:data:`PALETTE` / :data:`_HUD_RING` with data-derived HSV ranges to widen coverage.
+
 CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training
 path (brief §6).
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,6 +74,39 @@ from catan_rl.human_data.topology import load_topology
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type-checking
     import numpy.typing as npt
+
+
+@dataclass(frozen=True, slots=True)
+class OpeningResult:
+    """The outcome of :func:`detect_openings`: either the per-player openings, or a
+    typed ``rejection_reason`` (build brief §5.6 — every rejected game must emit a
+    reason so the per-archetype acceptance-rate audit can bucket it).
+
+    Exactly one of ``openings`` / ``rejection_reason`` is set. ``openings`` is the
+    ``{handle: PlayerOpening}`` map on success; ``rejection_reason`` is ``None`` on
+    success and a distinct reason string on every rejection branch:
+
+    - ``"player_colors_invalid"`` — ``player_colors`` is not two handles bound to
+      two distinct :data:`PALETTE` colours.
+    - ``"hud_unreadable"`` — the HUD did not yield exactly two distinct seat colours
+      (:func:`read_hud_seat_colors`); the per-game binding cannot be corroborated.
+    - ``"hud_set_mismatch"`` — the two HUD seat colours are not the two bound colours
+      (a colour named that the HUD never shows).
+    - ``"hud_assignment_mismatch"`` — the HUD seat *order* disagrees with the passed
+      handle→colour assignment (a swapped binding, §5.14) when a ``seat_order`` was
+      supplied to check against.
+    - ``"settlement_blob_shortfall:{color}"`` — fewer than two settlement blobs
+      survived for a colour. A ``tile_subtract`` colour (GREEN) additionally carries
+      the ``:green_tile_suppressed`` suffix so the §5.6 bias audit can separate a
+      green-tile-collision suppression from a genuine count shortfall.
+    - ``"settlement_double_snap:{color}"`` — the two settlement blobs snapped to one
+      vertex (a §5.7 double-snap).
+    - ``"road_unresolved:{color}:{settlement}"`` — a settlement had no resolvable
+      incident road (§5.7).
+    """
+
+    openings: dict[str, PlayerOpening] | None
+    rejection_reason: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +180,18 @@ _HEX_CENTER_EXCLUSION_PX = 18.0
 #: vertex collecting the most blob pixels within this radius.
 _HEAD_VOTE_RADIUS_PX = 16.0
 
+#: Minimum head votes a settlement blob's winning vertex must collect (blob pixels
+#: within :data:`_HEAD_VOTE_RADIUS_PX` of it). WITHOUT this floor, ``argmax`` on an
+#: all-zero vote array silently returns index 0, so a blob that sits nowhere near
+#: any lattice vertex is snapped to engine vertex 0 (a fabricated opening), and a
+#: blob that grazes a vertex by a single stray pixel is accepted as a settlement
+#: (review finding: red-team counterexample). A real setup settlement paints a
+#: solid disk on its vertex, so its head collects tens-to-hundreds of votes (the
+#: weakest real game-1 settlement head collects 29); this floor rejects the
+#: zero-vote fabrication and single-stray-pixel occlusion remnants far below that,
+#: turning "confidently wrong" into an honest rejection (``None``).
+_MIN_HEAD_VOTES = 10
+
 #: Road tiebreak band: along an incident edge's [lo, hi]·L midsection, count the
 #: colour's road-mask pixels within ``_ROAD_PERP_PX`` of the edge line. The
 #: midsection (skipping the settlement-fused ends) + perp band isolates the road
@@ -150,9 +220,18 @@ def _color_masks(
     piece = cv2.inRange(frame_hsv, _b(profile.piece_lo), _b(profile.piece_hi))
     road = cv2.inRange(frame_hsv, _b(profile.road_lo), _b(profile.road_hi))
     if profile.tile_subtract:
+        # Same-hue tile subtraction is an asymmetric, feature-correlated rejection
+        # source (review finding §5.6): a GREEN piece ON a green tile is eaten by
+        # this dilated tile mask, so keep the dilation to the MINIMUM that clears
+        # the tile's anti-alias fringe (9/11 px, shrunk from 11/13) — a larger
+        # kernel over-eats legitimate on-green-tile settlements and inflates the
+        # ``:green_tile_suppressed`` rejection rate. The residual bias cannot be
+        # removed at the mask level (piece-green and tile-green are near-colocated
+        # in HSV on real frames), so it is MEASURED via that rejection reason, not
+        # hidden.
         tile = cv2.inRange(baseline_hsv, _b(profile.tile_lo), _b(profile.tile_hi))
-        tile_piece = cv2.dilate(tile, np.ones((11, 11), np.uint8))
-        tile_road = cv2.dilate(tile, np.ones((13, 13), np.uint8))
+        tile_piece = cv2.dilate(tile, np.ones((9, 9), np.uint8))
+        tile_road = cv2.dilate(tile, np.ones((11, 11), np.uint8))
         piece = cv2.bitwise_and(piece, cv2.bitwise_not(tile_piece))
         road = cv2.bitwise_and(road, cv2.bitwise_not(tile_road))
     piece = cv2.bitwise_and(piece, board_mask)
@@ -167,12 +246,25 @@ def _detect_settlements(
     vertex_px: npt.NDArray[np.float64],
     hex_px: npt.NDArray[np.float64],
     count: int,
-) -> list[int] | None:
+) -> tuple[list[int] | None, str | None]:
     """The ``count`` (=2) largest on-board piece blobs → their settlement-head
-    vertices, or ``None`` if fewer than ``count`` blobs survive. Each blob's head
-    is the vertex collecting the most blob pixels within :data:`_HEAD_VOTE_RADIUS_PX`
-    (a fused settlement+road blob votes for its settlement vertex, not the road
-    midpoint). A blob on a hex centre (robber / number token) is excluded."""
+    vertices as ``(heads, None)``, or ``(None, reason)`` on rejection.
+
+    Each blob's head is the vertex collecting the most blob pixels within
+    :data:`_HEAD_VOTE_RADIUS_PX` (a fused settlement+road blob votes for its
+    settlement vertex, not the road midpoint). A blob on a hex centre (robber /
+    number token) is excluded, as is a blob whose winning vertex collects fewer
+    than :data:`_MIN_HEAD_VOTES` votes — WITHOUT that floor an all-zero vote array
+    makes ``argmax`` fabricate engine vertex 0, and a single-stray-pixel occlusion
+    remnant is accepted as a settlement (review finding: red-team counterexample).
+    Such a blob is dropped from candidacy (it is not a piece), so it can never be
+    snapped to a confidently-wrong vertex.
+
+    Reasons (suffix ``:double_snap`` is disambiguated by the caller via the
+    :class:`OpeningResult` reason strings): ``"shortfall"`` — fewer than ``count``
+    real settlement blobs survived (the guard turned a fabricated/occluded piece
+    into an honest count shortfall); ``"double_snap"`` — the ``count`` largest
+    survivors snapped to fewer than ``count`` distinct vertices (§5.7)."""
     import cv2
 
     _n, labels, stats, centroids = cv2.connectedComponentsWithStats(piece_mask)
@@ -187,15 +279,22 @@ def _detect_settlements(
         ys, xs = np.where(labels == i)
         pts = np.stack([xs, ys], 1).astype(float)
         dv = np.linalg.norm(vertex_px[:, None, :] - pts[None, :, :], axis=2)
-        head = int((dv < _HEAD_VOTE_RADIUS_PX).sum(1).argmax())
+        votes = (dv < _HEAD_VOTE_RADIUS_PX).sum(1)
+        # THE guard (review finding: red-team counterexample). A zero-vote blob
+        # (nowhere near any vertex) or a single-stray-pixel blob (grazes a vertex)
+        # is NOT a settlement; dropping it here avoids the argmax→vertex-0
+        # fabrication and the occluded-remnant mis-snap. Compare max BEFORE argmax.
+        if int(votes.max()) < _MIN_HEAD_VOTES:
+            continue
+        head = int(votes.argmax())
         blobs.append((area, head))
     if len(blobs) < count:
-        return None
+        return None, "shortfall"
     blobs.sort(key=lambda z: -z[0])
     heads = [head for _area, head in blobs[:count]]
     if len(set(heads)) != count:
-        return None  # two blobs snapped to one vertex — a double-snap, reject
-    return heads
+        return None, "double_snap"  # two blobs snapped to one vertex, reject
+    return heads, None
 
 
 def _road_for_settlement(
@@ -272,16 +371,20 @@ def read_hud_seat_colors(frame_rgb: npt.NDArray[np.uint8]) -> tuple[str, ...]:
     return tuple(color for _y, color in seats)
 
 
-def detect_openings(
+def detect_openings_result(
     frame_rgb: npt.NDArray[np.uint8],
     empty_baseline_rgb: npt.NDArray[np.uint8],
     board: BoardRead,
     *,
     player_colors: dict[str, str],
-) -> dict[str, PlayerOpening] | None:
-    """Detect the 2-settlement + 2-road snake-draft opening per player, keyed by
-    the per-game ``player_colors`` binding (``{handle: colour}``), or ``None`` if
-    the frame is rejected.
+    seat_order: Sequence[str] | None = None,
+) -> OpeningResult:
+    """Detect the 2-settlement + 2-road snake-draft opening per player, keyed by the
+    per-game ``player_colors`` binding (``{handle: colour}``), returning an
+    :class:`OpeningResult` that carries either the openings **or** a distinct
+    ``rejection_reason`` on every rejection branch (build brief §5.6 — the batch
+    path needs the reason to compute the per-archetype acceptance rate the bias
+    audit gates on; a bare ``None`` throws that signal away).
 
     ``frame_rgb`` is the post-setup RGB frame (8 pieces down, robber on the desert,
     pre-first-roll); ``empty_baseline_rgb`` the same board with no pieces (the
@@ -289,14 +392,18 @@ def detect_openings(
     :class:`~catan_rl.human_data.board_cv.BoardRead` (its projected ``vertex_px``
     and ``affine`` supply the lattice / hex centres).
 
-    Rejection (returns ``None``) rather than a confidently-wrong opening:
+    ``seat_order`` (optional) is the handle order top→bottom (the seat / draft
+    order). When supplied, the HUD is checked for the full **assignment** — each
+    handle's bound colour must equal the HUD's positional colour at that seat —
+    not merely the colour *set* (§5.14: a swapped ``{handle: colour}`` binding is
+    set-equal to the truth and would otherwise pass, silently inverting every
+    per-player scoreboard row). When absent, only the colour set is validated (the
+    weaker legacy check) — callers that know the seat order should pass it.
 
-    - ``player_colors`` is not exactly two handles bound to two distinct
-      :data:`PALETTE` colours,
-    - the two bound colours do not match the two HUD seat colours
-      (:func:`read_hud_seat_colors`) — a mis-bound ownership (§5.14),
-    - a colour yields fewer than 2 (or two coincident) settlement blobs (§5.7),
-    - a settlement has no resolvable incident road (§5.7).
+    Rejection reasons (see :class:`OpeningResult`): ``player_colors_invalid``,
+    ``hud_unreadable``, ``hud_set_mismatch``, ``hud_assignment_mismatch``,
+    ``settlement_blob_shortfall:{color}[:green_tile_suppressed]``,
+    ``settlement_double_snap:{color}``, ``road_unresolved:{color}:{settlement}``.
 
     Vertex/edge IDs are engine integer IDs under the SAME orientation ``board`` was
     locked at, so ``provenance.openings_desert_hex`` == ``board.desert_hex`` by
@@ -306,12 +413,28 @@ def detect_openings(
 
     colors = list(player_colors.values())
     if len(player_colors) != 2 or len(set(colors)) != 2 or any(c not in PALETTE for c in colors):
-        return None
+        return OpeningResult(None, "player_colors_invalid")
 
-    # §5.14: the bound colours must match the authoritative HUD seat colours.
+    # §5.14: corroborate the bound colours against the authoritative HUD.
     hud = read_hud_seat_colors(frame_rgb)
+    # The HUD must yield exactly two DISTINCT seat colours; anything else is an
+    # unreadable HUD (not this game's palette / a spurious hit), a distinct cause
+    # from a genuine binding mismatch (finding: HUD-unreadable vs mismatch).
+    if len(hud) != 2 or len(set(hud)) != 2:
+        return OpeningResult(None, "hud_unreadable")
     if set(hud) != set(colors):
-        return None
+        return OpeningResult(None, "hud_set_mismatch")
+    # §5.14 assignment check: validate the handle→colour ASSIGNMENT, not just the
+    # set — a swapped binding is set-equal but mislabels ownership. Only possible
+    # when the caller supplies the seat order the HUD's positional read pairs with.
+    # ``seat_order`` must name exactly the two bound handles (top→bottom), and each
+    # seat's bound colour must equal the HUD's colour at that seat.
+    if seat_order is not None:
+        if set(seat_order) != set(player_colors) or len(seat_order) != len(hud):
+            return OpeningResult(None, "hud_assignment_mismatch")
+        for seat_idx, handle in enumerate(seat_order):
+            if player_colors.get(handle) != hud[seat_idx]:
+                return OpeningResult(None, "hud_assignment_mismatch")
 
     topology = load_topology()
     edge_vertices = topology.edge_vertices
@@ -338,9 +461,15 @@ def detect_openings(
     for handle, color in player_colors.items():
         profile = PALETTE[color]
         piece_mask, road_mask = _color_masks(frame_hsv, baseline_hsv, board_mask, profile)
-        settlements = _detect_settlements(piece_mask, vertex_px, hex_px, count=2)
+        settlements, seat_reason = _detect_settlements(piece_mask, vertex_px, hex_px, count=2)
         if settlements is None:
-            return None
+            if seat_reason == "double_snap":
+                return OpeningResult(None, f"settlement_double_snap:{color}")
+            # A shortfall for a tile_subtract colour (GREEN) is flagged distinctly
+            # so the §5.6 audit can separate a green-tile-collision suppression
+            # (asymmetric, feature-correlated) from a generic count shortfall.
+            suffix = ":green_tile_suppressed" if profile.tile_subtract else ""
+            return OpeningResult(None, f"settlement_blob_shortfall:{color}{suffix}")
         ys, xs = np.where(road_mask > 0)
         road_pts = np.stack([xs, ys], 1).astype(float)
         used: set[int] = set()
@@ -348,8 +477,31 @@ def detect_openings(
         for settlement in settlements:
             edge_id = _road_for_settlement(road_pts, settlement, vertex_px, edge_vertices, used)
             if edge_id is None:
-                return None
+                return OpeningResult(None, f"road_unresolved:{color}:{settlement}")
             used.add(edge_id)
             roads.append(edge_id)
         openings[handle] = PlayerOpening(settlements=tuple(settlements), roads=tuple(roads))
-    return openings
+    return OpeningResult(openings, None)
+
+
+def detect_openings(
+    frame_rgb: npt.NDArray[np.uint8],
+    empty_baseline_rgb: npt.NDArray[np.uint8],
+    board: BoardRead,
+    *,
+    player_colors: dict[str, str],
+    seat_order: Sequence[str] | None = None,
+) -> dict[str, PlayerOpening] | None:
+    """Back-compat thin wrapper over :func:`detect_openings_result`: the openings
+    ``{handle: PlayerOpening}`` on success, or ``None`` on any rejection (the
+    reason is discarded). Callers that need the §5.6 ``rejection_reason`` (batch.py)
+    must call :func:`detect_openings_result` directly. See that function for the
+    ``seat_order`` §5.14 assignment check and the full rejection-reason vocabulary.
+    """
+    return detect_openings_result(
+        frame_rgb,
+        empty_baseline_rgb,
+        board,
+        player_colors=player_colors,
+        seat_order=seat_order,
+    ).openings

@@ -18,9 +18,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pytest
+
+if TYPE_CHECKING:
+    from catan_rl.human_data.board_cv import BoardRead
 
 from catan_rl.human_data import (
     PALETTE,
@@ -114,6 +118,49 @@ def test_detect_openings_rejects_bad_player_colors() -> None:
         assert detect_openings(frame, frame, board, player_colors=bad) is None
 
 
+def _blank_board() -> BoardRead:
+    from catan_rl.human_data.board_cv import BoardRead
+
+    return BoardRead(
+        hexes=(),
+        affine=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        vertex_px=_synthetic_lattice(),
+        desert_hex=11,
+        residual_px=0.5,
+        screen_rule_gap=40.0,
+        pip_ok=True,
+    )
+
+
+def test_detect_openings_result_carries_typed_rejection_reasons() -> None:
+    """§5.6 (finding §3): every rejection branch of ``detect_openings_result``
+    must carry a *distinct* ``rejection_reason``, not a bare ``None`` — the batch
+    path attributes rejections (green-tile-collision vs HUD-mismatch vs shortfall)
+    off this string. A blank frame has no readable HUD, so any two-colour binding
+    lands on ``hud_unreadable``; a bad binding lands on ``player_colors_invalid``
+    *before* the HUD read."""
+    pytest.importorskip("cv2")
+    from catan_rl.human_data import detect_openings_result
+    from catan_rl.human_data.openings import OpeningResult
+
+    board = _blank_board()
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+
+    # player_colors_invalid fires first (before the HUD read).
+    for bad in ({"a": "GREEN"}, {"a": "GREEN", "b": "PURPLE"}, {"a": "GREEN", "b": "GREEN"}):
+        res = detect_openings_result(frame, frame, board, player_colors=bad)
+        assert isinstance(res, OpeningResult)
+        assert res.openings is None
+        assert res.rejection_reason == "player_colors_invalid"
+
+    # A well-formed two-colour binding on a blank (HUD-less) frame -> hud_unreadable.
+    res = detect_openings_result(
+        frame, frame, board, player_colors={"ThePhantom": "GREEN", "rayman147": "BLACK"}
+    )
+    assert res.openings is None
+    assert res.rejection_reason == "hud_unreadable"
+
+
 def _synthetic_lattice() -> np.ndarray:
     """The real game-1 projected vertex pixels (board_cv on the committed frame),
     frozen so the pure road-tiebreak tests need no cv2 decode. Only the handful of
@@ -125,6 +172,58 @@ def _synthetic_lattice() -> np.ndarray:
     lattice[4] = (689.41, 590.82)
     lattice[9] = (607.92, 449.44)
     return lattice
+
+
+def _spread_lattice(near_vertex: int, at: tuple[float, float]) -> np.ndarray:
+    """A 54-vertex lattice with exactly one vertex at ``at`` and every other vertex
+    far away, so a blob near ``at`` votes only for ``near_vertex`` and a blob
+    elsewhere collects zero votes (the head-vote-guard counterexample)."""
+    lattice = np.zeros((54, 2), float)
+    for i in range(54):
+        lattice[i] = (2000.0 + 10 * i, 2000.0 + 10 * i)
+    lattice[near_vertex] = at
+    return lattice
+
+
+def test_detect_settlements_rejects_zero_vote_blob_no_vertex0_fabrication() -> None:
+    """BLOCKER (red-team §1): a blob nowhere near any lattice vertex yields an
+    all-zero vote array; WITHOUT the head-vote guard ``argmax`` returns index 0 and
+    the blob is fabricated as engine vertex 0. With the guard the blob is dropped,
+    so the two-settlement count is short and the detector honestly rejects
+    (``None``, ``"shortfall"``) instead of returning ``[7, 0]``."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import _detect_settlements
+
+    vertex_px = _spread_lattice(7, (300.0, 300.0))
+    hex_px = np.array([[9000.0, 9000.0]])  # no hex near either blob
+    mask = np.zeros((600, 600), np.uint8)
+    cv2.circle(mask, (300, 300), 12, 255, -1)  # real settlement at v7 (many votes)
+    cv2.circle(mask, (100, 100), 12, 255, -1)  # far from every vertex -> 0 votes
+    heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
+    assert heads is None
+    assert reason == "shortfall"
+
+
+def test_detect_settlements_rejects_single_stray_pixel_blob() -> None:
+    """BLOCKER (red-team §1): a blob that grazes a vertex by a single stray pixel
+    is not a settlement; the guard drops it (a max vote of 1 is below the floor),
+    so it can never be snapped to a confidently-wrong vertex."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import _MIN_HEAD_VOTES, _detect_settlements
+
+    assert _MIN_HEAD_VOTES > 1
+    vertex_px = _spread_lattice(9, (100.0, 100.0))
+    hex_px = np.array([[9000.0, 9000.0]])
+    mask = np.zeros((600, 600), np.uint8)
+    cv2.circle(mask, (300, 300), 12, 255, -1)  # one real blob far from v9
+    # a >min-area blob (occlusion remnant) whose bulk sits >16px from v9 so only a
+    # few graze pixels reach it: 3 head votes, well below _MIN_HEAD_VOTES and above
+    # 1 (the finding's ~1-vote occluded-remnant counterexample).
+    cv2.circle(mask, (118, 118), 10, 255, -1)
+    heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
+    # v9 blob is guarded out (<_MIN_HEAD_VOTES votes) -> only one real blob -> reject
+    assert heads is None
+    assert reason == "shortfall"
 
 
 # --- integration: real frame decode (slow, cv2) -----------------------------
@@ -186,3 +285,102 @@ def test_detect_openings_rejects_hud_binding_mismatch() -> None:
     # Bind ThePhantom to a colour the HUD never shows for this game.
     bad = {"rayman147": "GREEN", "ThePhantom": "PURPLE"}
     assert detect_openings(frame, baseline, board, player_colors=bad) is None
+
+
+@pytest.mark.slow
+def test_detect_openings_rejects_swapped_assignment_with_seat_order() -> None:
+    """§5.14 (finding §4): a SET-equal but swapped handle→colour binding must be
+    rejected when the seat order is supplied. The HUD reads GREEN(top)/BLACK(bottom)
+    = rayman147/ThePhantom; binding rayman147→BLACK, ThePhantom→GREEN is set-equal
+    (both colours present) yet inverts ownership, so with ``seat_order`` the
+    positional assignment check fires ``hud_assignment_mismatch``. The correct
+    binding with the same seat order is accepted."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import detect_openings_result, read_board
+
+    frame = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_FRAME)), cv2.COLOR_BGR2RGB)
+    baseline = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_BASELINE)), cv2.COLOR_BGR2RGB)
+    board = read_board(frame)
+    assert board is not None
+    seat_order = ["rayman147", "ThePhantom"]  # top -> bottom (matches the HUD read)
+
+    swapped = {"rayman147": "BLACK", "ThePhantom": "GREEN"}
+    res = detect_openings_result(
+        frame, baseline, board, player_colors=swapped, seat_order=seat_order
+    )
+    assert res.openings is None
+    assert res.rejection_reason == "hud_assignment_mismatch"
+
+    correct = detect_openings_result(
+        frame, baseline, board, player_colors=_GAME1_PLAYER_COLORS, seat_order=seat_order
+    )
+    assert correct.rejection_reason is None
+    assert correct.openings is not None
+
+
+@pytest.mark.slow
+def test_detect_openings_rejects_non_palette_game_with_named_reason() -> None:
+    """§5.6 (finding §5): a game whose seats use colours not in the calibrated
+    PALETTE is rejected with a NAMED reason (never a silent mislabel), so the
+    palette-coverage yield limit is auditable. A binding naming a non-palette colour
+    -> ``player_colors_invalid``; a valid-palette binding the HUD does not show ->
+    ``hud_set_mismatch``."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import detect_openings_result, read_board
+
+    frame = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_FRAME)), cv2.COLOR_BGR2RGB)
+    baseline = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_BASELINE)), cv2.COLOR_BGR2RGB)
+    board = read_board(frame)
+    assert board is not None
+
+    non_palette = detect_openings_result(
+        frame, baseline, board, player_colors={"a": "BLUE", "b": "ORANGE"}
+    )
+    assert non_palette.openings is None
+    assert non_palette.rejection_reason == "player_colors_invalid"
+
+
+@pytest.mark.slow
+def test_green_settlement_on_green_baseline_tile_survives_subtraction() -> None:
+    """§5.6 (finding §2): a vivid GREEN settlement straddling a green baseline tile
+    seam (the real vertex geometry — pieces sit on hex corners between tiles) must
+    survive the minimal-kernel tile subtraction, i.e. still register a >min-area
+    blob whose head votes for its vertex. Guards against the dilation over-eating a
+    legitimate on-green-tile settlement (an asymmetric, feature-correlated loss)."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import (
+        _MIN_HEAD_VOTES,
+        _MIN_PIECE_AREA,
+        PALETTE,
+        _color_masks,
+    )
+
+    h, w = 200, 200
+    tile_rgb = (46, 110, 52)  # duller forest/pasture tile green
+    piece_rgb = (60, 220, 90)  # vivid flat settlement paint
+    board_bg = (200, 180, 120)  # non-green board border (the seam side)
+    baseline = np.full((h, w, 3), board_bg, np.uint8)
+    baseline[:, :90] = tile_rgb  # green tile occupies x<90; the vertex is on the border
+    frame = baseline.copy()
+    vx, vy = 100, 100  # vertex on the hex border, adjacent to (not inside) the green tile
+    cv2.circle(frame, (vx, vy), 14, piece_rgb, -1)
+    board_mask = np.full((h, w), 255, np.uint8)
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+
+    piece_mask, _road = _color_masks(frame_hsv, baseline_hsv, board_mask, PALETTE["GREEN"])
+    n, labels, stats, _cent = cv2.connectedComponentsWithStats(piece_mask)
+    vertex_px = np.full((54, 2), 5000.0)
+    vertex_px[3] = (float(vx), float(vy))
+    survived = False
+    for i in range(1, n):
+        if int(stats[i, cv2.CC_STAT_AREA]) < _MIN_PIECE_AREA:
+            continue
+        ys, xs = np.where(labels == i)
+        pts = np.stack([xs, ys], 1).astype(float)
+        dv = np.linalg.norm(vertex_px[:, None, :] - pts[None, :, :], axis=2)
+        if int((dv < 16.0).sum(1).max()) >= _MIN_HEAD_VOTES:
+            survived = True
+    assert survived, "on-green-tile GREEN settlement was eaten by the tile subtraction"

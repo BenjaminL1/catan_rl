@@ -66,7 +66,9 @@ from catan_rl.human_data.logparse import (
 from catan_rl.human_data.openings import (
     PALETTE,
     ColorProfile,
+    OpeningResult,
     detect_openings,
+    detect_openings_result,
     read_hud_seat_colors,
 )
 from catan_rl.human_data.orientation import (
@@ -121,6 +123,7 @@ __all__ = [
     "GameSegment",
     "GlyphClassifierNotValidated",
     "LogEvent",
+    "OpeningResult",
     "OpponentStrength",
     "ParsedLog",
     "PlayerOpening",
@@ -139,6 +142,7 @@ __all__ = [
     "derive_opponent_strength",
     "derive_screen_anchors",
     "detect_openings",
+    "detect_openings_result",
     "download_video",
     "estimate_ocr_wall_clock_s",
     "granted_multiset_matches_a_settlement",
