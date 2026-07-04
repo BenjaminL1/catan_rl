@@ -18,6 +18,14 @@ the build brief ``docs/plans/human_data_pipeline.md`` §5.8 (there is no
 ``RESOURCES`` enum in ``engine/``).
 """
 
+from catan_rl.human_data.board_cv import (
+    BoardRead,
+    ContentAnchor,
+    EngineTemplate,
+    classify_resources,
+    load_engine_template,
+    read_board,
+)
 from catan_rl.human_data.ffmpeg import (
     FFmpegNotFoundError,
     resolve_ffmpeg,
@@ -89,7 +97,10 @@ __all__ = [
     "OCR_SECONDS_PER_CROP",
     "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
+    "BoardRead",
+    "ContentAnchor",
     "DecodedFrame",
+    "EngineTemplate",
     "FFmpegNotFoundError",
     "GameRecord",
     "GameSegment",
@@ -107,6 +118,7 @@ __all__ = [
     "assert_scale_up_orientation_gates",
     "build_sampling_schedule",
     "check_road_incidence",
+    "classify_resources",
     "crop_log",
     "decode_frames_at",
     "derive_opponent_strength",
@@ -115,12 +127,14 @@ __all__ = [
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
     "ingest_video",
+    "load_engine_template",
     "load_strength_manifest",
     "load_topology",
     "manifest_entry",
     "ocr_log_crop",
     "parse_log",
     "probe_resolution",
+    "read_board",
     "resolve_ffmpeg",
     "resolve_ffprobe",
     "ruleset_ok",
