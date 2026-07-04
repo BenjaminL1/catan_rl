@@ -35,6 +35,7 @@ from catan_rl.human_data.record import (
     OpponentStrength,
     PlayerOpening,
     check_road_incidence,
+    derive_opponent_strength,
 )
 from catan_rl.human_data.topology import Topology, load_topology
 
@@ -52,6 +53,7 @@ __all__ = [
     "assert_glyph_anchor",
     "assert_scale_up_orientation_gates",
     "check_road_incidence",
+    "derive_opponent_strength",
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
     "load_topology",

@@ -68,7 +68,9 @@ def _record() -> GameRecord:
             "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
         },
         dice_log=(8, 6, 11, 4),
-        winner="ThePhantom",
+        # Game 1 was won by rayman147 (ThePhantom POV LOST) — the earlier
+        # winner="ThePhantom" label welded a later game's victory line onto game 1.
+        winner="rayman147",
         episode_source="natural",
         passed_crosscheck=True,
         provenance={
@@ -163,6 +165,38 @@ def test_glyph_anchor_rejects_a_REAL_d6_joint_flip() -> None:
     )
     with pytest.raises(ValueError, match="glyph-anchor mismatch"):
         assert_glyph_anchor(rec, true_grants, topo)
+
+
+# --- glyph-anchor discriminative power: necessary, NOT sufficient (SHOULD-FIX) -
+
+
+def test_glyph_anchor_multiset_collision_rate() -> None:
+    """Characterize (not just demonstrate) the granted-multiset collision rate on
+    the committed game-1 board. The glyph anchor matches a granted multiset against
+    a settlement's 3-hex adjacency multiset; if many vertices SHARE a multiset, a
+    joint D6 flip can land on a collision-partner and false-accept. This pins the
+    review finding's measured numbers so a regression (e.g. a board change that
+    worsens collisions, or a claim the anchor is sufficient) is caught."""
+    topo = load_topology()
+    board = {int(h["hex_id"]): str(h["resource"]) for h in _GAME1_HEXES}
+    num_vertices = len(topo.vertex_adjacent_hexes)
+    multisets = [
+        frozenset(granted_resources_under_orientation(v, board, topo).items())
+        for v in range(num_vertices)
+    ]
+    distinct = set(multisets)
+    counts = Counter(multisets)
+    colliding = sum(1 for m in multisets if counts[m] > 1)
+    # Measured on the committed board: 54 vertices, 28 distinct multisets, 38/54
+    # vertices share a multiset with >=1 other vertex. The anchor is therefore a
+    # NECESSARY-not-sufficient discriminator (must be corroborated by number
+    # adjacency + restricted to the 2nd settlement) — asserting the numbers pins it.
+    assert num_vertices == 54
+    assert len(distinct) == 28
+    assert colliding == 38
+    # A strict-majority collision rate is the whole point: the granted multiset
+    # alone cannot uniquely identify a vertex.
+    assert colliding > num_vertices // 2
 
 
 # --- scale-up hard gate (FIX 4 deferred classifier + FIX 5 gates) -----------

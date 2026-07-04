@@ -22,6 +22,7 @@ from catan_rl.human_data import (
     OpponentStrength,
     PlayerOpening,
     check_road_incidence,
+    derive_opponent_strength,
     load_topology,
     resolve_ffmpeg,
 )
@@ -86,7 +87,14 @@ def _sample_record() -> GameRecord:
             "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
         },
         dice_log=(8, 6, 11, 4),
-        winner="ThePhantom",
+        # Game 1 (the t=80..620 segment) was won by rayman147, NOT ThePhantom:
+        # inside game 1's window the terminal LOG (spike scan_60_1200.json t=600)
+        # reads "rayman147 built a Settlement (+1 VP)" then "ThePhantom: gg"
+        # (ThePhantom conceding). The only "ThePhantom won the game" line (t=1160)
+        # belongs to a LATER game. Per spec §5.1 winner = the victory LOG line
+        # ONLY, so ThePhantom (the POV) LOST game 1. The earlier winner label was
+        # inverted (a later game's win line welded onto game 1).
+        winner="rayman147",
         episode_source="natural",
         passed_crosscheck=True,
         # board + openings both locked under the desert=11 orientation (schema v2
@@ -168,6 +176,9 @@ def test_golden_fixtures_exist_and_load() -> None:
     parsed = json.loads(openings.read_text(encoding="utf-8"))
     # Golden IDs are the desert=11 re-snap (the desert=17 IDs were wrong).
     assert parsed["fit"]["desert_hex"] == 11
+    # Game 1's winner is rayman147 (POV ThePhantom LOST) — the earlier
+    # winner="ThePhantom" label welded a LATER game's victory line onto game 1.
+    assert parsed["winner"] == "rayman147"
     assert parsed["openings"]["ThePhantom"]["settlements"] == [1, 19]
     assert parsed["openings"]["ThePhantom"]["roads"] == [0, 35]
     assert parsed["openings"]["rayman147"]["settlements"] == [11, 3]
@@ -314,6 +325,88 @@ def test_validate_rejects_manifest_none_source() -> None:
         GameRecord.from_dict(payload)
 
 
+# --- manifest -> OpponentStrength derivation (the high/unknown/excluded gate) -
+# The single most dangerous §5.5 trap: the derivation MUST key on the manifest
+# `strength` field, NOT `source` — 36 excluded videos carry source="ranked_rank"
+# (rank > 200), and a naive source-keyed mapping would turn a rank-288 opponent
+# into a confidently-wrong top-tier record. These pin ALL FOUR observed manifest
+# combos (cross-tab: ('high','tournament'), ('high','ranked_rank'),
+# ('excluded','ranked_rank'), ('unknown','none')).
+
+
+def test_derive_strength_high_tournament() -> None:
+    got = derive_opponent_strength({"strength": "high", "source": "tournament"})
+    assert got is not None
+    assert got.tier == "high"
+    assert got.source == "tournament"
+
+
+def test_derive_strength_high_ranked_rank_maps_to_rank_badge() -> None:
+    got = derive_opponent_strength({"strength": "high", "source": "ranked_rank"})
+    assert got is not None
+    assert got.tier == "high"
+    # segment.py's ranked_rank -> rank_badge reconciliation lives in the helper.
+    assert got.source == "rank_badge"
+
+
+def test_derive_strength_excluded_ranked_rank_returns_none() -> None:
+    # THE trap: rank > 200 -> excluded despite source="ranked_rank". Must be NO
+    # record (None), NOT a high record. This is the rank-288 confidently-wrong case.
+    got = derive_opponent_strength({"strength": "excluded", "source": "ranked_rank"})
+    assert got is None
+
+
+def test_derive_strength_unknown_none() -> None:
+    got = derive_opponent_strength({"strength": "unknown", "source": "none"})
+    assert got is not None
+    assert got.tier == "unknown"
+    # An unknown-strength game is never scoreboard-eligible regardless of source.
+
+
+def test_derive_strength_keys_on_strength_not_source() -> None:
+    # Same source ("ranked_rank"), opposite strength -> opposite outcome. This is
+    # the assertion that the derivation gates on `strength` first, never `source`.
+    high = derive_opponent_strength({"strength": "high", "source": "ranked_rank"})
+    excluded = derive_opponent_strength({"strength": "excluded", "source": "ranked_rank"})
+    assert high is not None and high.tier == "high"
+    assert excluded is None
+
+
+def test_derive_strength_matches_committed_manifest_combos() -> None:
+    # Exercise the derivation against the ACTUAL committed manifest: every entry's
+    # (strength, source) must derive without error, excluded -> None, high -> high,
+    # unknown -> unknown, and the rank-288-style excluded videos really exist there.
+    manifest_path = (
+        Path(__file__).resolve().parents[3] / "data" / "human" / "strength_manifest.json"
+    )
+    if not manifest_path.is_file():
+        pytest.skip("committed strength manifest not present")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    videos = manifest["videos"]
+    seen_excluded_ranked = False
+    for entry in videos:
+        got = derive_opponent_strength(entry)
+        if entry["strength"] == "excluded":
+            assert got is None
+            if entry["source"] == "ranked_rank":
+                seen_excluded_ranked = True
+        elif entry["strength"] == "high":
+            assert got is not None and got.tier == "high"
+            assert got.source in ("rank_badge", "tournament")
+        else:
+            assert entry["strength"] == "unknown"
+            assert got is not None and got.tier == "unknown"
+    # The dangerous combo the derivation must firewall really is in the manifest.
+    assert seen_excluded_ranked
+
+
+def test_derive_strength_high_with_unmappable_source_raises() -> None:
+    # A malformed manifest entry: strength=high but source=none is contradictory
+    # (a high video must carry a rank/tournament source). Fail loud, don't fabricate.
+    with pytest.raises(ValueError, match="unmappable source"):
+        derive_opponent_strength({"strength": "high", "source": "none"})
+
+
 def test_validate_enforces_rejection_truth_table() -> None:
     # rejection_reason set ⟹ passed_crosscheck must be False.
     payload = _sample_record().to_dict()
@@ -385,6 +478,44 @@ def test_validate_rejects_float_desert_provenance() -> None:
     payload["provenance"]["board_desert_hex"] = 11.0  # must be a true int
     with pytest.raises(ValueError, match="board_desert_hex"):
         GameRecord.from_dict(payload)
+
+
+# --- provenance resolution: sub-1080p is confidently-wrong (SHOULD-FIX) ------
+
+
+def test_validate_rejects_sub_1080p_provenance() -> None:
+    # A record sourced below 1080p OCRs number tokens + log glyphs to garbage —
+    # confidently wrong, not noisy. The contract firewall must reject it even
+    # though the scale-up gate (a bypassable batch-path function) also would.
+    payload = _sample_record().to_dict()
+    payload["provenance"]["resolution"] = 360
+    with pytest.raises(ValueError, match="resolution 360"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_rejects_720p_provenance() -> None:
+    # 720p is still below the 1080 minimum — must reject.
+    payload = _sample_record().to_dict()
+    payload["provenance"]["resolution"] = 720
+    with pytest.raises(ValueError, match="< required 1080"):
+        GameRecord.from_dict(payload)
+
+
+def test_validate_allows_absent_resolution_provenance() -> None:
+    # Optional-when-absent: a record with no resolution stamp still loads (present-
+    # and-too-low is the confidently-wrong case; absent is not asserted-against).
+    payload = _sample_record().to_dict()
+    del payload["provenance"]["resolution"]
+    assert GameRecord.from_dict(payload).provenance.get("resolution") is None
+
+
+def test_record_min_resolution_mirrors_orientation() -> None:
+    # record.py mirrors orientation.MIN_RESOLUTION locally (scope-lock: the pure
+    # value contract stays orientation-import-free). Pin the two in sync.
+    from catan_rl.human_data import MIN_RESOLUTION as ORIENTATION_MIN
+    from catan_rl.human_data.record import MIN_RESOLUTION as RECORD_MIN
+
+    assert RECORD_MIN == ORIENTATION_MIN == 1080
 
 
 # --- road-incidence: snap-sanity ONLY, NOT an orientation check (FIX 3) -----
@@ -665,6 +796,19 @@ def test_validate_rejects_provenance_desert_disagreeing_with_board() -> None:
 
 
 # --- scoreboard-eligibility predicate exported as code (SHOULD-FIX) ---------
+
+
+def test_game1_winner_is_rayman147_pov_lost() -> None:
+    # Regression for the inverted-winner BLOCKER: game 1 was won by rayman147, so
+    # the record's winner must be rayman147 (the ThePhantom POV LOST). It is still
+    # a valid, scoreboard-eligible game (a correctly-labelled human loss) — the bug
+    # was the label, not eligibility. If this ever reads "ThePhantom" again, a
+    # later game's victory line has been welded onto game 1 and the calibration
+    # signal for this opening is inverted.
+    rec = _sample_record()
+    assert rec.winner == "rayman147"
+    assert rec.winner != "ThePhantom"
+    assert rec.is_scoreboard_eligible() is True
 
 
 def test_is_scoreboard_eligible_true_for_sample() -> None:

@@ -87,6 +87,24 @@ def granted_multiset_matches_a_settlement(
     This is the orientation-independent assertion: a jointly-flipped board+openings
     moves the settlements onto different hexes, so no settlement's adjacency
     matches the externally-read granted cards and this returns False.
+
+    **NECESSARY, NOT SUFFICIENT — the granted multiset is a weak discriminator
+    (review finding: glyph-anchor discriminative power).** On the committed game-1
+    board only 28 distinct 3-hex adjacency multisets exist across the 54 vertices,
+    and 38/54 vertices SHARE their multiset with at least one other vertex (see
+    ``test_glyph_anchor_multiset_collision_rate``). So a joint D6 flip that lands a
+    settlement on a collision-partner vertex can false-accept on the multiset
+    alone. Two mitigations the batch MUST apply before trusting this:
+
+    1. Match only the **2nd (resource-granting) settlement** once the draft order
+       tells you which of the two it is — the 1st settlement grants nothing, so
+       allowing *either* to match (as this helper does, lacking draft order)
+       doubles the collision surface. Pass the record's ``draft_order`` down and
+       restrict the match at the call site.
+    2. Corroborate with the **number-token adjacency**: grant multisets tie-break
+       far better when the adjacent NUMBERS must also match. The glyph anchor is a
+       necessary check, not a sufficient one, and must be combined with the
+       number-adjacency (tracked as a Stage-2 gate condition).
     """
     board_resource_by_hex = {int(h["hex_id"]): str(h["resource"]) for h in record.hexes}
     for settlement_vertex in record.openings[player].settlements:

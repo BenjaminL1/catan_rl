@@ -55,6 +55,18 @@ NUM_HEXES = 19
 NUM_VERTICES = 54
 NUM_EDGES = 72
 
+#: Minimum capture resolution the record firewall admits (brief §5.10 / FIX-5).
+#: Sub-1080p footage OCRs number tokens and log glyphs to garbage, so a record
+#: sourced below this is *confidently* wrong (not merely noisy). Mirrors
+#: :data:`catan_rl.human_data.orientation.MIN_RESOLUTION`, kept local so
+#: :meth:`GameRecord.validate` stays a pure value check with no orientation
+#: import (the same scope-lock pattern as :data:`NUM_HEXES`). The batch path also
+#: gates on it in ``assert_scale_up_orientation_gates``, but that gate is
+#: bypassable by a single-game / resumed-shard path that builds records directly —
+#: so the contract, "the single firewall between the noisy CV/OCR pipeline and the
+#: RL stack", must enforce it too (review finding: sub-1080p provenance).
+MIN_RESOLUTION = 1080
+
 #: Number tokens a non-desert hex may carry (2..12 minus the robber-only 7).
 VALID_HEX_NUMBERS: frozenset[int] = frozenset(set(range(2, 13)) - {7})
 
@@ -207,6 +219,73 @@ class OpponentStrength:
             raise ValueError(f"OpponentStrength.confidence {self.confidence!r} not in [0, 1]")
 
 
+#: Confidence carried on a derived :class:`OpponentStrength`, by manifest source.
+#: A ``ranked_rank`` high was OCR-rank-verified off a leaderboard frame (high
+#: confidence); a ``tournament`` high was labelled from a title keyword with NO
+#: leaderboard-frame confirmation (a false-high on the tournament path is
+#: unrecoverable — build_strength_manifest.py), so it carries a lower confidence.
+#: ``unknown`` strength carries no signal.
+_DERIVED_CONFIDENCE: dict[str, float] = {"ranked_rank": 0.95, "tournament": 0.8, "none": 0.0}
+
+#: The manifest ``source`` → :data:`StrengthSource` mapping for a HIGH record.
+#: ``ranked_rank`` (a read rank badge ≤ ``rank_high_max``) reconciles to
+#: ``rank_badge``; ``tournament`` is carried through 1:1.
+_MANIFEST_SOURCE_TO_STRENGTH_SOURCE: dict[str, StrengthSource] = {
+    "ranked_rank": "rank_badge",
+    "tournament": "tournament",
+}
+
+
+def derive_opponent_strength(manifest_entry: dict[str, Any]) -> OpponentStrength | None:
+    """Derive the record's :class:`OpponentStrength` from a strength-manifest video
+    entry (``data/human/strength_manifest.json`` — see
+    ``scripts/build_strength_manifest.py`` for its shape).
+
+    **This is THE high/unknown/excluded gate**, moved out of the §5.5 docstring
+    prose into a pure, testable helper (review finding §1). It gates on the
+    manifest ``strength`` field FIRST and never on ``source`` — the trap being
+    that 36 ``excluded`` videos carry ``source="ranked_rank"`` (a real rank badge,
+    but rank > ``rank_high_max=200``), so a naive ``ranked_rank → rank_badge,
+    tier="high"`` mapping keyed on ``source`` would turn a genuinely rank-200+
+    opponent into a confidently-wrong top-tier record. Returns:
+
+    - ``strength="high"`` → an ``OpponentStrength(tier="high", ...)`` with
+      ``source`` mapped (``ranked_rank`` → ``rank_badge``; ``tournament`` →
+      ``tournament``).
+    - ``strength="unknown"`` → ``OpponentStrength(tier="unknown", source="rank_badge",
+      confidence=0.0)`` — an unknown-strength game (still a possible seed; never a
+      scoreboard game). ``source`` is a placeholder here: :meth:`is_scoreboard_eligible`
+      gates on ``tier`` first, so an ``unknown`` record is scoreboard-ineligible
+      regardless of its ``source``.
+    - ``strength="excluded"`` → ``None`` — an excluded video NEVER becomes a
+      record (the rank-288 case must return ``None``, not a high record).
+
+    Pure value logic (no manifest I/O, no engine/topology import) — the caller
+    (``segment.py``, a later stage) reads the manifest and passes one entry.
+    """
+    strength = manifest_entry.get("strength")
+    source = manifest_entry.get("source")
+    if strength == "excluded":
+        return None
+    if strength == "high":
+        mapped = (
+            _MANIFEST_SOURCE_TO_STRENGTH_SOURCE.get(source) if isinstance(source, str) else None
+        )
+        if mapped is None:
+            raise ValueError(
+                f"manifest strength='high' with unmappable source {source!r} — a high video must "
+                f"carry a rank/tournament source, not {source!r} (keys on strength then source)"
+            )
+        confidence = _DERIVED_CONFIDENCE.get(source, 0.8) if isinstance(source, str) else 0.8
+        return OpponentStrength(tier="high", source=mapped, confidence=confidence)
+    if strength == "unknown":
+        # tier drives eligibility; source is an unused placeholder for unknown.
+        return OpponentStrength(tier="unknown", source="rank_badge", confidence=0.0)
+    raise ValueError(
+        f"manifest strength {strength!r} is not one of 'high' / 'unknown' / 'excluded'"
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PlayerOpening:
     """One player's snake-draft opening: 2 settlements + 2 roads as engine IDs."""
@@ -295,6 +374,12 @@ class GameRecord:
           cross-orientation firewall (see below); it is the only gate that
           catches a welded board/openings record because a D6 flip preserves the
           resource/number multisets.
+        - **Provenance resolution (FIX-5):** if ``provenance`` carries a
+          ``resolution``, it must be ``>= MIN_RESOLUTION`` (1080). A sub-1080p
+          source OCRs number tokens and log glyphs to garbage — a confidently-wrong
+          record. The batch path also gates this in
+          ``assert_scale_up_orientation_gates``, but a single-game / resumed-shard
+          path can bypass that gate, so the contract enforces it too.
         - **Cross-field truth table** (brief §5.6 / §5.7 — see below).
 
         **Truth table the contract enforces and every consumer must honour:**
@@ -578,6 +663,26 @@ class GameRecord:
                 "desert17/desert11 record)"
             )
 
+        # --- provenance resolution: sub-1080p is confidently wrong (FIX-5) ----
+        # The scale-up gate (assert_scale_up_orientation_gates) enforces 1080p on
+        # the BATCH path, but a single-game / resumed-shard path can build a
+        # GameRecord directly and bypass it. A sub-1080p source OCRs number tokens
+        # and log glyphs to garbage — a confidently-wrong record, exactly what the
+        # contract is meant to be the last line against. So if provenance carries a
+        # ``resolution`` (it does for every real parse — brief §3), require it to
+        # meet the minimum. Kept optional-when-absent to avoid breaking a record
+        # that legitimately carries no resolution stamp; present-and-too-low is the
+        # confidently-wrong case and is rejected.
+        resolution = self.provenance.get("resolution")
+        if resolution is not None:
+            resolution = _as_int(resolution, "provenance.resolution")
+            if resolution < MIN_RESOLUTION:
+                raise ValueError(
+                    f"provenance.resolution {resolution} < required {MIN_RESOLUTION} — a sub-1080p "
+                    "source OCRs number tokens and log glyphs to garbage; the record is "
+                    "confidently wrong, not merely noisy (FIX-5)"
+                )
+
     def is_scoreboard_eligible(self) -> bool:
         """Whether this record may enter the opening calibration scoreboard.
 
@@ -599,6 +704,20 @@ class GameRecord:
         two manifest-backed high sources are admitted, so the firewall enforces
         the exclusion its own §5.5 docstring documents rather than leaving it as
         prose (review finding: known_window escape hatch).
+
+        **The two high sources are NOT equal-confidence (review finding:
+        tournament frame-unverified).** ``rank_badge`` is OCR-rank-verified off a
+        leaderboard frame; ``tournament`` is labelled purely from a title-keyword
+        regex (``TOURNAMENT_RE`` + ``NON_OWN_GAME_RE`` in
+        ``scripts/build_strength_manifest.py``) with NO leaderboard-frame
+        confirmation, so a title false-positive enters the calibration number
+        systematically (biased, not noisy) — and the scoreboard is only n≈20-40
+        high games (§5.4). This predicate admits both on equal footing, so a
+        downstream scoreboard builder MUST treat the two high sources as distinct
+        provenance: report the ``rank_badge`` vs ``tournament`` split of its n and
+        run the calibration with ``tournament`` games excluded as a robustness
+        check. The 15 tournament highs (of 204) are 1v1-tournament title matches,
+        NOT frame-verified.
 
         scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
         AND ``opponent_strength.tier == "high"`` AND
