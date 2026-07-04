@@ -9,6 +9,7 @@ with no network or ffmpeg on the CI box.
 from __future__ import annotations
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -94,3 +95,33 @@ def test_ingest_eta_scales_with_n_videos_and_procs(
     assert "n_videos=300" in out
     assert "n_procs=6" in out
     assert "= 116s" in out
+
+
+def test_batch_plan_reports_manifest_harvest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    manifest = tmp_path / "strength_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "videos": [
+                    {"video_id": "vidHIGH00001", "strength": "high", "source": "tournament"},
+                    {"video_id": "vidUNKNOWN00", "strength": "unknown", "source": "none"},
+                    {"video_id": "vidEXCLUDED0", "strength": "excluded", "source": "none"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    # Point the CLI at the temp manifest (never the committed one under test).
+    monkeypatch.setattr(mine, "MANIFEST", manifest)
+
+    rc = mine.main(["batch-plan"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    # 2 harvested (high+unknown), 1 scoreboard-eligible (high), 1 seed-only, 1 excluded.
+    assert "2 videos (high+unknown)" in out
+    assert "1 scoreboard-eligible (high)" in out
+    assert "1 seed-only (unknown)" in out
+    assert "1 excluded" in out

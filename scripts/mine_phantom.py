@@ -13,12 +13,18 @@ Subcommands:
     stream, two-pass sample it into in-memory frames (``ingest.py``), report the
     frame count, then delete the download. A runnable smoke for the ingest path.
 
+  * ``batch-plan`` — print the manifest-derived harvest plan: how many
+    ``high`` + ``unknown`` videos ``batch.run_batch`` would process (``high``
+    also scoreboard-eligible), and how many ``excluded`` rows are dropped. No
+    download / parse is performed.
+
 Downstream stages (``logparse`` / ``segment`` / ``board_cv`` / ``openings`` /
-``validate`` / ``batch``) attach further subcommands as they land. CPU-only; no
-``gui/`` or training-path import (build brief §6).
+``validate``) attach further subcommands as they land. CPU-only; no ``gui/`` or
+training-path import (build brief §6).
 
 Usage:
     PYTHONPATH=src python3 scripts/mine_phantom.py ingest 9Sm86ml04aI --duration 300
+    PYTHONPATH=src python3 scripts/mine_phantom.py batch-plan
 """
 
 from __future__ import annotations
@@ -31,6 +37,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
+from catan_rl.human_data.batch import harvest_plan
 from catan_rl.human_data.ingest import (
     build_sampling_schedule,
     ingest_video,
@@ -99,6 +106,31 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
     return 0 if n > 0 else 1
 
 
+def _cmd_batch_plan(args: argparse.Namespace) -> int:
+    """Print the manifest-derived harvest plan (no download / parse performed).
+
+    The full per-video CV parse (``parse_fn`` chaining ingest → logparse →
+    segment → board_cv → openings → validate into a ``list[GameRecord]``) is a
+    separate Stage-2 slice; ``batch.run_batch`` takes it as an injected callable.
+    Until that composition lands, this subcommand exercises only the
+    manifest-harvest half of the batch orchestration — the ``high`` + ``unknown``
+    corpus that WOULD be processed (``high`` also scoreboard-eligible).
+    """
+    if not MANIFEST.exists():
+        print(f"[batch] ERROR: strength manifest not found at {MANIFEST}")
+        return 1
+    plan = harvest_plan(MANIFEST)
+    seed_only = len(plan.harvested) - len(plan.scoreboard)
+    print(
+        f"[batch] harvest plan from {MANIFEST.name}: "
+        f"{len(plan.harvested)} videos (high+unknown) — "
+        f"{len(plan.scoreboard)} scoreboard-eligible (high), "
+        f"{seed_only} seed-only (unknown); "
+        f"{plan.excluded_count} excluded (dropped)"
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mine_phantom", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -133,6 +165,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="perf cores OCR fans out across in the ETA (brief §5.10; default 1)",
     )
     ing.set_defaults(func=_cmd_ingest)
+
+    batch = sub.add_parser(
+        "batch-plan",
+        help="print the manifest harvest plan (high+unknown; no parse)",
+    )
+    batch.set_defaults(func=_cmd_batch_plan)
     return parser
 
 
