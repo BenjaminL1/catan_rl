@@ -16,9 +16,11 @@ must NEVER be treated as the orientation gate (proven here).
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 import numpy as np
+import pytest
 
 from catan_rl.human_data import (
     GameRecord,
@@ -28,6 +30,7 @@ from catan_rl.human_data import (
     load_topology,
 )
 from catan_rl.human_data.board_cv import BoardRead
+from catan_rl.human_data.orientation import granted_resources_under_orientation
 from catan_rl.human_data.validate import (
     CrossCheckResult,
     cross_check,
@@ -71,16 +74,22 @@ _GAME1_OPENINGS_FLIPPED: dict[str, PlayerOpening] = {
 }
 
 
-def _board_read(desert_hex: int = 11) -> BoardRead:
+def _board_read(
+    desert_hex: int = 11,
+    *,
+    hexes: tuple[dict[str, Any], ...] = _GAME1_HEXES,
+    residual_px: float = 0.77,
+    pip_ok: bool = True,
+) -> BoardRead:
     """A cross-frame-stable BoardRead standing in for read_board_stable output."""
     return BoardRead(
-        hexes=_GAME1_HEXES,
+        hexes=hexes,
         affine=np.eye(2, 3, dtype=np.float64),
         vertex_px=np.zeros((54, 2), dtype=np.float64),
         desert_hex=desert_hex,
-        residual_px=0.77,
+        residual_px=residual_px,
         screen_rule_gap=43.5,
-        pip_ok=True,
+        pip_ok=pip_ok,
     )
 
 
@@ -91,14 +100,18 @@ def _cross_check(
     openings_desert_hex: int = 11,
     winner: str | None = "ThePhantom",
     resolution: int = 1080,
-    residual_px: float = 0.77,
+    dice_log: tuple[int, ...] = (8, 6, 11, 4),
+    granted_by_player: dict[str, Any] | None = None,
 ) -> CrossCheckResult:
+    # The gate reads the residual from the board it is validating (SHOULD-FIX 2); the
+    # ``residual_px`` param is cross-asserted equal, so mirror the board here.
+    resolved_board = board if board is not None else _board_read()
     return cross_check(
         video_id="9Sm86ml04aI",
         game_index=1,
         players={"agent": "ThePhantom", "opponent": "rayman147"},
         opponent_strength=OpponentStrength(tier="high", source="tournament", confidence=0.8),
-        board=board if board is not None else _board_read(),
+        board=resolved_board,
         openings_desert_hex=openings_desert_hex,
         opening_result=(
             opening_result
@@ -106,10 +119,11 @@ def _cross_check(
             else OpeningResult(openings=dict(_GAME1_OPENINGS), rejection_reason=None)
         ),
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
-        dice_log=(8, 6, 11, 4),
+        dice_log=dice_log,
         winner=winner,
         resolution=resolution,
-        residual_px=residual_px,
+        residual_px=resolved_board.residual_px,
+        granted_by_player=granted_by_player,
         topology=load_topology(),
     )
 
@@ -199,10 +213,44 @@ def test_gate_rejects_sub_1080p() -> None:
 
 
 def test_gate_rejects_blown_residual() -> None:
-    result = _cross_check(residual_px=42.0)
+    # The residual is read from the board the gate is validating (SHOULD-FIX 2), not
+    # a caller scalar — a caller cannot pass a clean residual alongside a board that
+    # fit at 42px.
+    result = _cross_check(board=_board_read(residual_px=42.0))
     assert result.accepted is False
     assert result.record.rejection_reason is not None
     assert "residual" in result.record.rejection_reason
+
+
+def test_gate_residual_param_must_match_board() -> None:
+    # If a caller passes a residual_px that disagrees with board.residual_px it is a
+    # caller bug (a stale scalar re-supplied alongside a different board) — the gate
+    # fails loud rather than gate on the wrong number.
+    with pytest.raises(ValueError, match="residual_px"):
+        cross_check(
+            video_id="9Sm86ml04aI",
+            game_index=1,
+            players={"agent": "ThePhantom", "opponent": "rayman147"},
+            opponent_strength=OpponentStrength(tier="high", source="tournament", confidence=0.8),
+            board=_board_read(),  # board.residual_px == 0.77
+            openings_desert_hex=11,
+            opening_result=OpeningResult(openings=dict(_GAME1_OPENINGS), rejection_reason=None),
+            draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
+            dice_log=(8, 6, 11, 4),
+            winner="ThePhantom",
+            resolution=1080,
+            residual_px=9.9,  # disagrees with the board
+            topology=load_topology(),
+        )
+
+
+def test_gate_rejects_pip_count_mismatch() -> None:
+    # The independent pip-count corroboration (§5.2): a board whose number tokens
+    # fail the pip re-count is rejected even if every other check passes.
+    result = _cross_check(board=_board_read(pip_ok=False))
+    assert result.accepted is False
+    assert result.record.rejection_reason is not None
+    assert "pip" in result.record.rejection_reason
 
 
 # --- winner must be one of the two handles ----------------------------------
@@ -240,3 +288,124 @@ def test_rejected_record_is_a_loadable_game_record() -> None:
     restored = GameRecord.from_json_line(line)
     assert restored.passed_crosscheck is False
     assert restored.rejection_reason is not None
+
+
+# --- reject path NEVER crashes: sanitize dice_log so the audit row always loads --
+
+
+def test_reject_empty_dice_with_valid_winner_does_not_raise() -> None:
+    # A game rejected for an unrelated reason (blown residual) whose winner IS a valid
+    # handle but whose dice_log failed to parse (empty). The record contract forbids
+    # an empty dice_log with a winner set; the reject path must sanitize (null the
+    # winner) so the §5.6 audit row LOADS instead of raising (BLOCKER 1).
+    result = _cross_check(board=_board_read(residual_px=42.0), winner="ThePhantom", dice_log=())
+    assert result.accepted is False
+    assert "residual" in (result.record.rejection_reason or "")
+    # Loadable, not raised.
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+def test_reject_garbage_dice_is_sanitized() -> None:
+    # An OCR-misread roll (13) on a game rejected for an unrelated reason (residual):
+    # the reject record must filter the garbage token, not raise (BLOCKER 2).
+    result = _cross_check(
+        board=_board_read(residual_px=42.0), winner="ThePhantom", dice_log=(8, 13, 6)
+    )
+    assert result.accepted is False
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    # The 13 was filtered; 8 and 6 survive; winner kept (dice_log non-empty).
+    assert restored.dice_log == (8, 6)
+    assert restored.winner == "ThePhantom"
+
+
+# --- accept path NEVER crashes on finer contract invariants (BLOCKER 3) -------
+
+
+def test_accept_path_dice_misread_is_rejected_not_raised() -> None:
+    # A record that passes the coarse pre-screen but trips the finer dice-log range
+    # invariant (a '13' OCR misread) must REJECT, not raise out of cross_check.
+    result = _cross_check(dice_log=(8, 6, 13, 4))
+    assert result.accepted is False
+    assert result.record.rejection_reason is not None
+    assert "record_contract_violation" in result.record.rejection_reason
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+def test_accept_path_bad_resource_multiset_is_rejected_not_raised() -> None:
+    # A resource-multiset misclassification (hex0 SHEEP->WOOD) fails the finer
+    # multiset invariant. It must reject with a loadable audit row, not crash — even
+    # though the board hexes themselves are contract-invalid (placeholder fallback).
+    bad_hexes = ({"hex_id": 0, "resource": "WOOD", "number": 11}, *_GAME1_HEXES[1:])
+    result = _cross_check(board=_board_read(hexes=bad_hexes))
+    assert result.accepted is False
+    assert result.record.rejection_reason is not None
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+def test_accept_path_settlement_double_snap_is_rejected_not_raised() -> None:
+    # A settlement double-snap (two pieces rounded to one vertex) fails the finer
+    # distinctness invariant. It must reject, not raise.
+    doubled = {
+        "ThePhantom": PlayerOpening(settlements=(1, 1), roads=(0, 35)),
+        "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
+    }
+    result = _cross_check(opening_result=OpeningResult(openings=doubled, rejection_reason=None))
+    assert result.accepted is False
+    assert result.record.rejection_reason is not None
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+def test_accept_path_bad_hex_number_is_rejected_not_raised() -> None:
+    # An invalid hex number (a 7, illegal on a hex token) fails the finer number
+    # invariant. It must reject with a loadable audit row, not crash.
+    bad_hexes = ({"hex_id": 0, "resource": "SHEEP", "number": 7}, *_GAME1_HEXES[1:])
+    result = _cross_check(board=_board_read(hexes=bad_hexes))
+    assert result.accepted is False
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+# --- glyph anchor wired into the accept path (SHOULD-FIX joint-flip firewall) -
+
+
+def _granted_for(vertex: int) -> Counter[str]:
+    """The setup granted-card multiset for a settlement at ``vertex`` on the game-1
+    board (adjacent-hex resources, DESERT excluded) — the ground truth the glyph
+    reader would produce under the correct orientation."""
+    topo = load_topology()
+    by_hex = {int(h["hex_id"]): str(h["resource"]) for h in _GAME1_HEXES}
+    return granted_resources_under_orientation(vertex, by_hex, topo)
+
+
+def test_gate_accepts_with_matching_glyph_anchor() -> None:
+    # ThePhantom's 2nd settlement is vertex 19; the granted glyphs match its
+    # adjacency under the correct orientation → the joint-flip firewall passes.
+    granted = {"ThePhantom": _granted_for(19)}
+    result = _cross_check(granted_by_player=granted)
+    assert result.accepted is True
+    assert result.record.passed_crosscheck is True
+
+
+def test_gate_rejects_joint_flip_via_glyph_anchor() -> None:
+    # A jointly-flipped-but-stable board sails through the desert-binding (both stages
+    # flipped together) and read_board_stable (stable across frames). The glyph anchor
+    # is the ONLY defense: granted cards that match NO settlement adjacency under this
+    # orientation → reject, not silently accept.
+    #
+    # Simulate the granted glyphs the log reports (from the *true* orientation) while
+    # the board+openings are welded to a different orientation: force a granted
+    # multiset that matches neither of ThePhantom's opening settlements' adjacencies.
+    ph_adj = {tuple(sorted(_granted_for(v).items())) for v in (1, 19)}
+    # A deliberately impossible-for-those-settlements grant (3 ORE — no vertex on this
+    # board touches 3 ore hexes; certainly not vertices 1/19).
+    impossible = Counter({"ORE": 3})
+    assert tuple(sorted(impossible.items())) not in ph_adj
+    result = _cross_check(granted_by_player={"ThePhantom": impossible})
+    assert result.accepted is False
+    assert result.record.rejection_reason == "orientation_joint_flip_glyph_mismatch"
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False

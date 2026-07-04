@@ -37,14 +37,20 @@ checks the build brief enumerates.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 
 from catan_rl.human_data.board_cv import BoardRead
 from catan_rl.human_data.openings import OpeningResult
-from catan_rl.human_data.orientation import MAX_AFFINE_RESIDUAL_PX, MIN_RESOLUTION
+from catan_rl.human_data.orientation import (
+    MAX_AFFINE_RESIDUAL_PX,
+    MIN_RESOLUTION,
+    assert_glyph_anchor,
+)
 from catan_rl.human_data.record import (
     PROVENANCE_BOARD_DESERT,
     PROVENANCE_OPENINGS_DESERT,
+    VALID_DICE_VALUES,
     GameRecord,
     OpponentStrength,
     PlayerOpening,
@@ -94,6 +100,47 @@ def road_incidence_offenders(
     return offenders
 
 
+# A legal standard 19-tile board (correct resource / number multisets, desert at
+# hex 11) used as the LAST-RESORT reject-record board when the real ``board.hexes``
+# are themselves contract-invalid (a CV multiset / number / hex-id misclassification
+# is often the rejection cause). Its only job is to make the §5.6 audit row LOAD —
+# the row is ``passed_crosscheck=False`` and carries the true cause in
+# ``rejection_reason``, so a placeholder board is never consumed as archetype data.
+_PLACEHOLDER_HEXES: tuple[dict[str, object], ...] = (
+    {"hex_id": 0, "resource": "SHEEP", "number": 11},
+    {"hex_id": 1, "resource": "BRICK", "number": 9},
+    {"hex_id": 2, "resource": "WHEAT", "number": 10},
+    {"hex_id": 3, "resource": "WHEAT", "number": 3},
+    {"hex_id": 4, "resource": "BRICK", "number": 6},
+    {"hex_id": 5, "resource": "SHEEP", "number": 5},
+    {"hex_id": 6, "resource": "ORE", "number": 4},
+    {"hex_id": 7, "resource": "WOOD", "number": 6},
+    {"hex_id": 8, "resource": "SHEEP", "number": 2},
+    {"hex_id": 9, "resource": "WOOD", "number": 5},
+    {"hex_id": 10, "resource": "BRICK", "number": 8},
+    {"hex_id": 11, "resource": "DESERT", "number": None},
+    {"hex_id": 12, "resource": "SHEEP", "number": 4},
+    {"hex_id": 13, "resource": "WOOD", "number": 11},
+    {"hex_id": 14, "resource": "WHEAT", "number": 12},
+    {"hex_id": 15, "resource": "ORE", "number": 9},
+    {"hex_id": 16, "resource": "ORE", "number": 10},
+    {"hex_id": 17, "resource": "WOOD", "number": 8},
+    {"hex_id": 18, "resource": "WHEAT", "number": 3},
+)
+_PLACEHOLDER_DESERT_HEX = 11
+
+
+def _contract_rejection_reason(exc: ValueError, glyph_ran: bool) -> str:
+    """Map a contract / glyph ``ValueError`` from the accepted-path construction to a
+    typed ``rejection_reason``. The glyph anchor is the joint-flip firewall, so its
+    failure gets its own reason; every other finer contract invariant is folded into
+    ``record_contract_violation:{msg}``."""
+    msg = str(exc)
+    if glyph_ran and "glyph-anchor" in msg:
+        return "orientation_joint_flip_glyph_mismatch"
+    return f"record_contract_violation:{msg}"
+
+
 def _placeholder_openings(players: dict[str, str], topology: Topology) -> dict[str, PlayerOpening]:
     """Structurally-valid stand-in openings for a rejected record whose real
     openings are unusable (upstream CV rejection).
@@ -141,6 +188,7 @@ def cross_check(
     resolution: int,
     residual_px: float,
     topology: Topology,
+    granted_by_player: dict[str, Counter[str]] | None = None,
     ts: int = 0,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
     min_resolution: int = MIN_RESOLUTION,
@@ -154,26 +202,50 @@ def cross_check(
     1. **resolution ≥ 1080** (FIX 5) — sub-1080p OCRs number tokens / log glyphs to
        garbage; ``rejection_reason="resolution_below_1080p"``.
     2. **mean affine residual ≤ 5px** (FIX 5) — a blown residual is a dropped/added
-       token during an animation; ``rejection_reason="affine_residual_exceeded"``.
-    3. **upstream openings** — if the openings stage already rejected
+       token during an animation. Gated on ``board.residual_px`` (the diagnostic the
+       board that produced these hexes actually fit at), NOT on a caller scalar; the
+       ``residual_px`` param is cross-asserted equal to ``board.residual_px`` so the
+       two can't silently diverge. ``rejection_reason="affine_residual_exceeded"``.
+    3. **pip-count corroboration** — ``board.pip_ok`` (the independent pip-count that
+       the number tokens OCR to the standard bag, §5.2); ``rejection_reason=
+       "pip_count_mismatch"``.
+    4. **upstream openings** — if the openings stage already rejected
        (``opening_result.openings is None``) carry its reason through.
-    4. **ORIENTATION firewall** — ``board.desert_hex == openings_desert_hex`` (the
+    5. **ORIENTATION firewall** — ``board.desert_hex == openings_desert_hex`` (the
        provenance-binding; the only gate that catches a board/openings weld);
        ``rejection_reason="orientation_mismatch_desert_hex"``.
-    5. **winner in handles** — winner is ``None`` or one of the two player handles;
+    6. **winner in handles** — winner is ``None`` or one of the two player handles;
        ``rejection_reason="winner_not_a_player_handle"``.
-    6. **road-incidence sanity** — every road touches an owner settlement
+    7. **road-incidence sanity** — every road touches an owner settlement
        (D6-invariant, so NOT the orientation gate); ``rejection_reason=
        "road_snap_isolated:{player}:{edge}"``.
+    8. **glyph anchor** (SHOULD-FIX) — when ``granted_by_player`` is supplied, the
+       jointly-flipped-board firewall (:func:`orientation.assert_glyph_anchor`) runs
+       on the assembled record BEFORE it is accepted; a joint D6 flip that the
+       desert-binding cannot see is caught here. ``rejection_reason=
+       "orientation_joint_flip_glyph_mismatch"``.
 
     A record that passes every check is built with ``passed_crosscheck=True``. The
     ``GameRecord`` constructor then re-runs its own pure-value :meth:`validate`
     (standard resource/number multisets, distinctness, snake-draft, provenance
-    orientation-binding, sub-1080p) — so the standard multiset + stability checks
-    the brief lists are enforced by the record contract the accepted board flows
-    into, not duplicated here.
+    orientation-binding, sub-1080p, dice-log range). Those finer contract invariants
+    are a SUPERSET of the coarse ``_first_rejection`` pre-screen, so the accepted-path
+    construction is wrapped: a record that passes the coarse gate but trips a finer
+    contract invariant (a dice-log OCR misread, a multiset misclassification, a
+    settlement double-snap) is REJECTED with
+    ``rejection_reason="record_contract_violation:{msg}"`` rather than crashing — the
+    §5.6 guarantee that every game emits a loadable audit row holds on every path.
     """
     board_hexes = board.hexes
+
+    if residual_px != board.residual_px:
+        # The residual param is redundant with the diagnostic the board carries; a
+        # divergence is a caller bug (a stale scalar re-supplied alongside a
+        # different board). Fail loud rather than gate on the wrong number.
+        raise ValueError(
+            f"residual_px={residual_px} disagrees with board.residual_px={board.residual_px}; "
+            "the gate reads the residual from the board it is validating (they must match)"
+        )
 
     reason = _first_rejection(
         board=board,
@@ -182,36 +254,48 @@ def cross_check(
         winner=winner,
         players=players,
         resolution=resolution,
-        residual_px=residual_px,
         topology=topology,
         max_residual_px=max_residual_px,
         min_resolution=min_resolution,
     )
 
     if reason is None:
-        assert opening_result.openings is not None  # guaranteed by check (3)
-        record = GameRecord(
-            video_id=video_id,
-            game_index=game_index,
-            players=dict(players),
-            opponent_strength=opponent_strength,
-            ruleset={"num_players": 2, "win_vp": 15},
-            hexes=board_hexes,
-            draft_order=draft_order,
-            openings=dict(opening_result.openings),
-            dice_log=dice_log,
-            winner=winner,
-            episode_source="natural",
-            passed_crosscheck=True,
-            provenance={
-                "resolution": resolution,
-                "ts": ts,
-                PROVENANCE_BOARD_DESERT: board.desert_hex,
-                PROVENANCE_OPENINGS_DESERT: openings_desert_hex,
-            },
-            rejection_reason=None,
-        )
-        return CrossCheckResult(accepted=True, record=record)
+        assert opening_result.openings is not None  # guaranteed by check (4)
+        try:
+            record = GameRecord(
+                video_id=video_id,
+                game_index=game_index,
+                players=dict(players),
+                opponent_strength=opponent_strength,
+                ruleset={"num_players": 2, "win_vp": 15},
+                hexes=board_hexes,
+                draft_order=draft_order,
+                openings=dict(opening_result.openings),
+                dice_log=dice_log,
+                winner=winner,
+                episode_source="natural",
+                passed_crosscheck=True,
+                provenance={
+                    "resolution": resolution,
+                    "ts": ts,
+                    PROVENANCE_BOARD_DESERT: board.desert_hex,
+                    PROVENANCE_OPENINGS_DESERT: openings_desert_hex,
+                },
+                rejection_reason=None,
+            )
+            # The jointly-flipped-board firewall (the desert-binding is blind to a
+            # JOINT flip). Run it on the assembled record before accepting; a glyph
+            # mismatch is a rejection, not an acceptance.
+            if granted_by_player is not None:
+                assert_glyph_anchor(record, granted_by_player, topology)
+        except ValueError as exc:
+            # A finer contract invariant (dice-log range / multiset / distinctness /
+            # snake-draft / free-anchor) or the glyph anchor failed. Treat it as a
+            # rejection so the §5.6 audit row still loads — NEVER let it crash out of
+            # cross_check (the coarse pre-screen is a strict subset of the contract).
+            reason = _contract_rejection_reason(exc, granted_by_player is not None)
+        else:
+            return CrossCheckResult(accepted=True, record=record)
 
     # --- REJECTED: emit a structurally-valid record for the §5.6 bias audit ---
     # Sanitize the fields the record contract would itself reject on, so the
@@ -220,6 +304,16 @@ def cross_check(
     # seed / scoreboard-eligible, so the sanitized winner / placeholder openings
     # are never consumed as data — they only make the audit row loadable.
     safe_winner = winner if winner in players.values() else None
+    # Sanitize dice_log the SAME way winner/openings/resolution are: the reject
+    # record's fields only need to LOAD (the true reason is in rejection_reason),
+    # not be faithful. An empty or garbage-token dice_log otherwise trips the record
+    # contract (dice range / empty-with-winner) and the audit row would fail to
+    # load — dropping the game from the §5.6 pool, and rejection is
+    # feature-correlated so the drop would be biased, not random.
+    safe_dice_log = tuple(roll for roll in dice_log if roll in VALID_DICE_VALUES)
+    if not safe_dice_log:
+        # The contract permits an empty dice_log only when winner is None.
+        safe_winner = None
     if opening_result.openings is not None and set(opening_result.openings.keys()) == set(
         players.values()
     ):
@@ -231,27 +325,49 @@ def cross_check(
     # sentinel-safe resolution (the game is already rejected; the true low value is
     # recorded in the reason string). The desert stamps are bound to the board's
     # OWN desert so the record's free-anchor + orientation-binding both pass.
-    record = GameRecord(
-        video_id=video_id,
-        game_index=game_index,
-        players=dict(players),
-        opponent_strength=opponent_strength,
-        ruleset={"num_players": 2, "win_vp": 15},
-        hexes=board_hexes,
-        draft_order=draft_order,
-        openings=safe_openings,
-        dice_log=dice_log,
-        winner=safe_winner,
-        episode_source="natural",
-        passed_crosscheck=False,
-        provenance={
-            "resolution": max(resolution, min_resolution),
-            "ts": ts,
-            PROVENANCE_BOARD_DESERT: board.desert_hex,
-            PROVENANCE_OPENINGS_DESERT: board.desert_hex,
-        },
-        rejection_reason=reason,
-    )
+    safe_resolution = max(resolution, min_resolution)
+
+    def _build(
+        hexes: tuple[dict[str, object], ...],
+        desert_hex: int,
+        openings: dict[str, PlayerOpening],
+    ) -> GameRecord:
+        return GameRecord(
+            video_id=video_id,
+            game_index=game_index,
+            players=dict(players),
+            opponent_strength=opponent_strength,
+            ruleset={"num_players": 2, "win_vp": 15},
+            hexes=hexes,
+            draft_order=draft_order,
+            openings=openings,
+            dice_log=safe_dice_log,
+            winner=safe_winner,
+            episode_source="natural",
+            passed_crosscheck=False,
+            provenance={
+                "resolution": safe_resolution,
+                "ts": ts,
+                PROVENANCE_BOARD_DESERT: desert_hex,
+                PROVENANCE_OPENINGS_DESERT: desert_hex,
+            },
+            rejection_reason=reason,
+        )
+
+    try:
+        # Preserve the real board (the §5.6 archetype signal) when it loads.
+        record = _build(board_hexes, board.desert_hex, safe_openings)
+    except ValueError:
+        # The rejection cause IS the board (a CV multiset / number / hex-id
+        # misclassification): the real hexes don't satisfy the record contract, so
+        # they can't be preserved faithfully anyway. Fall back to a canonical legal
+        # board + placeholder openings so the audit row still LOADS with its typed
+        # rejection_reason — never crash out of cross_check (§5.6 guarantee).
+        record = _build(
+            _PLACEHOLDER_HEXES,
+            _PLACEHOLDER_DESERT_HEX,
+            _placeholder_openings(players, topology),
+        )
     return CrossCheckResult(accepted=False, record=record)
 
 
@@ -263,20 +379,27 @@ def _first_rejection(
     winner: str | None,
     players: dict[str, str],
     resolution: int,
-    residual_px: float,
     topology: Topology,
     max_residual_px: float,
     min_resolution: int,
 ) -> str | None:
     """Return the first rejection reason, or ``None`` if the game passes the gate.
 
-    Ordered so a coarse capture defect (resolution / residual) is reported before
-    the finer structural cross-checks.
+    Ordered so a coarse capture defect (resolution / residual / pip) is reported
+    before the finer structural cross-checks. The residual and pip diagnostics are
+    read from ``board`` itself (the board that produced these hexes), not a
+    caller-supplied scalar — a caller cannot pass a clean residual alongside a board
+    that fit at 30px.
     """
     if resolution < min_resolution:
         return f"resolution_below_1080p:{resolution}"
-    if residual_px > max_residual_px:
-        return f"affine_residual_exceeded:{residual_px:.2f}px"
+    if board.residual_px > max_residual_px:
+        return f"affine_residual_exceeded:{board.residual_px:.2f}px"
+    if not board.pip_ok:
+        # The independent pip-count corroboration the brief §5.2 requires as a second
+        # OCR anchor: the number tokens must also OCR to the standard bag by pip
+        # count, not only by digit read.
+        return "pip_count_mismatch"
     if opening_result.openings is None:
         # Carry the upstream openings-stage reason through unchanged (§5.6).
         return opening_result.rejection_reason or "openings_unresolved"
