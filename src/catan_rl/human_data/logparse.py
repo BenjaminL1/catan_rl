@@ -170,7 +170,20 @@ _HANDLE_MATCH_THRESHOLD = 0.6
 #: event, and must never latch a winner or an actor (build brief §5.1 — the
 #: whole reason winner comes from the exact victory LOG line is that everything
 #: else, chat included, is a confidently-wrong outcome source).
-_CHAT_LINE = re.compile(r"^[a-z0-9|]+\s*:")
+#:
+#: The handle class must cover the FULL legal Colonist username alphabet — not
+#: just ``[a-z0-9|]``. Colonist handles routinely contain ``_``, ``.``, ``-`` (and
+#: non-ASCII word chars), and :func:`_tokens` / :func:`_handle_similarity` already
+#: resolve such handles. If the chat detector's handle notion is narrower than the
+#: resolver's, a real ``<handle>: <message>`` chat line with a punctuated handle
+#: slips past the firewall yet still binds a winner (e.g. ``"rayman.147: … won the
+#: game …"`` fabricating a winner — the §5.1 confidently-wrong failure). ``\w``
+#: (word chars incl. ``_`` and Unicode) plus ``.-|`` matches the resolver's
+#: alphabet. The trailing ``(?:\s|$)`` requires a real ``<handle>:`` chat form
+#: (colon then whitespace or line-end), so a multi-word log line whose colon is
+#: preceded by several space-separated tokens (``"list of commands: /help"``) never
+#: matches — ``^<token>:`` only matches a single leading token.
+_CHAT_LINE = re.compile(r"^[\w.\-|]+\s*:(?:\s|$)")
 
 
 def _is_chat_line(low: str) -> bool:

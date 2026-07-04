@@ -190,6 +190,24 @@ def test_winner_never_latches_on_chat_lines_quoting_won_the_game() -> None:
         assert parsed.events[0].actor is None
 
 
+def test_winner_never_latches_on_special_char_handle_chat() -> None:
+    # BLOCKER regression: Colonist usernames routinely contain '_', '.', '-'. A
+    # chat line whose speaker's handle carries such a char must STILL be caught by
+    # the chat firewall — otherwise it falls through to the victory branch and
+    # fabricates a winner (the §5.1 confidently-wrong failure). Handles are the two
+    # known player handles; the chat speaker is one of them but punctuated.
+    cases = [
+        (("thephantom", "rayman.147"), "rayman.147: thephantom won the game last game"),
+        (("thephantom", "the_phantom"), "the_phantom: gg you won the game"),
+        (("thephantom", "ray-man"), "ray-man: you almost won the game"),
+    ]
+    for handles, chat in cases:
+        parsed = parse_log([chat], handles)
+        assert parsed.winner is None, chat
+        assert parsed.events[0].kind == "unknown", chat
+        assert parsed.events[0].actor is None, chat
+
+
 def test_real_spike_chat_lines_stay_winnerless_and_actorless() -> None:
     # The exact chat lines captured in the spike end-screen crop (blockers/ocr):
     # 'gg', 'stop hacking please sir', 'lol still dead lost'. None may set a
