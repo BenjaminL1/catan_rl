@@ -98,6 +98,11 @@ from catan_rl.human_data.segment import (
     segment_opponent_strength,
 )
 from catan_rl.human_data.topology import Topology, load_topology
+from catan_rl.human_data.validate import (
+    CrossCheckResult,
+    cross_check,
+    road_incidence_offenders,
+)
 
 __all__ = [
     "BOARD_OCR_CALLS_PER_ACCEPTED_FRAME",
@@ -116,6 +121,7 @@ __all__ = [
     "BoardRead",
     "ColorProfile",
     "ContentAnchor",
+    "CrossCheckResult",
     "DecodedFrame",
     "EngineTemplate",
     "FFmpegNotFoundError",
@@ -138,6 +144,7 @@ __all__ = [
     "check_road_incidence",
     "classify_resources",
     "crop_log",
+    "cross_check",
     "decode_frames_at",
     "derive_opponent_strength",
     "derive_screen_anchors",
@@ -161,6 +168,7 @@ __all__ = [
     "read_hud_seat_colors",
     "resolve_ffmpeg",
     "resolve_ffprobe",
+    "road_incidence_offenders",
     "ruleset_ok",
     "schedule_ocr_eta_s",
     "segment_games",
