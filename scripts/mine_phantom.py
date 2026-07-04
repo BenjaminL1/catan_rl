@@ -31,7 +31,11 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-from catan_rl.human_data.ingest import ingest_video
+from catan_rl.human_data.ingest import (
+    build_sampling_schedule,
+    ingest_video,
+    schedule_ocr_eta_s,
+)
 
 MANIFEST = REPO / "data" / "human" / "strength_manifest.json"
 
@@ -57,6 +61,22 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             "[ingest] WARNING: video not in strength_manifest.json — it will produce "
             "no scoreboard/seed record downstream (segment.py gates on the manifest)."
         )
+
+    # ETA (brief §5.10): fps x 0.58s x n_videos / n_procs, with fps derived
+    # honestly from this video's two-pass schedule (not the naive 1 fps spike).
+    schedule = build_sampling_schedule(args.duration, sparse_interval_s=args.sparse_interval)
+    fps = len(schedule) / args.duration
+    eta_s = schedule_ocr_eta_s(
+        schedule,
+        args.duration,
+        n_videos=args.n_videos,
+        n_procs=args.n_procs,
+    )
+    print(
+        f"[ingest] OCR ETA: {len(schedule)} frames/video, fps={fps:.4f} "
+        f"x 0.58s x n_videos={args.n_videos:g} / n_procs={args.n_procs} "
+        f"= {eta_s:.0f}s ({eta_s / 3600.0:.2f}h)"
+    )
 
     n = 0
     sparse = dense = 0
@@ -92,6 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=4.0,
         help="sparse-pass cadence in seconds (default 4.0)",
+    )
+    ing.add_argument(
+        "--n-videos",
+        dest="n_videos",
+        type=float,
+        default=1.0,
+        help="corpus size to project the OCR ETA over (brief §5.10; default 1)",
+    )
+    ing.add_argument(
+        "--n-procs",
+        dest="n_procs",
+        type=int,
+        default=1,
+        help="perf cores OCR fans out across in the ETA (brief §5.10; default 1)",
     )
     ing.set_defaults(func=_cmd_ingest)
     return parser

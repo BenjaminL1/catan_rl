@@ -52,6 +52,11 @@ _FRAME_NBYTES = FRAME_WIDTH * FRAME_HEIGHT * 3
 DEFAULT_SPARSE_INTERVAL_S = 4.0
 DEFAULT_DENSE_INTERVAL_S = 1.0
 
+#: easyocr wall-clock cost per 1080p crop (brief §5.10). The corpus ETA is
+#: dominated by OCR, not by download/decode, so this is the single per-frame
+#: constant the ETA formula multiplies by.
+OCR_SECONDS_PER_CROP = 0.58
+
 PassName = Literal["sparse", "dense"]
 
 
@@ -139,6 +144,74 @@ def build_sampling_schedule(
         tagged.setdefault(round(ts, 6), "sparse")
 
     return [ScheduledFrame(ts=ts, pass_name=tag) for ts, tag in sorted(tagged.items())]
+
+
+def estimate_ocr_wall_clock_s(
+    fps: float,
+    n_videos: float,
+    *,
+    n_procs: int = 1,
+    seconds_per_crop: float = OCR_SECONDS_PER_CROP,
+) -> float:
+    """Estimate corpus OCR wall-clock, in seconds, per brief §5.10.
+
+    Implements the spec's ETA formula verbatim::
+
+        fps x 0.58s x n_videos / n_procs
+
+    where ``fps`` is the mean number of frames OCR'd per second of video (the
+    effective *sampled* rate, e.g. one crop every 4 s of the sparse pass is
+    ``fps = 0.25``, **not** the naive 1 fps), ``0.58s`` is the measured easyocr
+    cost per 1080p crop (:data:`OCR_SECONDS_PER_CROP`), ``n_videos`` is the
+    per-video work already expressed in frame-seconds by the caller (a bare video
+    count assumes a shared mean length), and ``n_procs`` is the number of perf
+    cores the batch fans OCR out across. OCR dominates the corpus cost, so this is
+    the ETA the batch driver reports (brief §5.10).
+
+    Pure arithmetic — no I/O. Raises :class:`ValueError` on a non-positive rate /
+    count or a ``n_procs < 1``.
+    """
+    if fps <= 0.0:
+        raise ValueError(f"fps {fps} must be > 0")
+    if n_videos <= 0.0:
+        raise ValueError(f"n_videos {n_videos} must be > 0")
+    if seconds_per_crop <= 0.0:
+        raise ValueError(f"seconds_per_crop {seconds_per_crop} must be > 0")
+    if n_procs < 1:
+        raise ValueError(f"n_procs {n_procs} must be >= 1")
+    return fps * seconds_per_crop * n_videos / n_procs
+
+
+def schedule_ocr_eta_s(
+    schedule: Sequence[ScheduledFrame],
+    duration_s: float,
+    *,
+    n_videos: float = 1.0,
+    n_procs: int = 1,
+    seconds_per_crop: float = OCR_SECONDS_PER_CROP,
+) -> float:
+    """ETA (seconds) to OCR ``n_videos`` videos shaped like ``schedule``.
+
+    Convenience over :func:`estimate_ocr_wall_clock_s` that derives the effective
+    sampling ``fps`` **honestly from the two-pass schedule** — ``len(schedule) /
+    duration_s`` frames per second of video — rather than assuming the naive 1 fps
+    the spike used. ``n_videos`` scales one video's shape up to the corpus; the
+    schedule is taken as representative of the mean video (brief §5.10). Pure
+    arithmetic — no I/O.
+
+    Raises :class:`ValueError` on an empty schedule or non-positive duration.
+    """
+    if not schedule:
+        raise ValueError("empty schedule — no frames to OCR")
+    if duration_s <= 0.0:
+        raise ValueError(f"duration_s {duration_s} must be > 0")
+    fps = len(schedule) / duration_s
+    return estimate_ocr_wall_clock_s(
+        fps,
+        n_videos,
+        n_procs=n_procs,
+        seconds_per_crop=seconds_per_crop,
+    )
 
 
 class VideoDownloadError(RuntimeError):

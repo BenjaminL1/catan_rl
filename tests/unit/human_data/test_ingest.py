@@ -20,6 +20,7 @@ import pytest
 from catan_rl.human_data.ingest import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
+    OCR_SECONDS_PER_CROP,
     DecodedFrame,
     ScheduledFrame,
     TimeWindow,
@@ -27,7 +28,9 @@ from catan_rl.human_data.ingest import (
     build_sampling_schedule,
     decode_frames_at,
     download_video,
+    estimate_ocr_wall_clock_s,
     ingest_video,
+    schedule_ocr_eta_s,
 )
 
 _FRAME_NBYTES = FRAME_WIDTH * FRAME_HEIGHT * 3
@@ -115,6 +118,65 @@ def test_time_window_rejects_inverted_bounds() -> None:
 def test_time_window_rejects_negative_start() -> None:
     with pytest.raises(ValueError, match="start_s"):
         TimeWindow(-1.0, 5.0)
+
+
+# --- OCR ETA formula (brief §5.10: fps x 0.58s x n_videos / n_procs) -----------
+
+
+def test_ocr_seconds_per_crop_is_the_spec_constant() -> None:
+    # brief §5.10: measured easyocr cost per 1080p crop.
+    assert OCR_SECONDS_PER_CROP == 0.58
+
+
+def test_estimate_ocr_wall_clock_matches_spec_formula() -> None:
+    # fps x 0.58s x n_videos / n_procs, verbatim.
+    fps, n_videos, n_procs = 0.25, 300.0, 4
+    expected = fps * 0.58 * n_videos / n_procs
+    assert estimate_ocr_wall_clock_s(fps, n_videos, n_procs=n_procs) == pytest.approx(expected)
+
+
+def test_estimate_ocr_wall_clock_defaults_to_single_process() -> None:
+    assert estimate_ocr_wall_clock_s(1.0, 1.0) == pytest.approx(0.58)
+
+
+def test_estimate_ocr_wall_clock_scales_inversely_with_procs() -> None:
+    one = estimate_ocr_wall_clock_s(0.5, 100.0, n_procs=1)
+    eight = estimate_ocr_wall_clock_s(0.5, 100.0, n_procs=8)
+    assert eight == pytest.approx(one / 8.0)
+
+
+def test_estimate_ocr_wall_clock_rejects_bad_args() -> None:
+    with pytest.raises(ValueError, match="fps"):
+        estimate_ocr_wall_clock_s(0.0, 1.0)
+    with pytest.raises(ValueError, match="n_videos"):
+        estimate_ocr_wall_clock_s(1.0, 0.0)
+    with pytest.raises(ValueError, match="n_procs"):
+        estimate_ocr_wall_clock_s(1.0, 1.0, n_procs=0)
+    with pytest.raises(ValueError, match="seconds_per_crop"):
+        estimate_ocr_wall_clock_s(1.0, 1.0, seconds_per_crop=0.0)
+
+
+def test_schedule_ocr_eta_derives_fps_from_schedule() -> None:
+    # 12s video, 4s sparse cadence -> frames at 0,4,8,12 = 4 frames -> fps = 4/12.
+    sched = build_sampling_schedule(12.0, sparse_interval_s=4.0)
+    assert len(sched) == 4
+    eta = schedule_ocr_eta_s(sched, 12.0, n_videos=1.0)
+    assert eta == pytest.approx((4 / 12.0) * 0.58)
+
+
+def test_schedule_ocr_eta_projects_over_corpus_and_procs() -> None:
+    sched = build_sampling_schedule(10.0, sparse_interval_s=2.0)  # 0,2,4,6,8,10 = 6 frames
+    fps = 6 / 10.0
+    eta = schedule_ocr_eta_s(sched, 10.0, n_videos=300.0, n_procs=6)
+    assert eta == pytest.approx(fps * 0.58 * 300.0 / 6)
+
+
+def test_schedule_ocr_eta_rejects_empty_schedule_and_bad_duration() -> None:
+    with pytest.raises(ValueError, match="empty schedule"):
+        schedule_ocr_eta_s([], 10.0)
+    sched = build_sampling_schedule(8.0, sparse_interval_s=4.0)
+    with pytest.raises(ValueError, match="duration_s"):
+        schedule_ocr_eta_s(sched, 0.0)
 
 
 # --- mocked download -----------------------------------------------------------

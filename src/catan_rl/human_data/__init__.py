@@ -24,6 +24,7 @@ from catan_rl.human_data.ingest import (
     DEFAULT_SPARSE_INTERVAL_S,
     FRAME_HEIGHT,
     FRAME_WIDTH,
+    OCR_SECONDS_PER_CROP,
     DecodedFrame,
     ScheduledFrame,
     TimeWindow,
@@ -31,7 +32,9 @@ from catan_rl.human_data.ingest import (
     build_sampling_schedule,
     decode_frames_at,
     download_video,
+    estimate_ocr_wall_clock_s,
     ingest_video,
+    schedule_ocr_eta_s,
 )
 from catan_rl.human_data.orientation import (
     MAX_AFFINE_RESIDUAL_PX,
@@ -60,6 +63,7 @@ __all__ = [
     "FRAME_WIDTH",
     "MAX_AFFINE_RESIDUAL_PX",
     "MIN_RESOLUTION",
+    "OCR_SECONDS_PER_CROP",
     "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
     "DecodedFrame",
@@ -79,9 +83,11 @@ __all__ = [
     "decode_frames_at",
     "derive_opponent_strength",
     "download_video",
+    "estimate_ocr_wall_clock_s",
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",
     "ingest_video",
     "load_topology",
     "resolve_ffmpeg",
+    "schedule_ocr_eta_s",
 ]
