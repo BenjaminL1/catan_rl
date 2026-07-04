@@ -1,154 +1,144 @@
-# Morning Report — human_data pipeline overnight build
+# Morning Report — human_data opening-extraction pipeline (overnight build)
 
-**Run window:** 2026-06-22 → 23 overnight (autonomous, unattended)
-**Read at:** ~08:00, 2026-06-23
-**Bottom line up front:** **The build HALTED at Stage 0 (scaffold). It never reached Stage 1 (segment/strength) or Stage 2 (openings CV). No harvest ran. No corpus exists. No scoreboard number was produced.** The scaffold went through 4 review-and-resolve iterations and was still **NOT-READY** when the loop gave up ("stuck"). Per the gate-first rule, the build correctly refused to start any pipeline work on an un-greened foundation. Do **not** read any calibration / win-rate / opening-prior number from this run — there is none.
+**Run window:** 2026-07-03 → 04 overnight (autonomous, unattended — you did not watch)
+**Read at:** ~08:00, 2026-07-04
+**Author:** overnight build agent (this is the phase you asked me to build while you slept)
+
+## Bottom line up front
+
+**The build HALTED at Stage 0 (scaffold) and never started Stage 1 (segment/strength) or Stage 2 (openings CV). No game corpus was harvested. No opening was extracted. No scoreboard number exists.** The scaffold review-and-resolve loop ran **4 iterations** and gave up **NOT-READY ("stuck")** with **3 open SHOULD-FIX** and **0 BLOCKER**. Per the gate-first rule the build correctly refused to run any harvest on an un-greened foundation.
+
+**Do not read any calibration / win-rate / opening-prior number from this run — there is none.** The one committed data artifact (`data/human/strength_manifest.json`, 814 videos labeled) is a **video-strength-labeling** artifact, **not** a harvested game corpus. It labels *candidate* videos; it does not contain a single extracted game, board, or opening.
+
+**HARVEST STATUS: GATED — not run.** It is blocked at the Stage-0 scaffold gate and, even if the scaffold greened, it is hard-gated a second time by the missing **glyph classifier** (see human-decision items). Zero games harvested, zero rejected (the rejection-bias audit was never reached because no game ever entered the pipeline).
 
 ---
 
 ## 1. What shipped (modules + commits)
 
-The scaffold *code* was written and committed; the scaffold *gate* did not pass. These two facts are separate — code on `origin/main` is **not** an indication the scaffold is READY.
+Scaffold *code* was written, committed, and is unit-level green (`ruff` + `mypy --strict` + `pytest`). The scaffold *review gate* did **not** pass. These are separate facts: **code on `origin/main` is NOT evidence the scaffold is READY.**
 
 Committed this run (newest first, `git log`):
 
-- `43ce247` docs: flag known_window placeholder + seed-eligible necessary-not-sufficient `[skip ci]`
-- `11138aa` fix: close rejection truth-table converse + real-d6-flip glyph-anchor test
-- `f7753c0` fix: dice_log gate + board-desert anchor + scoreboard-eligibility predicate
-- `60e7167` fix: type `_GAME1_HEXES` as `dict[str, Any]` for mypy --strict on tests
-- `105dede` docs: sync human-data brief + report to schema v2 orientation-binding `[skip ci]`
-- `ff3e9fb` fix: glyph-anchor firewall + scale-up orientation gates (FIX 4/5)
-- `9dcd28e` fix: add road-incidence as snap-sanity gate, labeled NOT orientation
-- `e74d58d` fix: provenance orientation-binding firewall (schema v2)
+- `72e6ba3` fix: game-1 winner=null (concession, no victory line) + multiset gate is necessary-not-sufficient
+- `6031a39` fix: human_data resolve pass — inverted game-1 winner + 3 firewall gaps
+- `1b0efdf` fix(human_data): exclude known_window placeholder from scoreboard eligibility
+- `b9b876a` feat(human_data): reconcile OpponentStrength source with strength manifest
+- `7af8f4a` chore: human-data overnight build workflow (manifest-integrated)
+- `2e99c47` data: thephantom strength manifest — 814 videos labeled (204 high)
+- `d1ecc6e` feat: shard the strength-manifest batch (--shard/--out + merge)
+- `d6b1a8f` feat: thephantom strength-manifest classifier (rank-OCR + tournament)
 
-**Modules present in `src/catan_rl/human_data/`** (written, lint/type/test-green at the unit level, but the module as a whole is NOT-READY per the review gate):
+**Modules present in `src/catan_rl/human_data/`** (written, lint/type/test-green at the unit level, but the scaffold as a whole is **NOT-READY** per the review gate):
 
 | File | State |
 |---|---|
-| `record.py` (37 KB) | Schema v2 dataclasses, `validate()`, `is_scoreboard_eligible()`, `is_seed_eligible()`, provenance orientation-binding firewall. **Carries 1 unresolved BLOCKER + 4 unresolved SHOULD-FIX (see §4).** |
-| `orientation.py` (8.7 KB) | D6 orientation module + `assert_scale_up_orientation_gates` (batch hard-block until glyph classifier validated). |
-| `topology.py` + `topology.json` | Engine board topology fixture. |
+| `record.py` (50 KB) | Schema dataclasses, `validate()`, `OpponentStrength` / `derive_opponent_strength()`, `is_scoreboard_eligible()`, `STANDARD_RESOURCE_COUNTS` multiset gate (documented necessary-not-sufficient), provenance orientation-binding firewall. **Carries 3 unresolved SHOULD-FIX (see §4).** |
+| `orientation.py` (8.9 KB) | D6 orientation module + `assert_glyph_anchor` (orientation-dependent prediction side) + `assert_scale_up_orientation_gates` (**raises** — batch hard-block until a validated glyph classifier is wired). |
+| `topology.py` + `topology.json` | Engine board-topology fixture. |
 | `ffmpeg.py` | Frame-extraction helper (thin). |
 | `__init__.py` | Package surface. |
 
 **READY modules: none.** The only module reviewed (`scaffold` = `record.py` + `orientation.py` + fixtures) returned `ready: false`, `halted: "stuck"`.
 
+**Not present (never built — pipeline never reached them):** `board_cv.py` (Stage-2 board classifier), the glyph-colour classifier, any Stage-1 segment/strength driver, any harvest runner.
+
 ---
 
 ## 2. GATE results (every gate, with numbers)
 
-Only one gate ran: the **scaffold review-and-resolve gate** (the §2 "Review" step of the CLAUDE.md loop). It never reached READY.
+Only one gate ran: the **scaffold review-and-resolve gate** (the "Review" step of the CLAUDE.md loop). It never reached READY.
 
-| Iter | Open findings at entry | Severities | Action |
-|---|---|---|---|
-| 0 | 4 | SHOULD-FIX, SHOULD-FIX, SHOULD-FIX, **BLOCKER** | resolve |
-| 1 | 2 | SHOULD-FIX, SHOULD-FIX | resolve |
-| 2 | 2 | SHOULD-FIX, SHOULD-FIX | resolve |
-| 3 | 5 | **BLOCKER**, SHOULD-FIX, SHOULD-FIX, SHOULD-FIX, SHOULD-FIX | resolve |
-| — | **HALT** | — | NOT-READY after 4 iters; loop declared "stuck" |
+| Iter | Open findings (severity) | Verdict |
+|---|---|---|
+| 0 | 5 open — SHOULD-FIX ×4, **BLOCKER ×1** | resolve |
+| 1 | 5 open — SHOULD-FIX ×4, **BLOCKER ×1** | resolve |
+| 2 | 3 open — SHOULD-FIX ×2, **BLOCKER ×1** | resolve |
+| 3 | 3 open — SHOULD-FIX ×3 | resolve |
+| **HALT** | **3 open — SHOULD-FIX ×3, BLOCKER ×0** | **NOT-READY ("stuck") after 4 iters** |
 
-**Verdict: NOT-READY.** The loop did not converge: it regressed from 2 open at iter 2 to 5 open at iter 3 (a BLOCKER re-opened and SHOULD-FIXes multiplied), which is why the loop stopped rather than spinning a 5th time. **1 BLOCKER + 4 SHOULD-FIX remain open** (full text in §4).
+Progress was real but incomplete: the loop cleared the **BLOCKER** (present through iters 0–2, gone by iter 3) and closed 2 of the SHOULD-FIX items, but plateaued at 3 residual SHOULD-FIX it could not clear within the iteration budget. It then halted rather than loosen a test or hand-wave a fix.
 
-**Stage 1 gate (segment/strength): NOT REACHED** — `stage1: null`.
-**Stage 2 gate (openings CV / orientation firewall): NOT REACHED** — `stage2: null`.
-
-I independently re-verified the three load-bearing claims against the current tree:
-- No window table exists anywhere in `data/` or the repo (`find` for `*window*` returns nothing; `data/` contains only `exit/`).
-- `record.py:is_scoreboard_eligible()` gates on `winner / passed_crosscheck / tier=="high" / rejection_reason` — and **still does not gate on `episode_source`**.
-- `tests/fixtures/human_data/` has no `game1_resnap_overlay.png`; the only copy is the ephemeral spike `scripts/dev/human_data_spikes/opening_cv/game1_resnap_overlay.jpg`.
-
-All three confirm the open findings are real, not stale.
+**No Stage-1 gate, no Stage-2 gate, no harvest gate, no rejection-bias audit ran** — those stages were never reached.
 
 ---
 
-## 3. Rejection-bias audit (§5.6)
+## 3. Where it halted, and why
 
-**NOT REACHED.** The rejection-bias audit is a property of a *harvested corpus* (it compares the accepted vs rejected game populations). No harvest ran, so there is no corpus and no audit. There is **no rejection-bias number** to report. The `is_scoreboard_eligible()` predicate that the audit would call is itself still an open SHOULD-FIX (episode_source asymmetry), so the audit could not have been trusted even if a corpus existed.
+**Halt point:** Stage 0 (scaffold), after 4 review-and-resolve iterations. `stage1: null`, `stage2: null` in the results — literally never started.
+
+**Why:** the scaffold gate returned `ready: false, halted: "stuck"`. Under the gate-first rule ("never commit the expensive next stage before the current stage's go/no-go gate result is in"), an un-greened scaffold blocks all downstream pipeline work. The 3 residual SHOULD-FIX are all **measurement-semantics / data-honesty** findings on the *strength* and *resource-correctness* labels — exactly the class of issue that, left unresolved, produces a confidently-wrong scoreboard rather than a noisy one. Shipping the harvest on top would bake those biases into the corpus. Halting was correct.
 
 ---
 
-## 4. WHERE it halted and WHY
+## 4. The 3 residual SHOULD-FIX (why they matter for the eventual scoreboard)
 
-**Halt point:** Stage 0 (scaffold), before any Stage 1 / Stage 2 / harvest work.
-**Why:** The scaffold review gate stayed NOT-READY through 4 resolve iterations and the loop flagged itself "stuck." Per the gate-first convention (never start the expensive next stage before the current stage's gate is green), the build refused to scaffold-onward and stopped. This was the correct call — proceeding would have built the segment/strength and openings stages on top of an unfalsifiable strength label and a defeatable orientation firewall.
+All three are **labelling / measurement-semantics**, not code-behaviour bugs. None is a crash; each is a way the eventual scoreboard could be *systematically* (not randomly) biased.
 
-**The 5 open findings blocking READY:**
+1. **`opponent_strength` is a matchmaking PROXY, not a measurement.** `scripts/build_strength_manifest.py` reads *ThePhantom's own* Global-leaderboard world rank (it matches only the channel owner's handle), and `derive_opponent_strength()` stamps that onto `OpponentStrength(tier=...)`, which `is_scoreboard_eligible()` gates on (`tier == "high"`). So "high opponent" actually encodes "the POV player was ≤rank-200 that session". In 1v1 ranked matchmaking that is a reasonable *proxy* for a strong opponent, but it is a proxy, and it is undocumented in the package — a JSONL reader will believe the opponent was rank-verified. Systematic over-statement in the direction of the POV's own rank (ladder variance / smurf / off-peak can draw a much-lower opponent that still enters as "high").
+   *Fix (labelling only, no behaviour change):* docstring the proxy plainly on `OpponentStrength` / `derive_opponent_strength`; carry the POV `rank` int onto provenance so the scoreboard can report the POV-rank distribution and sensitivity-slice on it.
 
-### BLOCKER — `opponent_strength` `known_window` is unfalsifiable (no committed backing data)
-- **Where:** `src/catan_rl/human_data/record.py:136-149` (`StrengthSource`), `:152-165` (`OpponentStrength`); no `data/` window table exists.
-- **Issue:** The scaffold constrains only the *shape* of the strength label (tier ∈ {high, unknown}, source ∈ {rank_badge, known_window}); it does NOT anchor `source="known_window"` to any committed `video_id`→window table. A `tier="high", source="known_window"` label is hand-stampable by any caller. Strength is the single most bias-inducing field in a calibration deliverable, and the headline §5.5 guarantee ("never pool a single number across mixed strength") becomes fiction if Stage 1's `segment.py` reads a hand-maintained/implicit window. Verified: no window/rank table exists in the repo or `data/`. (The scaffold's own docstrings at `record.py:140-148` and `:156-164` honestly flag this as a PLACEHOLDER — correct, but the gap must be a hard pre-condition on the segment/strength filter, not a deferred TODO.)
-- **Fix (pre-condition on the segment/strength filter):** commit the known-high-rank window as a versioned package-fixture data file (`video_id` → `{window_id, date_range, rationale}`); have `segment.py` DERIVE strength from it; carry `window_id` onto `OpponentStrength` (new field) for audit traceability; exclude games not covered by a committed window (`tier="unknown"`, scoreboard-ineligible). Do NOT invent rank-OCR. Until then, the batch must emit no `high` label.
+2. **`tournament` highs are title-keyword-only (no frame verification) but enter the same "high" pool.** `derive_opponent_strength()` maps manifest `tournament`→high at confidence 0.8, labeled purely by `TOURNAMENT_RE`. On an n≈20–40 high scoreboard a single title false-positive is a several-point systematic bias. The split-and-robustness caveat lives only in `is_scoreboard_eligible`'s prose; nothing forces the Stage-3 builder to split n by `source` or rerun tournament-excluded.
+   *Fix:* expose the weaker provenance machine-visibly (confidence 0.8 vs 0.95 is already on the record); document/assert that the scoreboard builder MUST split n by `source` and rerun with `tournament` excluded; move the caveat onto `derive_opponent_strength`'s docstring too.
 
-### SHOULD-FIX — `is_scoreboard_eligible()` does not exclude `episode_source != "natural"`
-- **Where:** `record.py:552-569`.
-- **Issue:** The scoreboard is a measurement over REAL natural games, but the predicate gates only on `winner / passed_crosscheck / tier / rejection_reason` — not `episode_source`. A `human_seed` record with a winner + `tier="high"` returns `True`. Low blast radius today (no seed records emitted yet) but the predicate is being frozen now as the documented SoT.
-- **Fix:** add `and self.episode_source == "natural"` (cleanest), or document the asymmetry explicitly (mirroring the seed-eligible note) so it is a decision, not an oversight.
+3. **The multiset resource gate is necessary-not-sufficient with no test proving future code understands the tautology risk.** `STANDARD_RESOURCE_COUNTS` correctly warns that (a) a multiset-preserving WOOD↔SHEEP swap passes the gate confidently-wrong, and (b) if `board_cv.py` ever forces the standard multiset (Hungarian cluster→resource), the gate degrades to a tautological no-op. The real cross-check is the orientation glyph-anchor firewall — which is **deferred (classifier not built) and hard-gates the batch** — so at Stage-2 the only live resource-correctness signal could be a tautological gate.
+   *Fix (when `board_cv.py` is built):* add a per-game calibration-residual gate + independent per-hex corroboration (pip-count vs OCR-number, already prototyped in the spike's `count_pips` / `ocr_digit`) + a test that a multiset-preserving swap on a real per-hex classifier is caught by corroboration, not merely the count gate.
 
-### SHOULD-FIX — `openings_desert_hex` must be the orientation the openings stage ACTUALLY snapped under
-- **Where:** `record.py:495-550`; `orientation.py:1-36`.
-- **Issue:** The orientation firewall's power rests on `openings_desert_hex` being an INDEPENDENT report. If the (unwritten) `openings.py` computes its stamp as `board_desert` or reuses the board affine, the firewall becomes a tautology and silently passes every D6 weld — the exact desert17/desert11 bug it exists to catch. This is a Stage-2 implementation trap.
-- **Fix:** in Stage 2, DERIVE `openings_desert_hex` from the openings stage's own locked affine; add a Stage-2 test where the openings stage honestly reports desert=17 against a board=11 record and `validate()` rejects it. Until the glyph classifier exists, keep relying on `assert_scale_up_orientation_gates` to block the batch.
-
-### SHOULD-FIX — cited verification artifact `game1_resnap_overlay.png` is not in the tree
-- **Where:** `tests/fixtures/human_data/game1_openings.json:10` + `tests/unit/human_data/test_scaffold.py:78`.
-- **Issue:** Both the golden fixture and the test comment cite `game1_resnap_overlay.png` as proof the desert=11 re-snap is correct (snap err <0.35px, owner colours confirmed). That PNG does not exist; the only copy is the ephemeral spike `.jpg`. The golden openings IDs (`[1,19]`/`[11,3]`) are the single load-bearing ground truth for the whole orientation firewall, and their only stated proof points at a 404.
-- **Fix:** commit the overlay into `tests/fixtures/human_data/` (tiny; §6 sanctions a small board crop) and fix the `.png`/`.jpg` mismatch in both the note and the test, OR rewrite the note to cite a committed artifact.
-
-### SHOULD-FIX — orientation firewall defeatable by a lazy openings stage that copies `board_desert_hex`
-- **Where:** `record.py:495-550` + `orientation.py:140-178`.
-- **Issue:** Same root as the previous finding, the single-flip case: if the openings stage copies `board_desert_hex` into `openings_desert_hex` (path of least resistance), the equality check is trivially satisfied and the firewall degrades to a no-op against a single-stage flip. Documented in the docstring but unguarded in code.
-- **Fix:** in Stage 2, derive `openings_desert_hex` from the openings affine's own desert prediction and assert it is computed from the openings affine, not read from the board record; add the Stage-2 test above. Until then, add one sentence to the `record.py` docstring so the Stage-2 author cannot miss it.
+**Rejection-bias audit: NOT REACHED.** No game entered the pipeline, so there is nothing to audit for rejection bias. This audit is owed at harvest time (Stage 1+), not at scaffold time.
 
 ---
 
 ## 5. HARVEST status
 
-**GATED — nothing harvested.** No frames were extracted, no games segmented, no records emitted.
+**GATED — full corpus was NOT harvested. 0 games extracted, 0 games rejected.**
 
-- **#games harvested:** 0
-- **#rejected:** 0 (nothing to reject)
-- **Rejection-bias audit:** not run (no corpus — see §3)
+Two gates block the harvest, in order:
 
-**What is needed to unblock the harvest** (in order):
+1. **Stage-0 scaffold gate — NOT-READY** (3 open SHOULD-FIX, above). Nothing downstream may run until this greens.
+2. **Glyph-classifier hard gate (would block even if #1 greened).** `orientation.py::assert_scale_up_orientation_gates` **raises** until a validated log-glyph colour classifier is wired. The batch/harvest path calls it, so it **can never run with the glyph anchor silently absent**. The glyph anchor is the real CV-correctness firewall (the resource multiset gate alone is tautology-vulnerable, per SHOULD-FIX #3). This classifier **was not built this run** — deferred, explicitly hard-gating the safe full harvest.
 
-1. **Resolve the BLOCKER** — commit the known-high-rank window as a versioned data fixture and wire `segment.py` to DERIVE strength from it with a `window_id` provenance stamp. Without this, every `high` label is unfalsifiable and the scoreboard is biased by construction. This is a hard pre-condition on the strength filter.
-2. **Resolve the 4 SHOULD-FIX** — `episode_source` gate on the scoreboard predicate; commit the resnap overlay artifact; and (deferred to Stage 2) the two independent-`openings_desert_hex` derivation guards + tests.
-3. **Re-run the scaffold gate to READY** — the loop must reach a verdict with no open BLOCKER/SHOULD-FIX before Stage 1 may begin.
-4. **Then** Stage 1 (segment/strength) and Stage 2 (openings CV) gates must each pass before a harvest produces a trustworthy corpus.
+The one committed data artifact is a **strength-labeling manifest**, not a corpus:
+
+`data/human/strength_manifest.json` — **814 videos labeled** (`build_strength_manifest.py`, rank-OCR + tournament title regex):
+- **204 high** (`tier == "high"`) — not scoreboard-eligible as games yet; these are candidate videos only.
+- **574 unknown** (`source: none`) — not scoreboard-eligible.
+- **36 excluded** (non-own-game / copycat / reaction uploads filtered out).
+- By source token: **225 `ranked_rank`**, **15 `tournament`**, **574 `none`**. (Source ≠ final tier: `ranked_rank` rows with rank > `rank_high_max=200` do not become high — this is why source-`ranked_rank`=225 exceeds tier-high=204.)
+
+**This manifest is candidate-video labels only. It contains zero extracted games, boards, openings, or winners.** "204 high videos" is NOT "204 harvested games" — those videos have never been segmented or CV-parsed. Do not treat 204 as a scoreboard n.
 
 ---
 
 ## 6. Single-command resume state
 
-Nothing is running and nothing is mid-write; the tree is clean apart from the committed scaffold and untracked scratch scripts. Resume = re-enter the review-and-resolve loop on the scaffold, starting from the BLOCKER:
+Nothing is running; nothing needs killing. Workspace is on `origin/main` (`72e6ba3`), git clean except pre-existing untracked paths (`data/exit/`, `scripts/export_dice_vectors.py`, `scripts/record_conformance.py`) and the scheduled-tasks lock. Resume the loop where it halted:
 
 ```
-# resume point: Stage 0 scaffold, NOT-READY, 1 BLOCKER + 4 SHOULD-FIX open
-# 1. commit the known-high-rank window fixture + wire segment.py strength derivation (BLOCKER)
-# 2. patch record.py is_scoreboard_eligible() episode_source gate (SHOULD-FIX)
-# 3. commit tests/fixtures/human_data/game1_resnap_overlay.png + fix .png/.jpg cite (SHOULD-FIX)
-# 4. re-green and re-run the scaffold review gate until READY, then start Stage 1
-ruff check src/catan_rl/human_data && mypy --strict src/catan_rl/human_data && pytest tests/unit/human_data -q
+# Re-enter the scaffold review-and-resolve loop at Stage 0 (halt point):
+# resolve the 3 residual SHOULD-FIX in src/catan_rl/human_data/record.py
+#   (§4.1 opponent_strength proxy docstring + rank passthrough,
+#    §4.2 tournament source split/robustness,
+#    §4.3 multiset-gate corroboration test-owed-at-board_cv),
+# re-green ruff + mypy --strict + pytest, re-review until READY.
+pytest src/catan_rl/human_data -q && ruff check src/catan_rl/human_data && mypy --strict src/catan_rl/human_data
 ```
 
-No detached process to reattach to; no checkpoint to resume; no partial corpus to clean up.
+Only after the scaffold is READY do Stage 1 (segment/strength driver) and Stage 2 (`board_cv.py` + glyph classifier) unlock. The harvest cannot be launched before **both** the scaffold greens **and** the glyph classifier is built + validated.
 
 ---
 
-## 7. Human-decision items
+## 7. Human-decision items (need you)
 
-These two need *your* call — the build could not resolve them autonomously and they are the crux of the BLOCKER and a downstream gate.
+1. **Glyph classifier (HARD-GATES the safe full harvest) — build it, or accept a weaker net?** The batch is intentionally hard-gated (`assert_scale_up_orientation_gates` raises) until a validated log-glyph colour classifier exists. It was not built this run. **Decision:** authorize building the glyph classifier (log-icon colour reader, validated against real D6-flip collisions) as the next work item, OR explicitly accept running Stage-2 with only the tautology-vulnerable multiset gate (NOT recommended — see SHOULD-FIX #3). Until this is resolved, no safe full harvest is possible.
 
-### (a) Glyph-classifier status
-**Status: does NOT exist; the true joint-D6-flip defense is therefore not yet armed.** The scaffold's orientation firewall catches a *single* D6 flip via the desert-hex binding, but a *joint* flip (board + openings both flipped the same way) preserves the resource/number multisets and is only caught by an independent glyph anchor. That glyph classifier is unbuilt. Until it exists and is validated, `assert_scale_up_orientation_gates` **hard-blocks the batch** — which is the correct conservative posture, but it means no scale-up harvest can run regardless of the BLOCKER above.
-**Decision needed:** approve building + validating the glyph classifier as a Stage-2 prerequisite, or explicitly accept a single-flip-only firewall for an initial small/manually-verified batch (NOT recommended for any number that feeds the scoreboard).
+2. **`opponent_strength` proxy — accept the proxy, or require frame-verified opponent rank?** The "high" label is ThePhantom's *own* top-200 session rank, a matchmaking proxy for opponent strength, not a direct read. **Decision:** accept the documented proxy (cheap, ships now with the §4.1 docstring/rank-passthrough fix) OR require the harder opponent-rank frame read (more accurate, more CV work, likely lower yield).
 
-### (b) Opponent-strength default
-**Status: this is the open BLOCKER.** The brief's design-default is a "known-high-rank-window only" approach (a committed `video_id`→window table; games outside any window become `tier="unknown"` and scoreboard-ineligible). The scaffold did NOT commit that table, so today the default is effectively "unfalsifiable hand-stamped high," which is unacceptable for a calibration deliverable.
-**Decision needed:** confirm the **"known-high-rank-window only, derive from committed data, exclude uncovered games"** default (recommended — matches §5.5), so Stage 1 can implement it as the BLOCKER fix. The alternative (rank-OCR badge reading) was explicitly rejected by the review and should not be built without your instruction.
+3. **Tournament highs — keep the 15 title-only highs in the pool, or scoreboard-split them?** They have no frame verification. **Decision:** require the Stage-3 scoreboard to split n by `source` and report a `tournament`-excluded robustness number (recommended), OR drop tournament-sourced highs from the eligible pool entirely.
+
+4. **Scaffold iteration budget — the loop halted "stuck" at 3 SHOULD-FIX with a clear resolution path.** These are labelling fixes, not architectural rethinks. **Decision:** confirm I should resolve them next session and continue to Stage 1, rather than re-scope the scaffold.
 
 ---
 
-## Throughline
+## One plain throughline
 
-The overnight build did the honest thing: it wrote the scaffold, reviewed it hard, found a strength-label that can't be falsified and an orientation firewall that a lazy Stage-2 author could neuter, failed to close them in 4 passes, and **stopped before harvesting anything** rather than ship a biased calibration number. There is no corpus, no scoreboard, and no success to claim — there is a clean, well-documented halt with one BLOCKER (commit the strength window as data) standing between you and a green scaffold, plus two decisions only you can make (build the glyph classifier; confirm the known-window strength default).
+I built and committed the scaffold and an 814-video strength-labeling manifest, but the scaffold review gate went NOT-READY (3 open SHOULD-FIX, 0 BLOCKER) and I stopped there — so **no games were harvested, no scoreboard exists, and the full harvest is double-gated** (scaffold-not-ready + glyph-classifier-not-built). The residual issues are honest-labeling fixes with a clear path; the biggest human-decision blocker is whether to build the glyph classifier that hard-gates the safe harvest.
