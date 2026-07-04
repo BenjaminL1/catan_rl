@@ -63,6 +63,12 @@ from catan_rl.human_data.logparse import (
     ocr_log_crop,
     parse_log,
 )
+from catan_rl.human_data.openings import (
+    PALETTE,
+    ColorProfile,
+    detect_openings,
+    read_hud_seat_colors,
+)
 from catan_rl.human_data.orientation import (
     MAX_AFFINE_RESIDUAL_PX,
     MIN_RESOLUTION,
@@ -102,9 +108,11 @@ __all__ = [
     "MAX_AFFINE_RESIDUAL_PX",
     "MIN_RESOLUTION",
     "OCR_SECONDS_PER_CROP",
+    "PALETTE",
     "RESOURCE_LITERALS",
     "SCHEMA_VERSION",
     "BoardRead",
+    "ColorProfile",
     "ContentAnchor",
     "DecodedFrame",
     "EngineTemplate",
@@ -130,6 +138,7 @@ __all__ = [
     "decode_frames_at",
     "derive_opponent_strength",
     "derive_screen_anchors",
+    "detect_openings",
     "download_video",
     "estimate_ocr_wall_clock_s",
     "granted_multiset_matches_a_settlement",
@@ -145,6 +154,7 @@ __all__ = [
     "probe_resolution",
     "read_board",
     "read_board_stable",
+    "read_hud_seat_colors",
     "resolve_ffmpeg",
     "resolve_ffprobe",
     "ruleset_ok",
