@@ -37,8 +37,12 @@ disk**: before writing a game, any ``(video_id, game_index)`` already present in
 ``corpus.jsonl`` / ``rejected.jsonl`` is skipped, so a hard kill between a record
 append and its per-game ledger append can never duplicate a row. A
 ``VideoParseError`` marks the whole video ``failed`` (retried on resume — not
-terminal). A crash mid-video may leave a torn *final* line; :func:`load_ledger`
-and the corpus readers tolerate it by skipping blank/partial trailing lines.
+terminal). A hard kill mid-append may leave a torn line with no trailing newline;
+:func:`_append_line` demotes that torn tail to a standalone skippable partial line
+(emitting a leading ``\n`` before the next row) instead of welding the next record
+onto it, so a resume can never strand an unparseable line in the MIDDLE of the file.
+:func:`load_ledger` and the corpus readers then tolerate the demoted partial line
+by skipping it.
 
 CPU-only; never imports ``gui/`` or the training path.
 """
@@ -200,9 +204,24 @@ def _load_record_keys(path: Path) -> set[tuple[str, int]]:
 
 
 def _append_line(path: Path, line: str) -> None:
-    """Atomically append one line to ``path`` (flush + fsync so a kill can't tear it)."""
-    with path.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    """Atomically append one line to ``path`` (flush + fsync so a kill can't tear it).
+
+    A hard kill (SIGKILL) *during* a previous append can leave the file ending in a
+    torn partial line with no trailing ``\\n`` (the OS committed only part of the
+    buffered write). Appending onto that unterminated tail would **weld** the torn
+    head to the new row, producing an unparseable line stranded in the MIDDLE of the
+    file — one the "skip blank/partial TRAILING line" tolerance can never recover
+    once a later row follows it (red-team BLOCKER). Guard it: if the file is
+    non-empty and does not already end in a newline, emit a leading ``\\n`` first,
+    demoting the torn tail to a standalone skippable partial line before the new,
+    well-formed record.
+    """
+    with path.open("ab+") as fh:
+        if fh.seek(0, os.SEEK_END) > 0:
+            fh.seek(-1, os.SEEK_END)
+            if fh.read(1) != b"\n":
+                fh.write(b"\n")
+        fh.write((line + "\n").encode("utf-8"))
         fh.flush()
         os.fsync(fh.fileno())
 

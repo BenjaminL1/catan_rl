@@ -433,6 +433,109 @@ def test_mid_video_kill_recovers_tail_games_on_resume(tmp_path: Path) -> None:
     assert again.videos_skipped == 1
 
 
+# --- torn-line firewall: a partial line from a SIGKILL is not welded on resume --
+
+
+def test_torn_partial_line_not_welded_on_resume(tmp_path: Path) -> None:
+    """A hard kill (SIGKILL) DURING an append can leave a partial line with no
+    trailing newline. On resume, the next append must NOT concatenate onto that
+    torn tail (welding an unparseable line into the MIDDLE of the file) — it must
+    demote the torn tail to a standalone skippable partial line first (red-team
+    BLOCKER).
+
+    Reproduces the probe: corpus.jsonl holds a valid game-1 row + a TORN game-2
+    row (no ``\\n``); resume re-parses the (un-marked-done) video and every persisted
+    line must round-trip through ``GameRecord.from_json_line`` — no mid-file corrupt
+    line, no silent drop of the re-parsed game.
+    """
+    from catan_rl.human_data.batch import _append_line
+
+    manifest = _write_manifest(tmp_path, [_manifest_row("vidTORN00000", "high")])
+    out = tmp_path / "out"
+
+    sink = _Sink(out_dir=out, now_fn=lambda: 0.0)
+    game1 = _make_record("vidTORN00000", 1)
+    # A committed game-1 row + its per-game ledger row (a SIGKILL after game 1).
+    _append_line(sink.corpus_path, game1.to_json_line())
+    _append_line(
+        sink.ledger_path,
+        LedgerEntry("vidTORN00000", 1, "done", None, 0.0).to_json_line(),
+    )
+    # Now simulate the OS committing only PART of game 2's row (no trailing newline)
+    # before the SIGKILL — a torn partial line at the tail of corpus.jsonl.
+    torn_head = game1.to_json_line()[:50]
+    assert not torn_head.endswith("\n")
+    with sink.corpus_path.open("a", encoding="utf-8") as fh:
+        fh.write(torn_head)  # deliberately NO newline — a torn write
+
+    # Sanity: corpus.jsonl currently ends without a newline (the torn tail).
+    assert not sink.corpus_path.read_text(encoding="utf-8").endswith("\n")
+
+    calls: list[str] = []
+
+    def parse_fn(video_id: str) -> list[GameRecord]:
+        calls.append(video_id)
+        return [_make_record(video_id, 1), _make_record(video_id, 2)]
+
+    run_batch(manifest_path=manifest, out_dir=out, parse_fn=parse_fn, max_workers=1)
+    assert calls == ["vidTORN00000"], "the torn (un-marked-done) video must re-parse"
+
+    # No welded corrupt line: every non-blank line either round-trips as a record
+    # or is a skippable partial line (the demoted torn head), NEVER a welded hybrid
+    # sitting in the middle of the file.
+    lines = sink.corpus_path.read_text(encoding="utf-8").splitlines()
+    valid = 0
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            GameRecord.from_json_line(line)
+            valid += 1
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            # Only the demoted torn head may fail — and it must be a strict PREFIX
+            # of a real row (never a welded head+full-row hybrid).
+            assert line == torn_head, f"welded corrupt line in the middle: {line!r}"
+
+    # Both games survive the resume (game 1 dedups, game 2 recovered) — no drop.
+    # A tolerant reader (the real corpus consumer contract: skip blank/partial
+    # lines) recovers exactly the two full records; only the demoted torn head is
+    # skipped, never a welded hybrid that would drop a valid game.
+    records: list[GameRecord] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            records.append(GameRecord.from_json_line(line))
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            continue
+    keys = sorted((r.video_id, r.game_index) for r in records)
+    assert keys == [("vidTORN00000", 1), ("vidTORN00000", 2)]
+    assert valid == 2, "both re-parsed games must be readable"
+
+
+def test_append_line_demotes_torn_tail_across_all_files(tmp_path: Path) -> None:
+    """``_append_line`` itself must never weld a new row onto an unterminated tail
+    — the guard applies to corpus.jsonl, rejected.jsonl AND ledger.jsonl (a torn
+    video-level ``done`` marker welded with the next ledger row would make
+    ``load_ledger`` drop a legitimately-written marker and force a needless
+    re-parse). Direct unit check of the byte-level guard.
+    """
+    from catan_rl.human_data.batch import _append_line
+
+    path = tmp_path / "f.jsonl"
+    path.write_text('{"a":1}', encoding="utf-8")  # a torn tail: no trailing newline
+    _append_line(path, '{"b":2}')
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    # The torn head stayed a standalone (skippable) line; the new row is separate.
+    assert lines == ['{"a":1}', '{"b":2}']
+    for line in lines:
+        json.loads(line)  # both parse cleanly — no welded hybrid
+    # And a normal (terminated) file appends without a spurious blank line.
+    _append_line(path, '{"c":3}')
+    assert path.read_text(encoding="utf-8").splitlines() == ['{"a":1}', '{"b":2}', '{"c":3}']
+
+
 # --- manifest cross-check: an over-claimed high tier is rejected, not trusted --
 
 
