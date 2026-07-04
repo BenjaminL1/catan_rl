@@ -55,12 +55,50 @@ from typing import Any, Literal
 from catan_rl.human_data.logparse import LogEvent
 from catan_rl.human_data.record import OpponentStrength, derive_opponent_strength
 
-#: How a game window ended. ``"victory"`` = a resolvable victory LOG line inside
-#: the window (the ONLY scoreboard-terminal cause, §5.1); ``"resign"`` = a
-#: ``"<player> has left the game"`` line; ``"cutoff"`` = neither was seen (the
-#: stream ended mid-game or the game was not sampled to its end). Only
-#: ``"victory"`` yields a winner.
-GameEndCause = Literal["victory", "resign", "cutoff"]
+#: How a game window ended. ``"victory"`` = exactly one resolvable victory LOG
+#: line inside the window (the ONLY scoreboard-terminal cause, §5.1); ``"resign"``
+#: = a ``"<player> has left the game"`` line; ``"cutoff"`` = none of the above was
+#: seen (the stream ended mid-game or the game was not sampled to its end);
+#: ``"weld"`` = the window structurally contains **≥2 victory events**, i.e. two
+#: back-to-back games merged into one window because the intervening reset marker
+#: was OCR-corrupted below the reset regex (``"Happy setting"`` etc.). A weld is
+#: definitionally ambiguous (which board/openings pair with which winner?), so it
+#: yields **no winner** and is NOT scoreboard-terminal — latching the first
+#: victory would be the §5.1 confidently-wrong outcome. Only ``"victory"`` yields
+#: a winner.
+GameEndCause = Literal["victory", "resign", "cutoff", "weld"]
+
+#: Event kinds that count as substantive in-game play. Used both by the boundary
+#: hygiene rule (a lingering reset re-OCR'd across frames is only a "same game"
+#: duplicate while no new gameplay separates it) and by the stale-victory gate in
+#: :func:`_own_game_victories` (a game_reset / unknown / chat / victory / resign
+#: line does NOT establish that the window's own game has begun). A victory
+#: preceded by none of these in-window is a stale carry-over from the previous game
+#: (§5.1) and must not latch a winner.
+_GAMEPLAY_KINDS: frozenset[str] = frozenset(
+    {
+        "setup_settlement",
+        "setup_road",
+        "starting_resources",
+        "roll",
+        "got_resources",
+        "built_settlement",
+        "built_city",
+        "built_road",
+        "bought_dev",
+        "used_dev",
+        "moved_robber",
+        "stole",
+        "bank_trade",
+    }
+)
+
+#: Event kinds that unambiguously end a game (a 15-VP victory or a resign). Once
+#: one is seen since the current window's start, the NEXT reset unambiguously opens
+#: a fresh game regardless of whether its OCR text repeats the previous reset — the
+#: only case where an identical-text reset is NOT a lingering scrolling-panel
+#: duplicate.
+_TERMINAL_KINDS: frozenset[str] = frozenset({"victory", "resign"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +124,23 @@ class GameSegment:
         """Whether this game reached a 15-VP victory (the only scoreboard-terminal
         cause, §5.1). A resign / cutoff game is kept (a possible seed) but is not
         scoreboard-terminal — deriving a winner from it fabricates an outcome.
+
+        A window is scoreboard-terminal iff it ``ended_by == "victory"`` (which
+        ``_resolve_window_outcome`` only sets when the window holds **exactly one**
+        own-game victory) AND has a resolved ``winner``. The exactly-one-victory
+        requirement is re-asserted here directly on ``events`` as a belt-and-braces
+        weld guard: a window that holds ≥2 own-game victory events is a weld (two
+        games merged by a corrupted reset marker) and must never pair one game's
+        board/openings with a winner drawn from a two-victory stream (the §5.1
+        confidently-wrong failure). ``_resolve_window_outcome`` already maps such a
+        window to ``ended_by="weld"`` / ``winner=None``, so this is a defensive
+        double-check, not the sole gate.
         """
-        return self.ended_by == "victory" and self.winner is not None
+        return (
+            self.ended_by == "victory"
+            and self.winner is not None
+            and len(_own_game_victories(self.events)) == 1
+        )
 
 
 def segment_games(
@@ -102,18 +155,40 @@ def segment_games(
     (used only to validate the count; actor resolution already happened in
     ``parse_log``).
 
-    Boundary rule (§5.3): a ``"game_reset"`` event opens a game; the game runs
-    until the next ``"game_reset"`` (or the end of the stream). A run of
-    consecutive resets with no intervening non-reset event is ONE game start
-    (easyocr splits the "Happy settling" / "/help" reset across lines). Events
-    before the first reset are dropped — we never fabricate a game start from a
-    mid-stream sample.
+    The parse path emits an OVERLAPPING multi-frame stream, not a de-duplicated
+    one (§5.10 mandates Pass-A sampling at 1 frame / 3-5s; the Colonist log is a
+    SCROLLING panel, so consecutive sampled frames re-OCR the recent tail). So a
+    lingering line — the "Happy settling" reset or a "won the game" victory — is
+    re-OCR'd across frames and re-appears later in the flattened stream. Two
+    invariants defend against that WITHOUT globally de-duplicating the stream
+    (which would wrongly collapse two different games' legitimately-identical lines
+    like ``"ThePhantom rolled"``):
+
+    - **Boundary hygiene (§5.3):** a ``"game_reset"`` opens a NEW game only if it is
+      the first reset, OR a terminal event (victory / resign) was seen since this
+      window's start (the game demonstrably ended, so even a verbatim-repeated reset
+      text is a fresh game), OR its text is new to this window AND new gameplay
+      separated it from the opener. A consecutive reset run (easyocr splitting
+      "Happy settling" / "/help") and a same-text reset re-shown across frames while
+      the game is still unfolding both collapse onto the SAME start. All per-window
+      boundary state is cleared at each real start, so a later game's
+      legitimately-identical reset / gameplay text is never conflated with an
+      earlier game's.
+
+    - **Own-game victory (§5.1):** see :func:`_resolve_window_outcome` — a victory
+      only latches / counts if preceded in-window by this game's own gameplay, so a
+      stale victory carried past the boundary neither wins the next game nor trips
+      the weld guard.
+
+    Events before the first reset are dropped — we never fabricate a game start
+    from a mid-stream sample.
 
     Each window's ``winner`` / ``ended_by`` is computed from the events **inside
-    that window only** (§5.1 firewall): the first resolvable ``"victory"`` event's
-    actor is the winner (``ended_by="victory"``); else a ``"resign"`` event closes
-    it with no winner (``ended_by="resign"``); else the window ended by cutoff
-    (``ended_by="cutoff"``, no winner).
+    that window only** (§5.1 firewall): the sole own-game ``"victory"`` event's
+    actor is the winner (``ended_by="victory"``); a window with ≥2 own-game victory
+    events is a weld and yields no winner (``ended_by="weld"``); else a ``"resign"``
+    event closes it with no winner (``ended_by="resign"``); else the window ended
+    by cutoff (``ended_by="cutoff"``, no winner).
 
     Returns the games in source order. An empty stream, or a stream with no reset
     marker, yields ``[]`` (no bounded game).
@@ -121,16 +196,45 @@ def segment_games(
     if len(handles) != 2 or len(set(handles)) != 2:
         raise ValueError(f"expected exactly two distinct player handles, got {handles!r}")
 
-    # Collect the index of every event that opens a game: a "game_reset" that is
-    # NOT immediately preceded (ignoring only other resets) by a reset — i.e. the
-    # FIRST reset of a consecutive run. A run of back-to-back resets is one start.
+    # Decide, for each "game_reset", whether it OPENS a new game or is a lingering
+    # re-OCR of the current window's reset (the scrolling-panel artifact §5.10). A
+    # reset opens a new game iff ANY of:
+    #   * it is the very first reset in the stream; OR
+    #   * a terminal event (victory / resign) was seen since this window's start —
+    #     the game demonstrably ended, so the next reset is a fresh game even when
+    #     its OCR text repeats the previous reset verbatim; OR
+    #   * this reset's text has NOT already appeared in the current window AND new
+    #     gameplay has appeared since the last reset — a genuinely different reset
+    #     line separated from the opener by real play.
+    # Everything else (a consecutive reset run — easyocr splitting "Happy settling"
+    # / "/help"; a same-text reset re-shown across frames while the game is still
+    # unfolding, even interleaved with dribbled-in setup lines) collapses onto the
+    # SAME start. All per-window state is cleared at each real start, so a LATER
+    # game's legitimately-identical reset / gameplay text is never conflated with an
+    # earlier game's.
     starts: list[int] = []
-    prev_was_reset = False
+    reset_texts_in_window: set[str] = set()
+    terminal_since_start = False
+    new_gameplay_since_reset = False
     for i, event in enumerate(events):
-        is_reset = event.kind == "game_reset"
-        if is_reset and not prev_was_reset:
-            starts.append(i)
-        prev_was_reset = is_reset
+        if event.kind == "game_reset":
+            opens = (
+                not starts
+                or terminal_since_start
+                or (event.text not in reset_texts_in_window and new_gameplay_since_reset)
+            )
+            if opens:
+                starts.append(i)
+                reset_texts_in_window = {event.text}
+                terminal_since_start = False
+            else:
+                reset_texts_in_window.add(event.text)
+            new_gameplay_since_reset = False
+        else:
+            if event.kind in _TERMINAL_KINDS:
+                terminal_since_start = True
+            elif event.kind in _GAMEPLAY_KINDS:
+                new_gameplay_since_reset = True
 
     if not starts:
         return []
@@ -145,16 +249,49 @@ def segment_games(
     return segments
 
 
+def _own_game_victories(window: Sequence[LogEvent]) -> list[str]:
+    """Return the resolved winners of this window's OWN-game victory events (§5.1).
+
+    A ``"victory"`` event counts as this game's own only if it is preceded
+    IN-WINDOW by at least one substantive gameplay event (:data:`_GAMEPLAY_KINDS`)
+    and carries a resolved actor. A victory as the first substantive event after
+    the opening reset is a stale carry-over of the PREVIOUS game's win (the
+    scrolling panel had not scrolled it off yet) lingering past the boundary in the
+    flattened multi-frame stream — it is NOT this game's win and is excluded here,
+    so it neither latches a winner nor trips the weld guard.
+    """
+    winners: list[str] = []
+    seen_gameplay = False
+    for event in window:
+        if event.kind in _GAMEPLAY_KINDS:
+            seen_gameplay = True
+        elif event.kind == "victory" and event.actor is not None and seen_gameplay:
+            winners.append(event.actor)
+    return winners
+
+
 def _resolve_window_outcome(window: Sequence[LogEvent]) -> tuple[str | None, GameEndCause]:
     """Compute ``(winner, ended_by)`` from a single game window (§5.1).
 
-    A victory line with a resolved actor wins (first one latches); else a resign
-    line closes with no winner; else the window ended by cutoff. Never infers a
-    winner from a non-victory line.
+    Counts only this window's OWN-game victories (:func:`_own_game_victories` —
+    stale carry-over victories from the previous game are excluded). Then:
+
+    - **≥2 own-game victories → weld.** The window is two back-to-back games merged
+      into one because the intervening reset marker was OCR-corrupted below the
+      reset regex (``"Happy setting"`` etc.). It is definitionally ambiguous (which
+      board/openings pair with which winner), so it yields no winner and
+      ``ended_by="weld"`` — never the first victory latched (that is the §5.1
+      confidently-wrong outcome the brief forbids).
+    - **exactly 1 → victory** with that winner.
+    - **0 own-game victories →** a resign line closes with no winner
+      (``ended_by="resign"``); else the window ended by cutoff. Never infers a
+      winner from a non-victory line.
     """
-    for event in window:
-        if event.kind == "victory" and event.actor is not None:
-            return event.actor, "victory"
+    winners = _own_game_victories(window)
+    if len(winners) >= 2:
+        return None, "weld"
+    if len(winners) == 1:
+        return winners[0], "victory"
     for event in window:
         if event.kind == "resign":
             return None, "resign"

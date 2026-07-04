@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from catan_rl.human_data.logparse import parse_log
+from catan_rl.human_data.logparse import LogEvent, parse_log
 from catan_rl.human_data.segment import (
     GameSegment,
     load_strength_manifest,
@@ -272,3 +272,137 @@ def test_gamesegment_is_frozen() -> None:
     assert isinstance(seg, GameSegment)
     with pytest.raises((AttributeError, Exception)):
         seg.winner = "someone"  # type: ignore[misc]
+
+
+# --- weld / multi-victory guard (BLOCKER: §5.1 confidently-wrong) ------------
+
+
+def test_welded_window_with_two_victories_is_not_scoreboard_terminal() -> None:
+    # Two back-to-back games between the SAME two players weld when game N+1's
+    # reset marker is OCR-corrupted below the reset regex (e.g. "Happy setting").
+    # The window then structurally contains TWO victory events. Latching the first
+    # winner and reporting scoreboard-terminal is exactly the §5.1 confidently-wrong
+    # failure: it pairs game N's board+openings with a winner from a welded stream.
+    # A window with >=2 victory events is definitionally a weld → NOT terminal.
+    parsed = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "ThePhantom won the game!",  # game N victory
+            # game N+1's reset OCR'd as "Happy setting" (dropped 'l') → NOT a reset
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 won the game!",  # game N+1 victory — welded into the SAME window
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 1
+    welded = segs[0]
+    n_victory = sum(1 for e in welded.events if e.kind == "victory")
+    assert n_victory == 2
+    # The guard: a welded (multi-victory) window is flagged and NOT scoreboard-terminal.
+    assert welded.ended_by == "weld"
+    assert welded.winner is None
+    assert welded.is_scoreboard_terminal() is False
+
+
+# --- cross-frame dedup: scrolling-panel re-OCR must not split/fabricate ------
+
+
+def test_duplicate_reset_after_intervening_gameplay_does_not_split_a_game() -> None:
+    # §5.3 + §5.10: the Colonist log is a SCROLLING panel and Pass A samples at
+    # 1 frame / 3-5s, so a later frame re-OCRs the recent tail — including the
+    # lingering "Happy settling" reset — AFTER intervening gameplay from other
+    # frames. The stale run-collapse only merges STREAM-ADJACENT resets, so this
+    # duplicate reset opens a spurious second game. Dedup must collapse it: ONE
+    # real game → ONE segment with the correct winner.
+    stream = [
+        "Happy settling! Learn how to play in the",
+        "ThePhantom placed a Settlement",
+        "rayman147 placed a Settlement",
+        "ThePhantom rolled",
+        # a later overlapping frame re-shows the lingering reset then re-OCRs
+        # already-seen gameplay (the scrolling tail), NOT new content
+        "Happy settling! Learn how to play in the",
+        "ThePhantom placed a Settlement",
+        "rayman147 placed a Settlement",
+        "ThePhantom rolled",
+        "rayman147 rolled",
+        "ThePhantom won the game!",
+    ]
+    parsed = parse_log(stream, _HANDLES)
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 1
+    assert segs[0].winner == "ThePhantom"
+    assert segs[0].ended_by == "victory"
+    assert segs[0].is_scoreboard_terminal() is True
+
+
+def test_lingering_reset_run_collapses_to_one_start() -> None:
+    # A reset line that lingers on-screen across several sparse frames appears in
+    # the flattened stream interleaved with new gameplay below it:
+    #   reset, placed, reset(dup), placed, reset(dup), ... → still ONE game.
+    stream = [
+        "Happy settling! Learn how to play in the",
+        "ThePhantom placed a Settlement",
+        "Happy settling! Learn how to play in the",
+        "rayman147 placed a Settlement",
+        "Happy settling! Learn how to play in the",
+        "ThePhantom rolled",
+        "rayman147 rolled",
+        "ThePhantom won the game!",
+    ]
+    segs = segment_games(parse_log(stream, _HANDLES).events, handles=_HANDLES)
+    assert len(segs) == 1
+    assert segs[0].winner == "ThePhantom"
+
+
+def test_stale_victory_carried_past_next_reset_does_not_win_next_game() -> None:
+    # §5.1: game N's "won the game" line lingers on-screen into the frame that
+    # first shows game N+1's reset, so in the flattened stream the stale victory
+    # can land AFTER the next reset. Windows sliced on reset index would then
+    # attribute game N's win to game N+1's window (phantom win) and demote game N
+    # to cutoff (real win lost). The dedup collapses the stale copy; the
+    # within-window gate ignores a victory that is the FIRST substantive event of a
+    # window (a stale carry-over, not this game's own victory).
+    stream = [
+        # game N
+        "Happy settling! Learn how to play in the",
+        "ThePhantom placed a Settlement",
+        "rayman147 placed a Settlement",
+        "ThePhantom rolled",
+        "ThePhantom won the game!",
+        # game N+1 opens; the stale game-N victory re-OCRs right after its reset
+        "Happy settling! Learn how to play in the",
+        "ThePhantom won the game!",  # stale carry-over of game N's win
+        "ThePhantom placed a Settlement",
+        "rayman147 placed a Settlement",
+        "rayman147 rolled",
+        "rayman147 won the game!",  # game N+1's real winner
+    ]
+    segs = segment_games(parse_log(stream, _HANDLES).events, handles=_HANDLES)
+    assert len(segs) == 2
+    # game N keeps its real win
+    assert segs[0].winner == "ThePhantom"
+    assert segs[0].ended_by == "victory"
+    # game N+1 wins for rayman147, NOT the stale ThePhantom carry-over
+    assert segs[1].winner == "rayman147"
+    assert segs[1].ended_by == "victory"
+
+
+def test_stale_victory_as_first_window_event_is_ignored() -> None:
+    # Directly exercise the within-window stale-victory gate: a victory event with
+    # NO preceding gameplay in its window is a carry-over from the previous game
+    # (the panel had not scrolled the win off yet) → it must not latch a winner.
+    events = (
+        LogEvent(kind="game_reset", actor=None, text="Happy settling"),
+        LogEvent(kind="victory", actor="ThePhantom", text="ThePhantom won the game"),
+        LogEvent(kind="setup_settlement", actor="rayman147", text="rayman147 placed a Settlement"),
+        LogEvent(kind="roll", actor="ThePhantom", text="ThePhantom rolled"),
+    )
+    seg = segment_games(events, handles=_HANDLES)[0]
+    assert seg.winner is None
+    assert seg.ended_by == "cutoff"
