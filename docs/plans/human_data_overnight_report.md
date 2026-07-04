@@ -1,215 +1,239 @@
 # MORNING REPORT — human_data opening-extraction pipeline (overnight autonomous build)
 
-**Run:** overnight, autonomous, unattended — **you did not watch this run** (you asked me
-to build this phase while you slept).
-**Bottom line, up front:** The pipeline was **NOT** completed and the **full corpus was NOT
-harvested.** The build **halted with every Stage-1 and Stage-2 module RED**, so **both
-harvest gates (gold + glyph) are unmet** and **zero games were extracted.** Only the
-**scaffold** is READY. Nothing here claims a passing gate that did not pass.
+**Run:** overnight, autonomous, unattended. You did not watch this run — you asked me to
+build this phase while you slept. This is the 8am read.
+
+**Bottom line, up front:** The pipeline is **partially built and green where it is green,
+but the FULL CORPUS WAS NOT HARVESTED.** Four of six modules are **READY** (scaffold,
+Stage-1 gate, `validate`, `batch`), but the two modules that reconstruct openings and defend
+board orientation — **`openings` and `glyph_anchor` — HALTED RED** after 4 review/resolve
+iterations each with a **BLOCKER still open**. Because the full harvest is **hard-gated on
+BOTH the gold gate AND the glyph firewall being green**, and the glyph firewall is not
+validated, **the harvest did NOT run: zero games were extracted, zero rejected, and the
+rejection-bias audit was NOT reached.** Nothing below claims a gate that did not pass.
 
 ---
 
 ## 1. What shipped (READY modules + commits)
 
-| Module | Status | Commit(s) |
+| Module | Status | Commit | Notes |
+|---|---|---|---|
+| `scaffold` | **READY** (verify-only) | `588e3b9` | No new commit — foundation + orientation-bug fixes were already on `main` (lineage through `8e4bfce`/`734316e`); nothing was missing to commit. |
+| Stage-1 gate | **PASSED** | (gate, not a module) | See §2 for the numbers + 2 non-blocking caveats. |
+| `validate` | **READY** (iter 1) | `2020cade` | Pushed `36f9a08..2020cad`. Scope-locked to `validate.py` + tests; CPU-only, no gui/engine/training imports. 4 advisory SHOULD-FIX left open (see §5). |
+| `batch` | **READY** (iter 3) | `d0af930` | Current `HEAD`. Resume/quarantine plumbing. 4 advisory SHOULD-FIX left open (see §5). |
+
+Current `HEAD` = `d0af930` on `main`, consistent with the batch READY commit above.
+
+**NOT shipped (halted RED):**
+
+| Module | Status | Halt reason |
 |---|---|---|
-| **scaffold** | **READY** | already on `main`; no new commit this run (see note) |
-| ingest | RED (halted, stuck) | partial: `3b83f8b`, `d6bccc0` |
-| logparse | RED (halted, stuck) | in-tree, not gate-clean |
-| segment | RED (halted, stuck) | in-tree, not gate-clean |
-| board_cv | RED (impl agent died) | partial in-tree (through `734316e`) |
-| openings | **not built** (impl agent died iter 0) | none |
-| validate | **not built** (impl agent died iter 0) | none |
-| glyph_anchor | **not built** (impl agent died iter 0) | none |
-| batch | **not built** (impl agent died iter 0) | none |
-
-**Only `scaffold` is READY.** Every downstream module is either RED or never reached
-implementation.
-
-**Scaffold detail (the one green thing):**
-- Committed artifacts: `src/catan_rl/human_data/{record.py, orientation.py, ffmpeg.py,
-  topology.py, topology.json}`, `tests/unit/human_data/{test_scaffold.py,
-  test_orientation.py}`, `tests/fixtures/human_data/game1_openings.json` (desert=11),
-  `data/human/strength_manifest.json`.
-- Tests: prompt expected 59; there are now **92, all green** (coverage grew).
-- `scripts/mine_phantom.py` exists as an ingest entrypoint (later slice); the harvest
-  orchestrator (`batch`) was never built.
-
-**Commit-SHA discrepancy — honest flag.** The scaffold-stage journal recorded the
-foundation as banked at `c7938f6` and deliberately made **no new commit** ("empty/no-op
-commit deliberately not created"). The **actual current HEAD is `734316e`**
-("fix(human_data): harden board_cv orientation + resource firewalls"); `c7938f6`,
-`3b83f8b`, `d6bccc0` are all present earlier in history (verified). So work *was* committed
-past scaffold (through the board_cv hardening), but **no module past scaffold reached a
-green gate.** The tree is coherent — the "commit: none" note applies only to the scaffold
-stage, not the whole run.
+| `openings` | **RED — HALTED "stuck"** | 1 BLOCKER open after 4 iters (see §3). |
+| `glyph_anchor` | **RED — HALTED "stuck"** | 2 BLOCKERs open after 4 iters (see §3). |
 
 ---
 
-## 2. Every GATE result (with numbers)
+## 2. GATE RESULTS (every gate, with numbers)
 
-| Gate | Result | Numbers |
-|---|---|---|
-| **Stage-1 gate (g1)** | **SKIPPED** | blocked = `ingest, logparse, segment` (all RED); gate never ran |
-| **Stage-2 gates (g2)** | **SKIPPED** | `s1Ready=false, s1Gate=false`; s2 blocked = `board_cv, openings, validate, glyph_anchor, batch`; never ran |
-| **Gold gate** (harvest precondition) | **NOT MET** — `gold=false` | never evaluated; no clean end-to-end record produced |
-| **Glyph firewall** (harvest precondition) | **NOT MET** — `glyph=false` | `glyph_anchor` never built |
-| **Full harvest** | **GATED / did not run** | `harvest.ran=false` |
+### Stage-1 gold gate — **PASSED**
+- `tools_green`: **true**
+- `gold_reproduced`: **true**
+- `invariants_pass`: **true**
+- `fixture_untampered`: **true**
 
-**No gate produced a pass number.** There are no WR / precision / recall / accept-rate
-figures because no gate executed. There is no harvest-quality number to report — inventing
-one would be dishonest.
+Two caveats were recorded on the passing gate. **Neither invalidates the pass**, but both are
+carry-forward items:
 
----
+1. **Download flake (environmental, not pipeline):** `nmk59XWFRBU` (1 of 5 gate videos)
+   failed to **download** (not parse) — `yt-dlp` `"No supported JavaScript runtime /
+   Requested format is not available"` under the 1080p-only format fallback. The other 4
+   downloaded fine with `node` as the nsig runtime. Fix owed in `batch.py`: per-video
+   download-failure quarantine + retry, likely `--js-runtimes` or a format re-fallback. The
+   segment/logparse pipeline itself is unaffected.
+2. **Gate-driver artifact (not a pipeline bug):** the Stage-1 gate harness passed
+   `pov_handle=None`, so on POV videos ThePhantom's "You …" lines resolve `actor=None` and
+   the ruleset filter reads `actors=1` on games it should pass. The **production** path threads
+   the HUD-seat `pov_handle` (covered by `test_pov_handle_maps_leading_you_to_pov_seat`). When
+   Stage-2 wires HUD-seat detection, **re-verify `ruleset_ok=True` on POV-video victory
+   games.** Winner extraction is unaffected.
 
-## 3. Rejection-bias audit
+### Stage-2 gates — **SKIPPED (not run)**
+- Reason recorded: `s1Ready=true`, `s1Gate=true`, but `s2blocked=[openings, glyph_anchor]`.
+- Because two Stage-2 modules never reached READY, the Stage-2 gate harness was **skipped**
+  (`g2.ok=false`, `g2.skipped=true`). No Stage-2 gate numbers exist because it did not run.
 
-**Not reached.** The rejection-bias audit runs only over a harvested corpus (accepted vs.
-rejected games, checking rejections don't systematically drop a player / opening / board
-class). Harvest never ran, so there is **no corpus, no #games, no #rejected, and no
-rejection-bias audit.**
-
----
-
-## 4. Exactly WHERE it halted and WHY
-
-Five independent halt points, cascading Stage-1 → gate-skip → Stage-2 → harvest-gate. The
-three Stage-1 halts are **real correctness BLOCKERs** (red-team counterexamples that would
-corrupt the scoreboard); the Stage-2 halts are **infrastructure failures** (the implement
-sub-agent died on spawn, three retries each).
-
-### Stage-1 — three modules stuck after 4 resolve iterations each (real bugs)
-
-1. **`ingest` — verify RED (test/code mock gap).** `_cmd_ingest` → `ingest_video(...)` now
-   calls `resolve_ffprobe()` (added `d6bccc0`), but the committed test
-   `tests/unit/scripts/test_mine_phantom.py` (`3b83f8b`) only monkeypatches
-   `resolve_ffmpeg`, not `resolve_ffprobe`. On any box without `ffprobe` on PATH (confirmed
-   here), both ETA tests fail with `FFmpegNotFoundError`. The slice is **RED (2 failing
-   committed tests).** Fix for real (stub `resolve_ffprobe` or thread a resolver kwarg
-   through `_cmd_ingest`) — **not** by loosening the test.
-
-2. **`logparse` — red-team counterexample (fabricates a winner).**
-   `parse_log(["rayman147:gg you won the game"], (...))` returns
-   `winner="rayman147", kind="victory"` — **WRONG.** This is a *chat* line; must yield
-   `winner=None` (§5.1). Cause: chat-firewall regex `_CHAT_LINE = r"^[\w.\-|]+\s*:(?:\s|$)"`
-   (`logparse.py:186`) requires whitespace/EOL after the colon; when OCR drops the
-   post-colon space (within this module's *own* demonstrated OCR-noise envelope), the line
-   escapes the firewall, falls to the `"won the game"` victory branch (`logparse.py:349`),
-   and latches a winner. Also fires on `"ThePhantom:you won the game noob"` and
-   `"rayman147:lol i won the game"`. Existing chat tests all use `"handle: message"`
-   (colon+space), so the suite stays green while emitting a **confidently-wrong winner into
-   scoreboard-eligible records.** Fix: relax `_CHAT_LINE` for a missing post-colon space,
-   keep the single-leading-token guard; failing test first.
-
-3. **`segment` — red-team counterexample (false-splits one real game into two).**
-   `segment_games` false-splits a legitimate game whenever the lingering `"Happy settling"`
-   reset marker is re-OCR'd **after both seats have rolled once.** Cause: `segment.py:265`
-   predicate `... or len(rollers_since_start) >= 2`; `rollers_since_start` clears only at a
-   real start (`line 271`), stays saturated the rest of the game, so every lingering-reset
-   re-OCR after round 1 opens a spurious new game. The docstring premise ("a lingering
-   re-OCR never has both seats rolling yet") is false on the **flattened multi-frame
-   stream.** Wrong two ways at once:
-   - `seg0`: `winner=None, ended_by="cutoff"`, holds **both** opening-settlement lines,
-     `is_scoreboard_terminal()=False` — the real win is demoted and dropped.
-   - `seg1`: `winner="ThePhantom", ended_by="victory"`, `setup_lines=[]`, actors =
-     `{ThePhantom}` only → `ruleset_ok()=False` — a hollow terminal, no board/openings, no
-     opponent.
-
-   This is the **§5.1 outcome-to-position mispairing the module exists to prevent, in
-   reverse**, and it hits the **common case** (every completed game reaches a full round).
-   Fix: gate the `>=2 rollers` separator on `event.text not in reset_texts_in_window` (a
-   lingering re-OCR is text-identical by construction); care needed vs. test line 381.
-
-→ **Stage-1 gate SKIPPED** — `ingest, logparse, segment` all blocked.
-
-### Stage-2 — five modules, implement sub-agent DIED (infrastructure, not a code verdict)
-
-- `board_cv` — impl agent died **iter 1** (3 attempts, all `null`). Partial code landed
-  through `734316e` before the death.
-- `openings` — impl agent died **iter 0** (3 attempts). **Never built.**
-- `validate` — impl agent died **iter 0** (3 attempts). **Never built.**
-- `glyph_anchor` — impl agent died **iter 0** (3 attempts). **Never built.** ← hard-gates harvest.
-- `batch` — impl agent died **iter 0** (3 attempts). **Never built.**
-
-→ **Stage-2 gates SKIPPED** (`s1Ready=false, s1Gate=false`, all five s2 modules blocked).
-
-**Distinction that matters for the fix:** Stage-1 halts are *stuck-on-a-real-bug* (resolver
-couldn't clear a BLOCKER in 4 iterations). Stage-2 halts are *the implement agent failing to
-run at all* (process death, not a review verdict). Different remedies — see §7.
+### Full-harvest gate — **GATED, harvest did NOT run**
+- `gold=false`, `glyph=false` → harvest refused. (`gold=false` here is the *harvest-scale*
+  gold precondition being unmet because Stage-2 is incomplete, distinct from the Stage-1
+  fixture gold gate which **did** pass.)
+- Recorded decision: *"Pipeline built + validated; corpus harvest needs BOTH the gold gate
+  AND the glyph firewall green. Not scaling unprotected."* — this is the correct call, see §4.
 
 ---
 
-## 5. HARVEST status
+## 3. WHERE it halted and WHY (the two open BLOCKERs)
 
-**GATED. Nothing harvested.** `harvest.ran=false`.
+### `openings` — BLOCKER: road path emits a confidently-wrong opening under realistic occlusion
+The settlement path was hardened with an **area-dominance margin guard**
+(`_MIN_SETTLEMENT_AREA_MARGIN`: accepted blob must tower over the best rejected candidate,
+else reject "ambiguous"). **The road path has NO equivalent** — only an absolute pixel floor
+`_MIN_ROAD_PIXELS=20`. Red-team, reproduced end-to-end on the committed real game-1 frame:
 
-- **#games extracted:** 0
-- **#games rejected:** 0
-- **Rejection-bias audit:** not produced (no corpus).
+- Settlement 19 (BLACK/ThePhantom) incident-edge road-mask pixel counts:
+  edge 35 = **76** (TRUE opening road), edge 10 = **37** (WRONG-but-incident), edge 34 = 0.
+- The floor's docstring claims leaks collect ~11–34px and true roads ≥29px. But the real leak
+  (37px on edge 10) **exceeds** the claimed ceiling (34) — so **leak (37) > ceiling (34) >
+  floor (20)**: the floor does **not** separate leaks from true roads even unmodified.
+- Occlude the true road (paint a bright `(255,240,120)` glow along edge 35 — one of the
+  module's own named failure modes) and re-run: `_road_for_settlement(19)` now snaps to the
+  runner-up **edge 10** (37px > floor 20).
 
-Harvest requires **BOTH** preconditions green and **neither is:**
-- **Gold gate: `gold=false`** — no clean end-to-end record exists (Stage-1 never produced a
-  gate-passing `ingest→logparse→segment` record; `openings`/`validate` never built).
-- **Glyph firewall: `glyph=false`** — `glyph_anchor` was never built (impl agent died).
+**Why it is dangerous, not merely noisy:** edge 10 = verts (4,19) **is incident** to
+settlement 19, so the §5.7 road-incidence legality re-check **and** `record.validate` both
+**PASS** the fabricated road. The result is a fully-legal, confidently-wrong `GameRecord` that
+would silently corrupt the scoreboard/seed corpus. **Fix owed:** mirror the settlement guard —
+require the winning incident edge to dominate the 2nd-best incident edge by a margin
+(winner ≥ K × runner-up), else fall to `road_unresolved`; and recalibrate the floor.
 
-The run **correctly refused to scale an unprotected pipeline** (journal final line: "Not
-scaling unprotected."). That is the right call: harvesting now — with the logparse
-winner-fabrication bug and the segment false-split bug live, and **no glyph firewall** —
-would produce a corpus of confidently-wrong outcome→opening pairings, exactly what this
-pipeline exists to prevent.
+### `glyph_anchor` — 2 BLOCKERs (this is the module that hard-gates the safe harvest)
+**BLOCKER 1 — joint-flip firewall is resource-multiset-only and matches EITHER settlement.**
+The glyph anchor is the **sole** defense against a jointly-flipped board+openings (both stages
+flip together, so the desert-binding trivially agrees — the §5.2 orientation trap). But the
+check it feeds compares the granted-card multiset against the **resource** multiset only, and
+matches if it equals **either** opening settlement's adjacency. The committed board has only
+**28 distinct 3-hex resource multisets across 54 vertices**, and **38/54 vertices share a
+multiset with another vertex** (pinned in `test_glyph_anchor_multiset_collision_rate`). So a
+joint D6 flip landing the 2nd settlement on a collision-partner vertex **passes**
+`assert_glyph_anchor`. The two documented mitigations (match only the 2nd/resource-granting
+settlement via `draft_order`; corroborate with number-token adjacency) are written as
+"the batch MUST apply" in the docstring but **enforced nowhere in code**.
 
----
-
-## 6. Single-command resume state
-
-Resumable from the top of Stage-1 — no partial-harvest state to clean up (nothing was
-harvested):
-
-```
-node scripts/dev/human_data_build_wf.js
-```
-
-The workflow re-enters at the first blocked module. **Caveat:** the three Stage-1 BLOCKERs
-are **deterministic** and will re-halt at the same place unless fixed first (they are real
-counterexamples, not flaky). The Stage-2 deaths *may* clear on a clean re-run if transient;
-if the impl agent keeps dying at iter 0 across modules, that is an environment/harness
-problem, not per-module.
-
-**Working tree at report time:** HEAD `734316e`, clean except out-of-scope noise
-(`.claude/scheduled_tasks.lock` modified; untracked `data/exit/`, `src.mp4`,
-`scripts/export_dice_vectors.py`, `scripts/record_conformance.py`). None are pipeline
-artifacts; none were touched by this build.
-
----
-
-## 7. Human-decision items (your call at 8am)
-
-1. **Glyph classifier — HARD GATE, needs your decision.** `glyph_anchor` was **never
-   built** (impl agent died iter 0 ×3). It is the **glyph firewall that hard-gates the safe
-   full harvest** — without it, harvest cannot legitimately run. Decide: (a) retry the
-   autonomous build of `glyph_anchor` in isolation, (b) hand-build/spec it yourself, or
-   (c) define an interim manual-verification firewall. **No harvest until this is green.**
-
-2. **Stage-2 implement-agent deaths — infra triage.** Five modules died at spawn (`null
-   (agent died)`), four at iter 0 (never wrote a line), three retries each with no help.
-   This reads as a harness/environment failure (sub-agent process death), **not** five
-   independent code bugs. Decide whether to investigate the runner (timeouts, memory, spawn
-   limits) before the next launch, so the next overnight run doesn't lose all of Stage-2 the
-   same way.
-
-3. **Fix the three Stage-1 BLOCKERs first (cheapest unblocks, all prerequisites for the
-   gold gate).** Concrete fixes in §4: (i) `ingest` — mock `resolve_ffprobe`;
-   (ii) `logparse` — relax `_CHAT_LINE` for missing post-colon space; (iii) `segment` — gate
-   the `>=2 rollers` split on `reset_texts_in_window` membership. Each needs a **failing
-   test first**; none should be "fixed" by loosening an existing test.
-
-4. **Do NOT harvest yet.** Both gates are red. Any corpus produced now would carry the
-   winner-fabrication and false-split bugs and have no glyph firewall.
+**BLOCKER 2 — `classify_glyph` confidently mislabels a desaturated grey ORE stone as a
+coloured resource.** `glyph_anchor.py:333` gates ORE with `if sat < ore_max_saturation`; any
+swatch at/above the ceiling falls into the hue branch with no floor. Reproduced end-to-end:
+`HSV(5,62,175)` reddish-grey stone → `classify_glyph(...) == 'BRICK'` (should be ORE or an
+honest None). **Catastrophic, not lossy:** ORE→BRICK corrupts the granted multiset; a classic
+ore-city opening `{ORE,WHEAT,SHEEP}` misreads to `{BRICK,WHEAT,SHEEP}`, a very common 3-hex
+adjacency, which under a joint flip can then **match** the flipped settlement and let a
+jointly-flipped board weld into the corpus — the exact failure the anchor is the sole defense
+against. Root cause: `ore_max_saturation` is derived from **board hex tiles** but applied to
+**log card icons** (a different rendered asset). None of the 37 passing tests attack this
+saturation-just-above-ceiling direction. **Fix owed:** give the hue branch a saturation
+floor / ORE-vs-nearest-hue margin so low-saturation swatches fail closed to None.
 
 ---
 
-**One-line throughline:** The scaffold is solid and green (92 tests), but the pipeline never
-cleared Stage-1 (three real, scoreboard-corrupting bugs the resolver couldn't fix in 4
-tries) and Stage-2 never ran (the implement agent died on every module), so **both harvest
-gates are red and zero games were harvested — the run correctly refused to scale an
-unprotected, unverified pipeline.**
+## 4. HARVEST STATUS — **GATED (did not run)**
+
+**No corpus was harvested.** `harvest.ran = false`.
+
+- **#games extracted: 0**
+- **#rejected: 0**
+- **Rejection-bias audit (§5.6): NOT REACHED** — it runs only during a harvest; none ran.
+
+**Which gate blocked it:** the **glyph firewall** (`glyph_anchor`, RED with 2 open BLOCKERs)
+and the harvest-scale **gold** precondition (Stage-2 incomplete because `openings` is also
+RED). The harvest requires **BOTH** green; **both are red**.
+
+**What is needed to unblock the full harvest:**
+1. Land the `openings` road-dominance margin guard (§3) → `openings` READY.
+2. Land the `glyph_anchor` fixes (§3): 2nd-settlement-only + number-token corroboration
+   (BLOCKER 1) and the ORE saturation floor (BLOCKER 2) → `glyph_anchor` READY.
+3. **Validate the glyph classifier** so `assert_scale_up_orientation_gates` stops raising
+   `GlyphClassifierNotValidated` (this is the human-decision item in §6 — it is the hard gate
+   on the *safe* full harvest).
+4. Re-run the Stage-2 gates (currently skipped), then the harvest gate re-checks `gold` +
+   `glyph`.
+
+The decision **not** to scale an unprotected harvest was the right one: without the glyph
+firewall, a jointly-flipped board relabels all 54 vertex / 72 edge IDs and would be welded
+into the corpus **confidently wrong, not merely noisy.**
+
+---
+
+## 5. Advisory SHOULD-FIX carried on the READY modules (non-blocking)
+
+These did **not** block READY but are open. Most bear directly on **audit honesty** and the
+**glyph firewall being silently optional** — worth a look before any harvest.
+
+**`validate` (4):**
+- **Board-CV multiset misclassification substitutes a fixed placeholder board** — biases the
+  §5.6 rejection-bias audit for exactly the feature-correlated subset it must measure
+  (`validate.py:357-370`; `record.py` has no raw-features field). A board-CV-failed game gets
+  relabeled to one synthetic desert-11 archetype, so an analyst would wrongly conclude
+  rejection is not feature-correlated. **Fix:** preserve raw CV board on the rejected record
+  (`raw_hexes`/`provenance.cv_hexes`) or tag as an explicit unbucketable stratum.
+- **Joint-flip glyph-anchor firewall is silently optional in `cross_check`** (×2 findings) —
+  `granted_by_player` defaults to `None` and the anchor runs only `if granted_by_player is not
+  None` (`validate.py:191,289`); `assert_scale_up_orientation_gates` is never called by
+  `cross_check`. A batch caller that forgets it gets `accepted=True` on a jointly-flipped
+  board. **Fix:** make the joint-flip defense non-silent — require an explicit opt-out or
+  refuse `accepted=True` unless the anchor ran; `batch.py` MUST call
+  `assert_scale_up_orientation_gates` per game.
+- **`cross_check` cannot verify BoardRead is cross-frame-stable** — the §5.2-mandatory
+  stability lives in an unenforced calling convention. **Fix:** add `frames_corroborated:int`
+  / `cross_frame_stable:bool` set by `read_board_stable`, reject when <2.
+
+**`batch` (4):**
+- **`HarvestPlan` collapses 204 "high" videos into one scoreboard number** — hides that the
+  defensible strong-vs-strong n is only the **15 tournament** videos (the 189 `ranked_rank`
+  highs are opponent-uncontrolled). `record.py` says this split MUST be reported and never
+  collapsed. **Fix:** split scoreboard by `source` and print both.
+- **`batch-plan` ETA omits the Stage-2 board-OCR term** (~0.85h) — the go/no-go compute number
+  structurally under-reports. **Fix:** pass `accepted_board_frames_per_video`.
+- **`batch-plan` ETA models only the sparse Pass A** — dense setup-window frames unbudgeted.
+- **`net_concurrency` unenforced for a legacy 1-arg parse_fn** — downloads can fan out to
+  `max_workers`, violating the §5.11 1–2-wide cap. **Fix:** hard-fail/warn when the gate is
+  not accepted and `net_concurrency < max_workers`.
+
+---
+
+## 6. HUMAN-DECISION ITEMS
+
+1. **Glyph classifier is NOT validated (hard gate on the safe full harvest).**
+   `assert_scale_up_orientation_gates` correctly **raises `GlyphClassifierNotValidated`**
+   today — this is the intended block, and it is why I did not scale the harvest. **Decision
+   needed:** how you want the glyph classifier validated (e.g. label a held-out set of log-card
+   glyph crops and pin an accuracy floor) before enabling the full corpus run. Until that
+   exists, **no accepted record is trustworthy against a joint D6 flip**, so the harvest must
+   stay gated.
+2. **Two BLOCKERs are genuinely stuck after 4 iters each** (`openings` road-dominance guard,
+   `glyph_anchor` 2nd-settlement + ORE-floor). These are well-diagnosed with concrete
+   reproductions and named fixes (§3) but were not resolvable inside the autonomous loop's
+   iter budget. **Decision needed:** approve the specific fixes in §3 so I can land them next
+   session, or adjust the approach.
+3. **Scoreboard-power reality:** the defensible strong-vs-strong calibration n is **15**
+   (tournament), not 204. Confirm you want the two-number reporting (tournament vs rank_badge)
+   before any scoreboard is built.
+
+---
+
+## 7. SINGLE-COMMAND RESUME STATE
+
+- **Branch:** `main`, **HEAD:** `d0af930` (batch READY commit; workspace consistent with the
+  journal). Pushed through `2020cad` for `validate`.
+- **Green modules to build on:** `scaffold`, Stage-1 gate, `validate`, `batch`.
+- **Resume target:** land the two open BLOCKERs (§3), starting with `glyph_anchor` (it hard-
+  gates the harvest), then `openings`, then re-run the Stage-2 gates and the harvest gate.
+- **Resume command:**
+
+  ```
+  make human-data-resume          # re-enters the Stage-2 review/resolve loop at the
+                                  # halted modules (openings, glyph_anchor); on green it
+                                  # re-runs the Stage-2 gates then re-checks the harvest
+                                  # gate (gold + glyph). If that make target is not yet
+                                  # wired, resume via the Stage-2 loop entrypoint under
+                                  # src/catan_rl/human_data/ targeting [openings, glyph_anchor].
+  ```
+
+  The harvest will remain refused until **both** `gold` and `glyph` read green and the glyph
+  classifier is validated (§6 item 1).
+
+---
+
+**One plain throughline:** the plumbing is built and the parts that could be proven correct
+were proven and committed — but the two safety-critical readers (opening-road detection and
+the joint-flip glyph firewall) each have a reproduced, confidently-wrong failure that the
+existing checks pass, so I held the harvest at the gate rather than weld a corrupt corpus.
+Nothing here was harvested, and nothing here claims a gate it did not pass.
