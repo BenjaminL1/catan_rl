@@ -22,17 +22,26 @@ firewalls, of increasing power:
 Scope-lock (brief §6): the pure value contract (``record.py``) stays
 topology-free; the topology-aware orientation checks live here.
 
-**FIX 4 status — glyph classifier deferred, scale-up HARD-GATED.** A reliable
-log-glyph colour classifier could not be built within the bug-fix task from the
-single committed fixture (the committed ``game1_log_crop_t120.png`` is captured
-*before* any "received starting resources" event, and the glyphs in the
-post-setup frame are ~14px, line-wrapped, and merge with the adjacent text and
-the "placed a Settlement" tree icon — see the task report). The CHECK
-(:func:`granted_resources_under_orientation`, :func:`granted_multiset_matches_a_settlement`)
-is implemented and tested; the glyph *reader* is not validated. Therefore the
-300-game batch path MUST call :func:`assert_scale_up_orientation_gates`, which
-**raises** until a validated glyph classifier is wired — the batch can never run
-with the glyph anchor silently absent.
+**FIX 4 status — glyph READER built, scale-up still HARD-GATED on VALIDATION.**
+The CHECK (:func:`granted_resources_under_orientation`,
+:func:`granted_multiset_matches_a_settlement`) and the glyph *reader*
+(:mod:`catan_rl.human_data.glyph_anchor`:
+:func:`~catan_rl.human_data.glyph_anchor.classify_granted_glyphs` colour-classifies
+the granted resource card icons into a per-player multiset) are both implemented and
+tested. The reader is BEST-EFFORT and fails closed: an ambiguous / too-dark glyph
+returns ``None`` rather than a guess. The scale-up gate is NOT unblocked by merely
+having a reader — it flips to allowed only when the reader is *validated* on a real
+labelled post-grant corpus via
+:func:`~catan_rl.human_data.glyph_anchor.validate_glyph_classifier`
+(>= ``MIN_VALIDATION_FRAMES`` frames at >= ``MIN_VALIDATION_ACCURACY`` accuracy),
+whose result is threaded through
+:func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_is_validated` into
+:func:`assert_scale_up_orientation_gates`'s ``glyph_classifier_validated`` argument.
+The single committed ``game1_log_crop_t120.png`` fixture is captured *before* any
+"received starting resources" event so it holds no card glyphs; validation therefore
+still awaits a labelled post-grant corpus, and until it passes the 300-game batch
+path MUST call :func:`assert_scale_up_orientation_gates`, which **raises** — the
+batch can never run with the glyph anchor unvalidated.
 """
 
 from __future__ import annotations
