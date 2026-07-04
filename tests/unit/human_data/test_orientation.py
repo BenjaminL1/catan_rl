@@ -68,9 +68,10 @@ def _record() -> GameRecord:
             "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
         },
         dice_log=(8, 6, 11, 4),
-        # Game 1 was won by rayman147 (ThePhantom POV LOST) — the earlier
-        # winner="ThePhantom" label welded a later game's victory line onto game 1.
-        winner="rayman147",
+        # Game 1 ended by CONCESSION with no "won the game!" log line in its window
+        # (§5.1: winner = the victory LOG line ONLY), so winner is null — see
+        # test_scaffold._sample_record and the game1_openings.json winner_note.
+        winner=None,
         episode_source="natural",
         passed_crosscheck=True,
         provenance={

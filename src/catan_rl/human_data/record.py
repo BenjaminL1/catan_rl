@@ -80,6 +80,36 @@ VALID_DICE_VALUES: frozenset[int] = frozenset(range(2, 13))
 #: misclassification yields a structurally-valid-but-wrong board with the wrong
 #: counts (brief §5.6) — the multiset gate is the cheapest CV-relevant defense.
 #: Kept a local constant (no engine import) to preserve the scope-lock (brief §6).
+#:
+#: **NECESSARY, NOT SUFFICIENT (review findings §1/§2) — do NOT rely on this gate
+#: as the CV-correctness net**, exactly the way the glyph anchor in
+#: :mod:`catan_rl.human_data.orientation` is documented as necessary-not-sufficient.
+#: The gate only fires when the resource *counts* deviate; it is structurally
+#: blind to a multiset-*preserving* swap. Two concrete Stage-2 failure modes it
+#: cannot catch (they land here, in the contract, undetected):
+#:
+#: 1. A mis-tuned per-hex hue classifier that lands game-B's WOOD in the SHEEP bin
+#:    AND its SHEEP in the WOOD bin: the 4/4 counts are preserved, so the board is
+#:    confidently wrong yet the gate passes. The only CV classifier committed so
+#:    far (``scripts/dev/human_data_spikes/board_cv/spike2.py`` ``classify()``) is a
+#:    FIXED HSV-threshold table calibrated on one render — its docstring claims
+#:    "palette-agnostic" but the code is hardcoded thresholds, contradicting brief
+#:    §5.13 ("per-game palette must be generalized") and §2 ("median hex colour,
+#:    calibrated per-frame, not hardcoded"). The production ``board_cv.py`` MUST
+#:    generalize it: cluster the 19 sampled hex colours PER GAME and assign
+#:    cluster→resource from the frame's OWN samples, then corroborate each hex with
+#:    an orientation-independent signal (number-token adjacency / port hints) so a
+#:    multiset-preserving swap surfaces. Add a per-game calibration-residual gate.
+#: 2. The gate becomes **tautological** if ``board_cv.py`` assigns resources by
+#:    forcing the standard multiset (Hungarian cluster→resource assignment): the CV
+#:    has already forced the counts to match, so this gate can NEVER fire for the
+#:    resource dimension — it silently degrades to a no-op. The contract to pick
+#:    (document the choice in ``board_cv.py`` when built): (a) PREFERRED — classify
+#:    each hex INDEPENDENTLY (raw per-hex label) so this gate is a genuine
+#:    cross-check that can fail; or (b) if multiset-forced assignment is used, this
+#:    gate must be REPLACED for the resource dimension by an INDEPENDENT signal
+#:    (per-hex pip-count vs OCR-number agreement; cross-frame stability of each
+#:    hex's raw colour cluster) rather than the now-tautological count check.
 STANDARD_RESOURCE_COUNTS: dict[str, int] = {
     "DESERT": 1,
     "ORE": 3,
@@ -470,6 +500,12 @@ class GameRecord:
                 number_bag[num] += 1
 
         # --- standard-board multisets (brief §5.2 / §5.6, finding §1/§5) -----
+        # NECESSARY, NOT SUFFICIENT (review findings §1/§2): this catches a wrong
+        # *count* but is blind to a multiset-PRESERVING resource swap (wood↔sheep)
+        # and goes tautological if board_cv forces the standard multiset. It is NOT
+        # the CV-correctness net — see STANDARD_RESOURCE_COUNTS docstring for the
+        # per-game clustering + orientation-independent corroboration board_cv.py
+        # must add. Same "necessary-not-sufficient" caveat as the glyph anchor.
         if dict(resource_counts) != STANDARD_RESOURCE_COUNTS:
             raise ValueError(
                 f"board resource counts {dict(sorted(resource_counts.items()))} are not the "

@@ -87,14 +87,21 @@ def _sample_record() -> GameRecord:
             "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
         },
         dice_log=(8, 6, 11, 4),
-        # Game 1 (the t=80..620 segment) was won by rayman147, NOT ThePhantom:
-        # inside game 1's window the terminal LOG (spike scan_60_1200.json t=600)
-        # reads "rayman147 built a Settlement (+1 VP)" then "ThePhantom: gg"
-        # (ThePhantom conceding). The only "ThePhantom won the game" line (t=1160)
-        # belongs to a LATER game. Per spec §5.1 winner = the victory LOG line
-        # ONLY, so ThePhantom (the POV) LOST game 1. The earlier winner label was
-        # inverted (a later game's win line welded onto game 1).
-        winner="rayman147",
+        # Game 1 (the t=80..620 segment) ended by CONCESSION with NO victory log
+        # line, so per spec §5.1 the winner is null. Inside game 1's window the
+        # terminal LOG (spike scan_60_1200.json t=600) reads "rayman147 built a
+        # Settlement (+1 VP)" then "ThePhantom: gg" (ThePhantom conceding) — a
+        # "built a Settlement (+1 VP)" precursor and a "gg" are NOT the victory
+        # line. There is NO "won the game!" line anywhere in t=80..620 (verified
+        # programmatically against scan_60_1200.json); the only "ThePhantom won the
+        # gamel" line is at t=1160, which belongs to the NEXT game (the t=620..1180
+        # segment). §5.1: "Winner = the victory LOG line ONLY ... resign /
+        # video-cut-off-before-15VP → winner = null, exclude from scoreboard."
+        # Deriving winner="rayman147" from the "+1 VP" precursor would inject a
+        # fabricated outcome into the calibration scoreboard — exactly the
+        # confidently-wrong failure this pipeline exists to prevent. Winner is null;
+        # board + openings are kept for SEEDS only (is_seed_eligible() stays True).
+        winner=None,
         episode_source="natural",
         passed_crosscheck=True,
         # board + openings both locked under the desert=11 orientation (schema v2
@@ -176,9 +183,10 @@ def test_golden_fixtures_exist_and_load() -> None:
     parsed = json.loads(openings.read_text(encoding="utf-8"))
     # Golden IDs are the desert=11 re-snap (the desert=17 IDs were wrong).
     assert parsed["fit"]["desert_hex"] == 11
-    # Game 1's winner is rayman147 (POV ThePhantom LOST) — the earlier
-    # winner="ThePhantom" label welded a LATER game's victory line onto game 1.
-    assert parsed["winner"] == "rayman147"
+    # Game 1 ended by CONCESSION with no "won the game!" log line in its window
+    # (§5.1), so winner is null. Deriving a winner from the "+1 VP" precursor or
+    # the "gg" would fabricate an outcome for the calibration scoreboard.
+    assert parsed["winner"] is None
     assert parsed["openings"]["ThePhantom"]["settlements"] == [1, 19]
     assert parsed["openings"]["ThePhantom"]["roads"] == [0, 35]
     assert parsed["openings"]["rayman147"]["settlements"] == [11, 3]
@@ -766,8 +774,10 @@ def test_validate_allows_seven_in_dice_log() -> None:
 
 
 def test_validate_rejects_empty_dice_log_on_finished_game() -> None:
-    # A completed game (winner set) must carry its rolls.
+    # A completed game (winner set) must carry its rolls. The golden sample is a
+    # concession (winner=None), so set a genuine winner to exercise this branch.
     payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
     payload["dice_log"] = []
     with pytest.raises(ValueError, match="dice_log is empty"):
         GameRecord.from_dict(payload)
@@ -798,25 +808,37 @@ def test_validate_rejects_provenance_desert_disagreeing_with_board() -> None:
 # --- scoreboard-eligibility predicate exported as code (SHOULD-FIX) ---------
 
 
-def test_game1_winner_is_rayman147_pov_lost() -> None:
-    # Regression for the inverted-winner BLOCKER: game 1 was won by rayman147, so
-    # the record's winner must be rayman147 (the ThePhantom POV LOST). It is still
-    # a valid, scoreboard-eligible game (a correctly-labelled human loss) — the bug
-    # was the label, not eligibility. If this ever reads "ThePhantom" again, a
-    # later game's victory line has been welded onto game 1 and the calibration
-    # signal for this opening is inverted.
+def test_game1_winner_is_null_concession_no_victory_line() -> None:
+    # Regression for the red-team BLOCKER: game 1 (the t=80..620 segment) ended by
+    # CONCESSION with NO "won the game!" log line in its window (verified against
+    # scan_60_1200.json — the only WON line is at t=1160, which is game 2). Per
+    # spec §5.1 "Winner = the victory LOG line ONLY ... resign / cutoff → winner =
+    # null, exclude from scoreboard." The record must therefore carry winner=null
+    # and be scoreboard-INELIGIBLE — deriving "rayman147" from the "built a
+    # Settlement (+1 VP)" precursor (or from the "gg") would inject a fabricated
+    # outcome into the calibration scoreboard. It is STILL seed-eligible: the board
+    # + openings are usable seeds even without a labelled outcome. If winner ever
+    # reads a non-null handle again, a non-victory line (or a later game's win
+    # line) has been mis-derived as game 1's winner.
     rec = _sample_record()
-    assert rec.winner == "rayman147"
-    assert rec.winner != "ThePhantom"
-    assert rec.is_scoreboard_eligible() is True
+    assert rec.winner is None
+    assert rec.is_scoreboard_eligible() is False
+    assert rec.is_seed_eligible() is True
 
 
-def test_is_scoreboard_eligible_true_for_sample() -> None:
-    assert _sample_record().is_scoreboard_eligible() is True
+def test_is_scoreboard_eligible_true_for_a_won_tournament_game() -> None:
+    # The golden game-1 sample is a CONCESSION (winner=None) and is deliberately
+    # NOT scoreboard-eligible (BLOCKER §5.1) — so the positive-eligibility case
+    # sets a genuine victory winner on top of the sample's high/tournament
+    # strength + passed_crosscheck, exercising all clauses of the predicate.
+    payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
+    assert GameRecord.from_dict(payload).is_scoreboard_eligible() is True
 
 
 def test_is_scoreboard_eligible_false_when_tier_not_high() -> None:
     payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"  # isolate the tier clause (sample winner=None)
     payload["opponent_strength"]["tier"] = "unknown"
     assert GameRecord.from_dict(payload).is_scoreboard_eligible() is False
 
@@ -827,6 +849,7 @@ def test_is_scoreboard_eligible_false_for_known_window_high() -> None:
     # known_window record must NOT feed the scoreboard's §5.5 mixed-strength
     # filter — is_scoreboard_eligible() gates on source, not tier alone.
     payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"  # isolate the source clause (sample winner=None)
     payload["opponent_strength"] = {"tier": "high", "source": "known_window", "confidence": 0.8}
     rec = GameRecord.from_dict(payload)
     assert rec.opponent_strength.source == "known_window"
@@ -837,6 +860,7 @@ def test_is_scoreboard_eligible_false_for_known_window_high() -> None:
 def test_is_scoreboard_eligible_true_for_rank_badge_high() -> None:
     # The two manifest-backed high sources (rank_badge, tournament) ARE eligible.
     payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"  # isolate the source clause (sample winner=None)
     payload["opponent_strength"] = {"tier": "high", "source": "rank_badge", "confidence": 0.9}
     assert GameRecord.from_dict(payload).is_scoreboard_eligible() is True
 
@@ -849,6 +873,7 @@ def test_is_scoreboard_eligible_false_when_winner_null() -> None:
 
 def test_is_scoreboard_eligible_false_when_rejected() -> None:
     payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"  # isolate the rejection clause (sample winner=None)
     payload["rejection_reason"] = "green_tile_subtraction_failed"
     payload["passed_crosscheck"] = False
     rec = GameRecord.from_dict(payload)
