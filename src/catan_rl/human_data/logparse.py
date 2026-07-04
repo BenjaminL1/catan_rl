@@ -186,11 +186,33 @@ _HANDLE_MATCH_THRESHOLD = 0.6
 _CHAT_LINE = re.compile(r"^[\w.\-|]+\s*:(?:\s|$)")
 
 
-def _is_chat_line(low: str) -> bool:
+#: Leading token immediately followed by a colon — the chat form's structural
+#: signature. Unlike :data:`_CHAT_LINE` it does NOT require a post-colon space, so
+#: an OCR-space-dropped chat (``"rayman147:gg you won the game"``) is still caught;
+#: the colon must be adjacent to a SINGLE leading token, so a log line whose colon
+#: follows several words (``"list of commands: /help"``) never matches.
+_CHAT_LEAD = re.compile(r"^([\w.\-|]+)\s*:")
+
+
+def _is_chat_line(low: str, handles: Sequence[str] = ()) -> bool:
     """True if a normalised, lowercased line is a Colonist CHAT line, not a log
     event. Chat is ``"<handle>: <message>"``; log events never use ``<handle>:``.
+
+    Handle-aware: a line is chat iff a ``:`` immediately follows a LEADING token
+    that resolves to a known player handle. This firewalls a space-dropped chat
+    (``"rayman147:gg you won the game"`` — the §5.1 confidently-wrong winner trap
+    where the old post-colon-space regex let the chat escape into the victory
+    branch) while a log line whose colon follows non-handle words
+    (``"list of commands: /help"``) is NOT chat. With no handles supplied, falls
+    back to the structural form (colon then space/end-of-line).
     """
-    return _CHAT_LINE.match(low) is not None
+    if not handles:
+        return _CHAT_LINE.match(low) is not None
+    m = _CHAT_LEAD.match(low)
+    if m is None:
+        return False
+    lead = m.group(1)
+    return any(_handle_similarity(lead, h) >= _HANDLE_MATCH_THRESHOLD for h in handles)
 
 
 def _resolve_actor(line: str, handles: Sequence[str], pov_handle: str | None = None) -> str | None:
@@ -334,7 +356,7 @@ def parse_log(
         # Chat line ("<handle>: <message>") — same crop as the log, but NOT a log
         # event. It can never set a winner or an actor (§5.1 firewall against
         # "gg you won the game" flipping the outcome). Kept as unknown for §5.6.
-        if _is_chat_line(low):
+        if _is_chat_line(low, handles):
             events.append(LogEvent(kind="unknown", actor=None, text=line))
             continue
 

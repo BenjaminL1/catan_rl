@@ -129,6 +129,29 @@ def test_winner_null_on_resign_never_infers_other_player() -> None:
     assert [e.kind for e in parsed.events] == ["resign"]
 
 
+def test_winner_null_on_space_dropped_chat_quoting_victory() -> None:
+    # BLOCKER (overnight review): an OCR-space-dropped chat line
+    # "rayman147:gg you won the game" LEADS with a handle + colon, so it is chat and
+    # must NOT fabricate a winner — the old post-colon-space firewall let it escape
+    # into the victory branch. The handle-aware detector firewalls it.
+    parsed = parse_log(["rayman147:gg you won the game"], _HANDLES)
+    assert parsed.winner is None
+    assert [e.kind for e in parsed.events] == ["unknown"]  # firewalled as chat
+    # a real victory line (handle + space, no colon) is still read correctly
+    assert parse_log(["rayman147 won the game!"], _HANDLES).winner == "rayman147"
+
+
+def test_nonhandle_colon_line_is_not_firewalled_as_chat() -> None:
+    # Regression: a log line whose colon follows non-handle words
+    # ("list of commands: /help") must NOT be treated as chat by the handle-aware
+    # detector; only a handle-led "<handle>:" is chat (space or not).
+    from catan_rl.human_data.logparse import _is_chat_line
+
+    assert not _is_chat_line("list of commands: /help", _HANDLES)
+    assert _is_chat_line("rayman147: gg wp", _HANDLES)
+    assert _is_chat_line("rayman147:gg wp", _HANDLES)  # space-dropped still caught
+
+
 def test_winner_null_on_empty_and_gameplay_only_logs() -> None:
     assert parse_log([], _HANDLES).winner is None
     assert parse_log(["ThePhantom rolled", "rayman147 got"], _HANDLES).winner is None
