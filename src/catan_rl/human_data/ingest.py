@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -290,7 +290,7 @@ def ingest_video(
     dense_interval_s: float = DEFAULT_DENSE_INTERVAL_S,
     ffmpeg: str | None = None,
     work_dir: Path | None = None,
-) -> Iterator[DecodedFrame]:
+) -> Generator[DecodedFrame, None, None]:
     """Ingest one video end-to-end: download → decode scheduled frames → delete.
 
     Builds the two-pass schedule (:func:`build_sampling_schedule`), downloads the
