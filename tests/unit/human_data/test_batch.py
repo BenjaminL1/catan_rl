@@ -463,6 +463,43 @@ def test_unknown_video_high_tier_record_routed_to_rejected(tmp_path: Path) -> No
     assert not rejected[0].passed_crosscheck
 
 
+def test_already_rejected_record_keeps_true_reason_on_strength_mismatch(tmp_path: Path) -> None:
+    """A record that is BOTH an over-claimed ``high`` tier on an ``unknown`` video
+    AND already a genuine reject (orientation weld) must keep its TRUE, feature-
+    correlated ``rejection_reason`` in ``rejected.jsonl`` — the strength-mismatch
+    stamp must NOT clobber the real cause (BLOCKER: red-team counterexample).
+
+    The §5.6 rejection-bias audit buckets rejected games by their real cause
+    (green-tile subtraction is harder near wood/sheep → rejection is feature-
+    correlated); overwriting an ``orientation_mismatch_desert_hex`` cause with the
+    strength reason biases that audit's per-archetype acceptance rates.
+    """
+    from catan_rl.human_data.batch import STRENGTH_MISMATCH_REASON
+
+    manifest = _write_manifest(tmp_path, [_manifest_row("vidUNKNOWN00", "unknown")])
+
+    def parse_fn(video_id: str) -> list[GameRecord]:
+        # Compound bug: an unknown video stamped high tier (parse over-claim) AND a
+        # genuine orientation-weld reject (board=11 / openings=17). The record
+        # already carries the true, feature-correlated rejection_reason.
+        return [_make_record(video_id, 1, accepted=False, manifest_strength="high")]
+
+    out = tmp_path / "out"
+    result = run_batch(manifest_path=manifest, out_dir=out, parse_fn=parse_fn, max_workers=1)
+
+    assert result.records_accepted == 0
+    assert result.records_rejected == 1
+    rejected = _read_jsonl(out / "rejected.jsonl")
+    assert [r.game_index for r in rejected] == [1]
+    reason = rejected[0].rejection_reason
+    assert reason is not None
+    # The TRUE orientation cause must survive (not be clobbered by the strength stamp).
+    assert "orientation_mismatch_desert_hex:board=11:openings=17" in reason
+    # The strength mismatch is appended (compound reason), not overwriting the cause.
+    assert STRENGTH_MISMATCH_REASON in reason
+    assert not rejected[0].passed_crosscheck
+
+
 def test_high_video_high_tier_record_accepted(tmp_path: Path) -> None:
     """A ``high``-manifest video legitimately emitting ``tier="high"`` is accepted
     (the cross-check only rejects an OVER-claim, never a consistent one)."""

@@ -323,7 +323,10 @@ class _Sink:
         ``opponent_strength.tier`` is inconsistent with its manifest strength
         (:meth:`_strength_ok`) is downgraded to a rejected row carrying
         :data:`STRENGTH_MISMATCH_REASON` — a loud failure in ``rejected.jsonl``
-        rather than a silent scoreboard contamination.
+        rather than a silent scoreboard contamination. If the record was ALREADY a
+        reject, its true (feature-correlated) ``rejection_reason`` is preserved and
+        the strength mismatch is **appended** (compound reason), never clobbered —
+        the §5.6 rejection-bias audit must see the real cause (BLOCKER fix).
 
         The video-level ``done`` marker is appended **only after every game is
         committed** and is the SOLE resume-skip signal (:func:`_done_video_ids`).
@@ -333,16 +336,39 @@ class _Sink:
         """
         accepted = rejected = 0
         for record in records:
+            # A parse_fn / segment contract violation (a wrong video_id stamped on a
+            # record) would key its per-game ledger row on the wrong id while the
+            # video-level ``done`` marker uses the harvested id — a resume hazard.
+            # Assert the parse_fn honoured the id it was invoked under (§6 contract).
+            if record.video_id != video_id:
+                raise ValueError(
+                    f"parse_fn for video {video_id!r} returned a record stamped with "
+                    f"video_id {record.video_id!r} — a record must carry the video_id it "
+                    "was parsed under (segment/parse_fn contract; keys the ledger + dedup)"
+                )
             key = (record.video_id, record.game_index)
             if key in self._committed:
                 continue
             if not self._strength_ok(record):
                 # Manifest is the source of truth (§5.5): an over-claimed ``high``
                 # tier is rejected loudly, never written to the scoreboard corpus.
+                # But if the record is ALREADY a reject, its true, feature-correlated
+                # cause (e.g. an orientation weld) MUST survive for the §5.6 audit —
+                # append the strength mismatch as a compound reason, never overwrite
+                # it (a clobbered orientation cause biases the per-archetype audit).
+                if record.passed_crosscheck:
+                    new_reason: str = STRENGTH_MISMATCH_REASON
+                else:
+                    existing = record.rejection_reason or ""
+                    new_reason = (
+                        f"{existing};{STRENGTH_MISMATCH_REASON}"
+                        if existing
+                        else STRENGTH_MISMATCH_REASON
+                    )
                 record = replace(
                     record,
                     passed_crosscheck=False,
-                    rejection_reason=STRENGTH_MISMATCH_REASON,
+                    rejection_reason=new_reason,
                 )
             if record.passed_crosscheck:
                 _append_line(self.corpus_path, record.to_json_line())
