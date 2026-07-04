@@ -68,7 +68,12 @@ def _sample_record() -> GameRecord:
         video_id="9Sm86ml04aI",
         game_index=1,
         players={"agent": "ThePhantom", "opponent": "rayman147"},
-        opponent_strength=OpponentStrength(tier="high", source="known_window", confidence=0.8),
+        # Faithful to the committed strength manifest: video 9Sm86ml04aI IS the
+        # tournament entry (strength="high", source="tournament"). Using a real
+        # manifest-backed high source (not the unfalsifiable known_window
+        # placeholder) keeps the golden scoreboard-eligible under the tightened
+        # is_scoreboard_eligible() source clause.
+        opponent_strength=OpponentStrength(tier="high", source="tournament", confidence=0.8),
         ruleset={"num_players": 2, "win_vp": 15},
         hexes=_GAME1_HEXES,
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
@@ -670,6 +675,26 @@ def test_is_scoreboard_eligible_false_when_tier_not_high() -> None:
     payload = _sample_record().to_dict()
     payload["opponent_strength"]["tier"] = "unknown"
     assert GameRecord.from_dict(payload).is_scoreboard_eligible() is False
+
+
+def test_is_scoreboard_eligible_false_for_known_window_high() -> None:
+    # The known_window placeholder is unfalsifiable (no committed backing window;
+    # the manifest emits zero known_window entries). Even with tier="high", a
+    # known_window record must NOT feed the scoreboard's §5.5 mixed-strength
+    # filter — is_scoreboard_eligible() gates on source, not tier alone.
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"] = {"tier": "high", "source": "known_window", "confidence": 0.8}
+    rec = GameRecord.from_dict(payload)
+    assert rec.opponent_strength.source == "known_window"
+    assert rec.opponent_strength.tier == "high"
+    assert rec.is_scoreboard_eligible() is False
+
+
+def test_is_scoreboard_eligible_true_for_rank_badge_high() -> None:
+    # The two manifest-backed high sources (rank_badge, tournament) ARE eligible.
+    payload = _sample_record().to_dict()
+    payload["opponent_strength"] = {"tier": "high", "source": "rank_badge", "confidence": 0.9}
+    assert GameRecord.from_dict(payload).is_scoreboard_eligible() is True
 
 
 def test_is_scoreboard_eligible_false_when_winner_null() -> None:

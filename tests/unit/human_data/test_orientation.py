@@ -57,7 +57,9 @@ def _record() -> GameRecord:
         video_id="9Sm86ml04aI",
         game_index=1,
         players={"agent": "ThePhantom", "opponent": "rayman147"},
-        opponent_strength=OpponentStrength(tier="high", source="known_window", confidence=0.8),
+        # Manifest-faithful high source (9Sm86ml04aI is the tournament entry);
+        # avoids the unfalsifiable known_window placeholder.
+        opponent_strength=OpponentStrength(tier="high", source="tournament", confidence=0.8),
         ruleset={"num_players": 2, "win_vp": 15},
         hexes=_GAME1_HEXES,
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),

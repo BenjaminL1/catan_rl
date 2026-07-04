@@ -151,10 +151,25 @@ StrengthTier = Literal["high", "unknown"]
 #:   ``tier="high", source="known_window"`` remains unfalsifiable, so it must not
 #:   feed the scoreboard's mixed-strength-pooling filter (§5.5).
 #:
-#: The manifest's third source, ``"none"`` (strength unknown / excluded), is NOT
-#: a valid :class:`OpponentStrength.source`: an unknown-strength game gets
+#: The manifest's third source, ``"none"`` (strength unknown), is NOT a valid
+#: :class:`OpponentStrength.source`: an unknown-strength game gets
 #: ``tier="unknown"`` (with whatever source the record carries — never a fake
 #: ``high``), and an ``excluded`` manifest video never becomes a record at all.
+#:
+#: **``segment.py`` MUST key the excluded-vs-high decision on the manifest's
+#: ``strength`` field, NOT its ``source`` field.** The committed manifest holds
+#: three distinct ``strength`` values — ``high`` (204), ``unknown`` (574),
+#: ``excluded`` (36) — and ``excluded`` and ``unknown`` are BOTH distinct from
+#: ``high`` (they map away from a record / to ``tier="unknown"``, never to a high
+#: record). Crucially, ``source`` alone is ambiguous: 36 ``excluded`` videos
+#: carry ``source="ranked_rank"`` (a real rank badge read, but rank
+#: > ``rank_high_max=200``, so excluded). A naive ``ranked_rank → rank_badge,
+#: tier="high"`` mapping keyed on ``source`` would turn a genuinely rank-200+
+#: opponent into a confidently-wrong top-tier record. So the derivation gates on
+#: ``strength`` first (``high`` → build a high record with the source mapped;
+#: ``unknown`` → ``tier="unknown"``; ``excluded`` → emit NO record) and only then
+#: maps ``source``. This is enforced where ``segment.py`` is built, not in this
+#: pure value contract (the record carries no manifest linkage to check).
 StrengthSource = Literal["rank_badge", "known_window", "tournament"]
 
 
@@ -288,12 +303,15 @@ class GameRecord:
           rejected record is **scoreboard-ineligible by definition** but still
           emits its parsed features for the §5.6 rejection-bias audit.
         - **scoreboard-eligible** ⟺ ``winner is not None`` AND ``passed_crosscheck``
-          AND ``opponent_strength.tier == "high"`` AND ``rejection_reason is None``
-          (the §5.4 filter). Not asserted (eligibility is a *property*, not every
-          record must be eligible), but it is implemented as the exported
-          :meth:`is_scoreboard_eligible` — **that method is the single source of
-          truth**; the scoreboard builder and the rejection-bias audit must both
-          call it so the mixed-strength-pooling filter (§5.5) can't drift.
+          AND ``opponent_strength.tier == "high"`` AND
+          ``opponent_strength.source in {"rank_badge", "tournament"}`` AND
+          ``rejection_reason is None`` (the §5.4 filter). Not asserted (eligibility
+          is a *property*, not every record must be eligible), but it is
+          implemented as the exported :meth:`is_scoreboard_eligible` — **that
+          method is the single source of truth**; the scoreboard builder and the
+          rejection-bias audit must both call it so the mixed-strength-pooling
+          filter (§5.5) can't drift. The ``source`` clause excludes the
+          unfalsifiable ``known_window`` placeholder (see :data:`StrengthSource`).
         - **seed-eligible** ⟺ ``passed_crosscheck`` (brief §5.7), exported as
           :meth:`is_seed_eligible`; eval/anchor additionally see only
           ``episode_source == "natural"`` seeds.
@@ -569,13 +587,29 @@ class GameRecord:
         load-bearing one: dropping it silently pools ``"unknown"``-tier games
         into the calibration number, the §5.5 mixed-strength-pooling bias.
 
+        The ``source in {"rank_badge", "tournament"}`` clause closes the
+        ``known_window`` placeholder escape hatch: :data:`StrengthSource` still
+        carries ``"known_window"`` for backwards compatibility, but it is an
+        unfalsifiable legacy source with no committed backing window (the
+        committed strength manifest uses only ``ranked_rank`` / ``tournament`` /
+        ``none`` and emits zero ``known_window`` entries). A hand-set or drifted
+        ``tier="high", source="known_window"`` record must NOT pool into the
+        calibration number — that is exactly the §5.5 confidently-wrong
+        mixed-strength failure this predicate is the last gate against. Only the
+        two manifest-backed high sources are admitted, so the firewall enforces
+        the exclusion its own §5.5 docstring documents rather than leaving it as
+        prose (review finding: known_window escape hatch).
+
         scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
-        AND ``opponent_strength.tier == "high"`` AND ``rejection_reason is None``.
+        AND ``opponent_strength.tier == "high"`` AND
+        ``opponent_strength.source in {"rank_badge", "tournament"}`` AND
+        ``rejection_reason is None``.
         """
         return (
             self.winner is not None
             and self.passed_crosscheck
             and self.opponent_strength.tier == "high"
+            and self.opponent_strength.source in ("rank_badge", "tournament")
             and self.rejection_reason is None
         )
 
