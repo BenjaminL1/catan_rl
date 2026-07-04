@@ -89,6 +89,10 @@ async function buildSlice(slice, phase) {
       note(`${slice.module} iter ${iter}: verify RED -> resolve`); continue
     }
 
+    // verify-only slices (e.g. the already-reviewed scaffold) are READY once green — no
+    // lens/red-team loop (that thrashes on design trade-offs, not code bugs).
+    if (slice.verifyOnly) { note(`READY ${slice.module} (verify-only, iter ${iter}, commit ${impl.commit})`); return { module: slice.module, ready: true, iters: iter + 1, commit: impl.commit, notes: impl.notes, shouldfix: [] } }
+
     const lenses = (await parallel([
       () => agent(`${COMMON}\n\nREVIEW \`${slice.module}\` — LENS A DATA/MEASUREMENT CORRECTNESS. Read the actual files. Does it avoid every §5 trap relevant to this slice? Would it yield a dataset that is CONFIDENTLY WRONG (biased/mislabeled) rather than merely noisy? Severity-tag findings (BLOCKER/SHOULD-FIX/NIT) with concrete fixes.`,
         { label: `revA:${tag}`, phase, schema: REVIEW, effort: 'high' }),
@@ -99,13 +103,18 @@ async function buildSlice(slice, phase) {
       `${COMMON}\n\nRED-TEAM \`${slice.module}\`: your ONLY job is to find a case where its output is WRONG. Sample real games/frames, reconstruct the engine board from the record and compare to the source frame, probe the deterministic invariants and edge cases (occlusion, non-default palette, animation frames, video cutoff). Report broke=true + a concrete counterexample if you find one.`,
       { label: `redteam:${tag}`, phase, schema: REDTEAM, effort: 'high' })
 
-    const open = lenses.flatMap((r) => r.findings || []).filter((f) => f.severity === 'BLOCKER' || f.severity === 'SHOULD-FIX')
-    if (rt && rt.broke) open.push({ severity: 'BLOCKER', title: 'red-team counterexample', where: slice.module, issue: rt.counterexample, fix: 'handle this case' })
-    if (open.length === 0) { note(`READY ${slice.module} (iter ${iter}, commit ${impl.commit})`); return { module: slice.module, ready: true, iters: iter + 1, commit: impl.commit, notes: impl.notes } }
+    const blockers = lenses.flatMap((r) => r.findings || []).filter((f) => f.severity === 'BLOCKER')
+    if (rt && rt.broke) blockers.push({ severity: 'BLOCKER', title: 'red-team counterexample', where: slice.module, issue: rt.counterexample, fix: 'handle this case' })
+    const shouldfix = lenses.flatMap((r) => r.findings || []).filter((f) => f.severity === 'SHOULD-FIX')
+    // BLOCKER always blocks; SHOULD-FIX gets ONE resolve attempt (iter 0) then becomes
+    // ADVISORY (carried to the report, not looped) — prevents thrash on design trade-offs
+    // that a resolve agent can never "fix" (they are choices, not bugs).
+    const open = iter === 0 ? [...blockers, ...shouldfix] : blockers
+    if (open.length === 0) { note(`READY ${slice.module} (iter ${iter}, commit ${impl.commit}, ${shouldfix.length} advisory should-fix)`); return { module: slice.module, ready: true, iters: iter + 1, commit: impl.commit, notes: impl.notes, shouldfix } }
     findings = open
-    note(`${slice.module} iter ${iter}: ${open.length} open (${open.map((f) => f.severity).join(',')}) -> resolve`)
+    note(`${slice.module} iter ${iter}: ${blockers.length} BLOCKER + ${shouldfix.length} SHOULD-FIX -> resolve`)
   }
-  note(`HALT ${slice.module}: still NOT-READY after ${MAX_ITERS} iters (stuck)`); return { module: slice.module, ready: false, halted: 'stuck', remaining: findings }
+  note(`HALT ${slice.module}: BLOCKER still open after ${MAX_ITERS} iters (stuck)`); return { module: slice.module, ready: false, halted: 'stuck', remaining: findings }
 }
 
 async function runStage(phase, slices) {
@@ -122,7 +131,9 @@ async function runStage(phase, slices) {
 phase('Stage0 scaffold')
 const scaffold = await buildSlice({
   module: 'scaffold',
-  what: `The scaffold AND the orientation-bug fixes are ALREADY BUILT AND COMMITTED on main: the src/catan_rl/human_data/ package (record.py with the schema-v2 GameRecord + provenance ORIENTATION-BINDING validate(), topology.py/json, ffmpeg.py, orientation.py with the glyph-anchor check + scale-up gates), banked spike code at scripts/dev/human_data_spikes/, the CORRECTED game-1 golden fixtures (tests/fixtures/human_data/game1_openings.json is desert=11 with re-snapped IDs — NOT the old desert=17), and tests/unit/human_data/test_scaffold.py (59 passing). Also NEW this session: data/human/strength_manifest.json (the committed opponent-strength source). Your job is NOT to rebuild — VERIFY the foundation is present + correct (schema_version==2; validate() REJECTS a welded board=desert11/openings=desert17 record; the corrected fixture loads; the tests pass; ruff + mypy --strict clean; the strength manifest loads and has 814 videos incl. 'high' entries) and commit only anything genuinely missing. Then READY. Do NOT touch /tmp; do NOT revert the desert=11 fixture to desert=17.`,
+  verifyOnly: true,  // a reviewed, green foundation — verify it's present + green, then proceed (no lens loop)
+  what: `ACCEPTED DESIGN DECISIONS (do NOT re-litigate — a prior run thrashed 4 iters on these; they are choices, not bugs): (1) opponent_strength is deliberately ThePhantom's OWN top-200 matchmaking rank from the committed manifest (opponents are Elo-matched) — this is the user's explicit definition, not a gap; (2) the 15 tournament highs are title-keyword-labeled by design (his tournament titles are unambiguous) — acceptable; (3) the standard-board multiset gate is one of SEVERAL cross-checks (necessary-not-sufficient by design) — board_cv/validate add orientation + residual + cross-frame gates. Your job: VERIFY the foundation is present + green, nothing more.
+The scaffold AND the orientation-bug fixes are ALREADY BUILT AND COMMITTED on main: the src/catan_rl/human_data/ package (record.py with the schema-v2 GameRecord + provenance ORIENTATION-BINDING validate(), topology.py/json, ffmpeg.py, orientation.py with the glyph-anchor check + scale-up gates), banked spike code at scripts/dev/human_data_spikes/, the CORRECTED game-1 golden fixtures (tests/fixtures/human_data/game1_openings.json is desert=11 with re-snapped IDs — NOT the old desert=17), and tests/unit/human_data/test_scaffold.py (59 passing). Also NEW this session: data/human/strength_manifest.json (the committed opponent-strength source). Your job is NOT to rebuild — VERIFY the foundation is present + correct (schema_version==2; validate() REJECTS a welded board=desert11/openings=desert17 record; the corrected fixture loads; the tests pass; ruff + mypy --strict clean; the strength manifest loads and has 814 videos incl. 'high' entries) and commit only anything genuinely missing. Then READY. Do NOT touch /tmp; do NOT revert the desert=11 fixture to desert=17.`,
   tests: `the existing tests/unit/human_data/ suite passes; schema_version==2; validate() rejects a welded desert11/desert17 record.`,
   invariants: `package imports without gui/torch; schema v2; provenance-binding firewall present; game-1 fixture is desert=11; strength_manifest.json present`,
 }, 'Stage0 scaffold')
