@@ -128,6 +128,29 @@ def _cmd_batch_plan(args: argparse.Namespace) -> int:
         f"{seed_only} seed-only (unknown); "
         f"{plan.excluded_count} excluded (dropped)"
     )
+
+    # Corpus-representative OCR ETA (brief §5.10): the harvest COUNT
+    # (len(plan.harvested)) x a representative MEAN video length, so the operator
+    # sees a wall-clock number for the whole job before launching it — not the
+    # ingest smoke's single-video ETA with n_videos=1. The ETA assumes every video
+    # is shaped like a --mean-duration-second video (a coarse estimate: ThePhantom
+    # video length varies widely, esp. multi-game compilations).
+    n_videos = len(plan.harvested)
+    if n_videos > 0:
+        schedule = build_sampling_schedule(
+            args.mean_duration, sparse_interval_s=args.sparse_interval
+        )
+        eta_s = schedule_ocr_eta_s(
+            schedule,
+            args.mean_duration,
+            n_videos=float(n_videos),
+            n_procs=args.n_procs,
+        )
+        print(
+            f"[batch] OCR ETA (assumes mean video length {args.mean_duration:g}s): "
+            f"{len(schedule)} frames/video x 0.58s x {n_videos} videos "
+            f"/ n_procs={args.n_procs} = {eta_s:.0f}s ({eta_s / 3600.0:.2f}h)"
+        )
     return 0
 
 
@@ -168,7 +191,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     batch = sub.add_parser(
         "batch-plan",
-        help="print the manifest harvest plan (high+unknown; no parse)",
+        help="print the manifest harvest plan + corpus OCR ETA (high+unknown; no parse)",
+    )
+    batch.add_argument(
+        "--mean-duration",
+        dest="mean_duration",
+        type=float,
+        default=4740.0,
+        help="representative mean video length in seconds for the corpus ETA "
+        "(brief §5.10; default ~79 min)",
+    )
+    batch.add_argument(
+        "--sparse-interval",
+        dest="sparse_interval",
+        type=float,
+        default=4.0,
+        help="sparse-pass cadence in seconds for the ETA schedule (default 4.0)",
+    )
+    batch.add_argument(
+        "--n-procs",
+        dest="n_procs",
+        type=int,
+        default=1,
+        help="perf cores OCR fans out across in the ETA (brief §5.10; default 1)",
     )
     batch.set_defaults(func=_cmd_batch_plan)
     return parser

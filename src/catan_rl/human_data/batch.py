@@ -20,17 +20,25 @@ YouTube corpus into the JSONL dataset. It:
 Durability / resume model
 -------------------------
 Each JSONL append is a single ``write`` + ``flush`` + ``fsync`` in ``"a"`` mode
-(atomic for the small line sizes here on POSIX). A video is committed as a unit:
-its records are written, then its ledger rows. Resume is made idempotent by
-**deduping against the record keys already on disk** — before writing a video's
-records, any ``(video_id, game_index)`` already present in ``corpus.jsonl`` /
-``rejected.jsonl`` is skipped. So a hard kill between a record append and its
-ledger append can never produce a duplicate: the resuming run sees the record
-key on disk and does not re-emit it. A ``VideoParseError`` marks the whole video
-``failed`` (retried on resume — not terminal). A crash mid-video may leave a
-torn *final* line; :func:`load_ledger` and the corpus readers tolerate it by
-skipping blank/partial trailing lines, and the video is re-parsed on resume
-(its already-committed games dedup out).
+(atomic for the small line sizes here on POSIX). Commit is **per game** (a game's
+record is written, then its ``done`` ledger row), and resume is **game-granular**:
+after all of a video's games are committed, a single video-level ``done`` marker
+(``game_index=None``) is appended, and ONLY that marker makes the video skippable
+on resume (:func:`_done_video_ids`). A video killed mid-commit — after game 1's
+rows but before game 2's, whether by a hard SIGKILL or any non-``VideoParseError``
+raised during a later append — has NO video-level marker, so the resuming run
+**re-parses it in full** and the on-disk ``_committed`` dedup drops the games
+already written (game 1 dedups out, game 2 is re-emitted). This closes the §5.6
+rejection-bias hazard where a mid-video kill silently dropped a multi-game video's
+tail games (its modal shape — ThePhantom videos hold many back-to-back games).
+
+Resume idempotence rests on that same **dedup against the record keys already on
+disk**: before writing a game, any ``(video_id, game_index)`` already present in
+``corpus.jsonl`` / ``rejected.jsonl`` is skipped, so a hard kill between a record
+append and its per-game ledger append can never duplicate a row. A
+``VideoParseError`` marks the whole video ``failed`` (retried on resume — not
+terminal). A crash mid-video may leave a torn *final* line; :func:`load_ledger`
+and the corpus readers tolerate it by skipping blank/partial trailing lines.
 
 CPU-only; never imports ``gui/`` or the training path.
 """
@@ -38,11 +46,13 @@ CPU-only; never imports ``gui/`` or the training path.
 from __future__ import annotations
 
 import concurrent.futures
+import inspect
 import json
 import os
+import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -54,14 +64,36 @@ from catan_rl.human_data.segment import load_strength_manifest, manifest_entry
 #: ``high`` + ``unknown`` feed the seed corpus (build brief §5.5).
 HARVEST_STRENGTHS: frozenset[str] = frozenset({"high", "unknown"})
 
-#: Ledger row status. ``done`` = one game's record committed;
-#: ``failed`` = the whole video raised a :class:`VideoParseError` (retried on
-#: resume — not terminal).
+#: Ledger row status. A per-game row (``game_index`` is an ``int``) with
+#: ``done`` = that game's record committed. A video-level row (``game_index`` is
+#: ``None``): ``done`` = the WHOLE video's games are all committed (the terminal
+#: per-video marker that makes the video skippable on resume — see
+#: :func:`_done_video_ids`); ``failed`` = the whole video raised a
+#: :class:`VideoParseError` (retried on resume — not terminal).
 LedgerStatus = Literal["done", "failed"]
 
-#: A video-level ledger row (a whole-video ``failed`` marker) has ``game_index``
-#: ``None``; a per-game row has an ``int`` game index.
+#: A video-level ledger row (a whole-video ``done`` / ``failed`` marker) has
+#: ``game_index`` ``None``; a per-game row has an ``int`` game index.
 LedgerKey = tuple[str, int | None]
+
+#: ``rejection_reason`` stamped on a record whose ``opponent_strength.tier`` is
+#: inconsistent with the manifest strength that admitted its video (a
+#: ``tier="high"`` record from an ``unknown``-manifest video). The manifest is THE
+#: source of truth (§5.5); a ``parse_fn`` bug that over-claims ``high`` would
+#: silently contaminate the scoreboard, so ``batch`` routes such a record to
+#: ``rejected.jsonl`` with this typed reason rather than trusting the callable.
+STRENGTH_MISMATCH_REASON = "manifest_strength_mismatch"
+
+
+#: The injected per-video parser. ``video_id -> list[GameRecord]``. It MAY also
+#: accept a ``download_gate`` keyword — a :class:`threading.BoundedSemaphore` that
+#: caps concurrent yt-dlp downloads to :func:`run_batch`'s ``net_concurrency``
+#: (§5.11: the pre-resolved googlevideo URL is short-lived and YouTube throttles
+#: parallel pulls). A ``parse_fn`` that downloads should acquire it around ONLY the
+#: download phase, leaving the CPU/OCR phase to fan out to the full ``max_workers``.
+#: ``run_batch`` detects the keyword by signature and omits it for a legacy
+#: 1-arg ``parse_fn``, so both shapes work.
+ParseFn = Callable[..., list[GameRecord]]
 
 
 class VideoParseError(RuntimeError):
@@ -251,6 +283,12 @@ class _Sink:
 
     out_dir: Path
     now_fn: Callable[[], float]
+    #: ``{video_id: manifest_strength}`` for the harvested corpus. Used to
+    #: cross-check each record's ``opponent_strength.tier`` against the manifest
+    #: strength that admitted its video (§5.5) — the manifest is the source of
+    #: truth, so a ``parse_fn`` that stamps ``tier="high"`` on an ``unknown``
+    #: video is rejected here, not trusted.
+    manifest_strength: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -261,23 +299,56 @@ class _Sink:
             self.corpus_path
         ) | _load_record_keys(self.rejected_path)
 
-    def commit_video(self, video_id: str, records: Sequence[GameRecord]) -> tuple[int, int]:
-        """Write one video's records + ledger rows. Returns ``(accepted, rejected)``.
+    def _strength_ok(self, record: GameRecord) -> bool:
+        """Whether the record's tier is consistent with its video's manifest strength.
 
-        Idempotent: a ``(video_id, game_index)`` already on disk is skipped (so a
-        resumed / retried video never duplicates a row).
+        A ``high`` manifest video may emit ``tier="high"`` or ``tier="unknown"``;
+        an ``unknown`` manifest video must NOT emit ``tier="high"`` (that would
+        silently promote it into the scoreboard, contaminating the §5.5
+        mixed-strength filter). A video absent from the strength map (only
+        possible in a direct-sink unit test — ``run_batch`` always populates it
+        from the manifest it harvested) is not cross-checked.
+        """
+        manifest_strength = self.manifest_strength.get(record.video_id)
+        if manifest_strength is None:
+            return True
+        return not (manifest_strength != "high" and record.opponent_strength.tier == "high")
+
+    def commit_video(self, video_id: str, records: Sequence[GameRecord]) -> tuple[int, int]:
+        """Write one video's per-game rows, then a terminal video-level ``done`` marker.
+
+        Returns ``(accepted, rejected)``. Per game: idempotent — a
+        ``(video_id, game_index)`` already on disk is skipped (so a re-parsed /
+        resumed video never duplicates a row). A record whose
+        ``opponent_strength.tier`` is inconsistent with its manifest strength
+        (:meth:`_strength_ok`) is downgraded to a rejected row carrying
+        :data:`STRENGTH_MISMATCH_REASON` — a loud failure in ``rejected.jsonl``
+        rather than a silent scoreboard contamination.
+
+        The video-level ``done`` marker is appended **only after every game is
+        committed** and is the SOLE resume-skip signal (:func:`_done_video_ids`).
+        A mid-video kill leaves no such marker, so the resuming run re-parses the
+        video in full and the per-game dedup drops the games already written —
+        the un-committed tail games are recovered, not silently lost (§5.6).
         """
         accepted = rejected = 0
         for record in records:
             key = (record.video_id, record.game_index)
             if key in self._committed:
                 continue
-            line = record.to_json_line()
+            if not self._strength_ok(record):
+                # Manifest is the source of truth (§5.5): an over-claimed ``high``
+                # tier is rejected loudly, never written to the scoreboard corpus.
+                record = replace(
+                    record,
+                    passed_crosscheck=False,
+                    rejection_reason=STRENGTH_MISMATCH_REASON,
+                )
             if record.passed_crosscheck:
-                _append_line(self.corpus_path, line)
+                _append_line(self.corpus_path, record.to_json_line())
                 accepted += 1
             else:
-                _append_line(self.rejected_path, line)
+                _append_line(self.rejected_path, record.to_json_line())
                 rejected += 1
             self._committed.add(key)
             _append_line(
@@ -290,6 +361,19 @@ class _Sink:
                     ts=self.now_fn(),
                 ).to_json_line(),
             )
+        # Terminal per-video marker: written last, so a mid-video kill can never
+        # leave it behind (game-granular resume — BLOCKER fix). This is the only
+        # row :func:`_done_video_ids` treats as "skip this whole video".
+        _append_line(
+            self.ledger_path,
+            LedgerEntry(
+                video_id=video_id,
+                game_index=None,
+                status="done",
+                error=None,
+                ts=self.now_fn(),
+            ).to_json_line(),
+        )
         return accepted, rejected
 
     def mark_failed(self, video_id: str, error: str) -> None:
@@ -306,23 +390,48 @@ class _Sink:
 
 
 def _done_video_ids(ledger: dict[LedgerKey, LedgerEntry]) -> set[str]:
-    """Videos with at least one committed (``done``) game — skip these on resume.
+    """Videos with a terminal video-level ``done`` marker — skip these on resume.
 
-    A stale video-level ``failed`` marker does NOT block resume: once a retried
-    video commits any ``done`` game it becomes skippable, and a ``failed``-only
-    video (no ``done`` rows) is retried.
+    Resume is **game-granular** (BLOCKER fix): the skip signal is the video-level
+    ``done`` row (``game_index is None``) that :meth:`_Sink.commit_video` writes
+    LAST, only after every game of the video is on disk. A per-game ``done`` row
+    (``game_index`` is an ``int``) does NOT make the video skippable — so a video
+    killed after game 1 but before game 2 (no video-level marker) is re-parsed in
+    full, and the on-disk dedup drops game 1 while re-emitting game 2. This closes
+    the silent-tail-loss hazard (§5.6) where a per-game skip permanently dropped a
+    crashed multi-game video's remaining games.
+
+    A stale video-level ``failed`` marker does NOT block resume: only the
+    video-level ``done`` marker skips, and a ``failed``-only video (no video-level
+    ``done`` row) is retried.
     """
-    return {
-        vid for (vid, gidx), entry in ledger.items() if gidx is not None and entry.status == "done"
-    }
+    return {vid for (vid, gidx), entry in ledger.items() if gidx is None and entry.status == "done"}
+
+
+def _parse_fn_accepts_download_gate(parse_fn: ParseFn) -> bool:
+    """Whether ``parse_fn`` declares a ``download_gate`` parameter (arity probe).
+
+    ``run_batch`` passes the download semaphore only to a ``parse_fn`` that opts
+    in by naming the keyword — a legacy 1-arg ``video_id -> list[GameRecord]``
+    callable is called unchanged. A callable whose signature can't be introspected
+    (a C builtin) is treated as legacy.
+    """
+    try:
+        params = inspect.signature(parse_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "download_gate" in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 def run_batch(
     *,
     manifest_path: str | Path,
     out_dir: str | Path,
-    parse_fn: Callable[[str], list[GameRecord]],
+    parse_fn: ParseFn,
     max_workers: int = 4,
+    net_concurrency: int = 2,
     video_ids: Sequence[str] | None = None,
     now_fn: Callable[[], float] = time.time,
 ) -> BatchResult:
@@ -333,13 +442,23 @@ def run_batch(
         out_dir: destination for ``corpus.jsonl`` / ``rejected.jsonl`` /
             ``ledger.jsonl`` (created if absent). Existing files are appended to
             and resumed.
-        parse_fn: injected per-video parser ``video_id -> list[GameRecord]``.
-            Raise :class:`VideoParseError` for a recoverable failure (marks the
-            video ``failed``, retried on resume); any other exception aborts the
-            batch (already-committed videos survive; the in-flight one dedups on
-            resume).
-        max_workers: thread-pool width (CPU-only; the CV pipeline releases the
-            GIL via ffmpeg / OCR subprocesses).
+        parse_fn: injected per-video parser (:data:`ParseFn`),
+            ``video_id -> list[GameRecord]``. Raise :class:`VideoParseError` for a
+            recoverable failure (marks the video ``failed``, retried on resume);
+            any other exception aborts the batch after the already-COMPLETED
+            in-flight parses are committed (so finished work is banked, not thrown
+            away), and any un-committed video is re-parsed on resume. May also
+            accept a ``download_gate`` keyword (see :data:`ParseFn` /
+            ``net_concurrency``).
+        max_workers: CPU/OCR fan-out width — the thread-pool width. NOT the
+            download width: the CV pipeline releases the GIL via ffmpeg / OCR
+            subprocesses, so this governs OCR parallelism only.
+        net_concurrency: max concurrent yt-dlp downloads (§5.11: the short-lived
+            googlevideo URL throttles under parallel pulls). Passed to ``parse_fn``
+            as a ``download_gate`` :class:`threading.BoundedSemaphore` when it opts
+            in by naming the keyword; a ``parse_fn`` that downloads acquires it
+            around ONLY its download phase, decoupling the 1—2-wide network stage
+            from the ``max_workers``-wide OCR stage.
         video_ids: optional subset of ids to process (still manifest-gated).
         now_fn: injectable clock for the ledger timestamp (deterministic tests).
 
@@ -350,33 +469,67 @@ def run_batch(
     out_dir = Path(out_dir)
     manifest = load_strength_manifest(manifest_path)
     harvested = _harvest_video_ids(manifest, video_ids)
+    strength_map: dict[str, str] = {}
+    for vid in harvested:
+        entry = manifest_entry(manifest, vid)
+        strength = entry.get("strength") if entry is not None else None
+        if isinstance(strength, str):
+            strength_map[vid] = strength
 
     ledger = load_ledger(out_dir / "ledger.jsonl")
     done = _done_video_ids(ledger)
     pending = [vid for vid in harvested if vid not in done]
     skipped = len(harvested) - len(pending)
 
-    sink = _Sink(out_dir=out_dir, now_fn=now_fn)
+    sink = _Sink(out_dir=out_dir, now_fn=now_fn, manifest_strength=strength_map)
 
     processed = failed = 0
     accepted_total = rejected_total = 0
+
+    # Split the two concurrency domains (§5.11): ``max_workers`` fans OCR out wide;
+    # ``download_gate`` throttles the network phase to ``net_concurrency`` inside
+    # parse_fn's download call. A legacy 1-arg parse_fn ignores the gate.
+    download_gate = threading.BoundedSemaphore(max(1, net_concurrency))
+    pass_gate = _parse_fn_accepts_download_gate(parse_fn)
+
+    def _submit(
+        pool: concurrent.futures.ThreadPoolExecutor, vid: str
+    ) -> concurrent.futures.Future[list[GameRecord]]:
+        if pass_gate:
+            return pool.submit(parse_fn, vid, download_gate=download_gate)
+        return pool.submit(parse_fn, vid)
 
     # Bound the pool by the actual pending work so a 1-video run stays single-
     # threaded (deterministic). Submit all, then drain in completion order —
     # every write happens on THIS thread through the single sink.
     workers = max(1, min(max_workers, len(pending))) if pending else 1
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-        future_to_vid = {pool.submit(parse_fn, vid): vid for vid in pending}
+        future_to_vid = {_submit(pool, vid): vid for vid in pending}
+        pending_futures = set(future_to_vid)
         for future in concurrent.futures.as_completed(future_to_vid):
             vid = future_to_vid[future]
+            pending_futures.discard(future)
             try:
                 records = future.result()
             except VideoParseError as exc:
                 sink.mark_failed(vid, str(exc))
                 failed += 1
                 continue
-            # Any other exception (a hard kill / unexpected bug) propagates and
-            # aborts the batch — already-committed videos are durable on disk.
+            except BaseException:
+                # An unexpected (non-VideoParseError) abort. Before re-raising,
+                # bank every already-COMPLETED in-flight parse so a multi-worker
+                # run does not throw away finished videos (each is ~10—20 min of
+                # download + OCR). A still-running future is NOT waited on — it is
+                # re-parsed on resume and the on-disk dedup drops any of its games
+                # already written. Videos with NO video-level ``done`` marker are
+                # re-parsed in full on resume.
+                for other in pending_futures:
+                    if other.done() and not other.cancelled() and other.exception() is None:
+                        acc, rej = sink.commit_video(future_to_vid[other], other.result())
+                        accepted_total += acc
+                        rejected_total += rej
+                        processed += 1
+                raise
             acc, rej = sink.commit_video(vid, records)
             accepted_total += acc
             rejected_total += rej
