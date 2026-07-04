@@ -28,8 +28,15 @@ The CHECK (:func:`granted_resources_under_orientation`,
 (:mod:`catan_rl.human_data.glyph_anchor`:
 :func:`~catan_rl.human_data.glyph_anchor.classify_granted_glyphs` colour-classifies
 the granted resource card icons into a per-player multiset) are both implemented and
-tested. The reader is BEST-EFFORT and fails closed: an ambiguous / too-dark glyph
-returns ``None`` rather than a guess. The scale-up gate is NOT unblocked by merely
+tested. The reader is PER-GAME calibrated (a
+:class:`~catan_rl.human_data.glyph_anchor.GlyphPalette` derived from the game's own
+board tiles via
+:func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette`, never a global
+hue constant) and BEST-EFFORT / fails closed: an ambiguous / too-dark / near-white /
+text-abutting (impure) glyph returns ``None`` rather than a guess, the hue median is
+wrap-safe, and a per-game multi-frame CONSENSUS
+(:func:`~catan_rl.human_data.glyph_anchor.consensus_granted_glyphs`) rejects a lone
+noisy frame. The scale-up gate is NOT unblocked by merely
 having a reader — it flips to allowed only when the reader is *validated* on a real
 labelled post-grant corpus via
 :func:`~catan_rl.human_data.glyph_anchor.validate_glyph_classifier`
