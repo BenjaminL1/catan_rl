@@ -38,8 +38,9 @@ line-wrapped, and abut the adjacent log text. :func:`classify_glyph` returns
 body:
 
 - too dark (below :data:`MIN_GLYPH_VALUE`) — log text / background bleed;
-- too bright / washed out (above :data:`MAX_GLYPH_VALUE` with near-zero
-  saturation) — white log text or a blank inter-icon gap, NOT a grey ORE card;
+- too bright / washed out (above :data:`MAX_ORE_VALUE`) — Colonist's light-grey
+  log panel background (RGB ~235-240), white log text, a blank inter-icon gap, or
+  a faint-tinted UI highlight / setup glow, NOT a grey ORE card;
 - a hue-classified swatch whose nearest and runner-up card centres are within
   :data:`MIN_GLYPH_HUE_MARGIN` (an ambiguous between-families colour);
 - an impure swatch whose body pixels do not agree with the chosen class (the
@@ -111,6 +112,19 @@ MIN_GLYPH_VALUE = 90.0
 #: a grey stone card — the ORE branch must fail closed on it rather than emit a
 #: confident ``ORE`` (red-team: ``(0,0,255)`` must be ``None``, not ``ORE``).
 MAX_GLYPH_VALUE = 240.0
+
+#: **Card-body brightness ceiling for the ORE branch** — deliberately well below
+#: :data:`MAX_GLYPH_VALUE` and below Colonist's light-grey log-panel background
+#: (RGB / HSV-val ~235-240). A real grey STONE card body renders around val ~150-
+#: 180; the log panel background and any washed-out UI highlight / setup glow sit
+#: at/above ~235. The old near-white guard only rejected the desaturated corner
+#: (``sat < MIN_ORE_SATURATION AND val > MAX_GLYPH_VALUE``), so a box mis-landing
+#: on the light-grey panel (val 235-240, ``<=`` the strict 240 boundary) OR a
+#: faint-tinted near-white (``sat`` in the stone band, ``val`` in (240,255]) was
+#: read as a CONFIDENT ``ORE``. The ORE accept now requires ``val <= MAX_ORE_VALUE``
+#: unconditionally, so the whole light/washed-out UI band fails closed to an honest
+#: ``None`` (red-team: RGB 235/238/240 and faint tints must be ``None``, not ORE).
+MAX_ORE_VALUE = 225.0
 
 #: Minimum saturation (0..255) an ORE-branch swatch must have to be a grey stone
 #: card rather than pure white UI. Stone icons carry a faint blue-grey tint; pure
@@ -291,18 +305,24 @@ def classify_glyph(
 
     - the swatch is too dark to be a vivid/bright card icon (below
       :data:`MIN_GLYPH_VALUE`) — log text / background bleed;
-    - the ORE branch's swatch is near-white (value above :data:`MAX_GLYPH_VALUE`
-      with saturation below :data:`MIN_ORE_SATURATION`) — white log text / a blank
-      gap, not a grey stone card;
+    - the ORE branch's swatch is above the card-body ceiling (value above
+      :data:`MAX_ORE_VALUE`, ANY saturation) — Colonist's light-grey log panel
+      (RGB ~235-240), white log text, a blank gap, or a faint-tinted UI glow, not
+      a grey stone card — or is pure/near-pure white (saturation below
+      :data:`MIN_ORE_SATURATION`, no stone tint);
     - a hue-classified swatch's nearest and runner-up card hue centres are within
       :data:`MIN_GLYPH_HUE_MARGIN` (an ambiguous between-families colour);
     - the body pixels do not agree with the chosen class at
       :data:`MIN_GLYPH_BODY_PURITY` (a bimodal / text-abutting swatch).
 
     ORE is the desaturated-grey branch (saturation below the palette's ORE ceiling,
-    value inside the card band) — a BRIGHT-BUT-NOT-WHITE grey card — mirroring
-    board_cv's ORE-by-saturation rule; the other four are wrap-aware nearest-hue
-    with the margin + purity gates.
+    value inside the card band ``[MIN_GLYPH_VALUE, MAX_ORE_VALUE]`` with a genuine
+    faint stone tint at/above :data:`MIN_ORE_SATURATION`) — a BRIGHT-BUT-NOT-WHITE
+    grey card — mirroring board_cv's ORE-by-saturation rule; the other four are
+    wrap-aware nearest-hue with the margin + purity gates. The upper card-body
+    ceiling is enforced for EVERY ORE candidate (not only the desaturated corner),
+    so the light-grey log panel background and faint-tinted near-white UI fail
+    closed instead of reading as a confident ORE.
     """
     stats = hsv if isinstance(hsv, _GlyphStats) else _stats_from_tuple(hsv)
     if not stats.ok:
@@ -311,10 +331,19 @@ def classify_glyph(
     if val < MIN_GLYPH_VALUE:
         return None  # too dark to be a card icon (log text / gap)
     if sat < palette.ore_max_saturation:
-        # ORE branch — but fail closed on near-white (bright, ~0 saturation) UI /
-        # text and on a value outside the card body band, and require body purity.
-        if sat < MIN_ORE_SATURATION and val > MAX_GLYPH_VALUE:
-            return None  # near-white log text / blank gap, not a grey stone card
+        # ORE branch — a BRIGHT-BUT-NOT-WHITE grey stone card. Fail closed on the
+        # WHOLE light/washed-out UI band, not just the strictly-brighter-than-240
+        # desaturated corner: a real stone card body sits at/below MAX_ORE_VALUE,
+        # while Colonist's light-grey log panel (val ~235-240) and faint-tinted
+        # near-white UI/glow (val in (240,255], any saturation) sit above it. The
+        # old guard (`sat < MIN_ORE_SATURATION AND val > MAX_GLYPH_VALUE`) let the
+        # 235-240 panel and the tinted band through as a confident ORE — this
+        # unconditional card-body ceiling closes both (red-team). We still require
+        # a genuine faint stone tint (>= MIN_ORE_SATURATION) and body purity.
+        if val > MAX_ORE_VALUE:
+            return None  # panel background / near-white UI, not a grey stone card
+        if sat < MIN_ORE_SATURATION:
+            return None  # pure/near-pure white (no stone tint), not a grey card
         ore_purity = _ore_purity(stats.sats, palette.ore_max_saturation)
         if ore_purity < MIN_GLYPH_BODY_PURITY:
             return None  # bimodal — abutting text / mis-boxed, not a clean grey card
@@ -373,13 +402,16 @@ def _glyph_median_hsv(glyph_rgb: npt.NDArray[np.uint8]) -> _GlyphStats:
     """Robust body statistics over the CARD-BODY pixels of one glyph swatch.
 
     A one-sided value floor is not enough: it drops dark background but KEEPS bright
-    white/grey log text abutting the icon, which then drags the median (a genuine
-    WHEAT can median to BRICK/ORE). We keep a two-sided card-BODY band — pixels
-    bright enough to be a card yet not near-white text (value in
-    ``[MIN_GLYPH_VALUE, MAX_GLYPH_VALUE]`` OR value >= floor with meaningful
-    saturation) — then report the CIRCULAR hue median (wrap-safe) plus the kept
-    hues/sats so :func:`classify_glyph` can vote body purity and turn an impure /
-    text-abutting swatch into an honest ``None`` instead of a confident mislabel.
+    white/grey log text and the light-grey log panel abutting the icon, which then
+    drags the median (a genuine WHEAT can median to BRICK/ORE; a grey stone body
+    abutting the panel can median above the ORE card ceiling). We keep a two-sided
+    card-BODY band — pixels bright enough to be a card yet not in the light/washed-
+    out UI band (a desaturated pixel above :data:`MAX_ORE_VALUE`: near-white text
+    or the light-grey panel background) — while KEEPING vivid coloured pixels
+    regardless of brightness. We then report the CIRCULAR hue median (wrap-safe)
+    plus the kept hues/sats so :func:`classify_glyph` can vote body purity and turn
+    an impure / text-abutting swatch into an honest ``None`` instead of a confident
+    mislabel.
     """
     import cv2
 
@@ -388,11 +420,15 @@ def _glyph_median_hsv(glyph_rgb: npt.NDArray[np.uint8]) -> _GlyphStats:
     val_c = flat[:, 2]
     sat_c = flat[:, 1]
     # Card-body pixels: bright enough to be a card, and either coloured (has
-    # saturation) or a mid-bright grey ORE body — but NOT near-white text (bright
-    # AND ~0 saturation), which we exclude two-sidedly.
+    # saturation) or a mid-bright grey ORE body — but NOT the light/washed-out UI
+    # band, which we exclude two-sidedly. That band is a DESATURATED bright pixel
+    # above the grey-card ceiling: near-white log text (val > MAX_GLYPH_VALUE) OR
+    # Colonist's light-grey log panel background / faint glow (val > MAX_ORE_VALUE),
+    # both at low saturation. A genuine coloured card pixel (high saturation) is
+    # kept regardless of brightness so a vivid hue card is never dropped.
     bright = val_c >= MIN_GLYPH_VALUE
-    not_white_text = ~((val_c > MAX_GLYPH_VALUE) & (sat_c < MIN_ORE_SATURATION))
-    keep = bright & not_white_text
+    not_ui_band = ~((val_c > MAX_ORE_VALUE) & (sat_c < MIN_ORE_SATURATION))
+    keep = bright & not_ui_band
     if not bool(keep.any()):
         return _GlyphStats(
             ok=False,

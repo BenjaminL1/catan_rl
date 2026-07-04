@@ -323,6 +323,50 @@ def test_classify_granted_glyphs_rejects_white_background_swatch() -> None:
     assert classify_granted_glyphs(crop, [(0, 0, 14, 14)]) is None
 
 
+@pytest.mark.parametrize("bg", [235, 238, 240])
+def test_classify_granted_glyphs_rejects_light_grey_log_background(bg: int) -> None:
+    # Red-team (the realistic band the 250-only tests miss): Colonist's log panel
+    # background is a light grey at RGB ~235-240 (HSV val 235-240, ~0 saturation),
+    # which sits AT/BELOW the old strict `> 240` near-white boundary. A glyph box
+    # that mis-lands on that panel background must read an honest None, NOT a
+    # confident ORE — a spurious ORE corrupts the granted multiset that feeds the
+    # joint-flip firewall (brief §5: confidently wrong, not merely noisy).
+    grey = np.full((14, 14, 3), bg, np.uint8)
+    crop = np.zeros((14, 14, 3), np.uint8)
+    crop[:, :] = grey
+    assert classify_granted_glyphs(crop, [(0, 0, 14, 14)]) is None
+
+
+@pytest.mark.parametrize(
+    ("hue", "sat", "val"),
+    [(0.0, 20.0, 250.0), (30.0, 8.0, 245.0), (0.0, 40.0, 255.0), (10.0, 59.0, 250.0)],
+)
+def test_classify_glyph_rejects_faint_tint_near_white_as_not_ore(
+    hue: float, sat: float, val: float
+) -> None:
+    # Red-team counterexample: a faint-tinted near-white swatch (sat in the stone
+    # band [8, ore_ceiling) but val above the card body — a UI highlight / setup
+    # glow with a slight colour cast). The old ORE guard only rejected the
+    # desaturated corner (sat < MIN_ORE_SATURATION AND val > MAX_GLYPH_VALUE), so
+    # this whole band slipped past as a confident ORE. It must fail closed (None).
+    assert classify_glyph((hue, sat, val)) is None
+
+
+def test_classify_granted_glyphs_rejects_faint_tint_swatch_pixel_path() -> None:
+    # End-to-end pixel path for the faint-tint counterexample: a stable tinted
+    # background reads identically every frame, so multi-frame consensus can't save
+    # it — the single-frame reader itself must fail closed.
+    import cv2
+
+    tint = np.asarray(
+        cv2.cvtColor(np.full((14, 14, 3), (0, 20, 250), np.uint8), cv2.COLOR_HSV2RGB), np.uint8
+    )
+    crop = np.zeros((14, 14, 3), np.uint8)
+    crop[:, :] = tint
+    assert classify_granted_glyphs(crop, [(0, 0, 14, 14)]) is None
+    assert consensus_granted_glyphs([(crop, [(0, 0, 14, 14)])] * 4) is None
+
+
 # --- median-drag by abutting bright text → honest None (red-team) ------------
 
 
