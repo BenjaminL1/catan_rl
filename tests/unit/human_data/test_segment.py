@@ -309,6 +309,76 @@ def test_welded_window_with_two_victories_is_not_scoreboard_terminal() -> None:
     assert welded.is_scoreboard_terminal() is False
 
 
+def test_same_winner_reocrd_across_frames_resolves_to_one_victory() -> None:
+    # RED-TEAM COUNTEREXAMPLE (BLOCKER): the MOST COMMON real terminal shape is a
+    # SINGLE legitimate game whose final victory line is re-OCR'd by ≥2 consecutive
+    # sampled frames — the win modal lingers on the scrolling panel for several
+    # seconds, so Pass-A (1 frame / 3-5s) captures the SAME "won the game" line
+    # twice. That is ONE game's win, NOT a weld. Counting DISTINCT winners (not raw
+    # victory events) must resolve it to a single victory with the real winner —
+    # the previous ">=2 victory events => weld" guard mis-set winner=None and
+    # dropped the game from the scoreboard.
+    parsed = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "ThePhantom won the game!",  # game victory
+            "ThePhantom won the game!",  # SAME line re-OCR'd by the next sampled frame
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 1
+    game = segs[0]
+    n_victory = sum(1 for e in game.events if e.kind == "victory")
+    assert n_victory == 2  # two raw victory EVENTS, one distinct winner
+    assert game.winner == "ThePhantom"
+    assert game.ended_by == "victory"
+    assert game.is_scoreboard_terminal() is True
+
+
+def test_same_winner_thrice_and_with_reocrd_tail_gameplay_is_one_victory() -> None:
+    # The other two re-OCR variants the finding names must ALSO resolve to one
+    # victory: (a) 3-frame persistence (victory x3), and (b) re-OCR'd tail gameplay
+    # BETWEEN the two victory copies (so a mere consecutive-dedup would not catch
+    # it — DISTINCT-winner counting is required).
+    thrice = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "ThePhantom won the game!",
+            "ThePhantom won the game!",
+            "ThePhantom won the game!",
+        ],
+        _HANDLES,
+    )
+    seg = segment_games(thrice.events, handles=_HANDLES)[0]
+    assert seg.winner == "ThePhantom"
+    assert seg.ended_by == "victory"
+    assert seg.is_scoreboard_terminal() is True
+
+    with_tail = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "ThePhantom won the game!",
+            "ThePhantom rolled",  # re-OCR'd tail gameplay between the two victory copies
+            "ThePhantom won the game!",
+        ],
+        _HANDLES,
+    )
+    seg2 = segment_games(with_tail.events, handles=_HANDLES)[0]
+    assert seg2.winner == "ThePhantom"
+    assert seg2.ended_by == "victory"
+    assert seg2.is_scoreboard_terminal() is True
+
+
 # --- cross-frame dedup: scrolling-panel re-OCR must not split/fabricate ------
 
 

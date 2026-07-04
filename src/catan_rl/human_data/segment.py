@@ -59,9 +59,12 @@ from catan_rl.human_data.record import OpponentStrength, derive_opponent_strengt
 #: line inside the window (the ONLY scoreboard-terminal cause, §5.1); ``"resign"``
 #: = a ``"<player> has left the game"`` line; ``"cutoff"`` = none of the above was
 #: seen (the stream ended mid-game or the game was not sampled to its end);
-#: ``"weld"`` = the window structurally contains **≥2 victory events**, i.e. two
+#: ``"weld"`` = the window contains **≥2 DISTINCT own-game winners**, i.e. two
 #: back-to-back games merged into one window because the intervening reset marker
-#: was OCR-corrupted below the reset regex (``"Happy setting"`` etc.). A weld is
+#: was OCR-corrupted below the reset regex (``"Happy setting"`` etc.). Note it is
+#: DISTINCT winners, not raw victory events: a single game's terminal line re-OCR'd
+#: by ≥2 sampled frames (the same winner twice) is ONE victory, not a weld. A weld
+#: is
 #: definitionally ambiguous (which board/openings pair with which winner?), so it
 #: yields **no winner** and is NOT scoreboard-terminal — latching the first
 #: victory would be the §5.1 confidently-wrong outcome. Only ``"victory"`` yields
@@ -126,20 +129,28 @@ class GameSegment:
         scoreboard-terminal — deriving a winner from it fabricates an outcome.
 
         A window is scoreboard-terminal iff it ``ended_by == "victory"`` (which
-        ``_resolve_window_outcome`` only sets when the window holds **exactly one**
-        own-game victory) AND has a resolved ``winner``. The exactly-one-victory
-        requirement is re-asserted here directly on ``events`` as a belt-and-braces
-        weld guard: a window that holds ≥2 own-game victory events is a weld (two
-        games merged by a corrupted reset marker) and must never pair one game's
-        board/openings with a winner drawn from a two-victory stream (the §5.1
-        confidently-wrong failure). ``_resolve_window_outcome`` already maps such a
-        window to ``ended_by="weld"`` / ``winner=None``, so this is a defensive
-        double-check, not the sole gate.
+        ``_resolve_window_outcome`` only sets when the window holds **exactly one
+        DISTINCT** own-game winner) AND has a resolved ``winner``. The
+        single-distinct-winner requirement is re-asserted here directly on
+        ``events`` as a belt-and-braces weld guard: a window that holds ≥2
+        **distinct** own-game winners is a weld (two games merged by a corrupted
+        reset marker) and must never pair one game's board/openings with a winner
+        drawn from a two-winner stream (the §5.1 confidently-wrong failure).
+        ``_resolve_window_outcome`` already maps such a window to
+        ``ended_by="weld"`` / ``winner=None``, so this is a defensive double-check,
+        not the sole gate.
+
+        Crucially the guard counts **distinct** winners, not raw victory events: a
+        single legitimate game whose final victory line is re-OCR'd by ≥2
+        consecutive sampled frames (the most common real terminal shape — the win
+        modal lingers on the scrolling panel for several seconds; brief §5.10) is
+        ONE victory for ONE winner, not a weld. Only ≥2 DISTINCT winners are two
+        games merged.
         """
         return (
             self.ended_by == "victory"
             and self.winner is not None
-            and len(_own_game_victories(self.events)) == 1
+            and len(set(_own_game_victories(self.events))) == 1
         )
 
 
@@ -274,23 +285,31 @@ def _resolve_window_outcome(window: Sequence[LogEvent]) -> tuple[str | None, Gam
     """Compute ``(winner, ended_by)`` from a single game window (§5.1).
 
     Counts only this window's OWN-game victories (:func:`_own_game_victories` —
-    stale carry-over victories from the previous game are excluded). Then:
+    stale carry-over victories from the previous game are excluded), then reduces
+    them to the set of **distinct winners**. Then:
 
-    - **≥2 own-game victories → weld.** The window is two back-to-back games merged
-      into one because the intervening reset marker was OCR-corrupted below the
-      reset regex (``"Happy setting"`` etc.). It is definitionally ambiguous (which
-      board/openings pair with which winner), so it yields no winner and
+    - **≥2 DISTINCT own-game winners → weld.** The window is two back-to-back games
+      merged into one because the intervening reset marker was OCR-corrupted below
+      the reset regex (``"Happy setting"`` etc.). It is definitionally ambiguous
+      (which board/openings pair with which winner), so it yields no winner and
       ``ended_by="weld"`` — never the first victory latched (that is the §5.1
       confidently-wrong outcome the brief forbids).
-    - **exactly 1 → victory** with that winner.
+    - **exactly 1 distinct winner → victory** with that winner. This is the common
+      real case even when the terminal victory line is re-OCR'd across ≥2 sampled
+      frames (the win modal lingers on the scrolling panel; brief §5.10) — the same
+      winner recorded twice (with or without re-OCR'd tail gameplay between the
+      copies) is ONE game's win, NOT a weld. Counting distinct winners (not raw
+      victory events) is what stops that most-common shape from being dropped from
+      the scoreboard (winner mis-set to ``None``).
     - **0 own-game victories →** a resign line closes with no winner
       (``ended_by="resign"``); else the window ended by cutoff. Never infers a
       winner from a non-victory line.
     """
     winners = _own_game_victories(window)
-    if len(winners) >= 2:
+    distinct_winners = set(winners)
+    if len(distinct_winners) >= 2:
         return None, "weld"
-    if len(winners) == 1:
+    if len(distinct_winners) == 1:
         return winners[0], "victory"
     for event in window:
         if event.kind == "resign":
