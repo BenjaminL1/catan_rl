@@ -62,10 +62,15 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
             "no scoreboard/seed record downstream (segment.py gates on the manifest)."
         )
 
-    # ETA (brief §5.10): fps x 0.58s x n_videos / n_procs, with fps derived
-    # honestly from this video's two-pass schedule (not the naive 1 fps spike).
+    # ETA (brief §5.10): frames_per_video x 0.58s x n_videos / n_procs — TOTAL
+    # WALL-CLOCK, with frames_per_video read honestly from this video's two-pass
+    # schedule (len(schedule)). The brief's `fps x 0.58s x n_videos` shorthand is a
+    # per-SECOND-of-video rate; it must be multiplied by the video duration to be
+    # wall-clock, so the ETA keys off total crops, not fps (the units-bug fix). fps
+    # is reported only as context (crops per second of video).
     schedule = build_sampling_schedule(args.duration, sparse_interval_s=args.sparse_interval)
-    fps = len(schedule) / args.duration
+    frames_per_video = len(schedule)
+    fps = frames_per_video / args.duration
     eta_s = schedule_ocr_eta_s(
         schedule,
         args.duration,
@@ -73,7 +78,7 @@ def _cmd_ingest(args: argparse.Namespace) -> int:
         n_procs=args.n_procs,
     )
     print(
-        f"[ingest] OCR ETA: {len(schedule)} frames/video, fps={fps:.4f} "
+        f"[ingest] OCR ETA: {frames_per_video} frames/video (fps={fps:.4f}) "
         f"x 0.58s x n_videos={args.n_videos:g} / n_procs={args.n_procs} "
         f"= {eta_s:.0f}s ({eta_s / 3600.0:.2f}h)"
     )

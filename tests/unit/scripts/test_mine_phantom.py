@@ -58,11 +58,13 @@ def test_ingest_reports_ocr_eta_formula(
     out = capsys.readouterr().out
 
     assert rc == 0
-    # 12s / 4s sparse -> frames at 0,4,8,12 = 4 frames -> fps = 4/12.
+    # 12s / 4s sparse -> frames at 0,4,8,12 = 4 frames -> fps = 4/12 (context only).
+    # WALL-CLOCK ETA keys off TOTAL crops: 4 x 0.58s = 2.32s -> "= 2s".
     assert "OCR ETA" in out
     assert "4 frames/video" in out
     assert "fps=0.3333" in out
     assert "0.58s" in out
+    assert "= 2s" in out
 
 
 def test_ingest_eta_scales_with_n_videos_and_procs(
@@ -87,7 +89,8 @@ def test_ingest_eta_scales_with_n_videos_and_procs(
     )
     out = capsys.readouterr().out
     assert rc == 0
-    # 4 frames, fps=4/12, 300 videos / 6 procs = (4/12)*0.58*300/6 = 9.6667s.
+    # 4 crops/video, 300 videos / 6 procs = 4 x 0.58s x 300 / 6 = 116s WALL-CLOCK
+    # (NOT the old (4/12)*0.58*300/6 = 9.67s — that dropped the duration factor).
     assert "n_videos=300" in out
     assert "n_procs=6" in out
-    assert "= 10s" in out  # 9.6667 rounds to 10 at :.0f
+    assert "= 116s" in out

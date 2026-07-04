@@ -103,6 +103,11 @@ _GAMEPLAY_KINDS: frozenset[str] = frozenset(
 #: duplicate.
 _TERMINAL_KINDS: frozenset[str] = frozenset({"victory", "resign"})
 
+#: Setup-phase event kinds (the snake-draft placement burst). A fresh burst of
+#: these AFTER an own-game victory is a structural weld signal (a new game welded
+#: into the window without an intervening reset — see :func:`_has_post_victory_setup`).
+_SETUP_KINDS: frozenset[str] = frozenset({"setup_settlement", "setup_road", "starting_resources"})
+
 
 @dataclass(frozen=True, slots=True)
 class GameSegment:
@@ -146,11 +151,22 @@ class GameSegment:
         modal lingers on the scrolling panel for several seconds; brief §5.10) is
         ONE victory for ONE winner, not a weld. Only ≥2 DISTINCT winners are two
         games merged.
+
+        The distinct-winner count has a blind spot: two back-to-back games BOTH
+        won by the same player, welded with NO intervening reset (game N's reset
+        marker OCR-corrupted below the reset regex), yield ``{ThePhantom}`` — one
+        distinct winner — yet span two games. ThePhantom wins the large majority of
+        his games, so consecutive SAME-winner games are the COMMON weld shape, and
+        the distinct-winner guard is weakest exactly where welds are most frequent.
+        So a **second, winner-independent structural guard** is asserted here too:
+        a fresh setup burst AFTER an own-game victory (:func:`_has_post_victory_setup`)
+        is a new game's draft welded into the window — never scoreboard-terminal.
         """
         return (
             self.ended_by == "victory"
             and self.winner is not None
             and len(set(_own_game_victories(self.events))) == 1
+            and not _has_post_victory_setup(self.events)
         )
 
 
@@ -216,7 +232,19 @@ def segment_games(
     #     its OCR text repeats the previous reset verbatim; OR
     #   * this reset's text has NOT already appeared in the current window AND new
     #     gameplay has appeared since the last reset — a genuinely different reset
-    #     line separated from the opener by real play.
+    #     line separated from the opener by real play; OR
+    #   * BOTH players have rolled since this window's start — the game demonstrably
+    #     LEFT its opening setup phase into full rounds, so a repeated (even
+    #     byte-identical) reset now marks a genuine restart, NOT a lingering re-OCR
+    #     of the setup screen. This is the §5.1 "cutoff" separator: when game N's
+    #     terminal is missed (Pass-A sparse sampling routinely misses the few-second
+    #     victory modal, or it OCRs below the `won the game` regex) and game N+1's
+    #     reset text is byte-identical, neither the terminal nor the new-text branch
+    #     fires; without this signal the two games weld. A lingering setup-screen
+    #     re-OCR never has both seats rolling yet (the opening draft precedes the
+    #     first full round), so this cannot mis-split a single game (verified: the
+    #     scrolling-panel re-OCR dedup tests show ≤1 distinct roller before the
+    #     lingering reset).
     # Everything else (a consecutive reset run — easyocr splitting "Happy settling"
     # / "/help"; a same-text reset re-shown across frames while the game is still
     # unfolding, even interleaved with dribbled-in setup lines) collapses onto the
@@ -227,17 +255,20 @@ def segment_games(
     reset_texts_in_window: set[str] = set()
     terminal_since_start = False
     new_gameplay_since_reset = False
+    rollers_since_start: set[str] = set()
     for i, event in enumerate(events):
         if event.kind == "game_reset":
             opens = (
                 not starts
                 or terminal_since_start
                 or (event.text not in reset_texts_in_window and new_gameplay_since_reset)
+                or len(rollers_since_start) >= 2
             )
             if opens:
                 starts.append(i)
                 reset_texts_in_window = {event.text}
                 terminal_since_start = False
+                rollers_since_start = set()
             else:
                 reset_texts_in_window.add(event.text)
             new_gameplay_since_reset = False
@@ -246,6 +277,8 @@ def segment_games(
                 terminal_since_start = True
             elif event.kind in _GAMEPLAY_KINDS:
                 new_gameplay_since_reset = True
+            if event.kind == "roll" and event.actor is not None:
+                rollers_since_start.add(event.actor)
 
     if not starts:
         return []
@@ -281,6 +314,38 @@ def _own_game_victories(window: Sequence[LogEvent]) -> list[str]:
     return winners
 
 
+def _has_post_victory_setup(window: Sequence[LogEvent]) -> bool:
+    """Whether a fresh setup burst begins AFTER an own-game victory in the window.
+
+    A winner-INDEPENDENT structural weld signal (finding: same-winner weld). When
+    two back-to-back games weld with NO intervening reset (game N's reset marker
+    OCR-corrupted below the reset regex), the window holds two full drafts and two
+    victory lines. If both games were won by the SAME player, the distinct-winner
+    guard sees one winner and passes the weld as a clean victory — its blind spot,
+    and the COMMON weld shape (ThePhantom wins the large majority of his games).
+
+    A snake-draft placement (:data:`_SETUP_KINDS`) occurring AFTER an own-game
+    victory (a victory preceded in-window by this game's own gameplay, so a stale
+    carry-over of the previous game's win does not count) can only be a NEW game's
+    opening draft welded into the window — no legal 1v1 game drafts again after a
+    15-VP win. This catches the same-winner weld the distinct-winner count
+    structurally cannot. Note it keys on setup-AFTER-victory, not a raw setup-phase
+    count: a single game whose opening draft is re-OCR'd across sampled frames (the
+    scrolling-panel artifact §5.10) shows two setup runs with NO victory between
+    them, so it is correctly NOT flagged here.
+    """
+    seen_gameplay = False
+    seen_own_victory = False
+    for event in window:
+        if event.kind in _GAMEPLAY_KINDS:
+            seen_gameplay = True
+        if event.kind == "victory" and event.actor is not None and seen_gameplay:
+            seen_own_victory = True
+        elif event.kind in _SETUP_KINDS and seen_own_victory:
+            return True
+    return False
+
+
 def _resolve_window_outcome(window: Sequence[LogEvent]) -> tuple[str | None, GameEndCause]:
     """Compute ``(winner, ended_by)`` from a single game window (§5.1).
 
@@ -288,6 +353,13 @@ def _resolve_window_outcome(window: Sequence[LogEvent]) -> tuple[str | None, Gam
     stale carry-over victories from the previous game are excluded), then reduces
     them to the set of **distinct winners**. Then:
 
+    - **A fresh setup burst AFTER an own-game victory → weld**
+      (:func:`_has_post_victory_setup`). A winner-INDEPENDENT guard that catches the
+      same-winner weld the distinct-winner count structurally cannot: two games BOTH
+      won by the same player, welded with no intervening reset, hold one distinct
+      winner but a second draft after the first game's win. Checked FIRST so this
+      shape is flagged before the distinct-winner branch mis-reads it as a clean
+      victory.
     - **≥2 DISTINCT own-game winners → weld.** The window is two back-to-back games
       merged into one because the intervening reset marker was OCR-corrupted below
       the reset regex (``"Happy setting"`` etc.). It is definitionally ambiguous
@@ -307,6 +379,8 @@ def _resolve_window_outcome(window: Sequence[LogEvent]) -> tuple[str | None, Gam
     """
     winners = _own_game_victories(window)
     distinct_winners = set(winners)
+    if _has_post_victory_setup(window):
+        return None, "weld"
     if len(distinct_winners) >= 2:
         return None, "weld"
     if len(distinct_winners) == 1:

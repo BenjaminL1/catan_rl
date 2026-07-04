@@ -339,6 +339,82 @@ def test_same_winner_reocrd_across_frames_resolves_to_one_victory() -> None:
     assert game.is_scoreboard_terminal() is True
 
 
+def test_same_winner_weld_without_reset_is_weld_not_scoreboard_terminal() -> None:
+    # RED-TEAM (BLOCKER, finding: same-winner weld blind spot). Two back-to-back
+    # games BOTH won by ThePhantom weld into one window when game N's reset marker
+    # OCR-corrupts below the reset regex (no intervening reset at all). The window
+    # then holds TWO full drafts + TWO "ThePhantom won the game!" lines → ONE
+    # distinct winner, so the distinct-winner guard passes it as a clean victory.
+    # ThePhantom wins the large majority of his games, so consecutive SAME-winner
+    # games are the COMMON weld shape, not the rare one. The winner-independent
+    # structural guard (a fresh setup burst AFTER an own-game victory) must flag it:
+    # ended_by='weld' / winner=None / NOT scoreboard-terminal.
+    parsed = parse_log(
+        [
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            "ThePhantom won the game!",  # game N victory
+            # game N's reset marker corrupted away entirely (no reset line) → the
+            # next game welds straight in with a fresh draft.
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            "ThePhantom won the game!",  # game N+1, SAME winner
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 1
+    welded = segs[0]
+    # ONE distinct winner (the distinct-winner guard alone would NOT catch it)...
+    assert len(set(e.actor for e in welded.events if e.kind == "victory")) == 1
+    # ...but the setup-after-victory guard flags the weld.
+    assert welded.ended_by == "weld"
+    assert welded.winner is None
+    assert welded.is_scoreboard_terminal() is False
+
+
+def test_missing_terminal_then_identical_reset_splits_into_two_games() -> None:
+    # RED-TEAM (BLOCKER, finding: cutoff/weld counterexample). Game N's terminal is
+    # NOT sampled (Pass-A sparse sampling misses the few-second victory modal, or it
+    # OCRs below the `won the game` regex — a legitimate §5.1 'cutoff' end-cause) AND
+    # game N+1 opens with the byte-identical reset text ("Happy settling ...").
+    # Neither the terminal branch nor the new-reset-text branch fires, so the naive
+    # segmenter welds the two games into one clean victory. The "both players have
+    # rolled since window start" separator (the game demonstrably LEFT setup into a
+    # full round) must open a NEW game at the repeated reset → TWO segments:
+    # game N ends by cutoff (winner=None), game N+1 by victory.
+    parsed = parse_log(
+        [
+            # game N: full round of play, but NO victory/resign captured (cutoff)
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            # game N+1: byte-identical reset text
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "rayman147 rolled",
+            "rayman147 won the game!",
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 2
+    assert segs[0].winner is None
+    assert segs[0].ended_by == "cutoff"
+    assert segs[0].is_scoreboard_terminal() is False
+    assert segs[1].winner == "rayman147"
+    assert segs[1].ended_by == "victory"
+    assert segs[1].is_scoreboard_terminal() is True
+
+
 def test_same_winner_thrice_and_with_reocrd_tail_gameplay_is_one_victory() -> None:
     # The other two re-OCR variants the finding names must ALSO resolve to one
     # victory: (a) 3-frame persistence (victory x3), and (b) re-OCR'd tail gameplay

@@ -131,7 +131,10 @@ def test_time_window_rejects_negative_start() -> None:
         TimeWindow(-1.0, 5.0)
 
 
-# --- OCR ETA formula (brief §5.10: fps x 0.58s x n_videos / n_procs) -----------
+# --- OCR ETA formula (brief §5.10: frames_per_video x 0.58s x n_videos / n_procs)
+# WALL-CLOCK — the per-video work is TOTAL crops (len(schedule)) x 0.58s, NOT a
+# per-second fps x 0.58s (the units bug: dropping the duration factor under-
+# estimated the ETA by a factor of the video duration).
 
 
 def test_ocr_seconds_per_crop_is_the_spec_constant() -> None:
@@ -140,24 +143,27 @@ def test_ocr_seconds_per_crop_is_the_spec_constant() -> None:
 
 
 def test_estimate_ocr_wall_clock_matches_spec_formula() -> None:
-    # fps x 0.58s x n_videos / n_procs, verbatim.
-    fps, n_videos, n_procs = 0.25, 300.0, 4
-    expected = fps * 0.58 * n_videos / n_procs
-    assert estimate_ocr_wall_clock_s(fps, n_videos, n_procs=n_procs) == pytest.approx(expected)
+    # frames_per_video x 0.58s x n_videos / n_procs, verbatim wall-clock.
+    frames_per_video, n_videos, n_procs = 1186.0, 300.0, 8
+    expected = frames_per_video * 0.58 * n_videos / n_procs
+    assert estimate_ocr_wall_clock_s(frames_per_video, n_videos, n_procs=n_procs) == pytest.approx(
+        expected
+    )
 
 
 def test_estimate_ocr_wall_clock_defaults_to_single_process() -> None:
+    # ONE crop, ONE video, single process -> 0.58s (one crop's cost).
     assert estimate_ocr_wall_clock_s(1.0, 1.0) == pytest.approx(0.58)
 
 
 def test_estimate_ocr_wall_clock_scales_inversely_with_procs() -> None:
-    one = estimate_ocr_wall_clock_s(0.5, 100.0, n_procs=1)
-    eight = estimate_ocr_wall_clock_s(0.5, 100.0, n_procs=8)
+    one = estimate_ocr_wall_clock_s(500.0, 100.0, n_procs=1)
+    eight = estimate_ocr_wall_clock_s(500.0, 100.0, n_procs=8)
     assert eight == pytest.approx(one / 8.0)
 
 
 def test_estimate_ocr_wall_clock_rejects_bad_args() -> None:
-    with pytest.raises(ValueError, match="fps"):
+    with pytest.raises(ValueError, match="frames_per_video"):
         estimate_ocr_wall_clock_s(0.0, 1.0)
     with pytest.raises(ValueError, match="n_videos"):
         estimate_ocr_wall_clock_s(1.0, 0.0)
@@ -167,19 +173,20 @@ def test_estimate_ocr_wall_clock_rejects_bad_args() -> None:
         estimate_ocr_wall_clock_s(1.0, 1.0, seconds_per_crop=0.0)
 
 
-def test_schedule_ocr_eta_derives_fps_from_schedule() -> None:
-    # 12s video, 4s sparse cadence -> frames at 0,4,8,12 = 4 frames -> fps = 4/12.
+def test_schedule_ocr_eta_is_total_frames_wall_clock() -> None:
+    # 12s video, 4s sparse cadence -> frames at 0,4,8,12 = 4 frames. WALL-CLOCK to
+    # OCR one such video = 4 crops x 0.58s = 2.32s (NOT (4/12)*0.58 = 0.19s — the
+    # units bug that dropped the per-video duration factor).
     sched = build_sampling_schedule(12.0, sparse_interval_s=4.0)
     assert len(sched) == 4
     eta = schedule_ocr_eta_s(sched, 12.0, n_videos=1.0)
-    assert eta == pytest.approx((4 / 12.0) * 0.58)
+    assert eta == pytest.approx(4 * 0.58)
 
 
 def test_schedule_ocr_eta_projects_over_corpus_and_procs() -> None:
     sched = build_sampling_schedule(10.0, sparse_interval_s=2.0)  # 0,2,4,6,8,10 = 6 frames
-    fps = 6 / 10.0
     eta = schedule_ocr_eta_s(sched, 10.0, n_videos=300.0, n_procs=6)
-    assert eta == pytest.approx(fps * 0.58 * 300.0 / 6)
+    assert eta == pytest.approx(6 * 0.58 * 300.0 / 6)
 
 
 def test_schedule_ocr_eta_rejects_empty_schedule_and_bad_duration() -> None:
