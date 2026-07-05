@@ -693,6 +693,32 @@ def read_board(
     )
 
 
+def board_hsv_samples(
+    frame_rgb: npt.NDArray[np.uint8], board: BoardRead
+) -> npt.NDArray[np.float64]:
+    """The 19x3 median-HSV hex samples for an accepted :class:`BoardRead`'s frame.
+
+    Recomputes the same per-hex fill samples :func:`read_board` used internally,
+    under the board's locked affine — the input
+    :func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette` needs to
+    build the per-game glyph palette (brief §5.13: the card icons share the tile
+    colour family, so the palette is derived from the game's own board).
+    """
+    import cv2
+
+    template = load_engine_template()
+    hcv = load_topology().hex_corner_to_vertex
+    hsv: npt.NDArray[np.uint8] = np.asarray(
+        cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2HSV), dtype=np.uint8
+    )
+    hex_px = _apply_affine(board.affine, template.hex_centers)
+    samples = np.zeros((NUM_HEXES, 3))
+    for e in range(NUM_HEXES):
+        corners = [board.vertex_px[hcv[e][c]] for c in range(6)]
+        samples[e] = _sample_hex_hsv(hsv, hex_px[e], corners)
+    return samples
+
+
 def read_board_stable(
     frames_rgb: list[npt.NDArray[np.uint8]],
     *,
