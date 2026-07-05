@@ -46,6 +46,7 @@ from catan_rl.human_data.ffmpeg import (
 )
 from catan_rl.human_data.glyph_anchor import (
     FALLBACK_PALETTE,
+    GRANT_RE,
     GRANTABLE_RESOURCES,
     HUE_RESOURCES_BY_RANK,
     MIN_GLYPH_HUE_MARGIN,
@@ -60,6 +61,7 @@ from catan_rl.human_data.glyph_anchor import (
     classify_glyph,
     classify_granted_glyphs,
     consensus_granted_glyphs,
+    detect_glyph_boxes,
     glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
     validate_glyph_classifier,
@@ -143,6 +145,7 @@ __all__ = [
     "FRAME_HEIGHT",
     "FRAME_WIDTH",
     "GRANTABLE_RESOURCES",
+    "GRANT_RE",
     "HARVEST_STRENGTHS",
     "HUE_RESOURCES_BY_RANK",
     "LOG_CROP_FRAC",
@@ -198,6 +201,7 @@ __all__ = [
     "decode_frames_at",
     "derive_opponent_strength",
     "derive_screen_anchors",
+    "detect_glyph_boxes",
     "detect_openings",
     "detect_openings_result",
     "download_video",

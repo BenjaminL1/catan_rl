@@ -29,7 +29,9 @@ future session feeds :func:`validate_glyph_classifier` to flip the batch gate.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -45,6 +47,8 @@ from catan_rl.human_data import (
     assert_scale_up_orientation_gates,
 )
 from catan_rl.human_data.glyph_anchor import (
+    CARD_PALETTE,
+    GRANT_RE,
     HUE_RESOURCES_BY_RANK,
     MIN_GRANT_CONSENSUS_FRAMES,
     MIN_VALIDATION_FRAMES,
@@ -56,6 +60,7 @@ from catan_rl.human_data.glyph_anchor import (
     classify_glyph,
     classify_granted_glyphs,
     consensus_granted_glyphs,
+    detect_glyph_boxes,
     glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
     validate_glyph_classifier,
@@ -561,3 +566,164 @@ def test_classify_glyph_borderline_grey_never_confident_warm_hue() -> None:
     assert classify_glyph((5.8, 110.0, 188.0)) == "BRICK"  # measured-median BRICK
     assert classify_glyph((5.0, 50.0, 179.0)) == "ORE"  # measured-band ORE
     assert classify_glyph((5.0, 62.0, 175.0)) == "ORE"  # below ceiling: grey band
+
+
+# --- detect_glyph_boxes: the PROMOTED production detector (expert BLOCKERs 2+3) --
+#
+# The 24/24 glyph-validation PASS scored a COMPOSITE (detector + classifier), so
+# the detector must live in production code and its merged-box failure mode —
+# boxes spanning >1 icon classify CONFIDENTLY WRONG and survive consensus — must
+# fail CLOSED. Two real-frame regression suites pin both sides:
+#
+# - the GOOD path: the committed game1_postsetup_t247.png fixture (2 grant lines)
+#   yields exactly the 3+3 boxes the detector was smoke-validated on;
+# - the MERGED path: the 8 SKIP-labelled crops of the 2026-07-04 valset (5 log
+#   frames, committed under data/human/glyph_valset/) must ALL end in an honest
+#   no-read — the detector returns no boxes, so classify_granted_glyphs is None
+#   and the game falls out of the harvest instead of feeding the firewall the
+#   measured wrong-but-stable multisets (Yejbe2-q4_o read {BRICK:1, WHEAT:1};
+#   MZBLarAmNXw_t145_b0 read a confident ORE).
+#
+# The OCR token boxes below are PINNED easyocr output (recorded 2026-07-05, CPU,
+# the same reader the harness uses) so these tests exercise the detector
+# deterministically without importing easyocr; the OCR side has its own
+# fixture-pinned tests in test_logparse.py. Texts are stored post-_normalise,
+# lowercase — exactly what the harness feeds GRANT_RE.
+
+_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "human_data"
+_VALSET = Path(__file__).resolve().parents[3] / "data" / "human" / "glyph_valset"
+
+#: Pinned OCR tokens of the game1_postsetup_t247.png log crop (normalised text,
+#: (x0, y0, x1, y1)). The first grant line is OCR-mangled ("receivea") — exactly
+#: the misread GRANT_RE is built to tolerate.
+_GAME1_TOKENS: list[tuple[str, tuple[int, int, int, int]]] = [
+    ("inernantom receivea starting resources", (291, 0, 617, 21)),
+    ("thephantom placed a road", (286, 54, 514, 80)),
+    ("rayman147 placed a settlement", (285, 108, 548, 135)),
+    ("rayman147 received starting resources", (285, 139, 604, 166)),
+    ("rayman147 placed a road", (285, 171, 502, 196)),
+]
+
+#: The exact boxes per grant line the detector was validated on (3 + 3): line 1
+#: is two icons on the grant row plus one on the wrap row below; line 2 is a
+#: tightly-packed 3-icon run that must pitch-split into three 19px cells.
+_GAME1_EXPECTED: dict[tuple[int, int, int, int], list[tuple[int, int, int, int]]] = {
+    (291, 0, 617, 21): [(620, 6, 632, 16), (639, 6, 652, 16), (268, 26, 280, 44)],
+    (285, 139, 604, 166): [(604, 140, 619, 160), (623, 140, 638, 160), (642, 140, 657, 160)],
+}
+
+#: Pinned OCR tokens for the 5 committed SKIP-frame log crops (the merged-icon
+#: regression corpus — every frame owning a SKIP label in labels.json).
+_SKIP_FRAME_TOKENS: dict[str, list[tuple[str, tuple[int, int, int, int]]]] = {
+    # b0 is a 26px merged box (2 icons) INSIDE the single-box aspect band.
+    "sG05DoaOmM4_t200": [
+        ("thephantom placed a", (280, 18, 460, 42)),
+        ("thephantom placed a", (280, 45, 460, 72)),
+        ("thephantom received starting resources", (280, 76, 608, 102)),
+        ("secpra placed a", (279, 135, 408, 161)),
+        ("secpra placed a", (277, 163, 410, 191)),
+        ("received starting resources", (340, 194, 558, 218)),
+        ("secpra", (275, 189, 341, 220)),
+    ],
+    # A 46px 3-icon run whose line-height pitch mis-rounds to k=2 -> two 19px
+    # boxes each spanning >1 icon; b0 read a confident (wrong) ORE.
+    "MZBLarAmNXw_t145": [
+        ("8 realninos placed a", (266, 36, 442, 64)),
+        ("realninos placed a", (280, 70, 442, 94)),
+        ("8 realninos placed a", (266, 132, 442, 156)),
+        ("8 realninos placed a", (264, 162, 442, 186)),
+        ("realninos received starting resources", (280, 192, 588, 218)),
+    ],
+    # b1 is a 29px merged box (2 icons) inside the single-box aspect band.
+    "mY2X6Dw0iFE_t127": [
+        ("mo061101 placed a", (293, 3, 439, 23)),
+        ("thephantom placed", (288, 47, 446, 72)),
+        ("thephantom placed a", (290, 76, 456, 100)),
+        ("thephantom placed a", (288, 123, 456, 148)),
+        ("thephantom received starting resources", (292, 150, 594, 176)),
+        ("thephantom placed a", (288, 178, 458, 202)),
+        ("chat is", (291, 251, 345, 271)),
+        ("being monitored: please be respectful.", (340, 247, 628, 275)),
+    ],
+    # Same mis-rounded k=2 run at two sampled times; the two 19px merged boxes
+    # read a STABLE wrong {BRICK:1, WHEAT:1} that survives consensus — the
+    # expert-verified firewall-defeating case.
+    "Yejbe2-q4_o_t250": [
+        ("8 thelew placed a", (266, 45, 414, 70)),
+        ("8 thejew placed a", (266, 74, 414, 100)),
+        ("thejew placed a", (280, 133, 414, 158)),
+        ("thelew placed a", (280, 162, 412, 188)),
+        ("thejew received starting resources", (280, 188, 560, 218)),
+        ("8 thejew: thephantom, love ur content: keep it", (264, 273, 644, 298)),
+        ("up", (261, 305, 285, 321)),
+    ],
+    "Yejbe2-q4_o_t260": [
+        ("thejew placed a", (280, 45, 414, 70)),
+        ("8 thejew placed a", (266, 73, 414, 100)),
+        ("thejew placed a", (280, 133, 414, 158)),
+        ("thejew placed a", (280, 164, 412, 188)),
+        ("thejew received starting resources", (280, 188, 560, 218)),
+        ("8 thejew: thephantom, love ur content: keep it", (264, 273, 644, 298)),
+        ("up", (261, 305, 285, 321)),
+    ],
+}
+
+
+def _load_rgb(path: Path) -> np.ndarray:
+    import cv2
+
+    bgr = cv2.imread(str(path))
+    assert bgr is not None, f"missing committed fixture {path}"
+    return np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), np.uint8)
+
+
+def test_grant_re_tolerates_ocr_misreads() -> None:
+    assert GRANT_RE.search("thephantom received starting resources")
+    assert GRANT_RE.search("inernantom receivea starting resources")  # game1 line 1
+    assert GRANT_RE.search("recelved starting resources")
+    assert not GRANT_RE.search("thephantom placed a road")
+
+
+def test_detector_pins_the_game1_fixture_boxes_exactly() -> None:
+    # The GOOD path, end-to-end on the committed real frame: both grant lines of
+    # game1_postsetup_t247.png yield EXACTLY the 3+3 boxes the promoted detector
+    # was validated on (any drift here is a detector regression — investigate,
+    # never re-pin without re-validating the composite).
+    frame = _load_rgb(_FIXTURES / "game1_postsetup_t247.png")
+    from catan_rl.human_data.logparse import LOG_CROP_FRAC
+
+    h, w = frame.shape[:2]
+    x0f, y0f, x1f, y1f = LOG_CROP_FRAC
+    crop = frame[int(y0f * h) : int(y1f * h), int(x0f * w) : int(x1f * w)]
+    text_boxes = [b for _, b in _GAME1_TOKENS]
+    grant_boxes = [b for t, b in _GAME1_TOKENS if GRANT_RE.search(t)]
+    assert grant_boxes == list(_GAME1_EXPECTED)  # both grant lines, pinned order
+    for line_box, expected in _GAME1_EXPECTED.items():
+        assert detect_glyph_boxes(crop, line_box, text_boxes) == expected
+
+
+def test_skip_corpus_covers_every_skip_label() -> None:
+    # The 5 pinned frames must own ALL SKIP labels in the committed labels.json —
+    # if the labelled corpus grows a new SKIP stratum, this corpus (and the
+    # committed crops) must grow with it, never silently under-cover.
+    labels: dict[str, str] = json.loads((_VALSET / "labels.json").read_text())
+    skip_frames = {cid.rsplit("_b", 1)[0] for cid, lab in labels.items() if lab == "SKIP"}
+    assert skip_frames == set(_SKIP_FRAME_TOKENS)
+    n_skip = sum(1 for lab in labels.values() if lab == "SKIP")
+    assert n_skip == 8
+
+
+@pytest.mark.parametrize("crop_id", sorted(_SKIP_FRAME_TOKENS))
+def test_detector_no_reads_every_skip_labelled_merged_frame(crop_id: str) -> None:
+    # The MERGED path fails CLOSED end-to-end: on every frame that produced a
+    # SKIP-labelled (unlabelable, merged-icon) crop, the promoted detector
+    # returns NO boxes — never a box spanning >1 icon — and the grant read is an
+    # honest None. Before the merged-box rule these frames produced boxes that
+    # classified confidently WRONG and survived consensus_granted_glyphs.
+    crop = _load_rgb(_VALSET / f"{crop_id}_log.png")
+    tokens = _SKIP_FRAME_TOKENS[crop_id]
+    text_boxes = [b for _, b in tokens]
+    grant_box = next(b for t, b in tokens if GRANT_RE.search(t))
+    boxes = detect_glyph_boxes(crop, grant_box, text_boxes)
+    assert boxes == []  # detector no-read: the merged-box rule fired
+    assert classify_granted_glyphs(crop, boxes, CARD_PALETTE) is None

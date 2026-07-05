@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import subprocess
 import sys
 import tempfile
@@ -43,8 +42,10 @@ sys.path.insert(0, str(REPO / "src"))
 from catan_rl.human_data.board_cv import board_hsv_samples, read_board
 from catan_rl.human_data.glyph_anchor import (
     CARD_PALETTE,
+    GRANT_RE,
     LabeledGrantFrame,
     calibrate_glyph_palette,
+    detect_glyph_boxes,
     validate_glyph_classifier,
 )
 from catan_rl.human_data.logparse import LOG_CROP_FRAC, _normalise
@@ -56,13 +57,9 @@ LABELS = OUT_DIR / "labels.json"
 VALIDATION_OUT = REPO / "data" / "human" / "glyph_validation.json"
 REPORT_OUT = REPO / "data" / "human" / "glyph_validation.md"
 
-#: OCR-tolerant grant-line matcher ("received" often reads "receivea"/"recelved").
-GRANT_RE = re.compile(r"rece\w{0,4} starting resources")
-
-# --- glyph-box detector tuning (calibrated on real 1080p log crops) -------------
-BOX_MIN_AREA = 55
-BOX_MIN_H, BOX_MAX_H = 9, 30
-BOX_AR_LO, BOX_AR_HI = 0.35, 1.8
+# The detector (detect_glyph_boxes) + grant-line matcher (GRANT_RE) were promoted
+# into catan_rl.human_data.glyph_anchor (expert review 2026-07-05: production must
+# ship the exact detector the 24/24 PASS validated); this harness imports them back.
 LABEL_UPSCALE = 8  # per-crop upscale factor for the labelling sheet
 
 
@@ -162,83 +159,6 @@ def ocr_lines_with_boxes(
         ys = [int(p[1]) for p in bbox]
         out.append((str(text), (min(xs), min(ys), max(xs), max(ys))))
     return out
-
-
-def detect_glyph_boxes(
-    crop_rgb: npt.NDArray[np.uint8],
-    line_box: tuple[int, int, int, int],
-    text_boxes: list[tuple[int, int, int, int]],
-) -> list[tuple[int, int, int, int]]:
-    """Detect the granted card-icon boxes for one grant line.
-
-    The mask is COLOUR-DISTANCE FROM THE PANEL BACKGROUND (per-crop median — the
-    panel skin varies: light-grey on some UIs, warm cream on others, and the cream
-    overlaps any fixed grey-stone S/V band). Candidates are icon-sized components
-    that sit either (a) ON the grant line's row, RIGHT of its text (excludes the
-    line-leading avatar glyph), or (b) on the WRAP row just below — but never
-    inside another log line's y-band (the neighbouring "placed a Road/Settlement"
-    lines carry their own piece glyphs, which are NOT granted cards).
-    """
-    h, _w = crop_rgb.shape[:2]
-    _x0, y0, x1, y1 = line_box
-    line_h = max(y1 - y0, 12)
-    band_y0 = max(0, y0 - 3)
-    band_y1 = min(h, y1 + int(1.3 * line_h))
-
-    band_px = crop_rgb[band_y0:band_y1, :].reshape(-1, 3)
-    panel = np.median(band_px, axis=0)  # background dominates the band area
-    dist = np.abs(crop_rgb.astype(np.int32) - panel.astype(np.int32)).max(axis=2)
-    mask = (dist > 30).astype(np.uint8)
-    band = np.zeros_like(mask)
-    band[band_y0:band_y1, :] = 1
-    mask &= band
-    mask = np.asarray(
-        cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)), dtype=np.uint8
-    )
-
-    # y-bands of OTHER text lines (their piece glyphs must never become candidates).
-    other_bands = [
-        (ty0 - 2, ty1 + 2)
-        for tx0, ty0, tx1, ty1 in text_boxes
-        if not (abs(ty0 - y0) < line_h // 2 and abs(ty1 - y1) < line_h // 2)
-    ]
-
-    n, _labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-    boxes: list[tuple[int, int, int, int]] = []
-    for i in range(1, n):
-        bx, by, bw, bh, area = (int(stats[i, k]) for k in range(5))
-        if area < BOX_MIN_AREA or not (BOX_MIN_H <= bh <= BOX_MAX_H):
-            continue
-        cx, cy = bx + bw / 2, by + bh / 2
-        if any(tx0 <= cx <= tx1 and ty0 <= cy <= ty1 for tx0, ty0, tx1, ty1 in text_boxes):
-            continue  # inside a text bbox (letters/avatar merged into OCR box)
-        on_grant_row = y0 - 2 <= cy <= y1 + 2
-        if on_grant_row:
-            if bx < x1 - 4:
-                continue  # left of / inside the grant text — the avatar glyph zone
-        else:
-            if any(oy0 <= cy <= oy1 for oy0, oy1 in other_bands):
-                continue  # another log line's own piece glyph, not a granted card
-        ar = bw / bh
-        if BOX_AR_LO <= ar <= BOX_AR_HI:
-            pieces = [(bx, bw)]
-        elif ar > BOX_AR_HI:
-            # tightly-packed icons merge into one wide run — split by the icon
-            # PITCH derived from the line height (the CC's own height is smeared
-            # by anti-aliasing, so width/height under-counts the icons).
-            pitch = max(10.0, 0.72 * line_h)
-            k = round(bw / pitch)
-            if not 2 <= k <= 6:
-                continue
-            cell = bw / k
-            pieces = [(bx + int(j * cell), int(cell)) for j in range(k)]
-        else:
-            continue
-        for px, pw in pieces:
-            # shrink 2px inward so the box samples the card body, not the border/panel
-            boxes.append((px + 2, by + 2, px + pw - 2, by + bh - 2))
-    boxes.sort(key=lambda b: (b[1] // line_h, b[0]))  # row-major, left to right
-    return boxes
 
 
 def find_grant_events(url: str, dur: float) -> list[tuple[float, str]]:
