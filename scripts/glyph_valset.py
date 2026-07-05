@@ -423,12 +423,36 @@ def cmd_sheet(per_row: int = 8) -> int:
     return 0
 
 
+def _dedupe_events(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Drop near-duplicate grant events (the SAME log line sampled twice ~10s apart
+    — it persists on screen ~30s). Two events of one video within 20s with the same
+    box count are the same physical line; keeping both double-counts a correlated
+    frame in the score. Keeps the first of each pair."""
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for row in rows:
+        dup = any(
+            k["video_id"] == row["video_id"]
+            and abs(float(k["t"]) - float(row["t"])) <= 20.0
+            and len(k["boxes"]) == len(row["boxes"])
+            for k in kept
+        )
+        if dup:
+            dropped += 1
+        else:
+            kept.append(row)
+    return kept, dropped
+
+
 def cmd_score() -> int:
     if not LABELS.exists():
         print(f"no labels at {LABELS} — label the sheets first")
         return 1
     labels: dict[str, str] = json.loads(LABELS.read_text())
-    rows = [json.loads(line) for line in META.read_text().splitlines()]
+    all_rows = [json.loads(line) for line in META.read_text().splitlines()]
+    rows, n_dupes = _dedupe_events(all_rows)
+    if n_dupes:
+        print(f"deduped {n_dupes} near-duplicate grant event(s) (same line re-sampled)")
     frames: list[LabeledGrantFrame] = []
     skipped: list[str] = []
     for row in rows:
