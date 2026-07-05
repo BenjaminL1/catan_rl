@@ -404,6 +404,30 @@ def maybe_resume_from_checkpoint(
         league=state.league,
         vec_env=state.vec_env,
     )
+    # ``optimizer.load_state_dict`` restores param_groups WHOLESALE — including
+    # betas/eps/weight_decay saved by a pre-fix run (which trained on torch
+    # defaults while its config claimed otherwise; audit 2026-07). arguments.py
+    # is the config source of truth, so re-stamp the declared hyperparameters
+    # onto every group (moment buffers untouched; lr is re-stamped every update
+    # by the trainer's schedule anyway), warning when the checkpoint disagreed.
+    opt_cfg = state.cfg.optimizer
+    desired: dict[str, Any] = {
+        "betas": tuple(opt_cfg.betas),
+        "eps": opt_cfg.eps,
+        "weight_decay": opt_cfg.weight_decay,
+    }
+    for group in state.optimizer.param_groups:
+        for key, want in desired.items():
+            have = tuple(group[key]) if key == "betas" else group[key]
+            if have != want:
+                log.warning(
+                    "resume: optimizer %s restored as %r from checkpoint; "
+                    "re-stamping config value %r (arguments.py is the source of truth)",
+                    key,
+                    have,
+                    want,
+                )
+                group[key] = want
     state.update_idx = payload.update_idx + 1
     state.global_step = payload.global_step
     state.resumed_from = latest
@@ -794,11 +818,16 @@ def run_training_loop(
                 )
 
             # ---- auto-re-anchor (in-process anchor promotion) -------
-            # This rollout's anchor outcomes are already in the league EMA
-            # (collector.record_outcome). A promotion is persisted at the NEXT
-            # checkpoint save (the save cadence is phase-shifted by 1 — save fires
-            # on update_idx+1), and resume re-derives the streak/EMA deterministically
-            # while the cooldown blocks any re-fire, so this is faithful regardless.
+            # This rollout's anchor outcomes are already in BOTH stores
+            # (collector.record_outcome feeds the PFSP EMA and the sliding
+            # anchor-outcome window); the promotion decision reads the window
+            # mean. A promotion is persisted at the NEXT checkpoint save (the
+            # save cadence is phase-shifted by 1 — save fires on update_idx+1).
+            # The streak/cooldown/n_promotions round-trip via the checkpoint,
+            # but the window deliberately does NOT — after a resume the gate
+            # skips (window-short) until a fresh min_games anchor outcomes
+            # accrue, so recovery is CONSERVATIVE rather than faithful, and
+            # the cooldown blocks any immediate re-fire.
             if cfg.league.auto_reanchor_enabled and (
                 update_idx % cfg.league.auto_reanchor_check_every_updates == 0
             ):

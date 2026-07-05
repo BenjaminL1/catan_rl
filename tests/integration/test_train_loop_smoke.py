@@ -173,6 +173,45 @@ class TestResume:
         assert state.update_idx == 4
         assert state.global_step == 64  # 4 updates * 16 transitions
 
+    def test_resume_restamps_optimizer_hparams_from_config(
+        self, tmp_path: Path, silent_logger: logging.Logger
+    ) -> None:
+        # A pre-fix checkpoint carries eps=1e-8 / drifted betas in its
+        # param_groups (audit 2026-07: the constructor silently dropped the
+        # configured values, and load_state_dict restores param_groups
+        # wholesale). Resume must re-stamp the config-declared values —
+        # arguments.py is the source of truth — while keeping moment buffers.
+        cfg = _tiny_cfg(total_updates=2)
+        state = build_training_state(
+            cfg, run_dir=tmp_path, device_label="cpu", logger=silent_logger
+        )
+        try:
+            for group in state.optimizer.param_groups:
+                group["eps"] = 1e-8  # simulate what a pre-fix run really used
+                group["betas"] = (0.85, 0.98)
+            state.ckpt_mgr.save(
+                config=cfg.to_dict(),
+                policy=state.policy,
+                optimizer=state.optimizer,
+                update_idx=0,
+                global_step=16,
+                league=state.league,
+                vec_env=state.vec_env,
+            )
+        finally:
+            state.vec_env.close()
+        fresh = build_training_state(
+            cfg, run_dir=tmp_path, device_label="cpu", logger=silent_logger
+        )
+        try:
+            assert maybe_resume_from_checkpoint(fresh, logger=silent_logger) is not None
+            for group in fresh.optimizer.param_groups:
+                assert group["eps"] == cfg.optimizer.eps
+                assert tuple(group["betas"]) == tuple(cfg.optimizer.betas)
+                assert group["weight_decay"] == cfg.optimizer.weight_decay
+        finally:
+            fresh.vec_env.close()
+
     def test_resume_preserves_league_snapshots(
         self, tmp_path: Path, silent_logger: logging.Logger
     ) -> None:

@@ -271,6 +271,14 @@ class OptimizerConfig:
     weight_decay: float = 1.0e-4
     betas: tuple[float, float] = (0.9, 0.999)
     eps: float = 1.0e-5
+    """AdamW epsilon. HISTORY (audit 2026-07): every run launched before the
+    fix trained at torch's default 1e-8 — the constructor silently dropped
+    this field — so the whole validated v2 lineage (bootstrap -> v8) is de
+    facto an eps=1e-8 lineage despite configs claiming 1e-5. From the fix
+    onward the configured value is honored on fresh runs AND re-stamped onto
+    restored param_groups on resume (config is the source of truth; a resume
+    warns if the checkpoint disagreed)."""
+
     grad_clip_max_norm: float = 1.0
 
     lr_anneal_total_updates: int = 0

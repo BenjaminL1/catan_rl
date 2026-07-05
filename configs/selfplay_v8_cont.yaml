@@ -41,6 +41,9 @@ optimizer:
   lr_end: 1.5e-4
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
+  # NOTE (audit 2026-07): pre-fix runs silently trained at torch-default
+  # eps=1e-8 — the v8 lineage is de facto 1e-8. From the fix onward this
+  # value is honored (fresh runs AND re-stamped on resume with a warning).
   eps: 1.0e-5
   grad_clip_max_norm: 1.0
   lr_anneal_total_updates: 0
