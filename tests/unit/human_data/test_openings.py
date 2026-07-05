@@ -566,3 +566,23 @@ def test_green_settlement_on_green_baseline_tile_survives_subtraction() -> None:
         if int((dv < 16.0).sum(1).max()) >= _MIN_HEAD_VOTES:
             survived = True
     assert survived, "on-green-tile GREEN settlement was eaten by the tile subtraction"
+
+
+def test_road_dominance_guard_rejects_occluded_true_road() -> None:
+    # Review BLOCKER: the absolute floor alone lets an occluded true road snap to a
+    # leaked wrong-but-incident edge (which the §5.7 re-check still passes). The
+    # runner-up dominance guard rejects when there is no clear winner.
+    from catan_rl.human_data.openings import _road_for_settlement
+
+    vertex_px = np.array([[100.0, 100.0], [200.0, 100.0], [100.0, 200.0]])
+    edge_vertices = ((0, 1), (0, 2))  # both incident to settlement vertex 0
+    a_mid = np.array([[150.0, 100.0]])  # midpoint of edge 0 (t=0.5, perp=0)
+    b_mid = np.array([[100.0, 150.0]])  # midpoint of edge 1
+
+    # dominant winner (80 vs 30 ≥ 2×): the true road resolves to edge 0
+    dominant = np.concatenate([np.repeat(a_mid, 80, 0), np.repeat(b_mid, 30, 0)])
+    assert _road_for_settlement(dominant, 0, vertex_px, edge_vertices, set()) == 0
+
+    # NOT dominant (40 vs 30 < 2×): true road likely occluded → honest rejection
+    ambiguous = np.concatenate([np.repeat(a_mid, 40, 0), np.repeat(b_mid, 30, 0)])
+    assert _road_for_settlement(ambiguous, 0, vertex_px, edge_vertices, set()) is None

@@ -247,6 +247,14 @@ _ROAD_PERP_PX = 10.0
 #: the leaked runner-up. Mirrors the settlement guard: reject below the floor.
 _MIN_ROAD_PIXELS = 20
 
+#: Runner-up dominance ratio (review BLOCKER: the absolute floor alone is not enough —
+#: the leaked wrong edges overlap the true-road range, and a wrong incident edge that
+#: clears the floor snaps to a fabricated road that the §5.7 incidence re-check still
+#: passes). A GENUINE road bar dominates the settlement-body/tile bleed on the OTHER
+#: incident edges; the winner must collect at least this multiple of the runner-up
+#: incident edge, else the true road is likely occluded and we emit road_unresolved.
+_ROAD_DOMINANCE_RATIO = 2.0
+
 
 def _color_masks(
     frame_hsv: npt.NDArray[np.uint8],
@@ -380,14 +388,13 @@ def _road_for_settlement(
     """The opening road for one settlement (§5.7 road tiebreak): among the edges
     incident to ``settlement`` and not already claimed, pick the one collecting the
     most colour road-mask pixels along its midsection perpendicular band. Returns
-    ``None`` when the best incident edge collects fewer than :data:`_MIN_ROAD_PIXELS`
-    pixels — the road analogue of the settlement head-vote guard (review finding:
-    red-team counterexample). WITHOUT this floor any incident edge with even one
-    stray/leaked road-mask pixel is accepted as the road; the floor turns that
-    fabrication (an occluded true road snapping to a leaked runner-up) into an
-    honest ``road_unresolved`` rejection."""
-    best: int | None = None
-    best_count = _MIN_ROAD_PIXELS - 1
+    ``None`` (``road_unresolved``) when the best incident edge collects fewer than
+    :data:`_MIN_ROAD_PIXELS` pixels OR fails to DOMINATE the runner-up incident edge
+    by :data:`_ROAD_DOMINANCE_RATIO` (review BLOCKER: the floor alone lets an occluded
+    true road snap to a leaked wrong-but-incident edge that the §5.7 re-check still
+    passes; a genuine road bar dominates the settlement-body bleed on the other
+    incident edges). Both guards fail closed — an honest rejection over a fabrication."""
+    counts: list[tuple[int, int]] = []  # (pixel_count, edge_id) per incident, unclaimed edge
     for edge_id, (a, b) in enumerate(edge_vertices):
         if settlement not in (a, b) or edge_id in used:
             continue
@@ -406,10 +413,17 @@ def _road_for_settlement(
                 (t > _ROAD_SPAN_LO * length) & (t < _ROAD_SPAN_HI * length) & (perp < _ROAD_PERP_PX)
             ).sum()
         )
-        if count > best_count:
-            best_count = count
-            best = edge_id
-    return best
+        counts.append((count, edge_id))
+    if not counts:
+        return None
+    counts.sort(reverse=True)
+    best_count, best_edge = counts[0]
+    if best_count < _MIN_ROAD_PIXELS:
+        return None
+    second_count = counts[1][0] if len(counts) > 1 else 0
+    if second_count > 0 and best_count < _ROAD_DOMINANCE_RATIO * second_count:
+        return None  # no clear winner → true road likely occluded → honest rejection
+    return best_edge
 
 
 def read_hud_seat_colors(frame_rgb: npt.NDArray[np.uint8]) -> tuple[str, ...]:
