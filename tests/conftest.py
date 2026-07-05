@@ -33,6 +33,20 @@ _ENGINE_BACKEND_IDS: dict[str, str] = {"python": "py_engine", "rust": "rust_engi
 _BACKEND_OVERRIDE_ENV = "CATAN_TEST_ENGINE_BACKEND"
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Auto-mark every test under ``tests/integration`` as ``integration``.
+
+    CI's integration step selects with ``-m integration``; path-based
+    marking keeps the marker exhaustive without per-module ``pytestmark``
+    lines (audit 2026-07: 59/63 integration tests were silently
+    deselected because only one module carried the marker).
+    """
+    integration_dir = REPO_ROOT / "tests" / "integration"
+    for item in items:
+        if integration_dir in item.path.parents:
+            item.add_marker(pytest.mark.integration)
+
+
 @pytest.fixture(autouse=True)
 def deterministic_seed() -> None:
     """Reset all RNGs before each test for reproducibility."""
