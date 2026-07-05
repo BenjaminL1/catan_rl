@@ -32,6 +32,8 @@ from catan_rl.human_data import (
 from catan_rl.human_data.board_cv import BoardRead
 from catan_rl.human_data.orientation import granted_resources_under_orientation
 from catan_rl.human_data.validate import (
+    GLYPH_MISMATCH_REASON,
+    GLYPH_UNREADABLE_REASON,
     CrossCheckResult,
     cross_check,
     road_incidence_offenders,
@@ -93,6 +95,25 @@ def _board_read(
     )
 
 
+def _granted_for(vertex: int) -> Counter[str]:
+    """The setup granted-card multiset for a settlement at ``vertex`` on the game-1
+    board (adjacent-hex resources, DESERT excluded) — the ground truth the glyph
+    reader would produce under the correct orientation."""
+    topo = load_topology()
+    by_hex = {int(h["hex_id"]): str(h["resource"]) for h in _GAME1_HEXES}
+    return granted_resources_under_orientation(vertex, by_hex, topo)
+
+
+# Readable, orientation-consistent grant reads for BOTH players (ThePhantom's 2nd
+# settlement is vertex 19; rayman147's is vertex 3). The joint-flip firewall is
+# NON-OPTIONAL (expert BLOCKER 1): acceptance requires the anchor to run for both
+# players, so the default fixture must supply grants that let it run and pass.
+_VALID_GRANTS: dict[str, Counter[str] | None] = {
+    "ThePhantom": _granted_for(19),
+    "rayman147": _granted_for(3),
+}
+
+
 def _cross_check(
     *,
     board: BoardRead | None = None,
@@ -101,7 +122,7 @@ def _cross_check(
     winner: str | None = "ThePhantom",
     resolution: int = 1080,
     dice_log: tuple[int, ...] = (8, 6, 11, 4),
-    granted_by_player: dict[str, Any] | None = None,
+    granted_by_player: dict[str, Any] | None = _VALID_GRANTS,
 ) -> CrossCheckResult:
     # The gate reads the residual from the board it is validating (SHOULD-FIX 2); the
     # ``residual_px`` param is cross-asserted equal, so mirror the board here.
@@ -369,25 +390,20 @@ def test_accept_path_bad_hex_number_is_rejected_not_raised() -> None:
     assert restored.passed_crosscheck is False
 
 
-# --- glyph anchor wired into the accept path (SHOULD-FIX joint-flip firewall) -
-
-
-def _granted_for(vertex: int) -> Counter[str]:
-    """The setup granted-card multiset for a settlement at ``vertex`` on the game-1
-    board (adjacent-hex resources, DESERT excluded) — the ground truth the glyph
-    reader would produce under the correct orientation."""
-    topo = load_topology()
-    by_hex = {int(h["hex_id"]): str(h["resource"]) for h in _GAME1_HEXES}
-    return granted_resources_under_orientation(vertex, by_hex, topo)
+# --- glyph anchor wired into the accept path (NON-OPTIONAL joint-flip firewall) -
 
 
 def test_gate_accepts_with_matching_glyph_anchor() -> None:
-    # ThePhantom's 2nd settlement is vertex 19; the granted glyphs match its
-    # adjacency under the correct orientation → the joint-flip firewall passes.
-    granted = {"ThePhantom": _granted_for(19)}
+    # ThePhantom's 2nd settlement is vertex 19, rayman147's is vertex 3; the granted
+    # glyphs match their adjacencies under the correct orientation → the joint-flip
+    # firewall runs for BOTH players and passes.
+    granted: dict[str, Any] = {"ThePhantom": _granted_for(19), "rayman147": _granted_for(3)}
     result = _cross_check(granted_by_player=granted)
     assert result.accepted is True
     assert result.record.passed_crosscheck is True
+    assert result.anchor_ran is True
+    assert result.anchor_unreadable is False
+    assert result.anchor_mismatch is False
 
 
 def test_gate_rejects_joint_flip_via_glyph_anchor() -> None:
@@ -401,11 +417,82 @@ def test_gate_rejects_joint_flip_via_glyph_anchor() -> None:
     # multiset that matches neither of ThePhantom's opening settlements' adjacencies.
     ph_adj = {tuple(sorted(_granted_for(v).items())) for v in (1, 19)}
     # A deliberately impossible-for-those-settlements grant (3 ORE — no vertex on this
-    # board touches 3 ore hexes; certainly not vertices 1/19).
+    # board touches 3 ore hexes; certainly not vertices 1/19). rayman147's read stays
+    # valid so the game reaches the anchor (an unreadable read would reject earlier).
     impossible = Counter({"ORE": 3})
     assert tuple(sorted(impossible.items())) not in ph_adj
-    result = _cross_check(granted_by_player={"ThePhantom": impossible})
+    result = _cross_check(
+        granted_by_player={"ThePhantom": impossible, "rayman147": _granted_for(3)}
+    )
     assert result.accepted is False
-    assert result.record.rejection_reason == "orientation_joint_flip_glyph_mismatch"
+    assert result.record.rejection_reason == GLYPH_MISMATCH_REASON
+    assert result.anchor_ran is True
+    assert result.anchor_mismatch is True
+    assert result.anchor_unreadable is False
     restored = GameRecord.from_json_line(result.record.to_json_line())
     assert restored.passed_crosscheck is False
+
+
+# --- the firewall is NON-OPTIONAL: unreadable/absent grants REJECT (BLOCKER 1) --
+
+
+def test_gate_rejects_unreadable_grant_none_read() -> None:
+    # A player whose grant read came back None (the glyph reader's honest "could
+    # not read") must be a typed REJECT — never an accepted game that silently
+    # skipped the only joint-flip defence.
+    result = _cross_check(granted_by_player={"ThePhantom": None, "rayman147": _granted_for(3)})
+    assert result.accepted is False
+    assert result.record.passed_crosscheck is False
+    assert result.record.rejection_reason == GLYPH_UNREADABLE_REASON
+    assert result.record.is_scoreboard_eligible() is False
+    assert result.record.is_seed_eligible() is False
+    assert result.anchor_ran is False
+    assert result.anchor_unreadable is True
+    assert result.anchor_mismatch is False
+    # The audit row still loads (§5.6).
+    restored = GameRecord.from_json_line(result.record.to_json_line())
+    assert restored.passed_crosscheck is False
+
+
+def test_gate_rejects_absent_grant_reads_entirely() -> None:
+    # No grant read at all (granted_by_player=None — the old fail-open path) must
+    # now be the same typed reject: the anchor never ran, so nothing is accepted.
+    result = _cross_check(granted_by_player=None)
+    assert result.accepted is False
+    assert result.record.rejection_reason == GLYPH_UNREADABLE_REASON
+    assert result.record.is_scoreboard_eligible() is False
+    assert result.record.is_seed_eligible() is False
+    assert result.anchor_ran is False
+    assert result.anchor_unreadable is True
+
+
+def test_gate_rejects_grant_read_missing_one_player() -> None:
+    # A read covering only ONE of the two granting players is not enough — the
+    # anchor must run for BOTH players before a game can be accepted.
+    result = _cross_check(granted_by_player={"ThePhantom": _granted_for(19)})
+    assert result.accepted is False
+    assert result.record.rejection_reason == GLYPH_UNREADABLE_REASON
+    assert result.anchor_ran is False
+    assert result.anchor_unreadable is True
+
+
+def test_accepted_record_implies_anchor_ran_for_both_players() -> None:
+    # "The anchor actually ran" is an explicit precondition of acceptance: every
+    # accepted result carries anchor_ran=True (both players' grants were readable
+    # and assert_glyph_anchor executed on the assembled record).
+    result = _cross_check()
+    assert result.accepted is True
+    assert result.anchor_ran is True
+    assert result.anchor_unreadable is False
+
+
+def test_coarse_reject_before_glyph_gate_keeps_its_reason() -> None:
+    # A game already rejected by a coarse capture gate (sub-1080p) keeps its true
+    # reason even when the grants are ALSO unreadable — but the unreadable-coverage
+    # telemetry still reports the read (the §5.6 audit reason stays feature-true).
+    result = _cross_check(resolution=720, granted_by_player=None)
+    assert result.accepted is False
+    assert result.record.rejection_reason is not None
+    assert "resolution" in result.record.rejection_reason
+    assert result.anchor_ran is False
+    assert result.anchor_unreadable is True

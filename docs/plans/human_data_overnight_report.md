@@ -171,6 +171,12 @@ These did **not** block READY but are open. Most bear directly on **audit honest
   board. **Fix:** make the joint-flip defense non-silent — require an explicit opt-out or
   refuse `accepted=True` unless the anchor ran; `batch.py` MUST call
   `assert_scale_up_orientation_gates` per game.
+  *(RESOLVED 2026-07-05: `cross_check` now rejects `glyph_unreadable` when a grant read is
+  absent/`None` for either player — anchor-ran is a precondition of acceptance;
+  `run_batch` calls `assert_scale_up_orientation_gates` once per run and raises
+  `GlyphClassifierNotValidated` on an absent/failed validation; `BatchResult` /
+  `CrossCheckResult` carry {anchor_ran, anchor_unreadable, anchor_mismatch} + grant-read
+  coverage telemetry.)*
 - **`cross_check` cannot verify BoardRead is cross-frame-stable** — the §5.2-mandatory
   stability lives in an unenforced calling convention. **Fix:** add `frames_corroborated:int`
   / `cross_frame_stable:bool` set by `read_board_stable`, reject when <2.
