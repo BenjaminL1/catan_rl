@@ -156,15 +156,17 @@ HUE_MIN_SATURATION_ABOVE_ORE = 20.0
 #: text contamination into an honest ``None`` rather than a dragged median.
 MIN_GLYPH_BODY_PURITY = 0.6
 
-#: Pre-registered validation bars for :func:`validate_glyph_classifier`. The
-#: classifier is only reported ``passed`` when it reproduces the labelled grants
-#: on at least :data:`MIN_VALIDATION_FRAMES` labelled post-grant frames at
-#: >= :data:`MIN_VALIDATION_ACCURACY` per-player-grant accuracy. These gate the
-#: scale-up firewall flip (task spec: the gate flips to allowed ONLY when
-#: validated), so they are deliberately strict — a mislabelled grant silently
-#: welds a jointly-flipped board.
+#: Pre-registered validation bars for :func:`validate_glyph_classifier` — the
+#: USER-APPROVED bar (2026-07-04): >= :data:`MIN_VALIDATION_ACCURACY` exact
+#: grant-multiset accuracy over at least :data:`MIN_VALIDATION_FRAMES` labelled
+#: post-grant frames, AND **zero ORE<->BRICK confusions** among the per-box labels
+#: (that specific misread is the systematic, firewall-blinding failure mode: a
+#: desaturated grey stone reads as a warm hue, corrupting the granted multiset a
+#: jointly-flipped board is compared against). These gate the scale-up firewall
+#: flip (the gate flips to allowed ONLY when validated), so they are deliberately
+#: strict — a mislabelled grant silently welds a jointly-flipped board.
 MIN_VALIDATION_FRAMES = 8
-MIN_VALIDATION_ACCURACY = 0.95
+MIN_VALIDATION_ACCURACY = 0.98
 
 #: Minimum agreeing single-frame reads for the per-game grant CONSENSUS
 #: (:func:`consensus_granted_glyphs`). The grant line persists across several
@@ -551,12 +553,19 @@ class LabeledGrantFrame:
     (defaults to the synthetic-test :data:`FALLBACK_PALETTE`). The classifier is
     scored per frame: a frame is CORRECT iff :func:`classify_granted_glyphs`
     returns exactly ``expected`` under that palette.
+
+    ``expected_by_box`` (optional) is the per-box ground truth, ordered to match
+    ``glyph_boxes``. Supplying it enables the CONFUSION-MATRIX half of the
+    user-approved bar — in particular the zero-ORE<->BRICK rule, which multiset
+    equality alone cannot attribute to a specific box. The validation harness
+    always supplies it; synthetic tests may omit it.
     """
 
     log_crop_rgb: npt.NDArray[np.uint8]
     glyph_boxes: list[tuple[int, int, int, int]]
     expected: Counter[str]
     palette: GlyphPalette = FALLBACK_PALETTE
+    expected_by_box: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -565,10 +574,16 @@ class GlyphValidation:
 
     ``passed`` is ``True`` ONLY when the classifier reproduced the labelled grants
     on >= :data:`MIN_VALIDATION_FRAMES` frames at >= :data:`MIN_VALIDATION_ACCURACY`
-    accuracy. ``n_frames`` / ``n_correct`` / ``accuracy`` carry the measured
-    numbers; ``reason`` explains a fail (too few frames, or below the accuracy bar)
-    so the scale-up gate can report EXACTLY why the harvest stays blocked (task
-    spec: never fake it validated — report why).
+    accuracy AND the per-box confusion matrix has zero ORE<->BRICK entries (the
+    user-approved bar). ``n_frames`` / ``n_correct`` / ``accuracy`` carry the
+    frame-level numbers; ``reason`` explains a fail so the scale-up gate can report
+    EXACTLY why the harvest stays blocked (never fake it validated — report why).
+
+    Per-box fields (populated from frames carrying ``expected_by_box``):
+    ``confusion`` is the sparse confusion matrix as ``(true, predicted, count)``
+    triples over CONFIDENT reads only; ``n_boxes`` the labelled box count;
+    ``n_unread_boxes`` the fail-closed ``None`` reads (COVERAGE — honest silence,
+    counted separately, never in ``confusion``).
     """
 
     passed: bool
@@ -576,6 +591,9 @@ class GlyphValidation:
     n_correct: int
     accuracy: float
     reason: str | None
+    confusion: tuple[tuple[str, str, int], ...] = ()
+    n_boxes: int = 0
+    n_unread_boxes: int = 0
 
 
 def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidation:
@@ -584,42 +602,77 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
     Runs :func:`classify_granted_glyphs` on each frame UNDER THAT FRAME'S per-game
     palette and counts a frame CORRECT iff the returned multiset equals the frame's
     ``expected`` label (an unreadable ``None`` counts as wrong — an honest miss, not
-    a pass). Reports ``passed=True`` only when both pre-registered bars clear
-    (:data:`MIN_VALIDATION_FRAMES`, :data:`MIN_VALIDATION_ACCURACY`); otherwise
-    ``passed=False`` with a ``reason``. This is the sole switch the scale-up
-    firewall consults (:func:`glyph_classifier_is_validated`), so a below-bar or
-    under-sampled run keeps the 300-game harvest BLOCKED.
+    a pass). For frames carrying ``expected_by_box`` it also classifies each box
+    individually into the per-box confusion matrix (fail-closed ``None`` reads are
+    counted as ``n_unread_boxes`` COVERAGE, never as confusion entries).
+
+    Reports ``passed=True`` only when the full user-approved bar clears:
+    >= :data:`MIN_VALIDATION_FRAMES` frames, >= :data:`MIN_VALIDATION_ACCURACY`
+    exact-multiset accuracy, AND zero ORE<->BRICK confusion entries (that misread is
+    the systematic failure mode that blinds the joint-flip firewall — one occurrence
+    in the labelled set means the saturation margin is mis-tuned and the error will
+    repeat at scale). This is the sole switch the scale-up firewall consults
+    (:func:`glyph_classifier_is_validated`), so a below-bar or under-sampled run
+    keeps the 300-game harvest BLOCKED.
     """
     n_frames = len(frames)
-    n_correct = sum(
-        1
-        for f in frames
-        if classify_granted_glyphs(f.log_crop_rgb, f.glyph_boxes, f.palette) == f.expected
-    )
+    n_correct = 0
+    confusion: Counter[tuple[str, str]] = Counter()
+    n_boxes = 0
+    n_unread = 0
+    for f in frames:
+        if classify_granted_glyphs(f.log_crop_rgb, f.glyph_boxes, f.palette) == f.expected:
+            n_correct += 1
+        if f.expected_by_box is None:
+            continue
+        if len(f.expected_by_box) != len(f.glyph_boxes):
+            raise ValueError(
+                f"expected_by_box has {len(f.expected_by_box)} labels for "
+                f"{len(f.glyph_boxes)} glyph boxes"
+            )
+        for (x0, y0, x1, y1), true_resource in zip(f.glyph_boxes, f.expected_by_box, strict=True):
+            n_boxes += 1
+            swatch = np.asarray(f.log_crop_rgb[y0:y1, x0:x1], np.uint8)
+            predicted = (
+                classify_glyph(_glyph_median_hsv(swatch), f.palette) if swatch.size else None
+            )
+            if predicted is None:
+                n_unread += 1  # honest fail-closed silence — coverage, not confusion
+            else:
+                confusion[(true_resource, predicted)] += 1
     accuracy = (n_correct / n_frames) if n_frames else 0.0
-    if n_frames < MIN_VALIDATION_FRAMES:
+    confusion_out = tuple((true, pred, count) for (true, pred), count in sorted(confusion.items()))
+
+    def _fail(reason: str) -> GlyphValidation:
         return GlyphValidation(
             passed=False,
             n_frames=n_frames,
             n_correct=n_correct,
             accuracy=accuracy,
-            reason=(
-                f"only {n_frames} labelled post-grant frame(s) < required "
-                f"{MIN_VALIDATION_FRAMES} — not enough to validate the glyph "
-                "classifier; scale-up stays blocked"
-            ),
+            reason=reason,
+            confusion=confusion_out,
+            n_boxes=n_boxes,
+            n_unread_boxes=n_unread,
+        )
+
+    ore_brick = confusion[("ORE", "BRICK")] + confusion[("BRICK", "ORE")]
+    if ore_brick > 0:
+        return _fail(
+            f"{ore_brick} ORE<->BRICK confusion(s) in the labelled set — the "
+            "firewall-blinding misread; zero tolerated (user-approved bar). "
+            "Widen HUE_MIN_SATURATION_ABOVE_ORE and re-measure; scale-up stays blocked"
+        )
+    if n_frames < MIN_VALIDATION_FRAMES:
+        return _fail(
+            f"only {n_frames} labelled post-grant frame(s) < required "
+            f"{MIN_VALIDATION_FRAMES} — not enough to validate the glyph "
+            "classifier; scale-up stays blocked"
         )
     if accuracy < MIN_VALIDATION_ACCURACY:
-        return GlyphValidation(
-            passed=False,
-            n_frames=n_frames,
-            n_correct=n_correct,
-            accuracy=accuracy,
-            reason=(
-                f"glyph accuracy {accuracy:.3f} < required {MIN_VALIDATION_ACCURACY} "
-                f"({n_correct}/{n_frames} frames) — classifier not reliable enough; "
-                "scale-up stays blocked"
-            ),
+        return _fail(
+            f"glyph accuracy {accuracy:.3f} < required {MIN_VALIDATION_ACCURACY} "
+            f"({n_correct}/{n_frames} frames) — classifier not reliable enough; "
+            "scale-up stays blocked"
         )
     return GlyphValidation(
         passed=True,
@@ -627,6 +680,9 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
         n_correct=n_correct,
         accuracy=accuracy,
         reason=None,
+        confusion=confusion_out,
+        n_boxes=n_boxes,
+        n_unread_boxes=n_unread,
     )
 
 
