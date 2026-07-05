@@ -1,327 +1,363 @@
 # Step 6 — Human-Corpus Use: Opening Scoreboard + Opening-Diversity Training
 
-**Status:** DRAFT v3 (2026-07-05) — third revision. v1: expert NOT-READY (6 BLOCKERs) +
-council unanimous NOT-READY. v2: all v1 blockers verified structurally resolved by both
-tracks; expert NOT-READY (6 residual/new, two introduced by v2's own fixes) + council
-3-REJECT/1-ACCEPT. §8 carries the full v1→v2→v3 traceability.
-**Depends on:** the human_data harvest completing. The corpus does **not exist yet**;
-§2 (PRE-GATE-0) is corpus-free and runs first.
-**Scope:** **A — external opening-calibration scoreboard** (measurement),
-**B — opening-diversity training response** (gated on A), **C — engine bridge + env
-injection** (shared foundation). Invariants preserved: 1v1 ruleset, obs schema, action
-space, checkpoint lineage, natural-start-only evaluation, additive TB.
+**Status:** DRAFT v4 (2026-07-05). Review history: v1 expert 6-BLOCKER + council 4×NOT-READY;
+v2 resolved all v1 blockers (verified both tracks); v3 resolved all round-2 findings
+(verified); round 3 = expert NOT-READY ("READY-shaped v4" with 4 blockers, mostly
+formula-precision) + council 2 ACCEPT / 2 REJECT-with-flip-conditions. v4 folds in every
+round-3 item; §8 carries traceability.
+**Depends on:** the human_data harvest completing. The corpus does **not exist yet**; the
+pre-corpus lane (§2, incl. the corpus-free parts of §3) runs first.
+**Invariants preserved:** 1v1 ruleset, obs schema, action space, checkpoint lineage,
+natural-start-only evaluation/promotion, additive TB.
 
 ---
 
-## 0. Inputs, scale, and the population honesty statement
+## 0. Inputs, scale, population honesty
 
-Corpus: `GameRecord` schema-v2 JSONL (`hexes`, `openings`, `draft_order`, `winner|null`,
-`dice_log`, `opponent_strength{tier,source}`, `passed_crosscheck`, provenance). **Ports
-are NOT recorded** (schema v1) — §3/§4 handle this explicitly. Port **slot positions**
-are fixed board geometry (9 slots, committed topology); only their **type assignment**
-is unrecorded — so *port-slot adjacency of a settlement IS computable* from the record
-and is used as a covariate (§4).
+Corpus: `GameRecord` schema-v2 JSONL. **Ports are unrecorded**; port **slot positions**
+are fixed topology (9 slots) so *slot adjacency is computable*; type assignment is not.
 
-Corrected scale arithmetic (v2 overstated the low end): 204 high videos × ~2–5
-games × ~60–80% acceptance ≈ **~245–800 scoreboard-eligible games**; after the
-EVAL-A/HOLDOUT-B split and stratum pinning, the **gating cell is ~74–240 games** —
-the power section (§4) is written against this honest number, not the headline.
+Scale: 204 high videos × ~2–5 games × ~60–80% acceptance ≈ **~245–800 eligible games**;
+the **gating cell** (within-ThePhantom-seat, EVAL-A) ≈ **74–240 games clustered in
+~50–120 videos**. All power statements are made against clustered effective n (§4).
 
-**Population statement (resolves the contract-inversion finding, both tracks, both
-rounds).** `record.py`'s guidance designates tournament-source games as the only
-opponent-controlled bucket, with ranked (`rank_badge`) games opponent-uncontrolled
-(matched by ThePhantom's rating; opponent strength unverified, and the
-opponent-strength covariate is near-constant, carrying almost no adversary
-information). The tournament bucket is ~15 videos — **incapable of powering any
-endpoint** (per-cell n≈7 for a 2-way split). This plan therefore makes a **declared,
-power-justified deviation**: the primary population is the **within-ThePhantom-seat
-stratum** (his skill held constant across his own games; opponent strength
-uncontrolled and acknowledged). Consequences, all binding:
+**Population statement (declared deviation).** `record.py` designates tournament-source
+as the only opponent-controlled bucket; it is ~15 videos and cannot power any endpoint
+(per-cell n≈7 for a 2-way split). This plan's primary population is therefore the
+**within-ThePhantom-seat stratum** — his skill held constant; opponent strength
+uncontrolled and acknowledged (the `rank_badge` covariate is near-constant and carries
+almost no adversary information). Binding consequences:
 
-1. What GATE-A licenses is the claim **"v8 misjudges the openings ThePhantom wins
-   with"** — NOT "elite-vs-elite opening truth." The report states this framing.
-2. **Tournament sign-agreement guard:** GO additionally requires the tournament-only
-   subset's M2 point estimate to agree in sign (pre-registered: opposite sign →
-   INCONCLUSIVE, not GO). Caveat carried: tournament labels are title-regex,
-   frame-unverified.
-3. `opponent_strength.source` joins M2's exact strata.
-4. Workstream A includes updating `record.py`'s guidance docstring to name this
-   power-justified primary in the same change (doc-sync rule).
+1. GATE-A licenses the claim **"v8 misjudges the openings ThePhantom wins with"** —
+   not "elite-vs-elite opening truth." The report headlines this framing.
+2. **Tournament sign-guard:** binds any GO **only if** the tournament subset has ≥10
+   eligible games (below that it is waived and reported — a 5-game point estimate must
+   not be a coin-flip veto). Sign disagreement → INCONCLUSIVE. Caveat carried:
+   tournament labels are title-regex, frame-unverified.
+3. `opponent_strength.source` joins the permutation strata (§4).
+4. Workstream A updates **both** `record.py` guidance docstrings (module header AND
+   `is_strong_opponent_scoreboard_eligible`) to a coherent superseding contract naming
+   the power-justified within-seat primary — never leaving text that contradicts this
+   plan (doc-sync rule).
 
-Structural facts: one-human corpus (every gating statistic stratum-pinned; pooled
-"vs humans" numbers never computed as evidence); winner-null games are seed-only.
-
-**Terminology:** the measured quantity is **external opening calibration**; no claim
-to isolate value-head error from off-policy/dynamics divergence (OPE caveat), bounded
-by the in-distribution anchor M0.
+One-human corpus; winner-null games are seed-only and never enter any measurement.
+**Terminology:** the measured quantity is **external opening calibration** (OPE caveat:
+no claim to isolate value-head error from off-policy/dynamics divergence; bounded by M0
+and the basin-mass robustness row, §4).
 
 ---
 
 ## 1. Pre-registration discipline
 
-- Thresholds, strata, splits, **and the archetype featurizer** (§2.1 — spec in this
-  document, implementation committed before PRE-GATE-0 runs) are frozen by commit;
-  the scoreboard CLI records and refuses to run without: this doc's git hash, the
-  **`archetypes.py` git hash**, corpus JSONL hash, checkpoint hash.
-- **Corpus-size floor (new in v3):** if scoreboard-eligible games < **200**, GATE-A
-  cannot return NO-GO — only GO or INCONCLUSIVE(extend) (§4) — an underpowered null
-  is never read as evidence of absence.
-- **Holdout split before any metric:** by game, EVAL-A (~60%) / HOLDOUT-B (~40%),
-  seeded RNG, committed. GATE-A runs on EVAL-A; seeds come from EVAL-A only;
+- Frozen by commit before any corpus number exists: this doc, **`archetypes.py`**,
+  **`scripts/opening_scoreboard.py`** (expert: the slash-choice lives in code, so the
+  code hash is part of the freeze), the corpus JSONL hash, checkpoint hash, and the
+  split file. The CLI records all hashes and refuses to run on mismatch.
+- **Floor (on the gating cell, not the pre-split pool):** if the within-ThePhantom-seat
+  EVAL-A cell < **100 games**, GATE-A cannot return NO-GO — only GO or
+  INCONCLUSIVE(extend).
+- **Split BY VIDEO (round-3 clustering blocker):** videos are the sampling unit —
+  games within a video share a session and opponent. EVAL-A (~60% of videos) /
+  HOLDOUT-B (~40%), seeded RNG, committed file. Seeds come from EVAL-A videos only;
   GATE-B3 re-measures on HOLDOUT-B only.
-- Unit of analysis = the **game** (game-level bootstrap everywhere; per-seat rows
-  never pooled as independent).
-- **Determinism pins:** the K port layouts per record are seeded by
-  `hash(video_id:game_index)` (bit-stable reruns under the hash manifest).
+- **Cluster statistics everywhere:** bootstrap resamples **videos** (all games of a
+  drawn video enter together); permutation tests permute at the **video level** within
+  strata. No game-level i.i.d. assumption anywhere.
+- **Determinism:** per-record port layouts seeded by
+  `int.from_bytes(hashlib.sha256(f"{video_id}:{game_index}".encode()).digest()[:8], "big")`
+  (Python `hash()` is PYTHONHASHSEED-salted and is not used anywhere in this plan).
 
 ---
 
-## 2. PRE-GATE-0 — corpus-free measurements (run NOW; ~1 day + short runs)
+## 2. PRE-CORPUS LANE (run now; ~3–4 days total)
 
-### 2.1 The archetype featurizer (frozen here — it is load-bearing in four gates)
+### 2.1 The archetype featurizer (frozen; load-bearing in four gates)
 
-`src/catan_rl/human_data/archetypes.py`, committed **before** PRE-GATE-0 executes.
-Spec (fixed; never changes after PRE-GATE-0's numbers exist):
+`src/catan_rl/human_data/archetypes.py`, committed before PRE-GATE-0 executes.
 
-- **Feature basis** per (seat, opening): the 5-vector of **pip-share** by resource
-  over the seat's two settlements (pips of adjacent hexes, desert=0, normalized to
-  sum 1), plus total pips, plus **port-slot adjacency** (either settlement on one of
-  the 9 fixed port-slot vertex pairs — boolean).
-- **Buckets (fixed count = 5, numeric boundaries):**
-  `ORE_ENGINE` (ORE+WHEAT share ≥ 0.45), `WOOD_BRICK` (WOOD+BRICK share ≥ 0.45),
-  `PORT_LED` (port-adjacent AND no share ≥ 0.45), `BALANCED_HIGH` (no share ≥ 0.45,
-  total pips ≥ 26), `BALANCED_LOW` (otherwise). Deterministic precedence in that
-  order. (PORT_LED uses slot adjacency only — no port *types*, which are unrecorded.)
-- Entropy metrics are over these 5 buckets; "+1 bucket at ≥10% mass" is well-defined
-  because the count is fixed.
+- **Features** per (seat, opening): 5-vector of pip-share by resource over the seat's
+  two settlements (pips of adjacent hexes; desert = 0; normalized; **total pips = 0 ⇒
+  bucket BALANCED_LOW directly**), total pips, port-slot adjacency (boolean, either
+  settlement on one of the 9 fixed slot vertex-pairs).
+- **"Share" always means the named PAIR-SUM** (ORE+WHEAT, WOOD+BRICK) — never a
+  single-resource share (round-3 ambiguity). Buckets (fixed count 5, precedence order):
+  1. `ORE_ENGINE`: ORE+WHEAT pair-share ≥ 0.45 (deliberately includes wheat-heavy,
+     low-ore engines — the ore→city→dev axis; intended).
+  2. `WOOD_BRICK`: WOOD+BRICK pair-share ≥ 0.45.
+  3. `PORT_LED`: port-adjacent AND neither pair-share ≥ 0.45.
+  4. `BALANCED_HIGH`: neither pair-share ≥ 0.45 AND total pips ≥ 26.
+  5. `BALANCED_LOW`: otherwise.
+- The 26-pip boundary is sanity-checked against PRE-GATE-0's v8 distribution (typical
+  two-settlement totals ≈ 19–24, so BALANCED_HIGH may be small); any amendment happens
+  **before** the corpus exists and is committed as a doc+code change — after PRE-GATE-0
+  reports, the featurizer never changes.
+- **Collinearity note (Architect):** the continuous ORE+WHEAT share is M2's regressor
+  AND the ORE_ENGINE boundary; buckets are used only for description, diversity
+  metrics, and B0 coverage — never as an M2 covariate — so the double use cannot
+  contaminate the primary.
 
-### 2.2 Measurements
+### 2.2 PRE-GATE-0 measurements
 
-- **v8 opening distribution:** n≥400 natural v8-vs-v8 + v8-vs-anchor games →
-  archetype histogram, entropy, `openings/setup_head_entropy`. Collapse verdict
-  pre-registered: ≥70% mass in one bucket = collapsed. The **v8-vs-anchor** histogram
-  is the pinned baseline for GATE-B3(3) (it matches what the v9 run's periodic anchor
-  evals produce).
-- **M0 — in-distribution anchor (moved pre-corpus, Skeptic):** port-marginal-style
-  `v_hat` at post-setup (to-move seat) on v8's own eval games vs their outcomes —
-  the honest ceiling for "how predictive can a post-setup value be under StackedDice."
-- **`setup_entropy_coef` pre-calibration (Researcher):** a short control-only run
-  (no seeds) sweeping 2–3 values; pick the largest that does not degrade anchor WR —
-  fixed before the multi-week commit so an uncalibrated HP cannot sink both arms.
+- **v8 opening distribution:** n≥400 natural v8-vs-v8 + v8-vs-anchor games → archetype
+  histogram, entropy, `openings/setup_head_entropy`. Collapse verdict: ≥70% mass in one
+  bucket. PRE-GATE-0 pins the **measurement condition** (v8-vs-anchor games — matching
+  what the v9 run's periodic anchor evals produce) **and the collapse verdict only**;
+  it is NOT the baseline for GATE-B3(3), whose comparator is exclusively the
+  contemporaneous control (§5) — (round-3 stale-sentence fix).
+- **M0 — in-distribution anchor:** same estimator as §4 (to-move-seat `v_hat`,
+  port-marginal once §3's injection API exists) on v8's own eval games vs outcomes.
+  Until the injection API lands, M0 is computed with **true ports** and re-run
+  port-marginal when C completes (both numbers reported; the true-port M0 is the
+  binding anchor — stated now to avoid a silent downgrade later).
+- **`setup_entropy_coef` pre-calibration:** the setup-phase-only entropy term **does
+  not exist in `arguments.py` yet** — its wiring is part of this pre-corpus lane
+  (small additive loss term, default 0.0), then a short control-only sweep (2–3
+  values) picks the largest value not degrading anchor WR. Fixed before B.
 
-Branch: not-collapsed → B's rationale becomes calibration-repair; B3(3) demoted from
-criterion to report (§5.B4).
+### 2.3 Corpus-free parts of Workstream C (moved forward — round-3 sequencing fix)
 
----
-
-## 3. Workstream C — engine bridge + env injection (~2–3d)
-
-`engine_bridge.py` + a `CatanEnv.reset(seed_game=...)` branch, **plus a small
-additive engine surface that does not exist yet** (flagged per CLAUDE.md rule 2;
-`engine/board.py` joins C's file list): a board/port **injection API** —
-`catanBoard.__init__` randomizes resources/spiral numbers and `updatePorts` draws
-from *global* `np.random` with no injectable RNG, and human boards need arbitrary
-number placement the spiral generator cannot produce. Injection = post-construction
-overwrite of `hexTileDict`/`resourcesList`/robber + deterministic port assignment
-from an explicit RNG. Additive, default-unused by training.
-
-Bridge (`build_post_setup_game(record, port_rng) -> catanGame | BridgeReject`):
-
-- Resource-literal → engine-order conversion at this boundary (rule 6).
-- **Placement legality via the env's action masks / geometry, asserted explicitly**
-  (engine `build_*` APIs check resources/pieces only — verified; they also
-  **silently no-op on failure**, so the bridge asserts post-conditions: piece
-  counts, vertex/edge occupancy — never relies on exceptions).
-- Starting resources through the spec-009 bank (`bank_draw`) then
-  `assert_conservation` + `rules_invariants`; hand-tracker state == `player.resources`
-  asserted (council bug class).
-- **Per-layout ordering (expert):** `player.portList` is captured inside
-  `build_settlement` and the encoder's port one-hot is frozen at construction — so
-  each of the K port layouts is a **full re-bridge** (set ports → replay placements →
-  grant → build encoder), 8 re-bridged games per record, never 8 obs tweaks.
-
-**Bridge null test (two parts, expert-corrected):** (i) serialize N=50 v8 self-play
-post-setup states **with their true port layouts carried out-of-band** and injected
-via the port parameter (RNG bypass) → assert `v_hat` ε-parity vs the live env +
-engine state-hash equality; the fixture set must include a port-vertex opening
-settlement (catches a `portList` weld). K-marginalization is explicitly NOT
-exercised by this test — it has its own determinism test. (ii) human-side: bridge N
-corpus records → re-serialize → re-bridge → state-hash idempotence, then a short
-random-agent rollout to terminal with invariants green.
+The engine **injection API** (additive, rule-2 flagged, `engine/board.py` in scope:
+post-construction board overwrite + deterministic port assignment from an explicit
+RNG — `updatePorts` currently draws from global `np.random`), the GameRecord
+serialization/re-bridge of v8 self-play states, and **bridge null test (i)** (below)
+are all corpus-independent and land now.
 
 ---
 
-## 4. Workstream A — the scoreboard (~3d after C; CPU)
+## 3. Workstream C — bridge + env injection (corpus-dependent parts, ~2d after harvest)
 
-Per EVAL-A game: K=8 full re-bridges (per-record seeded port layouts) → **to-move
-seat** `v_hat` per layout (the other seat is the zero-sum complement; never a second
-forward pass — v2's `v_hat(P1)−v_hat(P2)` notation is retired for a single-seat rank
-statistic sign-oriented to ThePhantom's seat).
+`build_post_setup_game(record, port_rng) -> catanGame | BridgeReject`:
 
-- **Port-marginal estimand:** `v_hat` = mean over the 8 layouts; per-record spread
-  reported as a diagnostic (not a gate quantity — v2's incommensurable band is
-  replaced by the per-layout rule below).
+- Resource-literal → engine-order conversion (rule 6); robber on desert.
+- Placement legality via the env's action masks/geometry, **asserted with
+  post-conditions** (engine `build_*` silently no-op on failure — verified; the bridge
+  never relies on exceptions): piece counts, vertex/edge occupancy, distance rule,
+  road incidence.
+- Starting resources via spec-009 `bank_draw`; `assert_conservation` +
+  `rules_invariants` on every bridged state; hand-tracker state == `player.resources`.
+- **Per-layout ordering:** `player.portList` is captured inside `build_settlement` and
+  the encoder's port one-hot is frozen at construction ⇒ each of the K=8 layouts is a
+  **full re-bridge** (set ports → replay placements → grant → build encoder).
 
-### Metrics (game-level bootstrap; within-ThePhantom-seat unless labeled)
+`CatanEnv.reset(seed_game=...)`: accepts a bridged game, skips interactive setup,
+rebuilds obs-encoder index maps, seats the snapshot opponent, sets the to-move player.
 
-- **M0** — from §2 (in-distribution reference).
-- **M1** — external discrimination: AUC/Spearman of the to-move-seat rank statistic
-  vs outcome on EVAL-A; reported against the pip-count baseline and v8+search@50.
-- **M2 — PRIMARY (α = 0.05):** partial Spearman / logistic coefficient of the
-  calibration residual on **ORE+WHEAT pip-share**, exact stratified permutation on
-  `(seat_is_thephantom, draft_position, opponent_strength.source)`, with
-  **port-slot adjacency as a covariate** (the Skeptic's selection-bias control:
-  elite players choose port-adjacent spots; marginal `v_hat` undervalues them,
-  correlated with ore share). **Primary is luck-UNADJUSTED; the luck-adjusted M2 and
-  the non-port-adjacent-subset M2 are the two named robustness rows** (no other
-  variants may be computed — forking-paths clause). Binary reporting split fixed at
-  the outcome-blind 65th percentile (sensitivity {60,65,70}; ORE-only in the grid).
-- **M3** — supporting inversion check (unchanged from v2: stratified quartile
-  WR-gap CI).
+**Bridge null tests:** (i) *(pre-corpus, §2.3)* 50 v8 self-play post-setup states,
+true port layouts carried out-of-band and injected via the port parameter → `v_hat`
+ε-parity vs the live env + engine state-hash equality; fixture set includes a
+port-vertex opening settlement (catches a `portList` weld). K-marginalization is not
+exercised here — it has its own determinism test. (ii) *(post-corpus)* bridge N human
+records → re-serialize → re-bridge → state-hash idempotence; short random-agent
+rollout to terminal, invariants green.
 
-**Power, stated honestly (expert):** gating cell ≈ 74–240 games ⇒ M2's minimum
-detectable partial correlation at α=0.05 / power 0.8 is **r ≈ 0.19–0.27** (a large
-effect). This is why INCONCLUSIVE exists as a first-class verdict.
+---
 
-### GATE-A — three-way verdict (v3 replaces v2's binary rule)
+## 4. Workstream A — the scoreboard (~3d after C)
 
-- **GO** ⟺ **M2 significant in the predicted direction** (α=0.05, stratified
-  permutation) **AND per-layout robustness:** the per-layout M2 estimate clears sign
-  + significance in **≥7 of 8** port layouts (the computable replacement for v2's
-  band) **AND** the tournament sign-agreement guard (§0.2) holds.
-  *Hierarchical secondary door (tested only if M2 fails, its own α=0.05):* the
-  pip-count baseline beats v8's M1 with a **paired game-level bootstrap CI on
-  Δ(M1_v8 − M1_pip) excluding 0** — a trivial heuristic significantly out-ranking
-  the champion is opening-specific failure dice variance can't explain.
-- **INCONCLUSIVE** ⟺ any of: corpus below the §1 floor; M2 null with the CI not
-  excluding the pre-registered MDE (r=0.20) — an underpowered null; per-layout
-  estimates straddling significance (port-driven instability); tournament sign
-  disagreement. Action: extend the corpus (harvest more videos) or decide B on
-  PRE-GATE-0 + M0 grounds alone — pre-registered as "extend, not fail."
-- **NO-GO** ⟺ a **well-powered** null: M2 CI excludes r=0.20 in both directions'
-  favor of ~0 AND the secondary door also fails. Action: seeded arm shelved; B-alt
-  only if PRE-GATE-0 collapsed; scoreboard becomes a standing eval.
+Per EVAL-A game: K=8 full re-bridges (per-record sha256-seeded layouts) → **to-move
+seat** `v_hat` per layout (other seat = zero-sum complement; single forward pass —
+never a fabricated second-seat obs). Port-marginal `v_hat` = mean over layouts;
+per-record spread reported as a diagnostic only.
 
-Deliverables: `scripts/opening_scoreboard.py`, report with every number CI'd,
-stratum-labeled, with the pipeline's per-archetype acceptance table beside M2.
-Day-1 spike unchanged (bridge 20 tournament games, eyeball raw values first).
+### The pinned formulas (each gate quantity has exactly one)
+
+- **Residual:** `r_i = win_i − σ(3.22·v̂_i − 1.14)` — the **committed search squash**
+  (spec 003), never refit on EVAL-A. `win_i`, `v̂_i` oriented to **ThePhantom's seat**.
+- **M2 (PRIMARY, α=0.05, predicted sign POSITIVE** — v8 *under*values ore openings ⇒
+  residual increases with ore share): **partial Spearman** of `r_i` on **ThePhantom's
+  ORE+WHEAT pip-share**, partialling **port-slot adjacency**, exact stratified
+  **video-level** permutation within strata `(draft_position,
+  opponent_strength.source)` — `seat_is_thephantom` is NOT a stratum here (it is
+  constant in the primary population; it appears only in the pooled secondary
+  analyses) (Pragmatist fix). The logistic-coefficient variant is a **named robustness
+  row**, not the primary.
+- **Luck proxy (pinned):** per game, Σ over `dice_log` of (realized pip production of
+  ThePhantom's two opening settlements − expected per-roll production), openings only,
+  ignoring robber/bank/later builds. **Primary M2 is luck-unadjusted; the
+  luck-adjusted M2 is robustness row #2** — and (Skeptic guard) **if the two disagree
+  on significance, the verdict is INCONCLUSIVE**, never GO.
+- **Basin-mass control (expert; robustness row #3):** re-run M2 with a competing
+  covariate = v8's PRE-GATE-0 mass of the opening's archetype bucket. If ore-share
+  loses its partial effect to basin-mass, the report attributes the result to
+  **generic off-basin miscalibration**, not an ore blind spot, and B-alt's ore-weight
+  fit is flagged. (Forking-paths whitelist = exactly these three named rows + the
+  {60,65,70}-percentile / ORE-only reporting grid. Nothing else is computed.)
+- **M1:** AUC/Spearman of the to-move-seat rank statistic vs outcome (cluster
+  bootstrap CI), reported against **M1_pip** (pinned: ThePhantom's two-settlement pip
+  total − opponent's, desert = 0, no port terms, same sign orientation) and
+  v8+search@50.
+- **M3 (supporting only):** stratified quartile WR-gap CI; its cell width (~±9–16pp at
+  37–120 games) is quoted in the report so it is never promoted to evidence.
+- **M0:** §2's in-distribution reference.
+
+**Power, honest:** with video-clustering (design effect ~1.15–1.4 at ~3.5 games/video,
+ICC 0.05–0.15), the effective gating-cell n is ~55–210 ⇒ minimum detectable partial r
+(one-sided α=0.05, power 0.8) ≈ **0.19–0.32**. `r = 0.20` is the pre-registered
+**minimum effect of interest** (not "the MDE"). Consequence, stated plainly (Skeptic):
+**in the expected sample regime the verdict will usually be GO or INCONCLUSIVE; NO-GO
+requires an unusually tight null and a gating cell ≳100** — INCONCLUSIVE is a
+first-class, honest outcome routing to "extend the corpus or decide on §2+M0 grounds."
+Expected-INCONCLUSIVE under a true r=0.2 effect: substantial (per-layout sign guard
+~0.9+, tournament guard ~0.7–0.85 when it binds) — accepted by design and disclosed.
+
+### GATE-A — exact decision rule (verdicts are exhaustive; INCONCLUSIVE is the else)
+
+- **GO** ⟺ either:
+  - **Primary door:** M2 significant (α=0.05, video-permutation, positive sign) AND
+    **per-layout sign-agreement in ≥7/8 layouts** (each layout's M2 point estimate
+    positive — sign only; the pooled port-marginal M2 carries significance, replacing
+    v3's near-unreachable 8× individually-significant rule) AND the tournament
+    sign-guard (§0.2) passes-or-is-waived; **or**
+  - **Secondary door** (evaluated only when M2 is a **well-powered null** — CI
+    excluding r ≥ 0.20): paired video-cluster bootstrap CI on Δ(M1_v8 − M1_pip)
+    entirely below 0 (α=0.05), with the same per-layout sign-agreement analog on
+    ΔM1 and the same tournament guard. (The door escapes a powered null only —
+    it cannot rescue an underpowered one.)
+- **NO-GO** ⟺ gating cell ≥ 100 AND M2's CI excludes r=0.20 (one-sided, predicted
+  direction) AND the secondary door fails.
+- **INCONCLUSIVE** ⟺ **anything else** (incl. floor breach, luck-consistency
+  disagreement, layout sign-split ≤6/8, tournament sign disagreement at n≥10).
+  Action: extend the corpus, or decide B on PRE-GATE-0 + M0 grounds — pre-registered
+  as "extend, not fail."
+
+Deliverables: `opening_scoreboard.py` (hash-frozen §1), report with per-archetype
+acceptance table beside M2. Day-1 spike: bridge 20 tournament games, eyeball raw
+values before building the statistics layer.
 
 ---
 
 ## 5. Workstream B — training response (gated on GATE-A GO + PRE-GATE-0)
 
-Mechanism statement unchanged from v2 (zero setup-head gradient on seeded episodes;
-pathways = value recalibration + the search pathway; `setup_entropy_coef` co-deployed
-in **both** arms at the §2-calibrated value). **All B3 attribution is
-seeded-vs-control** — the entropy bonus can never be credited to seeds (council).
+Mechanism (unchanged, stated): seeded episodes give the setup heads **zero policy
+gradient**; the pathways are value recalibration + deploy-time search (leaf values);
+`setup_entropy_coef` (pre-calibrated, §2.2) is co-deployed in **both arms**, so all
+credit assignment is **paired seeded-vs-contemporaneous-control**.
 
-**B-alt** (runs on GO regardless): calibrate the setup-prior's resource weights
-against the corpus via a **win-prediction fit** (logistic regression of winner on
-opening pip-share features) — NOT Phase A's existing NNLS-on-terminal-shares path,
-which fits a different target (Architect).
+**B-alt** (runs on GO regardless): logistic **win-prediction** fit of winner on
+opening pip-share features, **fit on EVAL-A only** (round-3: a HOLDOUT-B-fit weight
+reaching v8′'s deployed setup prior would contaminate the B3 comparator) — distinct
+from Phase A's NNLS-on-terminal-shares path.
 
 ### B1. Seed loader
-As v2 (EVAL-A + `unknown` tier, mask-based legality, D6-canonical dedup on
-`(board, both openings)`, per-episode seat randomization + port randomization),
-plus **GATE-B0 coverage requirement vs v8** (expert): ≥25% of pool mass must lie in
-archetype buckets where v8's PRE-GATE-0 natural mass is <5% — a pool that only
-revisits v8's own basins fails loudly. Pool histogram printed beside the
-per-archetype acceptance table (CV-rejection-bias visibility; stratified-sampling
-fallback noted as amplifying CV-noisy records — accepted, visible).
+EVAL-A + `unknown`-tier records (winner-null allowed — seeds never enter
+measurements); mask-based legality; D6-canonical dedup on `(board, both openings)`;
+per-episode seat + port randomization. **GATE-B0 coverage (round-3 deadlock fix):**
+qualifying buckets = those with v8 PRE-GATE-0 mass < 5%, **or if none exist, v8's two
+lowest-mass buckets**; require ≥25% of pool mass in qualifying buckets. If the pool
+cannot meet it, that is recorded as the first-class finding **"the corpus adds no
+unexplored opening mass"** and routed to the B decision (a legitimate reason to
+prefer B-alt/search levers) — never misread as a loader bug (Architect).
 
 ### B2. Wiring
-As v2 (`seed_prob` default 0.0; `reset_source` runtime tag; natural-only harness
-assertion), with the league correction (all reviewers): the promotion ratchet is the
-**sliding-window mean + streak** (`_anchor_window` / `anchor_window_stats` /
-`maybe_promote_anchor`; the EMA was explicitly rejected in the 2026-07 audit). The
-natural-only unit test asserts **`anchor_window_stats()` is unchanged** after a
-seeded anchor-game outcome (EMA `opponent_win_rate` secondarily). TB additions as
-v2 **plus `seeded/return` split by archetype bucket** (the B3-failure disambiguator).
+`seed_prob` (default 0.0), `reset_source` runtime tag (never in obs), natural-only
+assertions at named call sites: the promotion ratchet is the **sliding-window mean +
+streak** (`_anchor_window` / `anchor_window_stats` / `maybe_promote_anchor`; EMA was
+rejected in the 2026-07 audit) — the unit test asserts **`anchor_window_stats()`
+unchanged** after a seeded anchor-game outcome (EMA secondarily); the eval harness
+asserts no seed pool attached. TB (additive): `seeded/frac`, `seeded/return`,
+`seeded/return` **per archetype bucket** (the kill disambiguator),
+`seeds/legality_reject_rate`, `seeds/pool_entropy`, `openings/setup_head_entropy`,
+`openings/entropy_natural` (archetype entropy over the periodic natural-start
+anchor-eval games).
 
 ### B3. Run design
-As v2: warm-start v8, window+streak ratchet, `selfplay_v9_humanseed`,
-`seed_prob=0.25`, **mandatory contemporaneous A/B** (control = same everything,
-`seed_prob=0`, same `setup_entropy_coef`), interleaved on the same machine.
+Warm-start v8; `selfplay_v9_humanseed`; `seed_prob=0.25`; **mandatory contemporaneous
+A/B** (control: `seed_prob=0`, same `setup_entropy_coef`, same code, interleaved on
+the same machine). Honest wall-clock: per v7/v8 history each arm is **~1–2 weeks**,
+not days; GATE-B1's windows are step-based for that reason.
 
 ### B4. Gates
-- **GATE-B0:** as v2 + the coverage requirement (B1) + bridged-tracker assertion.
-- **GATE-B1:** unchanged (±3pp vs contemporaneous control, rolling 2M-step windows).
-- **GATE-B2:** offline n≥600 symmetrised Wilson vs v8, natural-start (distinct from
-  the in-run ratchet; both natural-only).
-- **GATE-B3 (all on HOLDOUT-B, all paired seeded-vs-control):**
-  1. head-to-head ≥0.55 vs v8 (n=600, natural-start), AND
-  2. **calibration:** comparator = **frozen v8's M2 effect re-measured on HOLDOUT-B
-     at B3 time** on identical games/strata/port draws (v8 never trained on corpus
-     states — uncontaminated and free; the GATE-A number is context only, being
-     winner's-curse-inflated). Criterion: the paired per-game residual-effect
-     difference (v8′ vs v8) shows improvement with a **CI-bound equivalence test**
-     at margin = 50% of v8's own HOLDOUT-B effect. If HOLDOUT-B is too small for
-     the TOST (power check pre-registered at B3 time), the criterion degrades
-     explicitly to "significant paired improvement + no worsening," labeled
-     underpowered in the report. AND
-  3. `openings/entropy_natural` (v8-vs-anchor condition) exceeds the
-     **contemporaneous control's** by +0.3 nats or +1 bucket ≥10% — never compared
-     to PRE-GATE-0 (both arms carry the bonus; council). Skipped as a criterion if
-     PRE-GATE-0 showed no collapse. AND
-  4. M1–M3 under v8′+search do not regress vs v8+search (deployed config).
-- **Control-arm branch (expert NIT, now explicit):** the control runs through
-  GATE-B2/B3 equivalents; if the control alone clears them, the honest conclusion is
-  "the entropy bonus suffices" — the **control** is promoted, seeds credited only
-  for the seeded-minus-control margin.
-- **Kill/pivot with disambiguation:** on B3 failure, read `seeded/return` by
-  archetype: flat ore-bucket returns → the policy never learned to *convert* those
-  openings (pivot: mid-game curriculum / setup fine-tune); rising returns with
-  failed B3(2) → value-side gap (pivot: B-alt / search-side). Two failures →
-  seeds shelved; BC/piKL stay off the table.
+- **GATE-B0:** loader/wiring tests; coverage requirement (B1); 1k-episode smoke
+  (0 crashes, legality-reject <5%, obs byte-identical, bridged-tracker ==
+  `player.resources`, `reset_source` accounting).
+- **GATE-B1 (in-run):** seeded arm natural-start anchor WR within 3pp of the
+  contemporaneous control, rolling 2M-step windows; first trip → halve `seed_prob`;
+  second → kill.
+- **GATE-B2 (offline):** champion vs v8, natural-start, **n≥600 symmetrised, Wilson
+  lower bound ≥ 0.5** (promotion convention unchanged).
+- **GATE-B3 (per-criterion scopes — the header claim "all paired on HOLDOUT-B"
+  applies to (2) only):**
+  1. Head-to-head ≥0.55 vs v8 — **Wilson lower bound**, n=600, natural-start.
+  2. **Calibration (pinned construct, round-3):** paired **video-cluster bootstrap on
+     Δ(effect)** over HOLDOUT-B: shared resample indices and identical port draws;
+     recompute the pinned M2 coefficient for v8′ and for **frozen v8 re-measured on
+     the same resample**; Δ = |effect_v8| − |effect_v8′|. **PASS ⟺ CI(Δ) lower bound
+     > 0.5·|effect_v8(HOLDOUT-B)|** (superiority at margin — the word "equivalence"
+     is struck; a v9 identical to v8 has Δ≈0 and FAILS). Pre-registered degrade path
+     when HOLDOUT-B is small (power check at B3 time): CI(Δ) lower bound > 0 AND
+     point estimate improved — same hypothesis family, labeled underpowered.
+     Sign-flip overcorrection fails by construction (|·|).
+  3. `openings/entropy_natural` exceeds the **contemporaneous control's** by +0.3 nats
+     or +1 bucket ≥10% (5 fixed buckets). Skipped as a criterion if PRE-GATE-0 showed
+     no collapse.
+  4. M1–M3 under v8′+search vs v8+search on HOLDOUT-B: **no regression beyond a
+     pre-registered tolerance of 0.02 AUC / 0.03 Spearman**.
+- **Control-arm branch:** the control runs the same B2/B3 gates; if the control alone
+  clears them, the conclusion is "the entropy bonus suffices" and the **control** is
+  promoted — seeds are credited only for the seeded-minus-control margin.
+- **Kill/pivot with disambiguation:** flat ore-bucket `seeded/return` → conversion
+  failure (pivot: mid-game curriculum / setup fine-tune); rising returns + failed
+  B3(2) → value-side gap (pivot: B-alt / search). Two failures → seeds shelved.
 
-Effort: as v2 (loader+wiring 2–3d; run = multi-day × 2 arms).
+## 6. Non-goals (inline, self-contained)
 
-## 6. Non-goals — unchanged from v2.
+No behaviour cloning and no piKL on this corpus (below the imitation regime;
+human-likeness trades strength). No move-agreement metrics anywhere (a superhuman
+agent should diverge from humans). No engine-rule, obs-schema, or action-space
+changes; the bridge/seeds live outside the policy graph. No 4-player anything. No
+port extraction in harvest v1 (if a future harvest records port types, §4's
+marginalization becomes exact conditioning — a flagged pipeline-schema change).
 
 ## 7. Sequencing
 
 ```
-NOW (no corpus):  §2 PRE-GATE-0: archetypes.py committed → v8 entropy + M0
-                  + setup_entropy_coef calibration  (~1d + short runs)
-corpus lands ──►  C: engine injection API + bridge + null tests (~2-3d)
-                  ├─► A: day-1 spike → scoreboard (~3d) → GATE-A (3-way)
-                  │     GO ──► B-alt + seeded A/B (B0..B3)
-                  │     INCONCLUSIVE ──► extend corpus / decide on §2+M0 grounds
-                  │     NO-GO ──► B-alt iff collapsed; standing eval
-                  └─► holdout split committed BEFORE any metric
+NOW (pre-corpus lane, ~3-4d):
+  archetypes.py (frozen) → PRE-GATE-0 (entropy + collapse verdict)
+  + M0 (true-port; port-marginal re-run when C lands)
+  + setup_entropy_coef loss wiring + calibration sweep
+  + engine injection API + v8-state re-bridge + bridge null test (i)
+corpus lands ──► C (bridge, ~2d) → null test (ii)
+  ├─► A: day-1 spike → scoreboard (~3d) → GATE-A (exhaustive 3-way)
+  │     GO ──► B-alt(EVAL-A fit) + seeded A/B (B0..B3, ~1-2wk/arm)
+  │     INCONCLUSIVE ──► extend corpus / decide on §2+M0 grounds
+  │     NO-GO ──► B-alt iff collapsed; scoreboard = standing eval
+  └─► BY-VIDEO holdout split committed BEFORE any metric
 ```
+
+Spec-driven execution: `specs/010-opening-scoreboard`, `specs/011-human-seeds` cite
+this document.
 
 ## 8. Review traceability
 
-- **v1→v2:** see the v2 changelog (git history of this file) — 6 expert BLOCKERs +
-  council round-1 findings, all verified structurally resolved by both tracks in
-  round 2.
-- **v2→v3 (expert round 2):** archetype featurizer frozen in-doc + committed
-  pre-PRE-GATE-0 (E1); per-layout M2 robustness rule replaces the incommensurable
-  band (E2); pip-baseline door now hierarchical with paired-bootstrap CI (E3);
-  B3(2) comparator = frozen-v8-on-HOLDOUT-B with CI-bound equivalence (E4);
-  corrected n arithmetic + MDE + three-way GATE-A with INCONCLUSIVE≠NO-GO (E5);
-  population deviation declared + tournament sign-guard + record.py doc-sync (E6);
-  engine injection API scoped + per-layout re-bridge ordering + no-op assertions +
-  null-test port injection + human idempotence (S1–S2); window-mean+streak
-  correction + `anchor_window_stats` test target (S3); GATE-B0 coverage-vs-v8
-  (S4); luck-unadjusted primary + forking-paths clause + softened covariate claim
-  (S5); archetype-split `seeded/return` disambiguator (S6); control-arm branch,
-  single-seat M1 statistic, determinism pins (N1–N3).
-- **v2→v3 (council round 2):** population honesty + sign-guard (Architect/Skeptic
-  B1); B3(3) vs contemporaneous control (Architect S2, Researcher); port
-  selection-bias covariate + INCONCLUSIVE routing (Skeptic B1); paired-CI GO door
-  (Researcher B1); `setup_entropy_coef` pre-calibration (Researcher); port-RNG +
-  featurizer-forward + league-test MUST-FIXes (Pragmatist); corpus-size floor +
-  holdout power check (Architect); B-alt win-prediction fit (Architect).
+- **v1→v2, v2→v3:** see git history of this file (all resolutions verified by both
+  review tracks in the subsequent round).
+- **v3→v4 (expert round 3):** M2 pinned verbatim — one statistic, committed squash
+  link, stated sign; logistic → robustness row; scoreboard-code hash frozen (E1).
+  B3(2) → paired Δ(effect) superiority-at-margin with |·| construct; "equivalence"
+  struck; same-family degrade path (E2). By-video split + cluster bootstrap +
+  video-level permutation + clustered MDE + floor moved to the gating cell (E3).
+  GATE-B0 two-lowest-buckets fallback + first-class "no unexplored mass" finding
+  (E4). GO/door logic restated exhaustively with else-INCONCLUSIVE; door escapes only
+  powered nulls (S1). §2.2 stale B3(3) sentence removed (S2). Luck proxy + pip
+  baseline pinned (S3). Featurizer pair-share disambiguation + zero-pip rule +
+  26-pip sanity check (S4). B-alt fit on EVAL-A only (S5). Basin-mass competing
+  covariate row (S6). Pre-corpus lane for corpus-free C parts + entropy-loss wiring +
+  M0 true-port statement (S7). Non-goals inlined; per-criterion B3 scopes; Wilson-LB
+  and tolerance pins; M3 cell width quoted; honest wall-clock; record.py doc-sync
+  scope widened (NITs).
+- **v3→v4 (council round 3):** per-layout rule → sign-agreement + pooled significance
+  (Skeptic/Researcher/Pragmatist); sha256 determinism (Architect); floor on gating
+  cell (Architect/Researcher); luck-consistency INCONCLUSIVE guard (Skeptic);
+  tournament guard n≥10 waiver (Skeptic); degenerate stratum fix (Pragmatist);
+  GATE-B0 conflation branch (Architect); NO-GO-rare honesty statement (Skeptic);
+  collinearity note (Architect).
 
-## 9. Risks — as v2, plus:
+## 9. Risks — as v3, plus:
 
 | Risk | Mitigation |
 |---|---|
-| Port SELECTION bias (not just variance) | port-slot-adjacency covariate + non-port-adjacent robustness row + per-layout GO rule |
-| Underpowered null read as absence | three-way verdict; MDE stated; corpus floor; "extend, not fail" |
-| Winner's curse in B3(2) | frozen-v8-on-HOLDOUT-B comparator, paired |
-| Featurizer tuned after seeing data | spec frozen in this doc; `archetypes.py` hash in the refuse-to-run manifest |
-| Entropy bonus mis-credited to seeds | all B3 criteria paired seeded-vs-control; control-arm branch explicit |
-| Engine no-op failures | bridge post-condition assertions |
+| Within-video session/opponent clustering | by-video split; cluster bootstrap; video-level permutation; clustered MDE |
+| Gate quantities admitting multiple computations | every formula pinned in §4/§5; scoreboard code hash in the §1 manifest |
+| Ore effect is generic off-basin miscalibration | basin-mass competing-covariate row; attribution rule pre-registered |
+| GATE-B0 deadlock / misread | two-lowest-buckets fallback + first-class no-unexplored-mass finding |
+| Verdict gaps between GO/NO-GO rules | INCONCLUSIVE is the exhaustive else-branch |
