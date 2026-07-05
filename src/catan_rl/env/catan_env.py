@@ -187,6 +187,10 @@ class CatanEnv(gym.Env):
                 empirically saw 99th-percentile game lengths around 250.
             vp_margin_bonus: per-VP terminal bonus on top of the +/-1 win
                 signal. ``0.0`` reduces to a pure +/-1 outcome reward.
+                Paid only on true termination (someone reached
+                ``maxPoints``); truncated episodes (``max_turns`` cap)
+                return 0.0 reward and are GAE-bootstrapped with
+                ``V(s_T)`` instead.
             engine_backend: ``"python"`` (production) or ``"rust"``
                 (Phase 4 scaffolding of the Rust migration remediation
                 plan). The Rust path raises ``NotImplementedError``
@@ -1037,7 +1041,11 @@ class CatanEnv(gym.Env):
             return 1.0 + margin
         if o_vp >= self.game.maxPoints:
             return -1.0 + margin  # margin is negative when opp wins
-        return margin
+        # Truncation (max_turns cap, nobody at maxPoints): pay nothing.
+        # GAE keeps the V(s_T) bootstrap on truncated-not-terminated
+        # steps, so paying the VP margin here on top of it would
+        # double-count credit for the same event (audit 2026-07).
+        return 0.0
 
     def _terminal_info(self, terminated: bool) -> dict[str, Any]:
         assert self.game is not None and self.agent_player is not None
