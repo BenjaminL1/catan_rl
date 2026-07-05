@@ -210,6 +210,8 @@ def build_training_state(
     optimizer = torch.optim.AdamW(
         policy.parameters(),
         lr=cfg.optimizer.lr_start,
+        betas=cfg.optimizer.betas,
+        eps=cfg.optimizer.eps,
         weight_decay=cfg.optimizer.weight_decay,
     )
 

@@ -217,6 +217,14 @@ class TestBuildOnly:
             assert state.global_step == 0
             # ckpt dir created.
             assert (tmp_path / "checkpoints").exists()
+            # Optimizer honors the FULL OptimizerConfig — audit 2026-07
+            # found betas/eps silently dropped (torch defaults used
+            # while configs + run provenance claimed eps=1e-5).
+            group = state.optimizer.param_groups[0]
+            assert group["lr"] == cfg.optimizer.lr_start
+            assert tuple(group["betas"]) == tuple(cfg.optimizer.betas)
+            assert group["eps"] == cfg.optimizer.eps
+            assert group["weight_decay"] == cfg.optimizer.weight_decay
         finally:
             state.vec_env.close()
 
