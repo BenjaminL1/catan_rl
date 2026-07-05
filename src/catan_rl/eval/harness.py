@@ -464,15 +464,19 @@ def evaluate_policy_vs_policy(
     Wilson CI. Bit-for-bit reproducible on CPU at a fixed seed.
 
     Note: this seeds the global torch RNG for a reproducible champion sampling
-    stream, but **saves and restores** it around the call — so it is safe to
-    invoke from inside a training loop without clobbering the learner's RNG.
+    stream, but **saves and restores** every torch backend's state (cpu + cuda
+    + mps — ``manual_seed`` reseeds them all) plus the global numpy/stdlib
+    streams the games consume — so it is safe to invoke from inside a training
+    loop without clobbering the learner's RNG. Mirrors ``EvalHarness.run``.
     """
     from typing import cast
 
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
     from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
 
-    rng_state = torch.random.get_rng_state()
+    np_state = np.random.get_state()
+    py_state = random.getstate()
+    torch_state = _snapshot_torch_rng()
     try:
         torch.manual_seed(seed)  # reproducible champion sampling stream
         # kind="policy" always yields a _PolicyActor (.policy / .device typed).
@@ -494,4 +498,6 @@ def evaluate_policy_vs_policy(
         )
         return harness.evaluate_vs_policy(champion, opponent, opponent_ref=str(opponent_ckpt))
     finally:
-        torch.random.set_rng_state(rng_state)
+        np.random.set_state(np_state)
+        random.setstate(py_state)
+        _restore_torch_rng(torch_state)
