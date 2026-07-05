@@ -537,8 +537,15 @@ class TestAutoReAnchor:
     def _sd(v: float = 0.0) -> dict[str, torch.Tensor]:
         return {"w": torch.full((2,), float(v))}
 
-    def _set_anchor_wr(self, lg: League, p: float, g: float) -> None:
-        lg._opp_stats[lg.anchor_id()] = [float(p), float(g)]  # type: ignore[index]
+    def _fill_window(self, lg: League, wins: int, games: int) -> None:
+        """Set the promotion window to an EXACT wins/games composition.
+
+        The decision statistic is the sliding-window mean (audit 2026-07 —
+        the alpha=0.1 EMA with N_eff~19 is no longer consulted), so tests
+        inject whole-game outcomes, not EMA floats.
+        """
+        lg._anchor_window.clear()
+        lg._anchor_window.extend([0.0] * (games - wins) + [1.0] * wins)
 
     def test_fires_on_sustained_high(self) -> None:
         lg = League(self._cfg())
@@ -546,63 +553,64 @@ class TestAutoReAnchor:
         old_aid = lg.anchor_id()
         results = []
         for i in range(3):
-            self._set_anchor_wr(lg, 0.95, 50)
+            self._fill_window(lg, wins=10, games=10)
             results.append(lg.maybe_promote_anchor(self._sd(2), update_idx=(i + 1) * 50))
         assert results[0] is None and results[1] is None
         assert results[2] is not None and results[2] != old_aid
         assert lg._n_promotions == 1
         assert lg.anchor_id() == results[2]
 
-    def test_no_thrash_on_v6_wobble(self) -> None:
-        # The exact live-observed anchor-WR EMA series; must fire ONLY at the end.
+    def test_no_thrash_on_wobble(self) -> None:
+        # A wobbling window-WR series (shape of the live-observed v6 wobble);
+        # must fire ONLY at the end. Any sub-threshold check resets the streak.
         lg = League(self._cfg())
         lg.set_anchor(self._sd(1), update_idx=0)
-        series = [0.82, 0.87, 0.88, 0.80, 0.92, 0.94, 0.82, 0.94, 0.94, 0.986]
+        series = [8, 9, 9, 8, 10, 10, 8, 10, 10, 10]  # wins out of 10; thr 0.92
         fired = []
         streak_after_wobble = None
-        for i, p in enumerate(series):
-            self._set_anchor_wr(lg, p, 50)
+        for i, w in enumerate(series):
+            self._fill_window(lg, wins=w, games=10)
             r = lg.maybe_promote_anchor(self._sd(9), update_idx=(i + 1) * 50)
             fired.append(r is not None)
-            if i == 6:  # the 0.94 -> 0.82 transition must reset the streak
+            if i == 6:  # the 1.0 -> 0.8 transition must reset the streak
                 streak_after_wobble = lg._reanchor_streak
         assert fired == [False] * 9 + [True]
         assert streak_after_wobble == 0
         assert lg._n_promotions == 1
 
     def test_strict_threshold_does_not_qualify(self) -> None:
-        lg = League(self._cfg(auto_reanchor_sustained_checks=1))
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1, auto_reanchor_min_games=25))
         lg.set_anchor(self._sd(1), update_idx=0)
-        self._set_anchor_wr(lg, 0.92, 50)  # exactly threshold -> NOT strictly >
+        self._fill_window(lg, wins=23, games=25)  # 23/25 == 0.92 exactly -> NOT strictly >
         assert lg.maybe_promote_anchor(self._sd(2), update_idx=50) is None
         assert lg._reanchor_streak == 0
 
-    def test_min_games_is_non_resetting_skip(self) -> None:
+    def test_short_window_is_non_resetting_skip(self) -> None:
         lg = League(self._cfg(auto_reanchor_min_games=200))
         lg.set_anchor(self._sd(1), update_idx=0)
-        self._set_anchor_wr(lg, 0.95, 300)
+        self._fill_window(lg, wins=190, games=200)  # 0.95 over a full window
         lg.maybe_promote_anchor(self._sd(2), update_idx=50)
         assert lg._reanchor_streak == 1
-        # games-short check: returns None AND leaves the streak intact
-        self._set_anchor_wr(lg, 0.99, 5)
+        # window-short check: returns None AND leaves the streak intact
+        self._fill_window(lg, wins=5, games=5)
         assert lg.maybe_promote_anchor(self._sd(2), update_idx=100) is None
         assert lg._reanchor_streak == 1
 
     def test_cooldown_blocks_then_allows(self) -> None:
         lg = League(self._cfg(auto_reanchor_sustained_checks=1, auto_reanchor_cooldown_updates=200))
         lg.set_anchor(self._sd(1), update_idx=0)
-        self._set_anchor_wr(lg, 0.95, 50)
+        self._fill_window(lg, wins=10, games=10)
         assert lg.maybe_promote_anchor(self._sd(2), update_idx=50) is not None  # promote @50
-        self._set_anchor_wr(lg, 0.95, 300)
+        self._fill_window(lg, wins=10, games=10)
         assert lg.maybe_promote_anchor(self._sd(3), update_idx=200) is None  # 150 < 200 cooldown
-        self._set_anchor_wr(lg, 0.95, 300)
+        self._fill_window(lg, wins=10, games=10)
         assert lg.maybe_promote_anchor(self._sd(3), update_idx=251) is not None  # 201 >= 200
 
     def test_demote_old_anchor_to_pool(self) -> None:
         lg = League(self._cfg(auto_reanchor_sustained_checks=1))
         lg.set_anchor(self._sd(1), update_idx=0)
         old_aid = lg.anchor_id()
-        self._set_anchor_wr(lg, 0.95, 50)
+        self._fill_window(lg, wins=10, games=10)
         new_id = lg.maybe_promote_anchor(self._sd(2), update_idx=50)
         assert new_id != old_aid and lg.anchor_id() == new_id
         # The old anchor is demoted into the pool under a FRESH id (cold-start),
@@ -614,10 +622,54 @@ class TestAutoReAnchor:
     def test_fresh_anchor_blocks_instant_repromote(self) -> None:
         lg = League(self._cfg(auto_reanchor_sustained_checks=1))
         lg.set_anchor(self._sd(1), update_idx=0)
-        self._set_anchor_wr(lg, 0.95, 50)
+        self._fill_window(lg, wins=10, games=10)
         lg.maybe_promote_anchor(self._sd(2), update_idx=50)
         assert lg.opponent_win_rate(lg.anchor_id()) == (0.0, 0)  # fresh anchor, no games
-        assert lg.maybe_promote_anchor(self._sd(3), update_idx=100) is None  # min-games gate
+        assert lg.anchor_window_stats() == (0.0, 0)  # window cleared by set_anchor
+        assert lg.maybe_promote_anchor(self._sd(3), update_idx=100) is None  # window-short gate
+
+    def test_window_tracks_only_anchor_outcomes(self) -> None:
+        lg = League(self._cfg())
+        aid = lg.set_anchor(self._sd(1), update_idx=0)
+        pid = lg.add_snapshot(self._sd(2), update_idx=1)
+        lg.record_outcome(pid, agent_won=True)  # pool game -> window untouched
+        assert lg.anchor_window_stats() == (0.0, 0)
+        lg.record_outcome(aid, agent_won=True)
+        lg.record_outcome(aid, agent_won=False)
+        assert lg.anchor_window_stats() == (0.5, 2)
+
+    def test_window_slides_at_min_games(self) -> None:
+        lg = League(self._cfg(auto_reanchor_min_games=4))
+        aid = lg.set_anchor(self._sd(1), update_idx=0)
+        for _ in range(4):
+            lg.record_outcome(aid, agent_won=False)
+        for _ in range(4):
+            lg.record_outcome(aid, agent_won=True)
+        # The 4 losses rolled off; only the last min_games outcomes count.
+        assert lg.anchor_window_stats() == (1.0, 4)
+
+    def test_promotion_ignores_ema_point_estimate(self) -> None:
+        # THE audit-2026-07 regression: a lucky-streak EMA (N_eff ~19) must
+        # not fire the gate when the real windowed WR is at chance.
+        lg = League(self._cfg(auto_reanchor_sustained_checks=1))
+        aid = lg.set_anchor(self._sd(1), update_idx=0)
+        lg._opp_stats[aid] = [0.99, 999.0]  # EMA screams "promote"
+        self._fill_window(lg, wins=5, games=10)  # window says coin-flip
+        assert lg.maybe_promote_anchor(self._sd(2), update_idx=50) is None
+        assert lg._reanchor_streak == 0
+        assert lg._n_promotions == 0
+
+    def test_diagnostics_include_window_stats(self) -> None:
+        lg = League(self._cfg())
+        aid = lg.set_anchor(self._sd(1), update_idx=0)
+        lg.record_outcome(aid, agent_won=True)
+        lg.record_outcome(aid, agent_won=True)
+        lg.record_outcome(aid, agent_won=False)
+        diag = lg.selfplay_diagnostics()
+        assert diag["anchor_wr_window"] == pytest.approx(2.0 / 3.0)
+        assert diag["anchor_window_games"] == 3.0
+        # Legacy EMA scalars stay (TB scalars are append-only).
+        assert "anchor_winrate" in diag and "anchor_games" in diag
 
     def test_off_is_pure_noop(self) -> None:
         lg = League(

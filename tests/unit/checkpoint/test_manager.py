@@ -338,7 +338,7 @@ class TestLeagueRoundTrip:
         p0, _ = _fresh_policy_and_optimizer(seed=1)
         league_a.set_anchor(p0.state_dict(), update_idx=0)
         aid0 = league_a.anchor_id()
-        league_a._opp_stats[aid0] = [0.95, 50]  # outgrown -> promote
+        league_a._anchor_window.extend([1.0] * 10)  # outgrown (full window) -> promote
         p1, _ = _fresh_policy_and_optimizer(seed=2)
         new_id = league_a.maybe_promote_anchor(p1.state_dict(), update_idx=100)
         assert new_id is not None and league_a._n_promotions == 1
@@ -362,8 +362,8 @@ class TestLeagueRoundTrip:
         assert league_b._reanchor_streak == 2
         assert any(s.metadata.get("demoted_from_anchor_id") == aid0 for s in league_b._snapshots)
         # No double-promote on resume: 150 - 100 = 50 < cooldown(200) blocks even
-        # with a high WR seeded on the restored anchor.
-        league_b._opp_stats[league_b.anchor_id()] = [0.99, 500]
+        # with a full all-wins window observed on the restored anchor.
+        league_b._anchor_window.extend([1.0] * 10)
         assert league_b.maybe_promote_anchor(p1.state_dict(), update_idx=150) is None
 
     def test_pre_feature_anchor_checkpoint_restores_defaults(self, tmp_path: Path) -> None:

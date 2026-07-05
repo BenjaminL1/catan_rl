@@ -157,6 +157,17 @@ class League:
         self._reanchor_streak: int = 0  # consecutive qualifying checks so far
         self._last_promote_update: int = -1  # update_idx of last promotion (-1=never)
         self._n_promotions: int = 0  # monotonic count (also a TB scalar)
+        # Sliding window of the learner's last ``auto_reanchor_min_games``
+        # outcomes vs the CURRENT anchor (1.0=win). This — not the PFSP EMA —
+        # is the promotion-decision statistic: an alpha=0.1 EMA has effective
+        # sample size (2-a)/a ~= 19 games regardless of how many were recorded
+        # (stationary SD ~0.11), giving a true-0.55 learner ~24% odds of
+        # clearing a 0.63 bar on any single check (audit 2026-07). The full
+        # window has N_eff == min_games. Cleared whenever the anchor changes;
+        # NOT checkpointed — after a resume the gate simply waits for a fresh
+        # window (~min_games anchor games, a few updates at 128 envs), which
+        # is conservative and keeps the checkpoint schema unchanged.
+        self._anchor_window: deque[float] = deque(maxlen=max(1, cfg.auto_reanchor_min_games))
 
     # ------------------------------------------------------------------
     # Snapshot management
@@ -236,6 +247,9 @@ class League:
             snapshot_id=snapshot_id,
             metadata=dict(metadata or {}),
         )
+        # New anchor -> the promotion-decision window starts empty (its
+        # outcomes were against the OLD anchor).
+        self._anchor_window.clear()
         return snapshot_id
 
     def anchor_id(self) -> int | None:
@@ -254,12 +268,20 @@ class League:
         WITHOUT touching any state, so the call is byte-identical to absent.
 
         Trigger (all must hold): cooldown elapsed since the last promotion; the
-        current anchor has >= ``min_games`` recorded games (a games-short check
-        SKIPS without resetting the streak); the anchor-WR EMA is STRICTLY above
-        ``winrate_threshold`` (a sub-threshold check RESETS the streak); and the
-        qualifying streak has reached ``sustained_checks``. The strict threshold
-        above the WR oscillation band plus the streak debounce stop a transient
-        up-wobble from thrashing promotions.
+        anchor-outcome window is FULL (``min_games`` outcomes vs the current
+        anchor — a window-short check SKIPS without resetting the streak); the
+        window's mean WR is STRICTLY above ``winrate_threshold`` (a
+        sub-threshold check RESETS the streak); and the qualifying streak has
+        reached ``sustained_checks``. The strict threshold above the WR
+        oscillation band plus the streak debounce stop a transient up-wobble
+        from thrashing promotions.
+
+        The decision statistic is the sliding-window mean (N_eff ==
+        ``min_games``; SD ~= sqrt(p(1-p)/min_games)), NOT the PFSP EMA whose
+        N_eff is ~19 at alpha=0.1 (audit 2026-07: the EMA gave a true-0.55
+        learner roughly coin-flip odds of a spurious promotion over a long
+        run). Same bar semantics as the validated v8 recipe (window mean vs
+        threshold), just a real sample size behind it.
         """
         cfg = self.cfg
         if not cfg.auto_reanchor_enabled:
@@ -273,8 +295,8 @@ class League:
             and (update_idx - self._last_promote_update) < cfg.auto_reanchor_cooldown_updates
         ):
             return None
-        p, g = self.opponent_win_rate(aid)
-        # Min-games gate: a "not enough data yet" SKIP — does NOT reset the streak.
+        p, g = self.anchor_window_stats()
+        # Window-short gate: a "not enough data yet" SKIP — does NOT reset the streak.
         if g < cfg.auto_reanchor_min_games:
             return None
         # Qualifying check (STRICT >). A sub-threshold check RESETS the streak.
@@ -335,11 +357,22 @@ class League:
             a = self.cfg.pfsp_ema_alpha
             st[0] = (1.0 - a) * st[0] + a * won
             st[1] += 1.0
+        if self._anchor is not None and snapshot_id == self._anchor.snapshot_id:
+            self._anchor_window.append(won)
 
     def opponent_win_rate(self, snapshot_id: int) -> tuple[float, int]:
         """``(p_hat, games)`` for a snapshot; ``(0.0, 0)`` if unseen."""
         st = self._opp_stats.get(snapshot_id)
         return (0.0, 0) if st is None else (float(st[0]), int(st[1]))
+
+    def anchor_window_stats(self) -> tuple[float, int]:
+        """``(mean_wr, n)`` over the sliding window of the learner's last
+        ``auto_reanchor_min_games`` outcomes vs the CURRENT anchor —
+        the promotion-decision statistic. ``(0.0, 0)`` when empty."""
+        n = len(self._anchor_window)
+        if n == 0:
+            return (0.0, 0)
+        return (float(sum(self._anchor_window)) / n, n)
 
     def opponent_stats_state(self) -> dict[int, tuple[float, int]]:
         """Serialisable PFSP state for the checkpoint, pruned to live ids."""
@@ -394,6 +427,13 @@ class League:
                 out["pfsp_p_hat_max"] = float(max(phats))
         if self.cfg.auto_reanchor_enabled:
             out["reanchor_streak"] = float(self._reanchor_streak)
+            wr, n = self.anchor_window_stats()
+            if n > 0:
+                # The actual promotion-decision statistic (window mean), next
+                # to the legacy EMA ``anchor_winrate`` (kept — TB scalars are
+                # append-only).
+                out["anchor_wr_window"] = wr
+                out["anchor_window_games"] = float(n)
             out["anchor_promotions_total"] = float(self._n_promotions)
         return out
 

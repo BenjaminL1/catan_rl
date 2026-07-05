@@ -429,18 +429,21 @@ class LeagueConfig:
 
     auto_reanchor_enabled: bool = False
     """Master switch for IN-PROCESS auto-re-anchoring. When the learner durably
-    outgrows the frozen anchor (its anchor-WR EMA stays above threshold), the
-    league demotes the old anchor into the PFSP pool and installs a fresh frozen
-    snapshot of the current learner as the new anchor — no process restart, the
-    optimizer/LR-clock/value-norm/pool are untouched. Keeps the anchor a *live*
-    signal instead of a dead one the agent has fully outgrown. OFF (default)
-    makes ``League.maybe_promote_anchor`` a pure no-op (byte-identical)."""
+    outgrows the frozen anchor (its windowed anchor-WR stays above threshold),
+    the league demotes the old anchor into the PFSP pool and installs a fresh
+    frozen snapshot of the current learner as the new anchor — no process
+    restart, the optimizer/LR-clock/value-norm/pool are untouched. Keeps the
+    anchor a *live* signal instead of a dead one the agent has fully outgrown.
+    OFF (default) makes ``League.maybe_promote_anchor`` a pure no-op
+    (byte-identical)."""
 
     auto_reanchor_winrate_threshold: float = 0.92
-    """Anchor-WR EMA must be STRICTLY above this for a check to qualify. Sits
-    above the empirically-observed ~0.80-0.88 anchor-WR oscillation band, so a
-    transient up-wobble can't trigger; strict-``>`` means the threshold value
-    itself can't start a streak. Validation: 0.5 < thr < 1.0."""
+    """The windowed anchor-WR (mean over the last ``auto_reanchor_min_games``
+    outcomes vs the current anchor) must be STRICTLY above this for a check to
+    qualify. Sits above the empirically-observed ~0.80-0.88 anchor-WR
+    oscillation band, so a transient up-wobble can't trigger; strict-``>``
+    means the threshold value itself can't start a streak.
+    Validation: 0.5 < thr < 1.0."""
 
     auto_reanchor_sustained_checks: int = 3
     """Consecutive qualifying checks required to promote (anti-thrash debounce).
@@ -452,10 +455,13 @@ class LeagueConfig:
     amount of persistence. Validation: >= 1."""
 
     auto_reanchor_min_games: int = 200
-    """The current anchor must have accrued >= this many recorded games before a
-    check can qualify (gates cold-start EMA noise — a fresh anchor's first lucky
-    game would otherwise seed p_hat=1.0). A games-short check SKIPS without
-    resetting the streak. Validation: >= 1."""
+    """Size of the sliding anchor-outcome window the promotion decision is
+    computed over: a check can only qualify once the window holds this many
+    outcomes vs the CURRENT anchor, and the decision statistic is the window's
+    mean WR (N_eff == this value). The PFSP EMA — whose alpha=0.1 effective
+    sample size is ~19 games no matter how many were recorded — is no longer
+    consulted for promotion (audit 2026-07). A window-short check SKIPS
+    without resetting the streak. Validation: >= 1."""
 
     auto_reanchor_cooldown_updates: int = 200
     """Minimum PPO updates between promotions, so a freshly installed anchor has
