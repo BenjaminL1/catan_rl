@@ -60,6 +60,7 @@ from catan_rl.human_data.glyph_anchor import (
     classify_glyph,
     classify_granted_glyphs,
     consensus_granted_glyphs,
+    glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
     validate_glyph_classifier,
 )
@@ -201,6 +202,7 @@ __all__ = [
     "detect_openings_result",
     "download_video",
     "estimate_ocr_wall_clock_s",
+    "glyph_classifier_fingerprint",
     "glyph_classifier_is_validated",
     "granted_multiset_matches_a_settlement",
     "granted_resources_under_orientation",

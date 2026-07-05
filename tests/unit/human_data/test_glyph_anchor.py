@@ -56,6 +56,7 @@ from catan_rl.human_data.glyph_anchor import (
     classify_glyph,
     classify_granted_glyphs,
     consensus_granted_glyphs,
+    glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
     validate_glyph_classifier,
 )
@@ -145,6 +146,7 @@ def _good_frame(expected: Counter[str]) -> LabeledGrantFrame:
     """A labelled frame whose glyphs are the calibrated card colours of ``expected``."""
     boxes: list[tuple[int, int, int, int]] = []
     swatches: list[np.ndarray] = []
+    by_box: list[str] = []
     x = 0
     for resource, count in expected.items():
         for _ in range(count):
@@ -154,11 +156,17 @@ def _good_frame(expected: Counter[str]) -> LabeledGrantFrame:
                 sw = _hsv_to_rgb_swatch(RESOURCE_CARD_HUES[resource], 200.0, 210.0)
             swatches.append(sw)
             boxes.append((x, 0, x + 14, 14))
+            by_box.append(resource)
             x += 14
     crop = np.zeros((14, max(x, 14), 3), np.uint8)
     for i, sw in enumerate(swatches):
         crop[:, i * 14 : i * 14 + 14] = sw
-    return LabeledGrantFrame(log_crop_rgb=crop, glyph_boxes=boxes, expected=expected)
+    return LabeledGrantFrame(
+        log_crop_rgb=crop,
+        glyph_boxes=boxes,
+        expected=expected,
+        expected_by_box=tuple(by_box),
+    )
 
 
 def test_validation_passes_on_enough_correct_frames() -> None:
@@ -194,6 +202,55 @@ def test_validation_fails_below_accuracy_bar() -> None:
     v = validate_glyph_classifier(frames)
     assert not v.passed
     assert v.reason is not None and "accuracy" in v.reason
+
+
+def test_validation_zero_tolerance_on_ore_brick_confusion() -> None:
+    # USER-APPROVED BAR: a single ORE->BRICK confusion fails validation regardless of
+    # the other numbers — it is the systematic, firewall-blinding misread. Build a
+    # frame whose TRUE label is ORE but whose glyph is a vivid brick colour, so the
+    # classifier confidently reads BRICK.
+    frames = [_good_frame(Counter({"BRICK": 1, "WOOD": 1})) for _ in range(MIN_VALIDATION_FRAMES)]
+    brick_swatch = _hsv_to_rgb_swatch(RESOURCE_CARD_HUES["BRICK"], 200.0, 210.0)
+    crop = np.zeros((14, 14, 3), np.uint8)
+    crop[:, :] = brick_swatch
+    frames.append(
+        LabeledGrantFrame(
+            log_crop_rgb=crop,
+            glyph_boxes=[(0, 0, 14, 14)],
+            expected=Counter({"ORE": 1}),
+            expected_by_box=("ORE",),
+        )
+    )
+    v = validate_glyph_classifier(frames)
+    assert not v.passed
+    assert v.reason is not None and "ORE<->BRICK" in v.reason
+    assert ("ORE", "BRICK", 1) in v.confusion
+
+
+def test_validation_confusion_matrix_and_coverage_fields() -> None:
+    # Per-box scoring: correct reads land on the confusion diagonal; a fail-closed
+    # unreadable box counts as COVERAGE (n_unread_boxes), never as a confusion entry.
+    frames = [_good_frame(Counter({"SHEEP": 1, "ORE": 2})) for _ in range(MIN_VALIDATION_FRAMES)]
+    v = validate_glyph_classifier(frames)
+    assert v.passed
+    assert v.n_boxes == 3 * MIN_VALIDATION_FRAMES
+    assert v.n_unread_boxes == 0
+    assert all(true == pred for true, pred, _ in v.confusion)  # diagonal only
+
+    dark = _hsv_to_rgb_swatch(RESOURCE_CARD_HUES["WOOD"], 200.0, 15.0)  # unreadably dark
+    crop = np.zeros((14, 14, 3), np.uint8)
+    crop[:, :] = dark
+    frames.append(
+        LabeledGrantFrame(
+            log_crop_rgb=crop,
+            glyph_boxes=[(0, 0, 14, 14)],
+            expected=Counter({"WOOD": 1}),
+            expected_by_box=("WOOD",),
+        )
+    )
+    v2 = validate_glyph_classifier(frames)
+    assert v2.n_unread_boxes == 1
+    assert not any(true == "WOOD" and pred != "WOOD" for true, pred, _ in v2.confusion)
 
 
 def test_scale_up_gate_blocked_without_validation() -> None:
@@ -232,6 +289,48 @@ def test_scale_up_gate_ALLOWED_only_when_validated() -> None:
         affine_residual_px=0.8,
         glyph_classifier_validated=glyph_classifier_is_validated(v),
     )
+
+
+# --- the PASS is bound to classifier identity (expert SHOULD-FIX 2026-07-05) --
+
+
+def test_validation_is_stamped_with_the_current_classifier_fingerprint() -> None:
+    # Every validate_glyph_classifier result — pass AND fail — carries the
+    # fingerprint of the classifier that produced it, so the artifact written to
+    # data/human/glyph_validation.json is self-identifying.
+    frames = [_good_frame(Counter({"SHEEP": 1, "ORE": 2})) for _ in range(MIN_VALIDATION_FRAMES)]
+    v = validate_glyph_classifier(frames)
+    assert v.classifier_fingerprint == glyph_classifier_fingerprint()
+    failed = validate_glyph_classifier(frames[:1])  # under-sampled → passed=False
+    assert not failed.passed
+    assert failed.classifier_fingerprint == glyph_classifier_fingerprint()
+    # The fingerprint is a stable sha256 hex digest of the classifier's identity.
+    fp = glyph_classifier_fingerprint()
+    assert len(fp) == 64 and fp == glyph_classifier_fingerprint()
+
+
+def test_scale_up_gate_blocked_on_fabricated_or_stale_validation() -> None:
+    # A hand-built passed=True record (a fabricated PASS — e.g. a doctored
+    # glyph_validation.json) has no / a foreign fingerprint and must NOT satisfy
+    # the gate; nor may a stale PASS stamped by a since-edited classifier.
+    fabricated = GlyphValidation(passed=True, n_frames=24, n_correct=24, accuracy=1.0, reason=None)
+    assert not glyph_classifier_is_validated(fabricated)
+    stale = GlyphValidation(
+        passed=True,
+        n_frames=24,
+        n_correct=24,
+        accuracy=1.0,
+        reason=None,
+        classifier_fingerprint="f" * 64,
+    )
+    assert not glyph_classifier_is_validated(stale)
+    for unbound in (fabricated, stale):
+        with pytest.raises(GlyphClassifierNotValidated):
+            assert_scale_up_orientation_gates(
+                resolution=1080,
+                affine_residual_px=0.8,
+                glyph_classifier_validated=glyph_classifier_is_validated(unbound),
+            )
 
 
 # --- per-game calibration (brief §5.13 — never a global hue constant) --------
@@ -449,3 +548,16 @@ def test_consensus_rejects_contradictory_readable_reads() -> None:
     assert consensus_granted_glyphs(frames) is None
     # Order-independence: reversing the reads must not flip the reject to an accept.
     assert consensus_granted_glyphs(list(reversed(frames))) is None
+
+
+def test_classify_glyph_borderline_grey_never_confident_warm_hue() -> None:
+    # Review BLOCKER, re-pinned to the MEASURED card palette (2026-07-04 valset):
+    # a grey stone whose saturation drifts past the ORE ceiling must fail closed —
+    # never read as a confident warm hue (the firewall-blinding ORE<->BRICK path).
+    # Measured bands: ORE cards S 44-57, coloured cards S >= 99; ceiling 75 with a
+    # fail-closed dead band [75, 95) between the branches.
+    assert classify_glyph((5.0, 80.0, 175.0)) is None  # dead band — refuses to guess
+    assert classify_glyph((5.0, 90.0, 175.0)) is None  # still dead band
+    assert classify_glyph((5.8, 110.0, 188.0)) == "BRICK"  # measured-median BRICK
+    assert classify_glyph((5.0, 50.0, 179.0)) == "ORE"  # measured-band ORE
+    assert classify_glyph((5.0, 62.0, 175.0)) == "ORE"  # below ceiling: grey band

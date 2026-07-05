@@ -32,7 +32,11 @@ training / engine-rule import; scope-lock, build brief §6). The deeper
 jointly-flipped-board firewall (the glyph anchor) lives in
 :mod:`catan_rl.human_data.orientation`; this gate covers the provenance-binding +
 the standard multiset / stability / winner-in-handles / resolution / residual
-checks the build brief enumerates.
+checks the build brief enumerates, **and it runs the glyph anchor NON-OPTIONALLY**
+(expert BLOCKER 1, 2026-07-05): a game whose grant read is absent or unreadable
+for either player is REJECTED with :data:`GLYPH_UNREADABLE_REASON` — "the anchor
+actually ran for both players" is an explicit precondition of ``accepted=True``
+(``CrossCheckResult.anchor_ran``), never a fail-open skip.
 """
 
 from __future__ import annotations
@@ -57,6 +61,14 @@ from catan_rl.human_data.record import (
 )
 from catan_rl.human_data.topology import Topology
 
+#: Typed rejection reason for a game whose grant read is absent or unreadable for
+#: at least one player. The glyph anchor is the ONLY joint-flip defence, so a game
+#: it could not run on is REJECTED — never accepted fail-open (expert BLOCKER 1).
+GLYPH_UNREADABLE_REASON = "glyph_unreadable"
+
+#: Typed rejection reason for a glyph-anchor mismatch (the joint-D6-flip catch).
+GLYPH_MISMATCH_REASON = "orientation_joint_flip_glyph_mismatch"
+
 
 @dataclass(frozen=True, slots=True)
 class CrossCheckResult:
@@ -66,10 +78,24 @@ class CrossCheckResult:
     §5.6 rejection-bias audit can load every game; ``accepted`` mirrors
     ``record.passed_crosscheck``. On rejection ``record.rejection_reason`` is the
     typed reason.
+
+    Firewall telemetry (additive — how often the joint-flip anchor actually
+    executed, expert review 2026-07-05):
+
+    - ``anchor_ran`` — :func:`orientation.assert_glyph_anchor` executed for BOTH
+      players (it is an explicit precondition of ``accepted=True``; also ``True``
+      when the anchor ran and REJECTED the game).
+    - ``anchor_unreadable`` — the grant read was absent / ``None`` for at least
+      one player (the anchor could not run on this game).
+    - ``anchor_mismatch`` — the anchor ran and rejected
+      (:data:`GLYPH_MISMATCH_REASON`).
     """
 
     accepted: bool
     record: GameRecord
+    anchor_ran: bool = False
+    anchor_unreadable: bool = False
+    anchor_mismatch: bool = False
 
 
 def road_incidence_offenders(
@@ -130,14 +156,14 @@ _PLACEHOLDER_HEXES: tuple[dict[str, object], ...] = (
 _PLACEHOLDER_DESERT_HEX = 11
 
 
-def _contract_rejection_reason(exc: ValueError, glyph_ran: bool) -> str:
+def _contract_rejection_reason(exc: ValueError) -> str:
     """Map a contract / glyph ``ValueError`` from the accepted-path construction to a
     typed ``rejection_reason``. The glyph anchor is the joint-flip firewall, so its
-    failure gets its own reason; every other finer contract invariant is folded into
-    ``record_contract_violation:{msg}``."""
+    failure gets its own reason (:data:`GLYPH_MISMATCH_REASON`); every other finer
+    contract invariant is folded into ``record_contract_violation:{msg}``."""
     msg = str(exc)
-    if glyph_ran and "glyph-anchor" in msg:
-        return "orientation_joint_flip_glyph_mismatch"
+    if "glyph-anchor" in msg:
+        return GLYPH_MISMATCH_REASON
     return f"record_contract_violation:{msg}"
 
 
@@ -188,7 +214,7 @@ def cross_check(
     resolution: int,
     residual_px: float,
     topology: Topology,
-    granted_by_player: dict[str, Counter[str]] | None = None,
+    granted_by_player: dict[str, Counter[str] | None] | None = None,
     ts: int = 0,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
     min_resolution: int = MIN_RESOLUTION,
@@ -219,11 +245,19 @@ def cross_check(
     7. **road-incidence sanity** — every road touches an owner settlement
        (D6-invariant, so NOT the orientation gate); ``rejection_reason=
        "road_snap_isolated:{player}:{edge}"``.
-    8. **glyph anchor** (SHOULD-FIX) — when ``granted_by_player`` is supplied, the
-       jointly-flipped-board firewall (:func:`orientation.assert_glyph_anchor`) runs
-       on the assembled record BEFORE it is accepted; a joint D6 flip that the
-       desert-binding cannot see is caught here. ``rejection_reason=
-       "orientation_joint_flip_glyph_mismatch"``.
+    8. **grant-read coverage** (expert BLOCKER 1 — the firewall is NON-OPTIONAL):
+       ``granted_by_player`` must carry a readable (non-``None``) grant multiset for
+       BOTH player handles. A ``None`` / absent read means the glyph anchor cannot
+       run, so the game is REJECTED with
+       ``rejection_reason=`` :data:`GLYPH_UNREADABLE_REASON` — never accepted
+       fail-open (an unreadable grant would otherwise silently skip the only
+       joint-flip defence).
+    9. **glyph anchor** — the jointly-flipped-board firewall
+       (:func:`orientation.assert_glyph_anchor`) runs on the assembled record for
+       BOTH players BEFORE it is accepted; "the anchor actually ran" is an explicit
+       precondition of ``accepted=True`` (``CrossCheckResult.anchor_ran``). A joint
+       D6 flip that the desert-binding cannot see is caught here;
+       ``rejection_reason=`` :data:`GLYPH_MISMATCH_REASON`.
 
     A record that passes every check is built with ``passed_crosscheck=True``. The
     ``GameRecord`` constructor then re-runs its own pure-value :meth:`validate`
@@ -259,6 +293,21 @@ def cross_check(
         min_resolution=min_resolution,
     )
 
+    # Grant-read coverage (BLOCKER 1): the anchor must be RUNNABLE for BOTH players
+    # before a game can be accepted. ``None``/absent reads are an honest "could not
+    # read" from the glyph reader — the game is rejected, never accepted fail-open.
+    handles = set(players.values())
+    readable_grants: dict[str, Counter[str]] = {
+        player: granted
+        for player, granted in (granted_by_player or {}).items()
+        if granted is not None
+    }
+    anchor_unreadable = not handles <= set(readable_grants)
+    if reason is None and anchor_unreadable:
+        reason = GLYPH_UNREADABLE_REASON
+
+    anchor_ran = False
+    anchor_mismatch = False
     if reason is None:
         assert opening_result.openings is not None  # guaranteed by check (4)
         try:
@@ -284,18 +333,25 @@ def cross_check(
                 rejection_reason=None,
             )
             # The jointly-flipped-board firewall (the desert-binding is blind to a
-            # JOINT flip). Run it on the assembled record before accepting; a glyph
-            # mismatch is a rejection, not an acceptance.
-            if granted_by_player is not None:
-                assert_glyph_anchor(record, granted_by_player, topology)
+            # JOINT flip). NON-OPTIONAL (BLOCKER 1): the coverage gate above
+            # guarantees a readable grant for both players, so the anchor ALWAYS
+            # runs on the accept path; a glyph mismatch is a rejection, not an
+            # acceptance, and ``anchor_ran`` records that the firewall executed.
+            anchor_ran = True
+            assert_glyph_anchor(record, readable_grants, topology)
         except ValueError as exc:
             # A finer contract invariant (dice-log range / multiset / distinctness /
             # snake-draft / free-anchor) or the glyph anchor failed. Treat it as a
             # rejection so the §5.6 audit row still loads — NEVER let it crash out of
             # cross_check (the coarse pre-screen is a strict subset of the contract).
-            reason = _contract_rejection_reason(exc, granted_by_player is not None)
+            reason = _contract_rejection_reason(exc)
+            anchor_mismatch = reason == GLYPH_MISMATCH_REASON
+            # ``anchor_ran`` is only true if the anchor was actually invoked: a
+            # contract ValueError raised DURING record construction happened before
+            # the anchor line, so the anchor never executed for that game.
+            anchor_ran = anchor_mismatch
         else:
-            return CrossCheckResult(accepted=True, record=record)
+            return CrossCheckResult(accepted=True, record=record, anchor_ran=True)
 
     # --- REJECTED: emit a structurally-valid record for the §5.6 bias audit ---
     # Sanitize the fields the record contract would itself reject on, so the
@@ -368,7 +424,13 @@ def cross_check(
             _PLACEHOLDER_DESERT_HEX,
             _placeholder_openings(players, topology),
         )
-    return CrossCheckResult(accepted=False, record=record)
+    return CrossCheckResult(
+        accepted=False,
+        record=record,
+        anchor_ran=anchor_ran,
+        anchor_unreadable=anchor_unreadable,
+        anchor_mismatch=anchor_mismatch,
+    )
 
 
 def _first_rejection(

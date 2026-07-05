@@ -55,7 +55,10 @@ only reports ``passed=True`` when the classifier reproduces the labelled grants 
 enough frames at the pre-registered accuracy bar. The scale-up gate is wired to
 that validation via :func:`glyph_classifier_is_validated`, so the 300-game batch
 harvest stays BLOCKED until a genuinely-validated classifier exists — the firewall
-is never faked validated.
+is never faked validated. The validation record is BOUND to the classifier it
+scored (:func:`glyph_classifier_fingerprint`, stamped on every result and
+re-verified at gate time), so a stale PASS from an edited classifier — or a
+fabricated ``passed=True`` record — cannot satisfy the gate either.
 
 CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training path
 (brief §6).
@@ -63,6 +66,9 @@ CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training pat
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -82,24 +88,28 @@ GRANTABLE_RESOURCES: tuple[str, ...] = ("WOOD", "BRICK", "WHEAT", "ORE", "SHEEP"
 #: applies to the non-ORE hexes (BRICK reddest → WOOD greenest).
 HUE_RESOURCES_BY_RANK: tuple[str, ...] = ("BRICK", "WHEAT", "SHEEP", "WOOD")
 
-#: **FALLBACK PRIOR ONLY — not a per-game palette.** Canonical OpenCV hues
-#: (0..180) of the four hue-classified resource card icons in one Colonist skin.
-#: A real game MUST be classified against a :class:`GlyphPalette` calibrated from
-#: that game's own board tiles (:func:`calibrate_glyph_palette`); these absolute
-#: centres are used only to seed :data:`FALLBACK_PALETTE` for the synthetic unit
-#: tests and cannot pass real-corpus validation across skins / compression.
+#: **THE CANONICAL CARD PALETTE — MEASURED, not assumed.** OpenCV hues (0..180) of
+#: the four hue-classified resource card icons, measured on the 2026-07-04
+#: validation set (74 hand-labelled icon boxes across 24 real games spanning the
+#: manifest). The card icons are a FIXED Colonist UI asset: their hues cluster
+#: within ~±2 units across every sampled game (BRICK 4.6-7.3, WHEAT 19.2-19.7,
+#: SHEEP 40.8-44.9, WOOD 51.9-55.9), independent of board skin/theme. The original
+#: §5.13 premise — "cards share the tile colour family, calibrate per game from the
+#: board" — was EMPIRICALLY WRONG for glyphs (see :func:`calibrate_glyph_palette`);
+#: this fixed palette is what real-corpus classification uses.
 RESOURCE_CARD_HUES: dict[str, float] = {
-    "BRICK": 8.0,
-    "WHEAT": 25.0,
-    "SHEEP": 40.0,
-    "WOOD": 70.0,
+    "BRICK": 5.8,
+    "WHEAT": 19.6,
+    "SHEEP": 43.0,
+    "WOOD": 54.9,
 }
 
-#: Fallback ORE saturation ceiling (0..255) for :data:`FALLBACK_PALETTE`. A card
-#: glyph with saturation below the palette's ORE ceiling AND a value in the card
-#: band is treated as ORE (a desaturated grey card has no meaningful hue). A real
-#: game derives its own ceiling from its ORE tiles (:func:`calibrate_glyph_palette`).
-ORE_MAX_SATURATION = 60.0
+#: ORE saturation ceiling (0..255) for the canonical card palette. Measured on the
+#: validation set: ORE stone cards sit at S 44-57; every coloured card is S >= 99
+#: (BRICK is the least saturated). 75 splits the empty [57, 99] gap; together with
+#: :data:`HUE_MIN_SATURATION_ABOVE_ORE` it leaves a fail-closed dead band
+#: [75, 95) where nothing classifies (a washed-out ambiguous swatch reads None).
+ORE_MAX_SATURATION = 75.0
 
 #: Minimum value (brightness) for a swatch to be a card glyph at all. A near-black
 #: swatch (log text / background bleed, not a card icon) — whether desaturated
@@ -136,7 +146,20 @@ MIN_ORE_SATURATION = 8.0
 #: accepted. Below this the glyph is ambiguous (its colour sits between two card
 #: families) and :func:`classify_glyph` returns ``None`` — the BEST-EFFORT honest
 #: "could not read reliably" that keeps the scale-up gate engaged (task spec).
-MIN_GLYPH_HUE_MARGIN = 8.0
+#: Set from the validation set: the tightest class pair is SHEEP(40.8-44.9) vs
+#: WOOD(51.9-55.9); the worst genuine WOOD (51.9) clears the margin by 5.9 while a
+#: true between-class hue (~49) still yields margin ~0-1 and fails closed.
+MIN_GLYPH_HUE_MARGIN = 5.0
+
+#: Saturation margin (0..255) a hue-classified swatch must clear ABOVE the palette's
+#: ORE ceiling before a warm/coloured hue class is trusted (review BLOCKER: a
+#: desaturated grey ORE stone whose saturation drifts just past the ceiling — e.g.
+#: HSV(5, 62, 175) with ceiling 60 — otherwise reads as a CONFIDENT BRICK, corrupting
+#: the granted multiset and defeating the joint-flip firewall). A genuine coloured
+#: card is vivid; a swatch in the ``[ore_ceiling, ore_ceiling + margin)`` band is a
+#: borderline grey and :func:`classify_glyph` fails closed. Conservative default — the
+#: glyph validation harness calibrates it against labelled real crops.
+HUE_MIN_SATURATION_ABOVE_ORE = 20.0
 
 #: Minimum fraction of a swatch's bright pixels that must agree with the chosen
 #: card class (hue within :data:`MIN_GLYPH_HUE_MARGIN` of the winning centre for
@@ -146,15 +169,17 @@ MIN_GLYPH_HUE_MARGIN = 8.0
 #: text contamination into an honest ``None`` rather than a dragged median.
 MIN_GLYPH_BODY_PURITY = 0.6
 
-#: Pre-registered validation bars for :func:`validate_glyph_classifier`. The
-#: classifier is only reported ``passed`` when it reproduces the labelled grants
-#: on at least :data:`MIN_VALIDATION_FRAMES` labelled post-grant frames at
-#: >= :data:`MIN_VALIDATION_ACCURACY` per-player-grant accuracy. These gate the
-#: scale-up firewall flip (task spec: the gate flips to allowed ONLY when
-#: validated), so they are deliberately strict — a mislabelled grant silently
-#: welds a jointly-flipped board.
+#: Pre-registered validation bars for :func:`validate_glyph_classifier` — the
+#: USER-APPROVED bar (2026-07-04): >= :data:`MIN_VALIDATION_ACCURACY` exact
+#: grant-multiset accuracy over at least :data:`MIN_VALIDATION_FRAMES` labelled
+#: post-grant frames, AND **zero ORE<->BRICK confusions** among the per-box labels
+#: (that specific misread is the systematic, firewall-blinding failure mode: a
+#: desaturated grey stone reads as a warm hue, corrupting the granted multiset a
+#: jointly-flipped board is compared against). These gate the scale-up firewall
+#: flip (the gate flips to allowed ONLY when validated), so they are deliberately
+#: strict — a mislabelled grant silently welds a jointly-flipped board.
 MIN_VALIDATION_FRAMES = 8
-MIN_VALIDATION_ACCURACY = 0.95
+MIN_VALIDATION_ACCURACY = 0.98
 
 #: Minimum agreeing single-frame reads for the per-game grant CONSENSUS
 #: (:func:`consensus_granted_glyphs`). The grant line persists across several
@@ -186,6 +211,15 @@ def calibrate_glyph_palette(
     board_samples: npt.NDArray[np.float64], desert_hex: int
 ) -> GlyphPalette:
     """Derive a per-game :class:`GlyphPalette` from the game's own board tiles.
+
+    .. warning:: **Do NOT use this for card-glyph classification.** The premise it
+       was built on ("card icons share the tile colour family", brief §5.13) was
+       measured FALSE on the 2026-07-04 validation set: the card icons are a fixed
+       UI asset with game-invariant hues, while board-tile hues vary with skin —
+       a board-derived palette mis-sits the card centres (WOOD read 0/22) and a
+       single bad board read can blow the ORE ceiling (observed 184, mislabelling
+       saturated cards as ORE, a firewall-blinding confusion). Real glyph reads use
+       :data:`CARD_PALETTE`. Kept for API compatibility and board-side tooling.
 
     ``board_samples`` is the 19x3 median-HSV array ``board_cv.read_board`` already
     computes for this game (engine hex order); ``desert_hex`` the locked desert.
@@ -230,15 +264,22 @@ def calibrate_glyph_palette(
     return GlyphPalette(hue_centres=hue_centres, ore_max_saturation=ore_ceiling)
 
 
-#: **Synthetic-test / last-resort prior ONLY.** A :class:`GlyphPalette` built from
-#: the module-level fallback centres. It is the default when no per-game palette is
-#: threaded into :func:`classify_glyph`; a REAL game must pass a
-#: :func:`calibrate_glyph_palette` palette instead (this fallback cannot pass
-#: real-corpus validation — brief §5.13 / §13).
+#: **THE palette real-corpus glyph reads use** — the measured canonical card-icon
+#: palette (:data:`RESOURCE_CARD_HUES` / :data:`ORE_MAX_SATURATION`, from the
+#: 2026-07-04 hand-labelled validation set). The card icons are a fixed UI asset,
+#: so a global palette is CORRECT here — unlike board tiles, which stay per-game
+#: calibrated in board_cv. Do NOT substitute a board-derived
+#: :func:`calibrate_glyph_palette` palette for glyphs: measured on the validation
+#: set, board-derived centres mis-sit the card hues (WOOD went 22/22 unread and one
+#: game's ORE ceiling landed at 184, mislabelling saturated cards as ORE).
 FALLBACK_PALETTE = GlyphPalette(
     hue_centres=dict(RESOURCE_CARD_HUES),
     ore_max_saturation=ORE_MAX_SATURATION,
 )
+
+#: Alias making the semantics explicit at call sites: the canonical measured
+#: card-icon palette (see :data:`FALLBACK_PALETTE`, kept for API compatibility).
+CARD_PALETTE = FALLBACK_PALETTE
 
 
 def _hue_distance(a: float, b: float) -> float:
@@ -348,6 +389,10 @@ def classify_glyph(
         if ore_purity < MIN_GLYPH_BODY_PURITY:
             return None  # bimodal — abutting text / mis-boxed, not a clean grey card
         return "ORE"
+    if sat < palette.ore_max_saturation + HUE_MIN_SATURATION_ABOVE_ORE:
+        # borderline grey just above the ORE ceiling — a desaturated ORE stone reads
+        # as a confident warm hue here; a genuine coloured card is vivid. Fail closed.
+        return None
     ranked = sorted(
         palette.hue_centres,
         key=lambda r: _hue_distance(hue, palette.hue_centres[r]),
@@ -537,12 +582,19 @@ class LabeledGrantFrame:
     (defaults to the synthetic-test :data:`FALLBACK_PALETTE`). The classifier is
     scored per frame: a frame is CORRECT iff :func:`classify_granted_glyphs`
     returns exactly ``expected`` under that palette.
+
+    ``expected_by_box`` (optional) is the per-box ground truth, ordered to match
+    ``glyph_boxes``. Supplying it enables the CONFUSION-MATRIX half of the
+    user-approved bar — in particular the zero-ORE<->BRICK rule, which multiset
+    equality alone cannot attribute to a specific box. The validation harness
+    always supplies it; synthetic tests may omit it.
     """
 
     log_crop_rgb: npt.NDArray[np.uint8]
     glyph_boxes: list[tuple[int, int, int, int]]
     expected: Counter[str]
     palette: GlyphPalette = FALLBACK_PALETTE
+    expected_by_box: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -551,10 +603,24 @@ class GlyphValidation:
 
     ``passed`` is ``True`` ONLY when the classifier reproduced the labelled grants
     on >= :data:`MIN_VALIDATION_FRAMES` frames at >= :data:`MIN_VALIDATION_ACCURACY`
-    accuracy. ``n_frames`` / ``n_correct`` / ``accuracy`` carry the measured
-    numbers; ``reason`` explains a fail (too few frames, or below the accuracy bar)
-    so the scale-up gate can report EXACTLY why the harvest stays blocked (task
-    spec: never fake it validated — report why).
+    accuracy AND the per-box confusion matrix has zero ORE<->BRICK entries (the
+    user-approved bar). ``n_frames`` / ``n_correct`` / ``accuracy`` carry the
+    frame-level numbers; ``reason`` explains a fail so the scale-up gate can report
+    EXACTLY why the harvest stays blocked (never fake it validated — report why).
+
+    Per-box fields (populated from frames carrying ``expected_by_box``):
+    ``confusion`` is the sparse confusion matrix as ``(true, predicted, count)``
+    triples over CONFIDENT reads only; ``n_boxes`` the labelled box count;
+    ``n_unread_boxes`` the fail-closed ``None`` reads (COVERAGE — honest silence,
+    counted separately, never in ``confusion``).
+
+    ``classifier_fingerprint`` binds the record to the EXACT classifier it scored
+    (expert review 2026-07-05): :func:`validate_glyph_classifier` stamps
+    :func:`glyph_classifier_fingerprint` on every result, and
+    :func:`glyph_classifier_is_validated` re-verifies it against the CURRENT
+    classifier — a stale PASS (classifier edited since) or a fabricated PASS
+    (hand-built record, empty/foreign fingerprint) fails the gate. The default
+    ``""`` never matches a real fingerprint, so an unstamped record fails closed.
     """
 
     passed: bool
@@ -562,6 +628,29 @@ class GlyphValidation:
     n_correct: int
     accuracy: float
     reason: str | None
+    confusion: tuple[tuple[str, str, int], ...] = ()
+    n_boxes: int = 0
+    n_unread_boxes: int = 0
+    classifier_fingerprint: str = ""
+
+
+def glyph_classifier_fingerprint() -> str:
+    """SHA-256 identity of the CURRENT glyph classifier — this module's source.
+
+    The classifier's behaviour is fully determined by this module (the palette
+    constants, the thresholds, and the decision functions), so its source text IS
+    its identity: any edit — a threshold retune, a branch change, even a helper
+    rewrite — yields a new fingerprint. :func:`validate_glyph_classifier` stamps
+    this on every :class:`GlyphValidation`, and :func:`glyph_classifier_is_validated`
+    recomputes it at gate time, so a validation PASS can never outlive the
+    classifier it measured (expert review 2026-07-05: the batch gate must be bound
+    to classifier identity — a stale or fabricated PASS must not satisfy it).
+    Deliberately strict: a doc-only edit also invalidates, and the remedy is the
+    cheap offline re-score (``scripts/glyph_valset.py score`` over the committed
+    labels + local crops), which re-stamps ``data/human/glyph_validation.json``.
+    """
+    source = inspect.getsource(sys.modules[__name__])
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidation:
@@ -570,42 +659,79 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
     Runs :func:`classify_granted_glyphs` on each frame UNDER THAT FRAME'S per-game
     palette and counts a frame CORRECT iff the returned multiset equals the frame's
     ``expected`` label (an unreadable ``None`` counts as wrong — an honest miss, not
-    a pass). Reports ``passed=True`` only when both pre-registered bars clear
-    (:data:`MIN_VALIDATION_FRAMES`, :data:`MIN_VALIDATION_ACCURACY`); otherwise
-    ``passed=False`` with a ``reason``. This is the sole switch the scale-up
-    firewall consults (:func:`glyph_classifier_is_validated`), so a below-bar or
-    under-sampled run keeps the 300-game harvest BLOCKED.
+    a pass). For frames carrying ``expected_by_box`` it also classifies each box
+    individually into the per-box confusion matrix (fail-closed ``None`` reads are
+    counted as ``n_unread_boxes`` COVERAGE, never as confusion entries).
+
+    Reports ``passed=True`` only when the full user-approved bar clears:
+    >= :data:`MIN_VALIDATION_FRAMES` frames, >= :data:`MIN_VALIDATION_ACCURACY`
+    exact-multiset accuracy, AND zero ORE<->BRICK confusion entries (that misread is
+    the systematic failure mode that blinds the joint-flip firewall — one occurrence
+    in the labelled set means the saturation margin is mis-tuned and the error will
+    repeat at scale). This is the sole switch the scale-up firewall consults
+    (:func:`glyph_classifier_is_validated`), so a below-bar or under-sampled run
+    keeps the 300-game harvest BLOCKED.
     """
     n_frames = len(frames)
-    n_correct = sum(
-        1
-        for f in frames
-        if classify_granted_glyphs(f.log_crop_rgb, f.glyph_boxes, f.palette) == f.expected
-    )
+    n_correct = 0
+    confusion: Counter[tuple[str, str]] = Counter()
+    n_boxes = 0
+    n_unread = 0
+    for f in frames:
+        if classify_granted_glyphs(f.log_crop_rgb, f.glyph_boxes, f.palette) == f.expected:
+            n_correct += 1
+        if f.expected_by_box is None:
+            continue
+        if len(f.expected_by_box) != len(f.glyph_boxes):
+            raise ValueError(
+                f"expected_by_box has {len(f.expected_by_box)} labels for "
+                f"{len(f.glyph_boxes)} glyph boxes"
+            )
+        for (x0, y0, x1, y1), true_resource in zip(f.glyph_boxes, f.expected_by_box, strict=True):
+            n_boxes += 1
+            swatch = np.asarray(f.log_crop_rgb[y0:y1, x0:x1], np.uint8)
+            predicted = (
+                classify_glyph(_glyph_median_hsv(swatch), f.palette) if swatch.size else None
+            )
+            if predicted is None:
+                n_unread += 1  # honest fail-closed silence — coverage, not confusion
+            else:
+                confusion[(true_resource, predicted)] += 1
     accuracy = (n_correct / n_frames) if n_frames else 0.0
-    if n_frames < MIN_VALIDATION_FRAMES:
+    confusion_out = tuple((true, pred, count) for (true, pred), count in sorted(confusion.items()))
+    fingerprint = glyph_classifier_fingerprint()
+
+    def _fail(reason: str) -> GlyphValidation:
         return GlyphValidation(
             passed=False,
             n_frames=n_frames,
             n_correct=n_correct,
             accuracy=accuracy,
-            reason=(
-                f"only {n_frames} labelled post-grant frame(s) < required "
-                f"{MIN_VALIDATION_FRAMES} — not enough to validate the glyph "
-                "classifier; scale-up stays blocked"
-            ),
+            reason=reason,
+            confusion=confusion_out,
+            n_boxes=n_boxes,
+            n_unread_boxes=n_unread,
+            classifier_fingerprint=fingerprint,
+        )
+
+    ore_brick = confusion[("ORE", "BRICK")] + confusion[("BRICK", "ORE")]
+    if ore_brick > 0:
+        return _fail(
+            f"{ore_brick} ORE<->BRICK confusion(s) in the labelled set — the "
+            "firewall-blinding misread; zero tolerated (user-approved bar). "
+            "Widen HUE_MIN_SATURATION_ABOVE_ORE and re-measure; scale-up stays blocked"
+        )
+    if n_frames < MIN_VALIDATION_FRAMES:
+        return _fail(
+            f"only {n_frames} labelled post-grant frame(s) < required "
+            f"{MIN_VALIDATION_FRAMES} — not enough to validate the glyph "
+            "classifier; scale-up stays blocked"
         )
     if accuracy < MIN_VALIDATION_ACCURACY:
-        return GlyphValidation(
-            passed=False,
-            n_frames=n_frames,
-            n_correct=n_correct,
-            accuracy=accuracy,
-            reason=(
-                f"glyph accuracy {accuracy:.3f} < required {MIN_VALIDATION_ACCURACY} "
-                f"({n_correct}/{n_frames} frames) — classifier not reliable enough; "
-                "scale-up stays blocked"
-            ),
+        return _fail(
+            f"glyph accuracy {accuracy:.3f} < required {MIN_VALIDATION_ACCURACY} "
+            f"({n_correct}/{n_frames} frames) — classifier not reliable enough; "
+            "scale-up stays blocked"
         )
     return GlyphValidation(
         passed=True,
@@ -613,6 +739,10 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
         n_correct=n_correct,
         accuracy=accuracy,
         reason=None,
+        confusion=confusion_out,
+        n_boxes=n_boxes,
+        n_unread_boxes=n_unread,
+        classifier_fingerprint=fingerprint,
     )
 
 
@@ -623,10 +753,18 @@ def glyph_classifier_is_validated(validation: GlyphValidation | None) -> bool:
     :func:`~catan_rl.human_data.orientation.assert_scale_up_orientation_gates`'s
     ``glyph_classifier_validated`` argument. Returns ``True`` — flipping the
     scale-up gate to allowed — ONLY when a :class:`GlyphValidation` with
-    ``passed=True`` is supplied. ``None`` (no validation ever run) or any
-    ``passed=False`` validation returns ``False``, so the gate keeps raising
+    ``passed=True`` **whose ``classifier_fingerprint`` matches the CURRENT
+    classifier** (:func:`glyph_classifier_fingerprint`) is supplied. ``None``
+    (no validation ever run), any ``passed=False`` validation, a STALE pass
+    (fingerprint from an edited classifier), or a FABRICATED pass (hand-built
+    record with an empty/foreign fingerprint) returns ``False``, so the gate
+    keeps raising
     :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated` and the
     300-game harvest stays blocked (task spec: gate flips to allowed only when
-    validated).
+    validated; expert review 2026-07-05: the PASS is bound to classifier identity).
     """
-    return validation is not None and validation.passed
+    return (
+        validation is not None
+        and validation.passed
+        and validation.classifier_fingerprint == glyph_classifier_fingerprint()
+    )

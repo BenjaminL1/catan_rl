@@ -3,6 +3,16 @@
 :func:`run_batch` is the parallel-per-video driver that turns ThePhantom's
 YouTube corpus into the JSONL dataset. It:
 
+- **hard-gates the whole run on a validated glyph classifier** (expert BLOCKER 1):
+  :func:`~catan_rl.human_data.orientation.assert_scale_up_orientation_gates` is
+  called once per harvest run with
+  :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_is_validated` over the
+  caller-supplied ``glyph_validation``; an absent/failed validation — or one whose
+  ``classifier_fingerprint`` does not match the CURRENT classifier
+  (:func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_fingerprint`; a stale
+  or fabricated PASS, expert SHOULD-FIX 2026-07-05) — raises
+  :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated` before any
+  video is parsed (the joint-flip firewall can never be silently absent);
 - reads the committed strength manifest (``data/human/strength_manifest.json``)
   — THE opponent-strength source of truth — and **harvests the ``high`` +
   ``unknown`` videos** (``excluded`` and manifest-absent are dropped; the
@@ -60,8 +70,14 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
+from catan_rl.human_data.glyph_anchor import GlyphValidation, glyph_classifier_is_validated
+from catan_rl.human_data.orientation import (
+    MIN_RESOLUTION,
+    assert_scale_up_orientation_gates,
+)
 from catan_rl.human_data.record import GameRecord
 from catan_rl.human_data.segment import load_strength_manifest, manifest_entry
+from catan_rl.human_data.validate import GLYPH_MISMATCH_REASON, GLYPH_UNREADABLE_REASON
 
 #: Manifest ``strength`` values that are harvested into the run. ``excluded``
 #: (and manifest-absent) videos are dropped. ``high`` also feeds the scoreboard;
@@ -147,7 +163,24 @@ class LedgerEntry:
 
 @dataclass(frozen=True, slots=True)
 class BatchResult:
-    """Summary of one :func:`run_batch` invocation."""
+    """Summary of one :func:`run_batch` invocation.
+
+    Firewall telemetry (additive, expert review 2026-07-05) — how often the
+    joint-flip glyph anchor actually EXECUTED across the records committed by this
+    run (derived from each record's typed ``rejection_reason``; see
+    :func:`_anchor_telemetry`):
+
+    - ``anchor_ran`` — records for which :func:`assert_glyph_anchor` executed for
+      both players (every accepted record, plus glyph-mismatch rejects, plus
+      strength-mismatch downgrades of otherwise-accepted records).
+    - ``anchor_unreadable`` — records rejected because a grant read was absent /
+      unreadable (:data:`~catan_rl.human_data.validate.GLYPH_UNREADABLE_REASON`).
+    - ``anchor_mismatch`` — records the anchor ran on and REJECTED
+      (:data:`~catan_rl.human_data.validate.GLYPH_MISMATCH_REASON`).
+    - ``grant_read_coverage`` — ``anchor_ran / (records_accepted +
+      records_rejected)`` (0.0 when no record was committed): the population
+      fraction of committed games on which the firewall actually executed.
+    """
 
     videos_processed: int = 0
     videos_skipped: int = 0
@@ -155,6 +188,10 @@ class BatchResult:
     records_accepted: int = 0
     records_rejected: int = 0
     harvested: tuple[str, ...] = field(default=())
+    anchor_ran: int = 0
+    anchor_unreadable: int = 0
+    anchor_mismatch: int = 0
+    grant_read_coverage: float = 0.0
 
 
 def load_ledger(path: str | Path) -> dict[LedgerKey, LedgerEntry]:
@@ -177,6 +214,31 @@ def load_ledger(path: str | Path) -> dict[LedgerKey, LedgerEntry]:
             continue
         ledger[(entry.video_id, entry.game_index)] = entry
     return ledger
+
+
+def _anchor_telemetry(record: GameRecord) -> tuple[bool, bool, bool]:
+    """``(anchor_ran, anchor_unreadable, anchor_mismatch)`` for one committed record.
+
+    Reason-derived (``batch`` sees finished :class:`GameRecord` rows, not the
+    :class:`~catan_rl.human_data.validate.CrossCheckResult` that produced them):
+
+    - an ACCEPTED record implies the anchor ran for both players (``cross_check``
+      makes that an explicit precondition of acceptance);
+    - a :data:`~catan_rl.human_data.validate.GLYPH_MISMATCH_REASON` reject means the
+      anchor ran and fired;
+    - a PURE :data:`STRENGTH_MISMATCH_REASON` reject was accepted by ``cross_check``
+      (anchor ran and passed) before ``batch`` downgraded it on the manifest
+      cross-check — a compound reason keeps the true underlying cause's telemetry;
+    - a :data:`~catan_rl.human_data.validate.GLYPH_UNREADABLE_REASON` reject means
+      the anchor could NOT run (grant read absent/unreadable).
+    """
+    if record.passed_crosscheck:
+        return True, False, False
+    reason = record.rejection_reason or ""
+    unreadable = GLYPH_UNREADABLE_REASON in reason
+    mismatch = GLYPH_MISMATCH_REASON in reason
+    ran = mismatch or reason == STRENGTH_MISMATCH_REASON
+    return ran, unreadable, mismatch
 
 
 def _load_record_keys(path: Path) -> set[tuple[str, int]]:
@@ -308,6 +370,12 @@ class _Sink:
     #: truth, so a ``parse_fn`` that stamps ``tier="high"`` on an ``unknown``
     #: video is rejected here, not trusted.
     manifest_strength: dict[str, str] = field(default_factory=dict)
+    #: Firewall telemetry accumulated over the records THIS run committed
+    #: (reason-derived per record via :func:`_anchor_telemetry`; deduped /
+    #: already-on-disk records are not re-counted).
+    anchor_ran: int = 0
+    anchor_unreadable: int = 0
+    anchor_mismatch: int = 0
 
     def __post_init__(self) -> None:
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -395,6 +463,10 @@ class _Sink:
             else:
                 _append_line(self.rejected_path, record.to_json_line())
                 rejected += 1
+            ran, unreadable, mismatch = _anchor_telemetry(record)
+            self.anchor_ran += int(ran)
+            self.anchor_unreadable += int(unreadable)
+            self.anchor_mismatch += int(mismatch)
             self._committed.add(key)
             _append_line(
                 self.ledger_path,
@@ -479,6 +551,7 @@ def run_batch(
     net_concurrency: int = 2,
     video_ids: Sequence[str] | None = None,
     now_fn: Callable[[], float] = time.time,
+    glyph_validation: GlyphValidation | None = None,
 ) -> BatchResult:
     """Parse the harvested corpus into ``corpus.jsonl`` + ``rejected.jsonl``.
 
@@ -506,11 +579,39 @@ def run_batch(
             from the ``max_workers``-wide OCR stage.
         video_ids: optional subset of ids to process (still manifest-gated).
         now_fn: injectable clock for the ledger timestamp (deterministic tests).
+        glyph_validation: the :class:`GlyphValidation` result of
+            :func:`~catan_rl.human_data.glyph_anchor.validate_glyph_classifier`
+            for the glyph classifier the run's ``parse_fn`` uses. **The harvest is
+            HARD-GATED on it** (expert BLOCKER 1): ``run_batch`` calls
+            :func:`assert_scale_up_orientation_gates` once per run and raises
+            :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated`
+            when the validation is absent (``None``), ``passed=False``, or NOT
+            BOUND to the current classifier (its ``classifier_fingerprint``
+            differs from
+            :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_fingerprint`
+            — a stale PASS from an edited classifier, or a fabricated record;
+            expert SHOULD-FIX 2026-07-05) — an unvalidated joint-flip firewall
+            must block the whole batch, never run silently without it.
+
+    Raises:
+        GlyphClassifierNotValidated: when ``glyph_validation`` is absent, failed,
+            or stamped by a different classifier than the one now imported.
 
     Returns:
         A :class:`BatchResult` summary. Idempotent under resume: a re-run over an
         already-complete corpus processes nothing and duplicates no rows.
     """
+    # The once-per-harvest-run scale-up gate (FIX 4). Resolution / residual are
+    # per-frame quantities enforced per game inside ``cross_check`` (checks 1-2),
+    # so they are passed trivially-passing values here — this call exists to make
+    # the CLASSIFIER-VALIDATION gate structurally impossible to skip: an
+    # unvalidated glyph classifier raises before any video is parsed.
+    assert_scale_up_orientation_gates(
+        resolution=MIN_RESOLUTION,
+        affine_residual_px=0.0,
+        glyph_classifier_validated=glyph_classifier_is_validated(glyph_validation),
+    )
+
     out_dir = Path(out_dir)
     manifest = load_strength_manifest(manifest_path)
     harvested = _harvest_video_ids(manifest, video_ids)
@@ -580,6 +681,7 @@ def run_batch(
             rejected_total += rej
             processed += 1
 
+    records_total = accepted_total + rejected_total
     return BatchResult(
         videos_processed=processed,
         videos_skipped=skipped,
@@ -587,4 +689,8 @@ def run_batch(
         records_accepted=accepted_total,
         records_rejected=rejected_total,
         harvested=tuple(harvested),
+        anchor_ran=sink.anchor_ran,
+        anchor_unreadable=sink.anchor_unreadable,
+        anchor_mismatch=sink.anchor_mismatch,
+        grant_read_coverage=(sink.anchor_ran / records_total) if records_total else 0.0,
     )

@@ -44,11 +44,18 @@ labelled post-grant corpus via
 whose result is threaded through
 :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_is_validated` into
 :func:`assert_scale_up_orientation_gates`'s ``glyph_classifier_validated`` argument.
-The single committed ``game1_log_crop_t120.png`` fixture is captured *before* any
-"received starting resources" event so it holds no card glyphs; validation therefore
-still awaits a labelled post-grant corpus, and until it passes the 300-game batch
-path MUST call :func:`assert_scale_up_orientation_gates`, which **raises** — the
-batch can never run with the glyph anchor unvalidated.
+The validation harness exists (``scripts/glyph_valset.py`` + the labelled crops
+under ``data/human/glyph_valset/``; result artifact
+``data/human/glyph_validation.json``), and the batch path
+(:func:`catan_rl.human_data.batch.run_batch`) now calls
+:func:`assert_scale_up_orientation_gates` **structurally, once per harvest run**
+— an absent/failed validation raises before any video is parsed, so the batch can
+never run with the glyph anchor unvalidated. The anchor itself is NON-OPTIONAL
+per game inside :func:`catan_rl.human_data.validate.cross_check`: an unreadable
+grant read is a typed reject
+(:data:`~catan_rl.human_data.validate.GLYPH_UNREADABLE_REASON`), and "the anchor
+ran for both players" is an explicit precondition of acceptance (expert BLOCKER 1,
+2026-07-05).
 """
 
 from __future__ import annotations
