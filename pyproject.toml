@@ -42,6 +42,11 @@ dev = [
   # broke pytest COLLECTION from June 18 on, silently disabling the whole
   # unit suite (a collection error aborts every test, not just these).
   "scipy>=1.11",
+  # human_data glyph firewall (detect_glyph_boxes / classify_granted_glyphs)
+  # imports cv2 lazily; without this the whole tests/unit/human_data glyph
+  # regression corpus importorskips on CI and the merged-box fail-closed
+  # invariants are never exercised there. Headless build — no GUI libs on CI.
+  "opencv-python-headless>=4.8",
 ]
 notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 
