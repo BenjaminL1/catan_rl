@@ -501,11 +501,14 @@ def test_consensus_rejects_contradictory_readable_reads() -> None:
     assert consensus_granted_glyphs(list(reversed(frames))) is None
 
 
-def test_classify_glyph_borderline_grey_ore_not_confident_brick() -> None:
-    # Review BLOCKER: a desaturated grey ORE stone whose saturation drifts just past
-    # the ORE ceiling (HSV 5,62,175; ceiling 60) previously read as a CONFIDENT BRICK,
-    # corrupting the granted multiset and defeating the joint-flip firewall. It must
-    # now fail closed (None), while a vivid BRICK and a clear ORE still classify.
-    assert classify_glyph((5.0, 62.0, 175.0)) is None
-    assert classify_glyph((8.0, 180.0, 175.0)) == "BRICK"
-    assert classify_glyph((5.0, 30.0, 175.0)) == "ORE"
+def test_classify_glyph_borderline_grey_never_confident_warm_hue() -> None:
+    # Review BLOCKER, re-pinned to the MEASURED card palette (2026-07-04 valset):
+    # a grey stone whose saturation drifts past the ORE ceiling must fail closed —
+    # never read as a confident warm hue (the firewall-blinding ORE<->BRICK path).
+    # Measured bands: ORE cards S 44-57, coloured cards S >= 99; ceiling 75 with a
+    # fail-closed dead band [75, 95) between the branches.
+    assert classify_glyph((5.0, 80.0, 175.0)) is None  # dead band — refuses to guess
+    assert classify_glyph((5.0, 90.0, 175.0)) is None  # still dead band
+    assert classify_glyph((5.8, 110.0, 188.0)) == "BRICK"  # measured-median BRICK
+    assert classify_glyph((5.0, 50.0, 179.0)) == "ORE"  # measured-band ORE
+    assert classify_glyph((5.0, 62.0, 175.0)) == "ORE"  # below ceiling: grey band

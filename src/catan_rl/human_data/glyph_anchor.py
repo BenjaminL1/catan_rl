@@ -82,24 +82,28 @@ GRANTABLE_RESOURCES: tuple[str, ...] = ("WOOD", "BRICK", "WHEAT", "ORE", "SHEEP"
 #: applies to the non-ORE hexes (BRICK reddest → WOOD greenest).
 HUE_RESOURCES_BY_RANK: tuple[str, ...] = ("BRICK", "WHEAT", "SHEEP", "WOOD")
 
-#: **FALLBACK PRIOR ONLY — not a per-game palette.** Canonical OpenCV hues
-#: (0..180) of the four hue-classified resource card icons in one Colonist skin.
-#: A real game MUST be classified against a :class:`GlyphPalette` calibrated from
-#: that game's own board tiles (:func:`calibrate_glyph_palette`); these absolute
-#: centres are used only to seed :data:`FALLBACK_PALETTE` for the synthetic unit
-#: tests and cannot pass real-corpus validation across skins / compression.
+#: **THE CANONICAL CARD PALETTE — MEASURED, not assumed.** OpenCV hues (0..180) of
+#: the four hue-classified resource card icons, measured on the 2026-07-04
+#: validation set (74 hand-labelled icon boxes across 24 real games spanning the
+#: manifest). The card icons are a FIXED Colonist UI asset: their hues cluster
+#: within ~±2 units across every sampled game (BRICK 4.6-7.3, WHEAT 19.2-19.7,
+#: SHEEP 40.8-44.9, WOOD 51.9-55.9), independent of board skin/theme. The original
+#: §5.13 premise — "cards share the tile colour family, calibrate per game from the
+#: board" — was EMPIRICALLY WRONG for glyphs (see :func:`calibrate_glyph_palette`);
+#: this fixed palette is what real-corpus classification uses.
 RESOURCE_CARD_HUES: dict[str, float] = {
-    "BRICK": 8.0,
-    "WHEAT": 25.0,
-    "SHEEP": 40.0,
-    "WOOD": 70.0,
+    "BRICK": 5.8,
+    "WHEAT": 19.6,
+    "SHEEP": 43.0,
+    "WOOD": 54.9,
 }
 
-#: Fallback ORE saturation ceiling (0..255) for :data:`FALLBACK_PALETTE`. A card
-#: glyph with saturation below the palette's ORE ceiling AND a value in the card
-#: band is treated as ORE (a desaturated grey card has no meaningful hue). A real
-#: game derives its own ceiling from its ORE tiles (:func:`calibrate_glyph_palette`).
-ORE_MAX_SATURATION = 60.0
+#: ORE saturation ceiling (0..255) for the canonical card palette. Measured on the
+#: validation set: ORE stone cards sit at S 44-57; every coloured card is S >= 99
+#: (BRICK is the least saturated). 75 splits the empty [57, 99] gap; together with
+#: :data:`HUE_MIN_SATURATION_ABOVE_ORE` it leaves a fail-closed dead band
+#: [75, 95) where nothing classifies (a washed-out ambiguous swatch reads None).
+ORE_MAX_SATURATION = 75.0
 
 #: Minimum value (brightness) for a swatch to be a card glyph at all. A near-black
 #: swatch (log text / background bleed, not a card icon) — whether desaturated
@@ -136,7 +140,10 @@ MIN_ORE_SATURATION = 8.0
 #: accepted. Below this the glyph is ambiguous (its colour sits between two card
 #: families) and :func:`classify_glyph` returns ``None`` — the BEST-EFFORT honest
 #: "could not read reliably" that keeps the scale-up gate engaged (task spec).
-MIN_GLYPH_HUE_MARGIN = 8.0
+#: Set from the validation set: the tightest class pair is SHEEP(40.8-44.9) vs
+#: WOOD(51.9-55.9); the worst genuine WOOD (51.9) clears the margin by 5.9 while a
+#: true between-class hue (~49) still yields margin ~0-1 and fails closed.
+MIN_GLYPH_HUE_MARGIN = 5.0
 
 #: Saturation margin (0..255) a hue-classified swatch must clear ABOVE the palette's
 #: ORE ceiling before a warm/coloured hue class is trusted (review BLOCKER: a
@@ -199,6 +206,15 @@ def calibrate_glyph_palette(
 ) -> GlyphPalette:
     """Derive a per-game :class:`GlyphPalette` from the game's own board tiles.
 
+    .. warning:: **Do NOT use this for card-glyph classification.** The premise it
+       was built on ("card icons share the tile colour family", brief §5.13) was
+       measured FALSE on the 2026-07-04 validation set: the card icons are a fixed
+       UI asset with game-invariant hues, while board-tile hues vary with skin —
+       a board-derived palette mis-sits the card centres (WOOD read 0/22) and a
+       single bad board read can blow the ORE ceiling (observed 184, mislabelling
+       saturated cards as ORE, a firewall-blinding confusion). Real glyph reads use
+       :data:`CARD_PALETTE`. Kept for API compatibility and board-side tooling.
+
     ``board_samples`` is the 19x3 median-HSV array ``board_cv.read_board`` already
     computes for this game (engine hex order); ``desert_hex`` the locked desert.
     The card icons share the tile colour family, so we cluster exactly as
@@ -242,15 +258,22 @@ def calibrate_glyph_palette(
     return GlyphPalette(hue_centres=hue_centres, ore_max_saturation=ore_ceiling)
 
 
-#: **Synthetic-test / last-resort prior ONLY.** A :class:`GlyphPalette` built from
-#: the module-level fallback centres. It is the default when no per-game palette is
-#: threaded into :func:`classify_glyph`; a REAL game must pass a
-#: :func:`calibrate_glyph_palette` palette instead (this fallback cannot pass
-#: real-corpus validation — brief §5.13 / §13).
+#: **THE palette real-corpus glyph reads use** — the measured canonical card-icon
+#: palette (:data:`RESOURCE_CARD_HUES` / :data:`ORE_MAX_SATURATION`, from the
+#: 2026-07-04 hand-labelled validation set). The card icons are a fixed UI asset,
+#: so a global palette is CORRECT here — unlike board tiles, which stay per-game
+#: calibrated in board_cv. Do NOT substitute a board-derived
+#: :func:`calibrate_glyph_palette` palette for glyphs: measured on the validation
+#: set, board-derived centres mis-sit the card hues (WOOD went 22/22 unread and one
+#: game's ORE ceiling landed at 184, mislabelling saturated cards as ORE).
 FALLBACK_PALETTE = GlyphPalette(
     hue_centres=dict(RESOURCE_CARD_HUES),
     ore_max_saturation=ORE_MAX_SATURATION,
 )
+
+#: Alias making the semantics explicit at call sites: the canonical measured
+#: card-icon palette (see :data:`FALLBACK_PALETTE`, kept for API compatibility).
+CARD_PALETTE = FALLBACK_PALETTE
 
 
 def _hue_distance(a: float, b: float) -> float:

@@ -42,7 +42,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from catan_rl.human_data.board_cv import board_hsv_samples, read_board
 from catan_rl.human_data.glyph_anchor import (
-    GlyphPalette,
+    CARD_PALETTE,
     LabeledGrantFrame,
     calibrate_glyph_palette,
     validate_glyph_classifier,
@@ -474,16 +474,15 @@ def cmd_score() -> int:
             skipped.append(cid)
             continue
         crop = np.asarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), dtype=np.uint8)
-        palette = GlyphPalette(
-            hue_centres={k: float(v) for k, v in row["palette"]["hue_centres"].items()},
-            ore_max_saturation=float(row["palette"]["ore_max_saturation"]),
-        )
+        # score under the CANONICAL card palette — the palette production uses.
+        # (The board-derived per-game palette stored in meta is provenance only;
+        # the valset measured it mis-sitting the fixed card-icon hues.)
         frames.append(
             LabeledGrantFrame(
                 log_crop_rgb=crop,
                 glyph_boxes=[(int(b[0]), int(b[1]), int(b[2]), int(b[3])) for b in row["boxes"]],
                 expected=Counter(per_box),
-                palette=palette,
+                palette=CARD_PALETTE,
                 expected_by_box=tuple(per_box),
             )
         )

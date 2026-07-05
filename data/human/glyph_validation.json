@@ -1,0 +1,47 @@
+{
+  "passed": true,
+  "n_frames": 24,
+  "n_correct": 24,
+  "accuracy": 1.0,
+  "n_boxes": 72,
+  "n_unread_boxes": 0,
+  "confusion": [
+    [
+      "BRICK",
+      "BRICK",
+      16
+    ],
+    [
+      "ORE",
+      "ORE",
+      9
+    ],
+    [
+      "SHEEP",
+      "SHEEP",
+      13
+    ],
+    [
+      "WHEAT",
+      "WHEAT",
+      12
+    ],
+    [
+      "WOOD",
+      "WOOD",
+      22
+    ]
+  ],
+  "reason": null,
+  "skipped_frames": [
+    "sG05DoaOmM4_t200",
+    "MZBLarAmNXw_t145",
+    "mY2X6Dw0iFE_t127",
+    "Yejbe2-q4_o_t250"
+  ],
+  "bar": {
+    "min_frames": 8,
+    "min_accuracy": 0.98,
+    "zero_ore_brick": true
+  }
+}
