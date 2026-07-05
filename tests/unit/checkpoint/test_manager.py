@@ -355,8 +355,12 @@ class TestLeagueRoundTrip:
         )
         payload = load_checkpoint(tmp_path / "ckpt.pt")
         league_b = League(cfg)
+        # Junk pre-apply window outcomes (vs whatever anchor league_b had) must
+        # not survive the restore — the checkpoint's anchor replaces it.
+        league_b._anchor_window.extend([1.0] * 3)
         payload.apply_to_league(league_b)
         assert league_b.anchor_id() == new_id  # checkpoint anchor, not config path
+        assert league_b.anchor_window_stats() == (0.0, 0)  # window cleared on restore
         assert league_b._n_promotions == 1
         assert league_b._last_promote_update == 100
         assert league_b._reanchor_streak == 2

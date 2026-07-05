@@ -171,7 +171,13 @@ def _play_one_game(
     won = (not hit_safety) and agent_vp >= 15 and agent_vp > opp_vp
     lost = opp_vp >= 15
     outcome = 1.0 if won else 0.0
-    # Margin reward shape (env terminal): +-1 + vp_diff/15. Truncation -> margin only.
+    # PRE-2026-07 margin reward shape: +-1 + vp_diff/15, truncation -> margin
+    # only. This is the reward the v6/v7/v8-era checkpoints this probe grades
+    # were TRAINED under — kept deliberately. It no longer mirrors the live
+    # env: since audit 2026-07, CatanEnv._terminal_reward pays 0.0 on
+    # truncation (margin is terminal-only). Probing a post-fix checkpoint
+    # against this target would grade it on a stale shape — update the
+    # truncation branch to 0.0 when that day comes.
     if won:
         margin_terminal = 1.0 + (agent_vp - opp_vp) * vp_margin_bonus
     elif lost:

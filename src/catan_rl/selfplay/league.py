@@ -280,8 +280,11 @@ class League:
         ``min_games``; SD ~= sqrt(p(1-p)/min_games)), NOT the PFSP EMA whose
         N_eff is ~19 at alpha=0.1 (audit 2026-07: the EMA gave a true-0.55
         learner roughly coin-flip odds of a spurious promotion over a long
-        run). Same bar semantics as the validated v8 recipe (window mean vs
-        threshold), just a real sample size behind it.
+        run). The bar CONSTANT is unchanged from the validated v8 recipe, but
+        the statistic behind it is deliberately different from the EMA the v8
+        promotion actually fired under — much tighter tails, so a
+        marginally-above-bar learner fires reliably and a below-bar learner
+        essentially never does.
         """
         cfg = self.cfg
         if not cfg.auto_reanchor_enabled:

@@ -457,6 +457,12 @@ class CheckpointPayload:
             league._reanchor_streak = int(anchor_state.get("reanchor_streak", 0))
             league._last_promote_update = int(anchor_state.get("last_promote_update", -1))
             league._n_promotions = int(anchor_state.get("n_promotions", 0))
+            # The promotion window tracks outcomes vs the CURRENT anchor; the
+            # checkpoint's anchor just replaced whatever this league had, so any
+            # accrued window outcomes are against the wrong opponent. Clear it
+            # (the window is deliberately not checkpointed — the gate waits for
+            # a fresh window after restore; see League.__init__).
+            league._anchor_window.clear()
         live_ids = [snap.snapshot_id for snap in deque_]
         if getattr(league, "_anchor", None) is not None:
             live_ids.append(league._anchor.snapshot_id)
