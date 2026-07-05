@@ -136,6 +136,7 @@ def test_road_tiebreak_rejects_below_floor_leaked_pixels() -> None:
 
 
 def test_detect_openings_rejects_bad_player_colors() -> None:
+    pytest.importorskip("cv2")  # detect_openings reaches cv2 at runtime
     from catan_rl.human_data import detect_openings
     from catan_rl.human_data.board_cv import BoardRead
 

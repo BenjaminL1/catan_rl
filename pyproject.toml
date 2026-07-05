@@ -37,6 +37,11 @@ dev = [
   "mypy>=1.10",
   "pre-commit>=3.0",
   "types-PyYAML>=6.0",
+  # scripts/elo_ladder.py (Bradley-Terry fit) is measurement-critical and its
+  # tests must run on CI — audit 2026-07: this dep missing from CI's install
+  # broke pytest COLLECTION from June 18 on, silently disabling the whole
+  # unit suite (a collection error aborts every test, not just these).
+  "scipy>=1.11",
 ]
 notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 

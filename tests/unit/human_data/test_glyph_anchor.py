@@ -34,6 +34,12 @@ from collections import Counter
 import numpy as np
 import pytest
 
+# Every test here reaches cv2 at runtime through the glyph classifier; skip
+# (not fail) where opencv isn't installed — the repo convention for CV deps
+# (see test_board_cv.py). Without this, CI reports all 18 as FAILURES
+# (audit 2026-07 follow-up: found once the collection error was fixed).
+pytest.importorskip("cv2")
+
 from catan_rl.human_data import (
     GlyphClassifierNotValidated,
     assert_scale_up_orientation_gates,

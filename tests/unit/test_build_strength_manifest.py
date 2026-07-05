@@ -10,6 +10,14 @@ import pathlib
 import sys
 from typing import Any
 
+import pytest
+
+# build_strength_manifest imports cv2 at module level; skip (not error) where
+# opencv isn't installed — the repo convention for CV deps (see
+# tests/unit/human_data/test_board_cv.py). Without this guard, CI dies at
+# COLLECTION and the entire unit suite is silently disabled (audit 2026-07).
+pytest.importorskip("cv2")
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts"))
 
 import build_strength_manifest as m

@@ -177,6 +177,7 @@ def test_screen_rule_locks_a_unique_orientation() -> None:
     """The screen-space rule (H8 top-center, H11 rightmost) picks ONE orientation
     with a large penalty gap — the residual is D6-degenerate and cannot, so this
     is the frame-stable lock (build brief §5.2)."""
+    pytest.importorskip("cv2")  # load_engine_template reaches cv2 at runtime
     tpl = load_engine_template()
     tokens = _synthetic_tokens()  # engine-space == the identity orientation
     candidates = _candidate_affines(tokens, tpl.hex_centers)
@@ -198,6 +199,7 @@ def test_screen_rule_rejects_the_mis_oriented_fit() -> None:
     winner: its H8/H11 do not land top-center/rightmost, so it scores strictly
     worse. This is the geometric half of the mis-orientation rejection (the
     content-anchor half is exercised in the slow integration test)."""
+    pytest.importorskip("cv2")  # load_engine_template reaches cv2 at runtime
     tpl = load_engine_template()
     tokens = _synthetic_tokens()
     candidates = _candidate_affines(tokens, tpl.hex_centers)
