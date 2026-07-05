@@ -7,7 +7,10 @@ YouTube corpus into the JSONL dataset. It:
   :func:`~catan_rl.human_data.orientation.assert_scale_up_orientation_gates` is
   called once per harvest run with
   :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_is_validated` over the
-  caller-supplied ``glyph_validation``; an absent/failed validation raises
+  caller-supplied ``glyph_validation``; an absent/failed validation — or one whose
+  ``classifier_fingerprint`` does not match the CURRENT classifier
+  (:func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_fingerprint`; a stale
+  or fabricated PASS, expert SHOULD-FIX 2026-07-05) — raises
   :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated` before any
   video is parsed (the joint-flip firewall can never be silently absent);
 - reads the committed strength manifest (``data/human/strength_manifest.json``)
@@ -582,12 +585,17 @@ def run_batch(
             HARD-GATED on it** (expert BLOCKER 1): ``run_batch`` calls
             :func:`assert_scale_up_orientation_gates` once per run and raises
             :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated`
-            when the validation is absent (``None``) or ``passed=False`` — an
-            unvalidated joint-flip firewall must block the whole batch, never run
-            silently without it.
+            when the validation is absent (``None``), ``passed=False``, or NOT
+            BOUND to the current classifier (its ``classifier_fingerprint``
+            differs from
+            :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_fingerprint`
+            — a stale PASS from an edited classifier, or a fabricated record;
+            expert SHOULD-FIX 2026-07-05) — an unvalidated joint-flip firewall
+            must block the whole batch, never run silently without it.
 
     Raises:
-        GlyphClassifierNotValidated: when ``glyph_validation`` is absent or failed.
+        GlyphClassifierNotValidated: when ``glyph_validation`` is absent, failed,
+            or stamped by a different classifier than the one now imported.
 
     Returns:
         A :class:`BatchResult` summary. Idempotent under resume: a re-run over an

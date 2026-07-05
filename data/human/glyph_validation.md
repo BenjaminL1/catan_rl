@@ -5,6 +5,7 @@
 - frames: 24 labelled grant events, 24 exact (100.0% accuracy; bar >= 98%)
 - boxes: 72 labelled icons, 0 fail-closed unread (coverage)
 - skipped (unlabelled/unreadable ground truth): 4
+- classifier fingerprint: `9f5eb183ded739062aa8725904da84d43d7d74faf279b7dd7c833138aac1cd47`
 
 | true \ predicted | count |
 |---|---|

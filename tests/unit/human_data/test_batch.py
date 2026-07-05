@@ -44,7 +44,7 @@ from catan_rl.human_data.batch import (
     run_batch,
 )
 from catan_rl.human_data.board_cv import BoardRead
-from catan_rl.human_data.glyph_anchor import GlyphValidation
+from catan_rl.human_data.glyph_anchor import GlyphValidation, glyph_classifier_fingerprint
 from catan_rl.human_data.orientation import (
     GlyphClassifierNotValidated,
     granted_resources_under_orientation,
@@ -59,8 +59,19 @@ from catan_rl.human_data.validate import (
 #: ``data/human/glyph_validation.json`` PASS). ``run_batch`` is HARD-GATED on one
 #: (expert BLOCKER 1) — every test that expects the batch to actually run supplies
 #: this; the gate itself is exercised in
-#: ``test_batch_hard_blocks_without_glyph_validation``.
-_VALIDATION = GlyphValidation(passed=True, n_frames=24, n_correct=24, accuracy=1.0, reason=None)
+#: ``test_batch_hard_blocks_without_glyph_validation``. The record must carry the
+#: CURRENT classifier's fingerprint (expert SHOULD-FIX 2026-07-05: the gate is
+#: bound to classifier identity — a ``passed=True`` record without it is exactly
+#: the fabricated PASS the gate now rejects, see
+#: ``test_batch_hard_blocks_on_unbound_glyph_validation``).
+_VALIDATION = GlyphValidation(
+    passed=True,
+    n_frames=24,
+    n_correct=24,
+    accuracy=1.0,
+    reason=None,
+    classifier_fingerprint=glyph_classifier_fingerprint(),
+)
 
 # --- a legal standard game-1 board + openings (mirrors test_validate) --------
 
@@ -1008,6 +1019,39 @@ def test_batch_hard_blocks_on_failed_glyph_validation(tmp_path: Path) -> None:
             max_workers=1,
             glyph_validation=failed,
         )
+
+
+def test_batch_hard_blocks_on_unbound_glyph_validation(tmp_path: Path) -> None:
+    """A ``passed=True`` record NOT bound to the current classifier blocks the
+    batch (expert SHOULD-FIX 2026-07-05): a FABRICATED pass (no fingerprint —
+    e.g. a hand-edited ``glyph_validation.json``) and a STALE pass (a fingerprint
+    stamped by an earlier, since-edited classifier) must both fail the gate —
+    only :func:`validate_glyph_classifier` run against THIS classifier can
+    unblock a harvest."""
+    manifest = _write_manifest(tmp_path, [_manifest_row("vidHIGH00000", "high")])
+    fabricated = GlyphValidation(passed=True, n_frames=24, n_correct=24, accuracy=1.0, reason=None)
+    stale = GlyphValidation(
+        passed=True,
+        n_frames=24,
+        n_correct=24,
+        accuracy=1.0,
+        reason=None,
+        classifier_fingerprint="0" * 64,  # an older classifier's identity
+    )
+
+    def parse_fn(video_id: str) -> list[GameRecord]:  # pragma: no cover - must not run
+        raise AssertionError("parse_fn must not be invoked under an unbound validation")
+
+    for validation in (fabricated, stale):
+        with pytest.raises(GlyphClassifierNotValidated):
+            run_batch(
+                manifest_path=manifest,
+                out_dir=tmp_path / "out",
+                parse_fn=parse_fn,
+                max_workers=1,
+                glyph_validation=validation,
+            )
+    assert not (tmp_path / "out" / "corpus.jsonl").exists()
 
 
 # --- firewall telemetry: how often the anchor actually executed ---------------

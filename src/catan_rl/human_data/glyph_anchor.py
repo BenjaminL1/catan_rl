@@ -55,7 +55,10 @@ only reports ``passed=True`` when the classifier reproduces the labelled grants 
 enough frames at the pre-registered accuracy bar. The scale-up gate is wired to
 that validation via :func:`glyph_classifier_is_validated`, so the 300-game batch
 harvest stays BLOCKED until a genuinely-validated classifier exists — the firewall
-is never faked validated.
+is never faked validated. The validation record is BOUND to the classifier it
+scored (:func:`glyph_classifier_fingerprint`, stamped on every result and
+re-verified at gate time), so a stale PASS from an edited classifier — or a
+fabricated ``passed=True`` record — cannot satisfy the gate either.
 
 CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training path
 (brief §6).
@@ -63,6 +66,9 @@ CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training pat
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import sys
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -607,6 +613,14 @@ class GlyphValidation:
     triples over CONFIDENT reads only; ``n_boxes`` the labelled box count;
     ``n_unread_boxes`` the fail-closed ``None`` reads (COVERAGE — honest silence,
     counted separately, never in ``confusion``).
+
+    ``classifier_fingerprint`` binds the record to the EXACT classifier it scored
+    (expert review 2026-07-05): :func:`validate_glyph_classifier` stamps
+    :func:`glyph_classifier_fingerprint` on every result, and
+    :func:`glyph_classifier_is_validated` re-verifies it against the CURRENT
+    classifier — a stale PASS (classifier edited since) or a fabricated PASS
+    (hand-built record, empty/foreign fingerprint) fails the gate. The default
+    ``""`` never matches a real fingerprint, so an unstamped record fails closed.
     """
 
     passed: bool
@@ -617,6 +631,26 @@ class GlyphValidation:
     confusion: tuple[tuple[str, str, int], ...] = ()
     n_boxes: int = 0
     n_unread_boxes: int = 0
+    classifier_fingerprint: str = ""
+
+
+def glyph_classifier_fingerprint() -> str:
+    """SHA-256 identity of the CURRENT glyph classifier — this module's source.
+
+    The classifier's behaviour is fully determined by this module (the palette
+    constants, the thresholds, and the decision functions), so its source text IS
+    its identity: any edit — a threshold retune, a branch change, even a helper
+    rewrite — yields a new fingerprint. :func:`validate_glyph_classifier` stamps
+    this on every :class:`GlyphValidation`, and :func:`glyph_classifier_is_validated`
+    recomputes it at gate time, so a validation PASS can never outlive the
+    classifier it measured (expert review 2026-07-05: the batch gate must be bound
+    to classifier identity — a stale or fabricated PASS must not satisfy it).
+    Deliberately strict: a doc-only edit also invalidates, and the remedy is the
+    cheap offline re-score (``scripts/glyph_valset.py score`` over the committed
+    labels + local crops), which re-stamps ``data/human/glyph_validation.json``.
+    """
+    source = inspect.getsource(sys.modules[__name__])
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
 def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidation:
@@ -665,6 +699,7 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
                 confusion[(true_resource, predicted)] += 1
     accuracy = (n_correct / n_frames) if n_frames else 0.0
     confusion_out = tuple((true, pred, count) for (true, pred), count in sorted(confusion.items()))
+    fingerprint = glyph_classifier_fingerprint()
 
     def _fail(reason: str) -> GlyphValidation:
         return GlyphValidation(
@@ -676,6 +711,7 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
             confusion=confusion_out,
             n_boxes=n_boxes,
             n_unread_boxes=n_unread,
+            classifier_fingerprint=fingerprint,
         )
 
     ore_brick = confusion[("ORE", "BRICK")] + confusion[("BRICK", "ORE")]
@@ -706,6 +742,7 @@ def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidatio
         confusion=confusion_out,
         n_boxes=n_boxes,
         n_unread_boxes=n_unread,
+        classifier_fingerprint=fingerprint,
     )
 
 
@@ -716,10 +753,18 @@ def glyph_classifier_is_validated(validation: GlyphValidation | None) -> bool:
     :func:`~catan_rl.human_data.orientation.assert_scale_up_orientation_gates`'s
     ``glyph_classifier_validated`` argument. Returns ``True`` — flipping the
     scale-up gate to allowed — ONLY when a :class:`GlyphValidation` with
-    ``passed=True`` is supplied. ``None`` (no validation ever run) or any
-    ``passed=False`` validation returns ``False``, so the gate keeps raising
+    ``passed=True`` **whose ``classifier_fingerprint`` matches the CURRENT
+    classifier** (:func:`glyph_classifier_fingerprint`) is supplied. ``None``
+    (no validation ever run), any ``passed=False`` validation, a STALE pass
+    (fingerprint from an edited classifier), or a FABRICATED pass (hand-built
+    record with an empty/foreign fingerprint) returns ``False``, so the gate
+    keeps raising
     :class:`~catan_rl.human_data.orientation.GlyphClassifierNotValidated` and the
     300-game harvest stays blocked (task spec: gate flips to allowed only when
-    validated).
+    validated; expert review 2026-07-05: the PASS is bound to classifier identity).
     """
-    return validation is not None and validation.passed
+    return (
+        validation is not None
+        and validation.passed
+        and validation.classifier_fingerprint == glyph_classifier_fingerprint()
+    )

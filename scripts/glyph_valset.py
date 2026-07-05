@@ -496,6 +496,11 @@ def cmd_score() -> int:
         "n_unread_boxes": v.n_unread_boxes,
         "confusion": [list(c) for c in v.confusion],
         "reason": v.reason,
+        # Binds this PASS to the exact classifier scored (expert SHOULD-FIX
+        # 2026-07-05): glyph_classifier_is_validated re-verifies it at gate time,
+        # so a stale artifact (classifier edited since) or a hand-edited JSON
+        # cannot unblock the harvest. Re-run `score` after any glyph_anchor edit.
+        "classifier_fingerprint": v.classifier_fingerprint,
         "skipped_frames": skipped,
         "bar": {
             "min_frames": 8,
@@ -514,6 +519,7 @@ def cmd_score() -> int:
         f" ({v.accuracy:.1%} accuracy; bar >= 98%)",
         f"- boxes: {v.n_boxes} labelled icons, {v.n_unread_boxes} fail-closed unread (coverage)",
         f"- skipped (unlabelled/unreadable ground truth): {len(skipped)}",
+        f"- classifier fingerprint: `{v.classifier_fingerprint}`",
         "",
         "| true \\ predicted | count |",
         "|---|---|",

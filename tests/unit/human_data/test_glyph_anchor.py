@@ -50,6 +50,7 @@ from catan_rl.human_data.glyph_anchor import (
     classify_glyph,
     classify_granted_glyphs,
     consensus_granted_glyphs,
+    glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
     validate_glyph_classifier,
 )
@@ -282,6 +283,48 @@ def test_scale_up_gate_ALLOWED_only_when_validated() -> None:
         affine_residual_px=0.8,
         glyph_classifier_validated=glyph_classifier_is_validated(v),
     )
+
+
+# --- the PASS is bound to classifier identity (expert SHOULD-FIX 2026-07-05) --
+
+
+def test_validation_is_stamped_with_the_current_classifier_fingerprint() -> None:
+    # Every validate_glyph_classifier result — pass AND fail — carries the
+    # fingerprint of the classifier that produced it, so the artifact written to
+    # data/human/glyph_validation.json is self-identifying.
+    frames = [_good_frame(Counter({"SHEEP": 1, "ORE": 2})) for _ in range(MIN_VALIDATION_FRAMES)]
+    v = validate_glyph_classifier(frames)
+    assert v.classifier_fingerprint == glyph_classifier_fingerprint()
+    failed = validate_glyph_classifier(frames[:1])  # under-sampled → passed=False
+    assert not failed.passed
+    assert failed.classifier_fingerprint == glyph_classifier_fingerprint()
+    # The fingerprint is a stable sha256 hex digest of the classifier's identity.
+    fp = glyph_classifier_fingerprint()
+    assert len(fp) == 64 and fp == glyph_classifier_fingerprint()
+
+
+def test_scale_up_gate_blocked_on_fabricated_or_stale_validation() -> None:
+    # A hand-built passed=True record (a fabricated PASS — e.g. a doctored
+    # glyph_validation.json) has no / a foreign fingerprint and must NOT satisfy
+    # the gate; nor may a stale PASS stamped by a since-edited classifier.
+    fabricated = GlyphValidation(passed=True, n_frames=24, n_correct=24, accuracy=1.0, reason=None)
+    assert not glyph_classifier_is_validated(fabricated)
+    stale = GlyphValidation(
+        passed=True,
+        n_frames=24,
+        n_correct=24,
+        accuracy=1.0,
+        reason=None,
+        classifier_fingerprint="f" * 64,
+    )
+    assert not glyph_classifier_is_validated(stale)
+    for unbound in (fabricated, stale):
+        with pytest.raises(GlyphClassifierNotValidated):
+            assert_scale_up_orientation_gates(
+                resolution=1080,
+                affine_residual_px=0.8,
+                glyph_classifier_validated=glyph_classifier_is_validated(unbound),
+            )
 
 
 # --- per-game calibration (brief §5.13 — never a global hue constant) --------
