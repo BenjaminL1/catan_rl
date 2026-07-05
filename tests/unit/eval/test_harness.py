@@ -50,6 +50,55 @@ class _StubPolicy(nn.Module):
         }
 
 
+class _TorchSamplingStub(nn.Module):
+    """Picks the action type via torch's GLOBAL generator.
+
+    Unlike :class:`_StubPolicy` (private numpy Generator), this stub
+    consumes ``torch``'s process-global RNG the way the real
+    ``CatanPolicy.sample`` does (generator-less ``Categorical.sample``)
+    — so it exposes whether ``EvalHarness.run`` seeds/restores the
+    torch stream (audit 2026-07).
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dummy = nn.Parameter(torch.zeros(1))
+
+    @staticmethod
+    def _first_legal(masks: dict[str, torch.Tensor], key: str, i: int) -> int:
+        idx = torch.nonzero(masks[key][i]).flatten()
+        return int(idx[0].item()) if idx.numel() else 0
+
+    def sample(
+        self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        B = next(iter(obs.values())).shape[0]
+        device = next(iter(obs.values())).device
+        type_mask = masks["type"].to(torch.float32).cpu()
+        action = torch.zeros((B, 6), dtype=torch.int64, device=device)
+        for i in range(B):
+            row = type_mask[i]
+            t = int(torch.multinomial(row, 1).item()) if row.sum() > 0 else 3
+            action[i, 0] = t
+            # Sub-heads must honor their masks: a blind 0 (e.g. res1=WOOD
+            # while discarding with no WOOD in hand) leaves the env's
+            # discard counter stuck and the game loops forever.
+            corner_key = "corner_city" if t == 1 else "corner_settlement"
+            res1_key = {10: "resource1_trade", 11: "resource1_discard"}.get(t, "resource1_default")
+            action[i, 1] = self._first_legal(masks, corner_key, i)
+            action[i, 2] = self._first_legal(masks, "edge", i)
+            action[i, 3] = self._first_legal(masks, "tile", i)
+            action[i, 4] = self._first_legal(masks, res1_key, i)
+            action[i, 5] = self._first_legal(masks, "resource2_default", i)
+        return {
+            "action": action,
+            "log_prob": torch.zeros(B, device=device),
+            "value": torch.zeros(B, device=device),
+            "per_head_log_prob": torch.zeros((B, 6), device=device),
+            "entropy": torch.zeros(B, device=device),
+        }
+
+
 # ---------------------------------------------------------------------------
 # Construction
 # ---------------------------------------------------------------------------
@@ -181,6 +230,49 @@ class TestReproducibility:
         # Seed sequence is deterministic in harness.seed.
         for ga, gb in zip(a, b, strict=True):
             assert ga.seed == gb.seed
+
+
+class TestTorchRngControl:
+    """run() must seed AND restore the torch generator (audit 2026-07)."""
+
+    def _harness(self, *, n_games_per_seat: int = 2) -> EvalHarness:
+        return EvalHarness(
+            opponent_types=("random",),
+            n_games_per_seat=n_games_per_seat,
+            max_turns=20,
+            seed=11,
+            device="cpu",
+            audit_rules=False,
+        )
+
+    def test_same_seed_reproducible_with_torch_sampler(self) -> None:
+        # Perturb the global torch stream differently before each run —
+        # run() must derive the champion's sampling stream from
+        # harness.seed, not from ambient process state.
+        def _run() -> tuple[GameOutcome, ...]:
+            import random as _r
+
+            _r.seed(0)
+            np.random.seed(0)
+            return self._harness().run(_TorchSamplingStub()).results[0].games
+
+        torch.manual_seed(999)
+        torch.rand(7)
+        a = _run()
+        torch.manual_seed(123)
+        torch.rand(3)
+        b = _run()
+        assert a == b  # GameOutcome is a frozen dataclass — field equality
+
+    def test_torch_rng_isolated_from_caller(self) -> None:
+        # A caller's torch stream must be untouched by an eval round —
+        # in-loop eval running INSIDE training must not shift the
+        # learner's subsequent sampling.
+        torch.manual_seed(4242)
+        expected = torch.rand(4)
+        torch.manual_seed(4242)
+        self._harness(n_games_per_seat=1).run(_TorchSamplingStub())
+        assert torch.equal(torch.rand(4), expected)
 
 
 # ---------------------------------------------------------------------------

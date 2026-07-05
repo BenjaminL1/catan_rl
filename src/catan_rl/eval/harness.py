@@ -48,6 +48,39 @@ from catan_rl.eval.wilson import WilsonInterval, wilson_interval
 from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 
 # ---------------------------------------------------------------------------
+# Torch RNG snapshot/restore (all backends)
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_torch_rng() -> dict[str, Any]:
+    """Snapshot every torch backend's RNG state (cpu + cuda + mps).
+
+    ``torch.manual_seed`` reseeds EVERY backend's generator, not just the
+    one eval samples on — so restoring only the CPU state would leave a
+    learner's MPS/CUDA stream clobbered by the in-loop eval. Mirrors
+    ``FrozenSnapshotOpponent._snapshot_rng``.
+    """
+    state: dict[str, Any] = {"cpu": torch.random.get_rng_state()}
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    if (
+        hasattr(torch, "mps")
+        and torch.backends.mps.is_available()
+        and hasattr(torch.mps, "get_rng_state")
+    ):
+        state["mps"] = torch.mps.get_rng_state()
+    return state
+
+
+def _restore_torch_rng(state: dict[str, Any]) -> None:
+    torch.random.set_rng_state(state["cpu"])
+    if "cuda" in state:
+        torch.cuda.set_rng_state_all(state["cuda"])
+    if "mps" in state:
+        torch.mps.set_rng_state(state["mps"])
+
+
+# ---------------------------------------------------------------------------
 # Result schema
 # ---------------------------------------------------------------------------
 
@@ -209,23 +242,33 @@ class EvalHarness:
         dropout is 0.0, but the toggle guards against any future stochastic
         layer perturbing eval WR). Restored in the ``finally``.
 
-        The global numpy + stdlib ``random`` PRNGs are snapshotted and
-        restored around the round: eval plays full games that consume the
-        process-global streams (StackedDice, heuristic, steal/dev-card), and
-        in-loop eval runs INSIDE the training loop — without this, whether/when
-        eval runs would shift the subsequent rollout, and resume on a different
-        eval cadence would diverge. Mirrors ``mask_spec_from_env``.
+        The global numpy + stdlib ``random`` PRNGs — and every torch
+        backend's RNG — are snapshotted and restored around the round: eval
+        plays full games that consume the process-global streams
+        (StackedDice, heuristic, steal/dev-card) and the policy samples
+        actions through torch's global generator, and in-loop eval runs
+        INSIDE the training loop — without this, whether/when eval runs
+        would shift the subsequent rollout, and resume on a different
+        eval cadence would diverge. Mirrors ``mask_spec_from_env`` and
+        ``FrozenSnapshotOpponent``. The torch generator is additionally
+        seeded from ``self.seed`` before the matchup loop so the
+        champion's sampling stream — and therefore the whole report — is
+        bit-identical across runs at a fixed seed (audit 2026-07: this
+        was previously left on whatever entropy the process had, making
+        eval results non-reproducible).
         """
         orig_device = self._policy_device(policy)
         moved = orig_device is not None and orig_device != self.device
         was_training = bool(getattr(policy, "training", False))
         np_state = np.random.get_state()
         py_state = random.getstate()
+        torch_state = _snapshot_torch_rng()
         if moved:
             policy.to(self.device)
         if was_training:
             policy.eval()
         try:
+            torch.manual_seed(self.seed % (2**31 - 1))
             results: list[EvalResult] = []
             n_total = 0
             for opp in self.opponent_types:
@@ -240,6 +283,7 @@ class EvalHarness:
                 policy.train()
             np.random.set_state(np_state)
             random.setstate(py_state)
+            _restore_torch_rng(torch_state)
 
     # ------------------------------------------------------------------
     # Internals
