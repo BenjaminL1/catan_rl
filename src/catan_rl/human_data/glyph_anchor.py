@@ -138,6 +138,16 @@ MIN_ORE_SATURATION = 8.0
 #: "could not read reliably" that keeps the scale-up gate engaged (task spec).
 MIN_GLYPH_HUE_MARGIN = 8.0
 
+#: Saturation margin (0..255) a hue-classified swatch must clear ABOVE the palette's
+#: ORE ceiling before a warm/coloured hue class is trusted (review BLOCKER: a
+#: desaturated grey ORE stone whose saturation drifts just past the ceiling — e.g.
+#: HSV(5, 62, 175) with ceiling 60 — otherwise reads as a CONFIDENT BRICK, corrupting
+#: the granted multiset and defeating the joint-flip firewall). A genuine coloured
+#: card is vivid; a swatch in the ``[ore_ceiling, ore_ceiling + margin)`` band is a
+#: borderline grey and :func:`classify_glyph` fails closed. Conservative default — the
+#: glyph validation harness calibrates it against labelled real crops.
+HUE_MIN_SATURATION_ABOVE_ORE = 20.0
+
 #: Minimum fraction of a swatch's bright pixels that must agree with the chosen
 #: card class (hue within :data:`MIN_GLYPH_HUE_MARGIN` of the winning centre for
 #: the hue branch, or low-saturation for the ORE branch) for the read to be
@@ -348,6 +358,10 @@ def classify_glyph(
         if ore_purity < MIN_GLYPH_BODY_PURITY:
             return None  # bimodal — abutting text / mis-boxed, not a clean grey card
         return "ORE"
+    if sat < palette.ore_max_saturation + HUE_MIN_SATURATION_ABOVE_ORE:
+        # borderline grey just above the ORE ceiling — a desaturated ORE stone reads
+        # as a confident warm hue here; a genuine coloured card is vivid. Fail closed.
+        return None
     ranked = sorted(
         palette.hue_centres,
         key=lambda r: _hue_distance(hue, palette.hue_centres[r]),

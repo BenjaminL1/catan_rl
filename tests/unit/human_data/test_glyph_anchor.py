@@ -443,3 +443,13 @@ def test_consensus_rejects_contradictory_readable_reads() -> None:
     assert consensus_granted_glyphs(frames) is None
     # Order-independence: reversing the reads must not flip the reject to an accept.
     assert consensus_granted_glyphs(list(reversed(frames))) is None
+
+
+def test_classify_glyph_borderline_grey_ore_not_confident_brick() -> None:
+    # Review BLOCKER: a desaturated grey ORE stone whose saturation drifts just past
+    # the ORE ceiling (HSV 5,62,175; ceiling 60) previously read as a CONFIDENT BRICK,
+    # corrupting the granted multiset and defeating the joint-flip firewall. It must
+    # now fail closed (None), while a vivid BRICK and a clear ORE still classify.
+    assert classify_glyph((5.0, 62.0, 175.0)) is None
+    assert classify_glyph((8.0, 180.0, 175.0)) == "BRICK"
+    assert classify_glyph((5.0, 30.0, 175.0)) == "ORE"
