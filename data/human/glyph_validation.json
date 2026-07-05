@@ -33,7 +33,35 @@
     ]
   ],
   "reason": null,
-  "classifier_fingerprint": "3bb716070c85aa10057fce59da74b2b2dd172ba7c83a030a46cc7b10ad8aeae2",
+  "classifier_fingerprint": "8a8db08c23ba2b2a10daa1fbcb6236d62c93ac9dd28591e30a74d96287ec68a4",
+  "validation_fingerprint": "45ea71af201464c2a7b189c823e29c8f8f7123a66968cb3578efe9bcf500e361",
+  "git_rev": "be87a1b8167f98da6c47e10d829a4f45dd9c298b",
+  "scored_frames": [
+    "EdMnUD-eZ6A_t117",
+    "AoOXWyxaTkA_t147",
+    "JHZnNTrhoT8_t147",
+    "5RLq1NX4nAo_t117",
+    "33KR75rhTgo_t67",
+    "MZBLarAmNXw_t155",
+    "wDBo8V765lk_t135",
+    "mY2X6Dw0iFE_t137",
+    "IVvj3NgRWCs_t155",
+    "fqJB9w4gp0w_t82",
+    "u5g69_rPTsg_t170",
+    "2PirCk3Sxc4_t67",
+    "R-d63v4OmVg_t187",
+    "-dOEmCbAGjc_t107",
+    "MrvZ1OD_u_8_t130",
+    "ImdSLYZyTj8_t87",
+    "59bAYptAX28_t180",
+    "4oRadHB-WwM_t110",
+    "1n_7Uo5QW6E_t142",
+    "MY6EsxBSAaw_t167",
+    "yAXZJvDzFAg_t212",
+    "lMCemfE1bDY_t147",
+    "6--qCkGT0pI_t157",
+    "fdaFyQBIkEI_t135"
+  ],
   "skipped_frames": [
     "sG05DoaOmM4_t200",
     "MZBLarAmNXw_t145",
@@ -44,5 +72,92 @@
     "min_frames": 8,
     "min_accuracy": 0.98,
     "zero_ore_brick": true
-  }
+  },
+  "margins": {
+    "dead_band_sat": [
+      75.0,
+      95.0
+    ],
+    "sat_gap_ore_side": {
+      "n": 9,
+      "min": 18.0,
+      "median": 26.0
+    },
+    "sat_gap_hue_side": {
+      "n": 63,
+      "min": 4.0,
+      "median": 89.5
+    },
+    "hue_margin": {
+      "n": 63,
+      "min": 5.93,
+      "median": 11.9
+    },
+    "n_in_dead_band": 0,
+    "n_no_body": 0
+  },
+  "folds": [
+    {
+      "fold": 0,
+      "score_videos": [
+        "-dOEmCbAGjc",
+        "2PirCk3Sxc4",
+        "4oRadHB-WwM",
+        "5RLq1NX4nAo",
+        "AoOXWyxaTkA",
+        "IVvj3NgRWCs",
+        "JHZnNTrhoT8",
+        "MZBLarAmNXw",
+        "R-d63v4OmVg",
+        "fqJB9w4gp0w",
+        "mY2X6Dw0iFE",
+        "wDBo8V765lk"
+      ],
+      "fitted_palette": {
+        "hue_centres": {
+          "BRICK": 5.76,
+          "WHEAT": 19.52,
+          "SHEEP": 42.98,
+          "WOOD": 54.87
+        },
+        "ore_max_saturation": 77.75
+      },
+      "n_frames": 12,
+      "n_correct": 12,
+      "accuracy": 1.0,
+      "passed": true,
+      "reason": null
+    },
+    {
+      "fold": 1,
+      "score_videos": [
+        "1n_7Uo5QW6E",
+        "33KR75rhTgo",
+        "59bAYptAX28",
+        "6--qCkGT0pI",
+        "EdMnUD-eZ6A",
+        "ImdSLYZyTj8",
+        "MY6EsxBSAaw",
+        "MrvZ1OD_u_8",
+        "fdaFyQBIkEI",
+        "lMCemfE1bDY",
+        "u5g69_rPTsg",
+        "yAXZJvDzFAg"
+      ],
+      "fitted_palette": {
+        "hue_centres": {
+          "BRICK": 6.07,
+          "WHEAT": 19.54,
+          "SHEEP": 42.94,
+          "WOOD": 54.7
+        },
+        "ore_max_saturation": 78.0
+      },
+      "n_frames": 12,
+      "n_correct": 12,
+      "accuracy": 1.0,
+      "passed": true,
+      "reason": null
+    }
+  ]
 }

@@ -16,7 +16,14 @@ enough to unblock the full harvest. Three subcommands, run in order:
            validate_glyph_classifier — the module enforces the approved bar
            (>=0.98 exact-multiset accuracy over >=8 frames, ZERO ORE<->BRICK
            confusions, fail-closed coverage reported). Writes
-           data/human/glyph_validation.json + a markdown report.
+           data/human/glyph_validation.json + a markdown report. The artifact is
+           HARDENED (expert SHOULD-FIXes 2026-07-05): it carries the
+           validation_fingerprint (live palette/threshold constants + detector
+           source — load_glyph_validation refuses a stale PASS), the git rev,
+           per-box margin diagnostics (saturation distance to the [75, 95)
+           dead band + hue margins), and — with --folds 2 (the default) — a
+           video-disjoint 2-fold cross-check (hue medians + ore ceiling fitted
+           on one fold, scored on the other).
 
 Local + deterministic (yt-dlp / ffmpeg / easyocr / opencv — no API calls).
 """
@@ -29,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -43,10 +51,15 @@ from catan_rl.human_data.board_cv import board_hsv_samples, read_board
 from catan_rl.human_data.glyph_anchor import (
     CARD_PALETTE,
     GRANT_RE,
+    HUE_MIN_SATURATION_ABOVE_ORE,
+    HUE_RESOURCES_BY_RANK,
+    GlyphPalette,
     LabeledGrantFrame,
+    _glyph_median_hsv,
     calibrate_glyph_palette,
     detect_glyph_boxes,
     validate_glyph_classifier,
+    validation_fingerprint,
 )
 from catan_rl.human_data.logparse import LOG_CROP_FRAC, _normalise
 
@@ -364,7 +377,141 @@ def _dedupe_events(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], in
     return kept, dropped
 
 
-def cmd_score() -> int:
+def _git_rev() -> str:
+    """The repo HEAD at score time (provenance for the artifact)."""
+    try:
+        return _run(["git", "-C", str(REPO), "rev-parse", "HEAD"]).strip()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return "unknown"
+
+
+def _summary(values: list[float]) -> dict[str, Any]:
+    """min/median summary stats (the slice's per-box diagnostics contract)."""
+    if not values:
+        return {"n": 0, "min": None, "median": None}
+    arr = np.asarray(values, dtype=np.float64)
+    return {
+        "n": len(values),
+        "min": round(float(arr.min()), 2),
+        "median": round(float(np.median(arr)), 2),
+    }
+
+
+def _margin_summary(frames: list[LabeledGrantFrame]) -> dict[str, Any]:
+    """Per-box margin diagnostics over every scored box (expert SHOULD-FIX d).
+
+    For each labelled box: the body-median saturation's distance to the edges of
+    the fail-closed dead band [ore_ceiling, ore_ceiling + margin) = [75, 95) —
+    reported per side (ORE boxes sit BELOW 75; hue boxes ABOVE 95) — plus the
+    hue margin (runner-up minus nearest card-centre distance) for hue-side
+    boxes. Small minima here mean the PASS is living near a threshold edge.
+    """
+    band_lo = CARD_PALETTE.ore_max_saturation
+    band_hi = band_lo + HUE_MIN_SATURATION_ABOVE_ORE
+    sat_gap_ore: list[float] = []
+    sat_gap_hue: list[float] = []
+    hue_margins: list[float] = []
+    n_in_dead_band = 0
+    n_no_body = 0
+    for f in frames:
+        assert f.expected_by_box is not None
+        for x0, y0, x1, y1 in f.glyph_boxes:
+            st = _glyph_median_hsv(np.asarray(f.log_crop_rgb[y0:y1, x0:x1], np.uint8))
+            if not st.ok:
+                n_no_body += 1
+                continue
+            if st.sat < band_lo:
+                sat_gap_ore.append(band_lo - st.sat)
+            elif st.sat >= band_hi:
+                sat_gap_hue.append(st.sat - band_hi)
+                dists = sorted(
+                    min(abs(st.hue - c) % 180.0, 180.0 - abs(st.hue - c) % 180.0)
+                    for c in CARD_PALETTE.hue_centres.values()
+                )
+                hue_margins.append(dists[1] - dists[0])
+            else:
+                n_in_dead_band += 1
+    return {
+        "dead_band_sat": [band_lo, band_hi],
+        "sat_gap_ore_side": _summary(sat_gap_ore),
+        "sat_gap_hue_side": _summary(sat_gap_hue),
+        "hue_margin": _summary(hue_margins),
+        "n_in_dead_band": n_in_dead_band,
+        "n_no_body": n_no_body,
+    }
+
+
+def _fit_fold_palette(frames: list[LabeledGrantFrame]) -> GlyphPalette | None:
+    """Fit hue medians + an ORE saturation ceiling from labelled boxes only.
+
+    Mirrors how the canonical constants were measured: per-class body-median
+    hues -> class medians; the ORE ceiling is the midpoint of the gap between
+    the most-saturated labelled ORE body and the least-saturated coloured body.
+    Returns None when a class is unrepresented (the fold cannot fit a palette).
+    """
+    ore_sats: list[float] = []
+    coloured_sats: list[float] = []
+    hues: dict[str, list[float]] = {r: [] for r in HUE_RESOURCES_BY_RANK}
+    for f in frames:
+        assert f.expected_by_box is not None
+        for (x0, y0, x1, y1), lab in zip(f.glyph_boxes, f.expected_by_box, strict=True):
+            st = _glyph_median_hsv(np.asarray(f.log_crop_rgb[y0:y1, x0:x1], np.uint8))
+            if not st.ok:
+                continue
+            if lab == "ORE":
+                ore_sats.append(st.sat)
+            else:
+                hues[lab].append(st.hue)
+                coloured_sats.append(st.sat)
+    if not ore_sats or not coloured_sats or any(not v for v in hues.values()):
+        return None
+    return GlyphPalette(
+        hue_centres={r: float(np.median(np.asarray(v))) for r, v in hues.items()},
+        ore_max_saturation=(max(ore_sats) + min(coloured_sats)) / 2.0,
+    )
+
+
+def _fold_results(
+    entries: list[tuple[str, LabeledGrantFrame]], n_folds: int
+) -> list[dict[str, Any]]:
+    """Video-disjoint k-fold cross-check (expert SHOULD-FIX c).
+
+    Videos (not frames — two frames of one video share a skin, so a frame-level
+    split would leak) are assigned round-robin to folds; each fold is scored by
+    validate_glyph_classifier under a palette fitted on the OTHER fold(s), so
+    the per-fold PASS is evidence the palette generalises across videos rather
+    than memorising the very frames it was measured on.
+    """
+    vids = sorted({vid for vid, _ in entries})
+    assign = {vid: i % n_folds for i, vid in enumerate(vids)}
+    out: list[dict[str, Any]] = []
+    for fold in range(n_folds):
+        fit = [f for vid, f in entries if assign[vid] != fold]
+        score = [f for vid, f in entries if assign[vid] == fold]
+        palette = _fit_fold_palette(fit)
+        if palette is None or not score:
+            out.append({"fold": fold, "passed": False, "reason": "insufficient fit/score data"})
+            continue
+        v = validate_glyph_classifier([replace(f, palette=palette) for f in score])
+        out.append(
+            {
+                "fold": fold,
+                "score_videos": sorted({vid for vid, _ in entries if assign[vid] == fold}),
+                "fitted_palette": {
+                    "hue_centres": {r: round(h, 2) for r, h in palette.hue_centres.items()},
+                    "ore_max_saturation": round(palette.ore_max_saturation, 2),
+                },
+                "n_frames": v.n_frames,
+                "n_correct": v.n_correct,
+                "accuracy": round(v.accuracy, 4),
+                "passed": v.passed,
+                "reason": v.reason,
+            }
+        )
+    return out
+
+
+def cmd_score(folds: int) -> int:
     if not LABELS.exists():
         print(f"no labels at {LABELS} — label the sheets first")
         return 1
@@ -373,7 +520,8 @@ def cmd_score() -> int:
     rows, n_dupes = _dedupe_events(all_rows)
     if n_dupes:
         print(f"deduped {n_dupes} near-duplicate grant event(s) (same line re-sampled)")
-    frames: list[LabeledGrantFrame] = []
+    entries: list[tuple[str, LabeledGrantFrame]] = []
+    scored_ids: list[str] = []
     skipped: list[str] = []
     for row in rows:
         cid = row["crop_id"]
@@ -397,16 +545,24 @@ def cmd_score() -> int:
         # score under the CANONICAL card palette — the palette production uses.
         # (The board-derived per-game palette stored in meta is provenance only;
         # the valset measured it mis-sitting the fixed card-icon hues.)
-        frames.append(
-            LabeledGrantFrame(
-                log_crop_rgb=crop,
-                glyph_boxes=[(int(b[0]), int(b[1]), int(b[2]), int(b[3])) for b in row["boxes"]],
-                expected=Counter(per_box),
-                palette=CARD_PALETTE,
-                expected_by_box=tuple(per_box),
+        entries.append(
+            (
+                str(row["video_id"]),
+                LabeledGrantFrame(
+                    log_crop_rgb=crop,
+                    glyph_boxes=[
+                        (int(b[0]), int(b[1]), int(b[2]), int(b[3])) for b in row["boxes"]
+                    ],
+                    expected=Counter(per_box),
+                    palette=CARD_PALETTE,
+                    expected_by_box=tuple(per_box),
+                ),
             )
         )
+        scored_ids.append(cid)
+    frames = [f for _, f in entries]
     v = validate_glyph_classifier(frames)
+    fold_results = _fold_results(entries, folds) if folds >= 2 else []
     result = {
         "passed": v.passed,
         "n_frames": v.n_frames,
@@ -421,12 +577,20 @@ def cmd_score() -> int:
         # so a stale artifact (classifier edited since) or a hand-edited JSON
         # cannot unblock the harvest. Re-run `score` after any glyph_anchor edit.
         "classifier_fingerprint": v.classifier_fingerprint,
+        # Binds the artifact to the LIVE palette/threshold constants + detector
+        # source (expert SHOULD-FIX a/b): load_glyph_validation recomputes this
+        # at load time and refuses a stale PASS with the reason logged.
+        "validation_fingerprint": validation_fingerprint(),
+        "git_rev": _git_rev(),
+        "scored_frames": scored_ids,
         "skipped_frames": skipped,
         "bar": {
             "min_frames": 8,
             "min_accuracy": 0.98,
             "zero_ore_brick": True,
         },
+        "margins": _margin_summary(frames),
+        "folds": fold_results,
     }
     VALIDATION_OUT.write_text(json.dumps(result, indent=2) + "\n")
     lines = [
@@ -440,11 +604,23 @@ def cmd_score() -> int:
         f"- boxes: {v.n_boxes} labelled icons, {v.n_unread_boxes} fail-closed unread (coverage)",
         f"- skipped (unlabelled/unreadable ground truth): {len(skipped)}",
         f"- classifier fingerprint: `{v.classifier_fingerprint}`",
+        f"- validation fingerprint: `{result['validation_fingerprint']}`"
+        f" (git `{result['git_rev']}`)",
         "",
         "| true \\ predicted | count |",
         "|---|---|",
     ]
     lines += [f"| {t} -> {p} | {c} |" for t, p, c in v.confusion]
+    for fr in fold_results:
+        lines.append(
+            f"- fold {fr['fold']}: "
+            + (
+                f"{fr['n_correct']}/{fr['n_frames']} ({fr['accuracy']:.1%}) "
+                f"{'PASSED' if fr['passed'] else 'NOT PASSED'}"
+                if "n_frames" in fr
+                else f"NOT PASSED — {fr['reason']}"
+            )
+        )
     REPORT_OUT.write_text("\n".join(lines) + "\n")
     print(json.dumps(result, indent=2))
     print(f"\nwrote {VALIDATION_OUT} and {REPORT_OUT}")
@@ -458,13 +634,19 @@ def main() -> int:
     ex.add_argument("--videos", type=int, default=30)
     ex.add_argument("--seed", type=int, default=0)
     sub.add_parser("sheet")
-    sub.add_parser("score")
+    sc = sub.add_parser("score")
+    sc.add_argument(
+        "--folds",
+        type=int,
+        default=2,
+        help="video-disjoint cross-check folds written into the artifact (0 disables)",
+    )
     args = ap.parse_args()
     if args.cmd == "extract":
         return cmd_extract(args.videos, args.seed)
     if args.cmd == "sheet":
         return cmd_sheet()
-    return cmd_score()
+    return cmd_score(args.folds)
 
 
 if __name__ == "__main__":

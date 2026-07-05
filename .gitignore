@@ -79,9 +79,14 @@ src/catan_engine/*.pyd
 # timestamp-anchored evidence links in strength_manifest.json.
 data/human/frames/
 data/human/*.json.tmp
-# Glyph validation-set images — re-derivable from meta.jsonl (video ids + t +
-# boxes); the committed core is meta.jsonl + labels.json + glyph_validation.*
+# Glyph validation-set images: the per-box/sheet PNGs are re-derivable from
+# meta.jsonl (video ids + t + boxes) and stay ignored, but the *_log.png line
+# crops ARE committed — `scripts/glyph_valset.py score` reads them, so the
+# validation artifact must be reproducible from a clean clone (expert
+# SHOULD-FIX 2026-07-05). Committed core: meta.jsonl + labels.json +
+# glyph_validation.* + *_log.png.
 data/human/glyph_valset/*.png
+!data/human/glyph_valset/*_log.png
 # Intermediate shard files + review snapshot/preview (the merged
 # strength_manifest.json is the committed source of truth).
 data/human/strength_manifest.shard*.json

@@ -75,16 +75,21 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
+import logging
 import re
 import sys
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 if TYPE_CHECKING:  # pragma: no cover - import only for type-checking
     import numpy.typing as npt
+
+logger = logging.getLogger(__name__)
 
 #: The five GRANTABLE resource literals (DESERT is never granted at setup, so it
 #: is not a card-glyph class). Resource literals are strings, never an enum
@@ -819,6 +824,152 @@ def glyph_classifier_fingerprint() -> str:
     """
     source = inspect.getsource(sys.modules[__name__])
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+#: The palette / threshold constants whose LIVE values feed
+#: :func:`validation_fingerprint`. Everything the classify + detect decisions
+#: depend on numerically: the measured card palette, the fail-closed bands, the
+#: validation bar, and the detector's box/pitch tuning. Live ``getattr`` values —
+#: not source text — so even a monkeypatched constant invalidates a stored PASS.
+_FINGERPRINT_CONSTANTS: tuple[str, ...] = (
+    "GRANTABLE_RESOURCES",
+    "HUE_RESOURCES_BY_RANK",
+    "RESOURCE_CARD_HUES",
+    "ORE_MAX_SATURATION",
+    "MIN_GLYPH_VALUE",
+    "MAX_GLYPH_VALUE",
+    "MAX_ORE_VALUE",
+    "MIN_ORE_SATURATION",
+    "MIN_GLYPH_HUE_MARGIN",
+    "HUE_MIN_SATURATION_ABOVE_ORE",
+    "MIN_GLYPH_BODY_PURITY",
+    "MIN_VALIDATION_FRAMES",
+    "MIN_VALIDATION_ACCURACY",
+    "MIN_GRANT_CONSENSUS_FRAMES",
+    "BOX_MIN_AREA",
+    "BOX_MIN_H",
+    "BOX_MAX_H",
+    "BOX_AR_LO",
+    "BOX_AR_HI",
+    "GLYPH_PITCH_LINE_FRAC",
+    "MERGED_BOX_PITCH_FACTOR",
+    "MIN_ICON_CELL_W",
+    "MAX_ICON_CELL_W",
+)
+
+
+def validation_fingerprint() -> str:
+    """SHA-256 over the LIVE palette/threshold constants + the detector source.
+
+    The companion to :func:`glyph_classifier_fingerprint` for the on-disk
+    artifact (expert SHOULD-FIX 2026-07-05): where the module-source hash pins
+    the PASS to the exact code text, this fingerprint pins it to the exact
+    *decision surface* — the values of every constant in
+    :data:`_FINGERPRINT_CONSTANTS` (read live via ``getattr``, so a runtime /
+    monkeypatched retune also mismatches), the :data:`GRANT_RE` pattern, and
+    ``inspect.getsource(detect_glyph_boxes)``. ``scripts/glyph_valset.py score``
+    stamps it into ``data/human/glyph_validation.json``;
+    :func:`load_glyph_validation` recomputes it at load time and refuses a
+    stored PASS whose fingerprint no longer matches (the gate stays closed
+    until the valset is re-scored).
+    """
+    mod = sys.modules[__name__]
+    parts = [f"{name}={getattr(mod, name)!r}" for name in _FINGERPRINT_CONSTANTS]
+    parts.append(f"GRANT_RE={GRANT_RE.pattern!r}")
+    parts.append(inspect.getsource(detect_glyph_boxes))
+    return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
+
+
+def load_glyph_validation(path: Path) -> GlyphValidation | None:
+    """Load ``data/human/glyph_validation.json`` — fail CLOSED on any doubt.
+
+    The artifact-side half of the glyph gate (expert SHOULD-FIX 2026-07-05: the
+    stored PASS must not outlive the constants / detector / bar it measured).
+    Returns the stored :class:`GlyphValidation` ONLY when ALL of:
+
+    - the artifact exists, parses, and recorded ``passed=True``;
+    - the STORED bar is at least as strict as the CURRENT constants
+      (``bar.min_frames >= MIN_VALIDATION_FRAMES``, ``bar.min_accuracy >=
+      MIN_VALIDATION_ACCURACY``, and the zero-ORE<->BRICK rule was enforced) —
+      raising the module bar retroactively invalidates an old PASS;
+    - the stored ``validation_fingerprint`` matches the CURRENT
+      :func:`validation_fingerprint` (palette/threshold constants + detector
+      source unchanged since ``scripts/glyph_valset.py score`` ran).
+
+    Anything else returns ``None`` with the reason logged — the scale-up gate
+    stays closed (:func:`glyph_classifier_is_validated` additionally re-checks
+    the stored ``classifier_fingerprint`` against the whole module source).
+    The remedy for a mismatch is never to hand-edit the JSON: re-run
+    ``scripts/glyph_valset.py score`` over the committed labels + crops.
+    """
+    try:
+        raw: Any = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "glyph validation artifact %s unreadable (%s) — gate stays closed", path, exc
+        )
+        return None
+    if not isinstance(raw, dict):
+        logger.warning(
+            "glyph validation artifact %s is not a JSON object — gate stays closed", path
+        )
+        return None
+    if raw.get("passed") is not True:
+        logger.warning(
+            "glyph validation artifact %s did not record a PASS (reason=%r) — gate stays closed",
+            path,
+            raw.get("reason"),
+        )
+        return None
+    bar = raw.get("bar")
+    try:
+        bar_ok = (
+            isinstance(bar, dict)
+            and float(bar["min_frames"]) >= MIN_VALIDATION_FRAMES
+            and float(bar["min_accuracy"]) >= MIN_VALIDATION_ACCURACY
+            and bar["zero_ore_brick"] is True
+        )
+    except (KeyError, TypeError, ValueError):
+        bar_ok = False
+    if not bar_ok:
+        logger.warning(
+            "glyph validation artifact %s bar %r is below/missing the current "
+            "MIN_VALIDATION_* constants (frames>=%d, accuracy>=%s, zero ORE<->BRICK) "
+            "— gate stays closed; re-run scripts/glyph_valset.py score",
+            path,
+            bar,
+            MIN_VALIDATION_FRAMES,
+            MIN_VALIDATION_ACCURACY,
+        )
+        return None
+    current = validation_fingerprint()
+    if raw.get("validation_fingerprint") != current:
+        logger.warning(
+            "glyph validation artifact %s fingerprint %r != current %r — the "
+            "palette/threshold constants or the detector changed since score; "
+            "gate stays closed until scripts/glyph_valset.py score is re-run",
+            path,
+            raw.get("validation_fingerprint"),
+            current,
+        )
+        return None
+    try:
+        return GlyphValidation(
+            passed=True,
+            n_frames=int(raw["n_frames"]),
+            n_correct=int(raw["n_correct"]),
+            accuracy=float(raw["accuracy"]),
+            reason=None,
+            confusion=tuple((str(t), str(p), int(c)) for t, p, c in raw.get("confusion", [])),
+            n_boxes=int(raw.get("n_boxes", 0)),
+            n_unread_boxes=int(raw.get("n_unread_boxes", 0)),
+            classifier_fingerprint=str(raw.get("classifier_fingerprint", "")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning(
+            "glyph validation artifact %s is malformed (%s) — gate stays closed", path, exc
+        )
+        return None
 
 
 def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidation:

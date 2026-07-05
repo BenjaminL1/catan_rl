@@ -32,6 +32,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -42,6 +43,7 @@ import pytest
 # (audit 2026-07 follow-up: found once the collection error was fixed).
 pytest.importorskip("cv2")
 
+import catan_rl.human_data.glyph_anchor as glyph_anchor
 from catan_rl.human_data import (
     GlyphClassifierNotValidated,
     assert_scale_up_orientation_gates,
@@ -51,6 +53,7 @@ from catan_rl.human_data.glyph_anchor import (
     GRANT_RE,
     HUE_RESOURCES_BY_RANK,
     MIN_GRANT_CONSENSUS_FRAMES,
+    MIN_VALIDATION_ACCURACY,
     MIN_VALIDATION_FRAMES,
     ORE_MAX_SATURATION,
     RESOURCE_CARD_HUES,
@@ -63,7 +66,9 @@ from catan_rl.human_data.glyph_anchor import (
     detect_glyph_boxes,
     glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
+    load_glyph_validation,
     validate_glyph_classifier,
+    validation_fingerprint,
 )
 
 
@@ -727,3 +732,143 @@ def test_detector_no_reads_every_skip_labelled_merged_frame(crop_id: str) -> Non
     boxes = detect_glyph_boxes(crop, grant_box, text_boxes)
     assert boxes == []  # detector no-read: the merged-box rule fired
     assert classify_granted_glyphs(crop, boxes, CARD_PALETTE) is None
+
+
+# --- load_glyph_validation: the artifact-side gate (expert SHOULD-FIXes a/b) --
+#
+# The on-disk PASS (data/human/glyph_validation.json) must not outlive the
+# constants / detector / bar it measured: load_glyph_validation recomputes the
+# validation fingerprint (LIVE palette/threshold constant values + the detector
+# source) at load time and fails CLOSED (None + a logged reason) on any doubt.
+
+
+def _artifact_payload(v: GlyphValidation) -> dict[str, Any]:
+    """Serialize a GlyphValidation exactly as `scripts/glyph_valset.py score` does."""
+    return {
+        "passed": v.passed,
+        "n_frames": v.n_frames,
+        "n_correct": v.n_correct,
+        "accuracy": v.accuracy,
+        "n_boxes": v.n_boxes,
+        "n_unread_boxes": v.n_unread_boxes,
+        "confusion": [list(c) for c in v.confusion],
+        "reason": v.reason,
+        "classifier_fingerprint": v.classifier_fingerprint,
+        "validation_fingerprint": validation_fingerprint(),
+        "git_rev": "deadbeef",
+        "bar": {
+            "min_frames": MIN_VALIDATION_FRAMES,
+            "min_accuracy": MIN_VALIDATION_ACCURACY,
+            "zero_ore_brick": True,
+        },
+    }
+
+
+def _passing_validation() -> GlyphValidation:
+    frames = [_good_frame(Counter({"SHEEP": 1, "ORE": 2})) for _ in range(MIN_VALIDATION_FRAMES)]
+    v = validate_glyph_classifier(frames)
+    assert v.passed
+    return v
+
+
+def test_load_glyph_validation_returns_pass_on_matching_fingerprint(tmp_path: Path) -> None:
+    p = tmp_path / "glyph_validation.json"
+    v = _passing_validation()
+    p.write_text(json.dumps(_artifact_payload(v)))
+    loaded = load_glyph_validation(p)
+    assert loaded is not None
+    assert loaded.passed
+    assert loaded.n_frames == v.n_frames
+    assert loaded.n_correct == v.n_correct
+    assert loaded.confusion == v.confusion
+    assert loaded.classifier_fingerprint == v.classifier_fingerprint
+    # The round-tripped record still satisfies the module-source gate check.
+    assert glyph_classifier_is_validated(loaded)
+
+
+@pytest.mark.parametrize(
+    "constant",
+    [
+        "ORE_MAX_SATURATION",  # palette threshold
+        "MIN_GLYPH_HUE_MARGIN",  # classifier threshold
+        "MERGED_BOX_PITCH_FACTOR",  # DETECTOR tuning — the fingerprint covers it too
+    ],
+)
+def test_load_glyph_validation_none_after_constant_perturbed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, constant: str
+) -> None:
+    # A stored PASS written under the CURRENT constants...
+    p = tmp_path / "glyph_validation.json"
+    p.write_text(json.dumps(_artifact_payload(_passing_validation())))
+    assert load_glyph_validation(p) is not None
+    # ...must be refused once ANY palette/threshold/detector constant changes
+    # (live values, so even a runtime retune — not just a source edit — mismatches).
+    monkeypatch.setattr(glyph_anchor, constant, getattr(glyph_anchor, constant) + 1.0)
+    assert load_glyph_validation(p) is None
+
+
+def test_load_glyph_validation_rejects_failed_or_lowered_bar(tmp_path: Path) -> None:
+    p = tmp_path / "glyph_validation.json"
+    v = _passing_validation()
+    # A non-PASS record never loads, whatever its fingerprint says.
+    failed = _artifact_payload(v)
+    failed["passed"] = False
+    p.write_text(json.dumps(failed))
+    assert load_glyph_validation(p) is None
+    # A PASS scored under a LOOSER bar than the current constants never loads:
+    # raising MIN_VALIDATION_* retroactively invalidates the old artifact.
+    for weak_bar in (
+        {"min_frames": MIN_VALIDATION_FRAMES - 1, "min_accuracy": 0.98, "zero_ore_brick": True},
+        {"min_frames": MIN_VALIDATION_FRAMES, "min_accuracy": 0.9, "zero_ore_brick": True},
+        {"min_frames": MIN_VALIDATION_FRAMES, "min_accuracy": 0.98, "zero_ore_brick": False},
+        None,
+    ):
+        weak = _artifact_payload(v)
+        weak["bar"] = weak_bar
+        p.write_text(json.dumps(weak))
+        assert load_glyph_validation(p) is None
+
+
+def test_load_glyph_validation_fails_closed_on_missing_or_malformed(tmp_path: Path) -> None:
+    assert load_glyph_validation(tmp_path / "nope.json") is None
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json")
+    assert load_glyph_validation(bad) is None
+    bad.write_text(json.dumps(["passed"]))  # not an object
+    assert load_glyph_validation(bad) is None
+
+
+def test_committed_validation_artifact_is_hardened_and_current() -> None:
+    # The COMMITTED artifact must load under the CURRENT code — this is the
+    # re-score discipline made executable: any edit to the glyph constants or
+    # the detector fails this test until `scripts/glyph_valset.py score` is
+    # re-run over the committed labels + *_log.png crops (all in-repo, so the
+    # score IS reproducible from a clean clone). Never fix this test by editing
+    # the JSON by hand.
+    artifact = Path(__file__).resolve().parents[3] / "data" / "human" / "glyph_validation.json"
+    loaded = load_glyph_validation(artifact)
+    assert loaded is not None
+    assert loaded.passed
+    assert glyph_classifier_is_validated(loaded)
+    raw = json.loads(artifact.read_text())
+    assert raw["validation_fingerprint"] == validation_fingerprint()
+    assert raw["git_rev"] not in ("", "unknown")
+    # Every scored frame's log crop is committed alongside the artifact.
+    valset = artifact.parent / "glyph_valset"
+    assert raw["scored_frames"]
+    for cid in raw["scored_frames"]:
+        assert (valset / f"{cid}_log.png").exists(), f"scored crop {cid}_log.png not committed"
+    # (c) the video-disjoint 2-fold cross-check is present and both folds pass.
+    folds = raw["folds"]
+    assert len(folds) == 2
+    assert all(f["passed"] for f in folds)
+    assert all(f["n_frames"] >= 1 for f in folds)
+    fold_vids = [set(f["score_videos"]) for f in folds]
+    assert not (fold_vids[0] & fold_vids[1])  # video-disjoint
+    # (d) per-box margin diagnostics (min/median summaries) are present.
+    margins = raw["margins"]
+    assert margins["dead_band_sat"] == [75.0, 95.0]
+    for key in ("sat_gap_ore_side", "sat_gap_hue_side", "hue_margin"):
+        assert margins[key]["n"] > 0
+        assert margins[key]["min"] is not None
+        assert margins[key]["median"] is not None

@@ -64,7 +64,9 @@ from catan_rl.human_data.glyph_anchor import (
     detect_glyph_boxes,
     glyph_classifier_fingerprint,
     glyph_classifier_is_validated,
+    load_glyph_validation,
     validate_glyph_classifier,
+    validation_fingerprint,
 )
 from catan_rl.human_data.ingest import (
     BOARD_OCR_CALLS_PER_ACCEPTED_FRAME,
@@ -214,6 +216,7 @@ __all__ = [
     "hue_cluster_margin",
     "ingest_video",
     "load_engine_template",
+    "load_glyph_validation",
     "load_ledger",
     "load_strength_manifest",
     "load_topology",
@@ -233,4 +236,5 @@ __all__ = [
     "segment_games",
     "segment_opponent_strength",
     "validate_glyph_classifier",
+    "validation_fingerprint",
 ]
