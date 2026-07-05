@@ -1,5 +1,10 @@
 # Strength manifest — hand-check validation set
 
+> **VERDICT (2026-07-05, hand-checked by the developer): ALL 52 ROWS CORRECT — 0 wrong
+> labels, 0 missed leaderboards in the `unknown` recall sample.** The manifest's
+> high/excluded/unknown labels are human-verified across every stratum (all 20 excluded,
+> all 5 boundary highs, 8-video unknown recall check, tournaments, random).
+
 Stratified sample of **52** videos (seed=0), weighted toward the decisions that cost the most if wrong. Click **Check** to jump to the exact frame the label came from, or open the saved frame. Mark each ✓ (agree) or ✗ (wrong) at the end.
 
 For `unknown` rows there is no frame — open the video and scan the first/last ~90s: if you DO see a Global leaderboard with his rank, that's a missed `high` (recall gap, not a wrong label).
