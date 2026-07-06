@@ -15,8 +15,12 @@ the real `high` corpus **cannot yet be harvested to acceptance**: **0/3 reached 
 were accepted**, blocked by three integration/CV issues the run surfaced (two fixed
 here, one large-CV blocker documented). The **board CV is verified correct** on real
 frames (desert + 19/19 resources) and **winner extraction is verified** against a real
-victory line. The flip-sweep leakage question is answered on the reference accepted
-record + the real boards the harvest read.
+victory line. **The plan's §joint-flip residual is NOT closed on real accepted games**
+— **0 games were accepted**, so the *game-level* sweep runs only on a single committed
+synthetic fixture (the game-1 golden record); the residual across the real corpus is
+**unmeasured** pending accepted games. What *is* measured on real data is the
+**board-level** leakage surface (openings-independent) over the boards the harvest
+actually read — the honest partial signal. See §3.
 
 ---
 
@@ -71,9 +75,15 @@ to the anchor) and count how many `assert_glyph_anchor` calls **reject**, under
 (i) the current **either-settlement** matching and (ii) **2nd-settlement-only** matching
 (the record now carries log placement order). Tool: `scripts/tier5_flip_sweep.py`.
 
-**Accepted games in the harvest: 0**, so the game-level sweep runs on the **reference
-accepted record** (the pipeline's own committed game-1 fixture — real board desert=11,
-hand-verified openings, order-established):
+**Accepted games in the harvest: 0** (all 3 reached games rejected at the §5.14 HUD
+stage, before the anchor). The plan's §joint-flip residual asks for the leakage
+**over real accepted games**, and that number is therefore **UNMEASURED here** — the
+harvest produced no accepted game to sweep. The game-level sweep below is run only on
+a **single committed synthetic fixture** (the pipeline's own game-1 golden record —
+real board desert=11, hand-verified openings in **log-placement order** so
+`settlements[1]` is the true granting vertex, matching `game1_openings.json`'s
+`placement_order` block). It demonstrates the sweep mechanism and shows that *this one*
+board+openings rejects every flip; it is **NOT** a measurement of the corpus residual:
 
 | matching mode | rejects / (11·n) | leakage |
 |---|---|---|
@@ -97,16 +107,21 @@ by the relabel:
 | harvested (desert 13) | 94/576 | **16.3%** | 25 | 43/54 |
 | harvested (desert 9) | 30/576 | **5.2%** | 34 | 31/54 |
 
-**Interpretation:** a single settlement's joint-flip leakage residual is **5–18%** (the
-board's multiset-collision structure); at the **game level** (both players must
-independently collide) it collapses to ≈0, which is why the reference game rejects
-11/11. **2nd-settlement-only matching is the safe default** — it never leaks more than
-either-settlement — but on these boards the game-level either-mode already leaks 0, so
-the residual the plan asked about is **collision-driven and board-specific, not a
-systematic hole**. (The purely-symmetric joint flip — board *and* openings both relabeled
-by the same g — is a genuine relabeling the grant multiset is invariant under, and is
-outside the anchor's reach by construction; the operative defence is against an openings
-snap that is mis-oriented *relative to a correctly-read board*, measured above.)
+**Interpretation (and what is NOT concluded).** A single settlement's joint-flip
+leakage residual is **5–18%** (the board's multiset-collision structure) — this is a
+**real measurement** on the harvested boards. At the **game level** (both players'
+relabeled settlements must *independently* collide), the single committed fixture leaks
+**0** (rejects 11/11), and **2nd-settlement-only matching is the safe default** — it
+never leaks more than either-settlement. **But one synthetic game is not the corpus.**
+The plan's §joint-flip residual — the game-level false-accept rate **across real
+accepted games** — is **still UNMEASURED** (0 accepted); the 11/11 is a single-fixture
+demonstration, not evidence the residual is board-wide ≈0. The honest bound we have is
+the settlement-level **5–18%**; whether real accepted games' *pairs* of settlements
+collide simultaneously is an open number that only real accepted footage can close.
+(The purely-symmetric joint flip — board *and* openings both relabeled by the same g —
+is a genuine relabeling the grant multiset is invariant under, and is outside the
+anchor's reach by construction; the operative defence measured above is against an
+openings snap mis-oriented *relative to a correctly-read board*.)
 
 Pinned in `tests/unit/human_data/test_tier5_flip_sweep.py` (reference sweep 11/11;
 game-1 board 28 distinct / 38 colliding — matching the committed

@@ -9,10 +9,13 @@ caught. The board-collision figures (28 distinct / 38 colliding) mirror the comm
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+_FIXTURES = Path(__file__).resolve().parents[2] / "fixtures" / "human_data"
 
 _REPO = Path(__file__).resolve().parents[3]
 _SPEC = importlib.util.spec_from_file_location(
@@ -58,9 +61,17 @@ def _reference_record() -> GameRecord:
         ruleset={"num_players": 2, "win_vp": 15},
         hexes=_GAME1_HEXES,
         draft_order=("rayman147", "ThePhantom", "ThePhantom", "rayman147"),
+        # LOG-PLACEMENT order (step6 §3.1): settlements[1] == the 2nd/resource-granting
+        # settlement, roads[i] incident to settlements[i]. This is the order a real
+        # accepted record carries — cross_check re-orders the order-blind CV detections
+        # via order_openings_by_grant before building the record — and it matches the
+        # committed golden fixture's ``placement_order`` block (game1_openings.json).
+        # NOT the order-blind CV-detection order (rayman147 (11, 3) / roads (19, 8)):
+        # pinning settlements[1] on the CV order would reconstruct the WRONG grant
+        # (v3's SHEEP/BRICK/ORE instead of the true v11 WHEAT/WOOD/BRICK).
         openings={
             "ThePhantom": PlayerOpening(settlements=(1, 19), roads=(0, 35)),
-            "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
+            "rayman147": PlayerOpening(settlements=(3, 11), roads=(8, 19)),
         },
         dice_log=(8, 6, 11, 4),
         winner="ThePhantom",
@@ -93,9 +104,11 @@ def test_reconstructed_grant_equals_granting_settlement_adjacency() -> None:
     topo = load_topology()
     rec = _reference_record()
     grants = t5.reconstruct_true_grants(rec, topo)
-    # settlements[1] is the granting settlement; TP s[1,19] -> v19 grants SHEEP+2*ORE.
+    # settlements[1] is the granting settlement (LOG-placement order): TP s[1,19] ->
+    # v19 grants SHEEP+2*ORE; rayman147 s[3,11] -> v11 grants WHEAT+WOOD+BRICK. These
+    # equal the golden fixture's hand-verified granted_resources (game1_openings.json).
     assert grants["ThePhantom"] == Counter({"SHEEP": 1, "ORE": 2})
-    assert grants["rayman147"] == Counter({"SHEEP": 1, "BRICK": 1, "ORE": 1})
+    assert grants["rayman147"] == Counter({"WHEAT": 1, "WOOD": 1, "BRICK": 1})
 
 
 def test_board_leakage_surface_matches_committed_collision_numbers() -> None:
@@ -109,6 +122,31 @@ def test_board_leakage_surface_matches_committed_collision_numbers() -> None:
     assert surface.colliding_vertices == 38
     # Moved-settlement leak surface is a strict subset of the moved pairs.
     assert 0 <= surface.leak_pairs <= surface.moved_pairs <= 54 * 11
+
+
+def test_reference_record_matches_golden_placement_order() -> None:
+    """The flip-sweep reference record must carry the committed golden fixture's
+    LOG-PLACEMENT order (``settlements[1]`` = the granting vertex), not the
+    order-blind CV-detection order — the placement-order contract the sweep's
+    reconstruct_true_grants relies on (pinning ``settlements[1]`` as the true grant).
+
+    Ties the reference record to ``game1_openings.json`` so a future edit that
+    reverts it to CV-detection order (the ``openings`` block, (11, 3) for rayman147)
+    fails here rather than silently pinning the wrong grant into the sweep numbers.
+    """
+    topo = load_topology()
+    golden = json.loads((_FIXTURES / "game1_openings.json").read_text(encoding="utf-8"))
+    rec = _reference_record()
+    for player, po in golden["placement_order"].items():
+        if player == "established":
+            continue
+        assert rec.openings[player].settlements == tuple(po["settlements"])
+        assert rec.openings[player].roads == tuple(po["roads"])
+    # reconstruct_true_grants pins settlements[1]; it must equal the golden fixture's
+    # hand-verified granted_resources (the orientation-independent log ground truth).
+    grants = t5.reconstruct_true_grants(rec, topo)
+    for player, granted in golden["granted_resources"].items():
+        assert grants[player] == Counter(granted)
 
 
 def test_order_unestablished_record_excluded_from_sweep() -> None:
