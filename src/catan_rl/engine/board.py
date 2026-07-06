@@ -365,7 +365,30 @@ class catanBoard:
             )
 
     # Update Board vertices with Port info
-    def updatePorts(self):
+    def updatePorts(self, *, rng=None, port_assignment=None):
+        """Assign the 9 ports to their fixed slot vertex-pairs.
+
+        Default behaviour is **unchanged**: with ``rng=None`` and
+        ``port_assignment=None`` the slot→type shuffle draws from the global
+        ``np.random`` exactly as before, so a default board built by
+        ``__init__`` consumes the same randomness and is byte-identical to
+        pre-injection builds.
+
+        Two additive, deterministic injection paths (step6 §2.3 bridge):
+
+        * ``rng`` — an explicit ``np.random.Generator`` (or any object exposing
+          ``permutation``). The slot ordering is drawn from it instead of the
+          global PRNG, so an injected board's port shuffle is reproducible
+          without perturbing global randomness.
+        * ``port_assignment`` — an explicit ``{port_type: [vertex_index, ...]}``
+          mapping (the inverse of :meth:`get_port_assignment`). When provided,
+          NO randomness is consumed: the ports are welded onto exactly those
+          vertices. This is how a serialized/human board's ports are rebuilt
+          one-to-one (out-of-band port list — ports are not in the corpus obs).
+        """
+        if port_assignment is not None:
+            self._apply_port_assignment(port_assignment)
+            return
         # Define ports by (HexIndex, CornerIndex1, CornerIndex2)
         # Derived from analysis of flat layout to support rotation
         port_hex_corners = [
@@ -404,8 +427,11 @@ class catanBoard:
                 # print(
                 #     f"Warning: Could not find vertices for port at Hex {h_idx}, Corners {c1}, {c2}")
 
-        # Get a random permutation of indices of ports
-        randomPortIndices = np.random.permutation([i for i in range(len(port_pair_list))])
+        # Get a random permutation of indices of ports. Default source is the
+        # global ``np.random`` (byte-unchanged); an explicit ``rng`` overrides
+        # it deterministically without touching global state (injection path).
+        _permute = np.random.permutation if rng is None else rng.permutation
+        randomPortIndices = _permute([i for i in range(len(port_pair_list))])
         randomPortIndex_counter = 0
 
         # Initialize port dictionary with counts
@@ -436,6 +462,92 @@ class catanBoard:
                 vertexPixel = self.vertex_index_to_pixel_dict[v_index]
                 # Update the port type
                 self.boardGraph[vertexPixel].port = portType
+
+    # ------------------------------------------------------------------
+    # Injection API (step6 §2.3 — additive; default board build is untouched)
+    # ------------------------------------------------------------------
+    def inject_hex_layout(
+        self,
+        resources: list[str],
+        numbers: list[int | None],
+        robber_hex: int,
+    ) -> None:
+        """Overwrite the 19 hexes with an explicit resource + number layout.
+
+        The spiral generator (``SPIRAL_CHIP_SEQUENCE``) can only emit the 12
+        canonical spiral walks, so an arbitrary (e.g. human-harvested or
+        serialized-self-play) number placement cannot be produced at
+        construction time. This POST-CONSTRUCTION overwrite mutates each
+        ``BoardTile``'s ``resource_type`` / ``number_token`` / ``has_robber`` in
+        place and rebuilds the dependent ``resourcesList`` so the two stay
+        consistent. The vertex graph, edges, and per-vertex hex adjacency are
+        PURELY GEOMETRIC (independent of resource/number) and are deliberately
+        left untouched — they remain valid for the same 54-vertex / 72-edge
+        topology.
+
+        Args:
+            resources: length-19 list of resource literals indexed by hex id.
+            numbers: length-19 list of number tokens (``None`` for the desert
+                and only the desert), indexed by hex id.
+            robber_hex: the single hex id that carries the robber.
+
+        Raises:
+            ValueError: on any length / value / desert-consistency violation.
+        """
+        if len(resources) != 19 or len(numbers) != 19:
+            raise ValueError(
+                f"inject_hex_layout expects 19 resources and 19 numbers; "
+                f"got {len(resources)} / {len(numbers)}"
+            )
+        if not 0 <= robber_hex < 19:
+            raise ValueError(f"robber_hex {robber_hex} out of range 0..18")
+        for hex_idx in range(19):
+            resource = resources[hex_idx]
+            number = numbers[hex_idx]
+            is_desert = resource == "DESERT"
+            if is_desert and number is not None:
+                raise ValueError(
+                    f"desert hex {hex_idx} must have number_token None, got {number!r}"
+                )
+            if not is_desert and number is None:
+                raise ValueError(f"non-desert hex {hex_idx} ({resource}) must carry a number token")
+            tile = self.hexTileDict[hex_idx]
+            tile.resource_type = resource
+            tile.number_token = number
+            tile.has_robber = hex_idx == robber_hex
+        self.resourcesList = [Resource(resources[i], numbers[i]) for i in range(19)]
+
+    def _apply_port_assignment(self, port_assignment: dict[str, list[int]]) -> None:
+        """Weld an explicit ``{port_type: [vertex_index, ...]}`` map onto the
+        graph, clearing any prior port strings first so the result depends only
+        on the assignment (used by the ``updatePorts(port_assignment=...)``
+        injection path)."""
+        for v_idx, px in self.vertex_index_to_pixel_dict.items():
+            self.boardGraph[px].port = False
+        for port_type, v_indices in port_assignment.items():
+            for v_idx in v_indices:
+                if v_idx not in self.vertex_index_to_pixel_dict:
+                    raise ValueError(
+                        f"port_assignment vertex index {v_idx} not in 0..{self.vertexIndexCount - 1}"
+                    )
+                px = self.vertex_index_to_pixel_dict[v_idx]
+                self.boardGraph[px].port = port_type
+
+    def get_port_assignment(self) -> dict[str, list[int]]:
+        """Read the current port layout as ``{port_type: sorted[vertex_index]}``.
+
+        The inverse of :meth:`_apply_port_assignment`; this is the out-of-band
+        port list the bridge serializes (ports are engine state only, never in
+        the obs). Deterministic: vertex indices are sorted within each type.
+        """
+        assignment: dict[str, list[int]] = {}
+        for v_idx in sorted(self.vertex_index_to_pixel_dict.keys()):
+            px = self.vertex_index_to_pixel_dict[v_idx]
+            port = getattr(self.boardGraph[px], "port", False)
+            if not port:
+                continue
+            assignment.setdefault(str(port), []).append(int(v_idx))
+        return assignment
 
     # Function to Display Catan Board Info
 
