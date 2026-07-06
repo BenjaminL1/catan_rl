@@ -1,11 +1,9 @@
 # Step 6 — Human-Corpus Use: Opening Scoreboard + Opening-Diversity Training
 
-**Status:** DRAFT v5 (2026-07-05). Review history: v1–v3 per §8/git history. Round 4:
-**council unanimous ACCEPT** (4/4; both round-3 rejectors flipped per their stated
-conditions); **expert**: both lenses READY, red-team confirmed one BLOCKER in
-Workstream B's in-run gate (moving-anchor confound) + 4 SHOULD-FIXes + a pin pack —
-"the measurement design would be READY on the four one-sentence pins alone; a
-v5-mechanical revision, not a redesign." v5 lands all of it.
+**Status:** **v5.1 — RATIFIED** (2026-07-05). Council: **unanimous ACCEPT 4/4**
+(round 4). Expert: **READY** (round 5) — every round-4 item verified landed; the
+READY verdict's pre-freeze pin pack (1 SHOULD-FIX + 6 NITs) is folded into this
+v5.1. Full history: v1–v5 per §8/git.
 **Depends on:** the human_data harvest completing. The corpus does **not exist yet**;
 the pre-corpus lane (§2) runs first. **One item is harvest-blocking (§3.1): the
 settlement placement-order contract must land in `record.py` before the harvest runs.**
@@ -99,7 +97,8 @@ enter M2 as covariates).
 - **M0 — in-distribution anchor, identity pinned:** M0 = the M1 statistic (AUC) plus
   the M2 partial Spearman, computed on v8's own eval games vs their outcomes
   (true-port now; port-marginal re-run when the injection API lands — the true-port
-  M0 is binding).
+  M0 is binding). **M0's permutation strata = `(draft_position)` only**
+  (`opponent_strength.source` does not exist for self-play games — fork closed).
 - **`setup_entropy_coef`:** wire the setup-phase-only loss term (absent from
   `arguments.py` today; additive, default 0.0), then the calibration sweep. Honest
   budget: readable anchor-WR resolution is ~1–2 days/point ⇒ **pre-registered
@@ -126,9 +125,12 @@ from the log's setup-event sequence. **Pinned now, before any harvest:**
 sourced from the setup-event sequence; the `record.py` docstring is amended in the
 same doc-sync commit; the harvest driver must establish order from the log or mark
 the game **order-unestablished ⇒ EVAL-excluded, seed-eligible only**. The bridge
-grants from `settlements[1]`. (Fallback if order proves broadly unrecoverable:
-grant-marginalize — K layouts × 2 grant hypotheses — pre-registered here, used only
-if >20% of games are order-unestablished.)
+grants from `settlements[1]`; **an order-unestablished record used as a seed samples
+the grant hypothesis per episode** (never a fixed arbitrary pick — a
+Colonist-unreachable start state must not enter training deterministically).
+(Fallback if order proves broadly unrecoverable: grant-marginalize — K layouts × 2
+grant hypotheses — pre-registered here, used only if >20% of games are
+order-unestablished.)
 
 ### 3.2 Bridge
 
@@ -136,6 +138,13 @@ As v4: mask-based legality with post-condition assertions (engine `build_*` sile
 no-op), spec-009 `bank_draw` + conservation + `rules_invariants`, tracker parity,
 K=8 full re-bridges (portList/encoder frozen at construction). Null test (ii):
 human-record idempotence + random-agent rollout to terminal.
+
+**Spiral-consistency gate (expert round-5):** engine number placement is
+deterministic (`SPIRAL_CHIP_SEQUENCE` given orientation + desert), so a harvested
+board's 18 tokens must match one of the **12 spiral walks** for its desert — a free
+check the multiset gate cannot make (it is blind to multiset-preserving swaps).
+Bridge-time: non-matching boards → `rejection_reason="non_spiral_board"`; the
+corpus pass-rate is a line in the PRE-GATE-0/GATE-A report.
 
 ---
 
@@ -200,8 +209,27 @@ Deliverables/spike as v4.
 
 Mechanism, B-alt (EVAL-A-only logistic fit), B1 seed loader (incl. the
 two-lowest-buckets fallback and the first-class "corpus adds no unexplored mass"
-finding), B2 wiring (`reset_source`; `anchor_window_stats()` unit test; harness
-assertion; TB incl. per-archetype `seeded/return`) — all as v4, plus:
+finding; **seed draws are uniform-over-qualifying-buckets, never at empirical corpus
+frequency** — the D6-dedup removes almost nothing on all-distinct boards, and
+frequency-weighting would concentrate `seed_prob` in ThePhantom's modal archetype),
+B2 wiring (`reset_source`; `anchor_window_stats()` unit test; harness assertion; TB
+incl. per-archetype `seeded/return`) — all as v4, plus:
+
+**B-launch precondition (expert round-5 — moved from B3 time):** immediately after
+GATE-A GO, compute frozen v8's HOLDOUT-B M2 effect (contaminates nothing — v8 is
+frozen; the result is cached and reused at B3). If its cluster-bootstrap CI does not
+exclude 0 in the predicted sign, B3(2) is **VOID before any arm launches**: the GO
+is flagged failed-replication and routes to INCONCLUSIVE/extend — a strength-only
+launch (B3(1)/(3)/(4) gates) remains a conscious option, but the calibration
+endpoint of a 1–2-week run is never spent on a license that didn't replicate.
+
+**Squash-refit pin (expert round-5 SHOULD-FIX):** σ(3.22·v̂−1.14) was fit to v8's
+value distribution; after weeks of PPO with value normalization, v8′'s scale drifts,
+and the seat-complement mixes σ/1−σ branches, so a stale squash changes ranks.
+**Any non-v8 policy entering the calibration metrics gets its own squash refit by
+the spec-003 procedure on its own natural eval games (disjoint from HOLDOUT-B)**,
+and B3(2) PASS additionally requires v8′'s HOLDOUT-B M1 AUC ≥ v8's − 0.02 (the
+attenuation guard — a noisier p̂ must not shrink |effect| into a spurious PASS).
 
 ### The in-run gate statistic (expert round-4 BLOCKER — the moving-anchor confound)
 
@@ -219,6 +247,11 @@ therefore **kills the seeded arm for succeeding** (it promotes first → its WR 
   reference games per arm; GATE-B1 trips only if the seeded−control gap exceeds 3pp
   AND clears a two-proportion test (α=0.05), or persists across 2 consecutive
   non-overlapping windows. First trip → halve `seed_prob`; second → kill.
+  **Operative-branch note (expert round-5):** at n=300/arm, SE(gap) ≈ 4.1pp, so the
+  significance branch binds only above ~8pp — **the 2-window persistence branch is
+  the operative protection at 3pp** (per-pair false-trip ≈ 0.05; the shared eval
+  seeds make the unpaired test conservative). Optional power upgrade if needed:
+  paired shared-seed McNemar.
 
 ### B4 gates (deltas from v4)
 
@@ -270,6 +303,12 @@ base-rate disclosure, board-ore covariate row, per-layout seed formula, sweep
 re-budget. **v4→v5 (council round 4, all non-blocking):** same-commit doc-sync;
 bridge hashes in the freeze set; cached layouts; shared resample stream;
 `opening_archetypes.py` rename. **Council verdict: 4/4 ACCEPT (round 4).**
+**v5→v5.1 (expert round 5, READY — pre-freeze pin pack):** squash-refit pin +
+attenuation guard for B3 metrics on non-v8 policies (SHOULD-FIX); spiral-consistency
+bridge gate; M0 strata = draft_position only; B3(2) replication precondition moved
+to a B-launch precondition with cached reuse; uniform-over-qualifying-buckets seed
+draw; per-episode grant-hypothesis sampling for order-unestablished seeds;
+GATE-B1 operative-branch (persistence) note. **Expert verdict: READY (round 5).**
 
 ## 9. Risks — as v4, plus:
 
