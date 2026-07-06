@@ -20,13 +20,18 @@ Correctness constraints honoured (build brief §5):
   :func:`read_hud_seat_colors` reads the HUD seat-avatar ring colours (top →
   bottom) for THIS game. :func:`detect_openings_result` requires the HUD to yield
   exactly two DISTINCT seat colours (else ``hud_unreadable``) and that they equal
-  the two bound colours as a SET (else ``hud_set_mismatch``). When the caller
-  supplies the ``seat_order`` (the top→bottom handle order), it *also* validates
-  the handle→colour **assignment** positionally (else ``hud_assignment_mismatch``)
-  — a swapped ``{handle: colour}`` binding is set-equal to the truth and would
-  otherwise silently invert ownership. Without ``seat_order`` only the set is
-  validated (the weaker legacy check), so callers that know the seat order must
-  pass it.
+  the two bound colours as a SET (else ``hud_set_mismatch``). It *also* validates
+  the handle→colour **assignment** (else ``hud_assignment_mismatch``) — a swapped
+  ``{handle: colour}`` binding is set-equal to the truth and would otherwise
+  silently invert ownership. The STRONG assignment anchor is ``pov_handle``: the
+  recording player's own HUD panel is ALWAYS the bottom seat (spike VERDICT), so the
+  POV handle (identified from the LOG, independent of the HUD colour read) must be
+  bound to the bottom seat colour ``hud[-1]``. This BREAKS the circularity a bare
+  positional re-read has — re-reading the same HUD the binding was built from only
+  confirms the HUD is stable, never that the right handle sits at the right seat, so
+  a mis-seated handle would pass. ``seat_order`` (top→bottom handle order) is the
+  legacy positional anchor, discriminating only when derived independently of the
+  binding. Without either, only the set is validated (the weakest check).
 - **§5.7 road tiebreak.** A setup settlement + its road fuse into one blob whose
   pixel mass bleeds onto several incident edges; the road is resolved among the
   edges *incident to the owner's settlement* by a colour-specific road mask (the
@@ -470,6 +475,7 @@ def detect_openings_result(
     *,
     player_colors: dict[str, str],
     seat_order: Sequence[str] | None = None,
+    pov_handle: str | None = None,
 ) -> OpeningResult:
     """Detect the 2-settlement + 2-road snake-draft opening per player, keyed by the
     per-game ``player_colors`` binding (``{handle: colour}``), returning an
@@ -484,13 +490,25 @@ def detect_openings_result(
     :class:`~catan_rl.human_data.board_cv.BoardRead` (its projected ``vertex_px``
     and ``affine`` supply the lattice / hex centres).
 
-    ``seat_order`` (optional) is the handle order top→bottom (the seat / draft
-    order). When supplied, the HUD is checked for the full **assignment** — each
-    handle's bound colour must equal the HUD's positional colour at that seat —
-    not merely the colour *set* (§5.14: a swapped ``{handle: colour}`` binding is
-    set-equal to the truth and would otherwise pass, silently inverting every
-    per-player scoreboard row). When absent, only the colour set is validated (the
-    weaker legacy check) — callers that know the seat order should pass it.
+    The §5.14 assignment check validates the handle→colour **assignment**, not
+    merely the colour *set* (a swapped ``{handle: colour}`` binding is set-equal to
+    the truth and would otherwise pass, silently inverting every per-player
+    scoreboard row). It offers two anchors:
+
+    ``pov_handle`` (optional, the STRONG anchor) is the POV/self-seat handle. The
+    recording player's own HUD panel is ALWAYS the bottom seat (spike VERDICT), and
+    :func:`read_hud_seat_colors` returns colours top→bottom, so the POV handle must
+    be bound to the BOTTOM seat colour ``hud[-1]``. This anchor is genuinely
+    independent of the read the binding was built from: the POV identity comes from
+    the LOG (name), not the HUD colour read, so it BREAKS the circularity where a
+    positional re-read of the same HUD can only confirm the HUD is stable — never
+    that the right handle sits at the right seat (a mis-seated handle would pass).
+
+    ``seat_order`` (optional, the legacy positional anchor) is the handle order
+    top→bottom; when supplied, each handle's bound colour must equal the HUD's
+    positional colour at that seat. Callers that derive the seat order from a source
+    OTHER than the binding (e.g. the POV anchor) should pass it. When both are
+    absent, only the colour set is validated (the weakest check).
 
     Rejection reasons (see :class:`OpeningResult`): ``player_colors_invalid``,
     ``hud_unreadable``, ``hud_set_mismatch``, ``hud_assignment_mismatch``,
@@ -517,10 +535,20 @@ def detect_openings_result(
     if set(hud) != set(colors):
         return OpeningResult(None, "hud_set_mismatch")
     # §5.14 assignment check: validate the handle→colour ASSIGNMENT, not just the
-    # set — a swapped binding is set-equal but mislabels ownership. Only possible
-    # when the caller supplies the seat order the HUD's positional read pairs with.
-    # ``seat_order`` must name exactly the two bound handles (top→bottom), and each
-    # seat's bound colour must equal the HUD's colour at that seat.
+    # set — a swapped binding is set-equal but mislabels ownership.
+    #
+    # STRONG anchor (breaks the §5.14 circularity): the POV/self-seat handle is
+    # identified from the LOG (name) and, per the Colonist layout (spike VERDICT), is
+    # ALWAYS the BOTTOM HUD seat. ``read_hud_seat_colors`` returns top→bottom, so the
+    # POV handle MUST be bound to ``hud[-1]``. Because the POV identity is independent
+    # of the HUD colour read the binding was built from, this catches a mis-seated
+    # handle a positional self-check never could (it would only confirm HUD stability).
+    if pov_handle is not None and player_colors.get(pov_handle) != hud[-1]:
+        return OpeningResult(None, "hud_assignment_mismatch")
+    # Legacy positional anchor: ``seat_order`` must name exactly the two bound handles
+    # (top→bottom), and each seat's bound colour must equal the HUD's colour at that
+    # seat. Only discriminating when ``seat_order`` is derived independently of the
+    # binding (else it re-reads what built the binding — the finding being resolved).
     if seat_order is not None:
         if set(seat_order) != set(player_colors) or len(seat_order) != len(hud):
             return OpeningResult(None, "hud_assignment_mismatch")
@@ -589,12 +617,14 @@ def detect_openings(
     *,
     player_colors: dict[str, str],
     seat_order: Sequence[str] | None = None,
+    pov_handle: str | None = None,
 ) -> dict[str, PlayerOpening] | None:
     """Back-compat thin wrapper over :func:`detect_openings_result`: the openings
     ``{handle: PlayerOpening}`` on success, or ``None`` on any rejection (the
     reason is discarded). Callers that need the §5.6 ``rejection_reason`` (batch.py)
     must call :func:`detect_openings_result` directly. See that function for the
-    ``seat_order`` §5.14 assignment check and the full rejection-reason vocabulary.
+    ``pov_handle`` / ``seat_order`` §5.14 assignment check and the full
+    rejection-reason vocabulary.
     """
     return detect_openings_result(
         frame_rgb,
@@ -602,4 +632,5 @@ def detect_openings(
         board,
         player_colors=player_colors,
         seat_order=seat_order,
+        pov_handle=pov_handle,
     ).openings

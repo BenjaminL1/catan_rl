@@ -413,6 +413,24 @@ def test_draft_order_falls_back_to_sorted_handles_when_no_setup() -> None:
     )  # min("ThePhantom","rayman147") == "ThePhantom" (uppercase sorts first)
 
 
+def test_bind_colours_derives_assignment_from_pov_anchor_not_log_order() -> None:
+    # §5.14 circularity fix: the handle→colour binding is DERIVED from the
+    # authoritative POV seat anchor (agent=bottom self-seat, opponent=top seat),
+    # NOT from the log-frequency ``handles`` order. The HUD reads top→bottom
+    # GREEN/BLACK; game-1 truth is rayman147 (top/green) / ThePhantom (bottom/black).
+    players = {"agent": "ThePhantom", "opponent": "rayman147"}
+    player_colors, seat_order = harvest._bind_colours(players, ("GREEN", "BLACK"))
+    assert seat_order == ("rayman147", "ThePhantom")  # top → bottom (opponent above POV)
+    assert player_colors == {"rayman147": "GREEN", "ThePhantom": "BLACK"}
+    # The POV/agent is bound to the BOTTOM seat colour regardless of log order.
+    assert player_colors[players["agent"]] == "BLACK"
+
+
+def test_bind_colours_rejects_non_distinct_hud() -> None:
+    with pytest.raises(harvest.VideoParseError, match="two distinct seat colours"):
+        harvest._bind_colours({"agent": "a", "opponent": "b"}, ("GREEN", "GREEN"))
+
+
 def test_dice_log_extracts_valid_rolls_only() -> None:
     events = (
         LogEvent("roll", "ThePhantom", "thephantom rolled a 8"),

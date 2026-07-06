@@ -415,12 +415,13 @@ def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
     per_frame_lines = [ocr_log_crop(crop_log(f.frame)) for f in frames]
     all_lines = [line for lines in per_frame_lines for line in lines]
     handles = _discover_handles(all_lines)
+    players = _agent_binding(handles)
     events = parse_log(all_lines, handles).events
     seat_colours = read_hud_seat_colors(frames[len(frames) // 2].frame) if frames else ()
-    player_colors, seat_order = _bind_colours(handles, seat_colours)
+    player_colors, seat_order = _bind_colours(players, seat_colours)
     game_frames = _route_frames_to_games(frames, per_frame_lines, handles)
     return VideoContext(
-        players=_agent_binding(handles),
+        players=players,
         handles=handles,
         player_colors=player_colors,
         seat_order=seat_order,
@@ -460,6 +461,7 @@ def _read_game_inputs(
         board,
         player_colors=ctx.player_colors,
         seat_order=list(ctx.seat_order),
+        pov_handle=ctx.players["agent"],
     )
     granted: dict[str, Counter[str] | None] = {}
     for handle in ctx.handles:
@@ -743,15 +745,26 @@ def _agent_binding(handles: tuple[str, str]) -> dict[str, str]:  # pragma: no co
 
 
 def _bind_colours(
-    handles: tuple[str, str], seat_colours: tuple[str, ...]
-) -> tuple[dict[str, str], tuple[str, ...]]:  # pragma: no cover - real-run path
-    """Pair handles to HUD seat colours (top→bottom). A wrong pairing is caught by the
-    §5.14 HUD-assignment firewall (the game rejects), never a confidently-wrong accept.
+    players: dict[str, str], seat_colours: tuple[str, ...]
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    """Derive the handle→colour binding from the AUTHORITATIVE POV seat anchor.
+
+    ``read_hud_seat_colors`` returns the two seat colours top→bottom. The POV/agent
+    (ThePhantom) is ALWAYS the BOTTOM self-seat and the opponent the TOP seat (spike
+    ``blockers/VERDICT.md``: "POV / 'You' = ThePhantom (bottom-right self-seat)"), so
+    the binding is DERIVED from that structural invariant — top→opponent,
+    bottom→agent — NOT from the earlier ``seat_order = handles`` guess. Log-line
+    frequency (how ``handles`` is ordered) has nothing to do with HUD seat position:
+    that was an unvalidated assumption the §5.14 firewall — re-reading the very HUD
+    the binding was built from — could never test (a mis-seated handle passed
+    silently). The §5.14 assignment check re-anchors on the POV IDENTITY against the
+    post-setup frame (a DIFFERENT read), so it now has real discriminating power.
     """
     if len(seat_colours) != 2 or len(set(seat_colours)) != 2:
         raise VideoParseError("HUD did not yield two distinct seat colours")
-    seat_order = handles  # top→bottom, paired positionally with the HUD colours
-    player_colors = {seat_order[0]: seat_colours[0], seat_order[1]: seat_colours[1]}
+    agent, opponent = players["agent"], players["opponent"]
+    seat_order = (opponent, agent)  # top → bottom: opponent seat above the POV self-seat
+    player_colors = {opponent: seat_colours[0], agent: seat_colours[1]}
     return player_colors, seat_order
 
 

@@ -202,6 +202,43 @@ def test_detect_openings_result_carries_typed_rejection_reasons() -> None:
     assert res.rejection_reason == "hud_unreadable"
 
 
+def test_pov_anchor_catches_mis_seated_handle_non_circularly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§5.14 circularity fix: the ``pov_handle`` anchor rejects a binding that seats
+    the POV (always the BOTTOM self-seat) at the wrong colour — a mis-seating the old
+    positional self-check (re-reading the HUD the binding was built from) could never
+    catch. The HUD reads GREEN(top)/BLACK(bottom); the POV/ThePhantom must be BLACK."""
+    pytest.importorskip("cv2")
+    from catan_rl.human_data import detect_openings_result
+    from catan_rl.human_data import openings as openings_mod
+
+    board = _blank_board()
+    frame = np.zeros((1080, 1920, 3), np.uint8)
+    # Authoritative HUD, read independently of the binding (patched to a fixed order).
+    monkeypatch.setattr(openings_mod, "read_hud_seat_colors", lambda _f: ("GREEN", "BLACK"))
+
+    # POV bound to the TOP colour (GREEN) though the POV is the bottom seat -> reject,
+    # BEFORE any settlement CV. The set is still correct (both colours present), so
+    # only the POV-identity anchor can catch this inversion.
+    mis_seated = {"rayman147": "BLACK", "ThePhantom": "GREEN"}
+    res = detect_openings_result(
+        frame, frame, board, player_colors=mis_seated, pov_handle="ThePhantom"
+    )
+    assert res.openings is None
+    assert res.rejection_reason == "hud_assignment_mismatch"
+
+    # A POV handle absent from the binding is likewise a typed assignment reject.
+    res = detect_openings_result(
+        frame,
+        frame,
+        board,
+        player_colors={"rayman147": "GREEN", "ThePhantom": "BLACK"},
+        pov_handle="someone_else",
+    )
+    assert res.rejection_reason == "hud_assignment_mismatch"
+
+
 def _synthetic_lattice() -> np.ndarray:
     """The real game-1 projected vertex pixels (board_cv on the committed frame),
     frozen so the pure road-tiebreak tests need no cv2 decode. Only the handful of
@@ -497,6 +534,35 @@ def test_detect_openings_rejects_swapped_assignment_with_seat_order() -> None:
 
     correct = detect_openings_result(
         frame, baseline, board, player_colors=_GAME1_PLAYER_COLORS, seat_order=seat_order
+    )
+    assert correct.rejection_reason is None
+    assert correct.openings is not None
+
+
+@pytest.mark.slow
+def test_detect_openings_pov_anchor_end_to_end() -> None:
+    """§5.14 (circularity fix): the ``pov_handle`` anchor, driven end-to-end on the
+    real game-1 fixture, rejects a POV-inverted binding and accepts the correct one —
+    the wiring's actual assignment guard (harvest passes ``pov_handle=agent``). The
+    HUD reads GREEN(top)/BLACK(bottom); ThePhantom is the bottom self-seat (BLACK)."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import detect_openings_result, read_board
+
+    frame = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_FRAME)), cv2.COLOR_BGR2RGB)
+    baseline = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_BASELINE)), cv2.COLOR_BGR2RGB)
+    board = read_board(frame)
+    assert board is not None
+
+    swapped = {"rayman147": "BLACK", "ThePhantom": "GREEN"}  # POV bound to the top seat
+    res = detect_openings_result(
+        frame, baseline, board, player_colors=swapped, pov_handle="ThePhantom"
+    )
+    assert res.openings is None
+    assert res.rejection_reason == "hud_assignment_mismatch"
+
+    correct = detect_openings_result(
+        frame, baseline, board, player_colors=_GAME1_PLAYER_COLORS, pov_handle="ThePhantom"
     )
     assert correct.rejection_reason is None
     assert correct.openings is not None
