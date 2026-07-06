@@ -145,6 +145,16 @@ class ColorProfile:
     road_lo: tuple[int, int, int]
     road_hi: tuple[int, int, int]
     tile_subtract: bool
+    #: Enable the piece-vs-tile SPARE (:func:`_piece_over_tile_mask`) inside the
+    #: tile subtraction. Distinct from ``tile_subtract``: the spare re-admits pixels
+    #: where a vivid piece towers over the baseline tile, and its ``sat``/``val``
+    #: deltas are **measured for GREEN only** (committed game-1 footage, §5.6). RED is
+    #: also ``tile_subtract`` but its brick-vs-piece saturation split was NEVER
+    #: verified (survey ``separable_by_sat=false``), so applying a GREEN-calibrated
+    #: spare to RED would poke unmeasured holes in RED's fail-closed subtraction and
+    #: could resurrect brick-tile pixels as a spurious RED piece — a mislabel. So the
+    #: spare stays OFF for every colour but GREEN until separately measured.
+    piece_over_tile_spare: bool = False
     #: Broad same-hue tile range (empty-baseline) dilated & subtracted when
     #: ``tile_subtract`` — the forest/pasture green that masquerades as a piece.
     tile_lo: tuple[int, int, int] = (0, 0, 0)
@@ -164,6 +174,7 @@ PALETTE: dict[str, ColorProfile] = {
         road_lo=(40, 150, 120),
         road_hi=(90, 255, 255),
         tile_subtract=True,
+        piece_over_tile_spare=True,
         tile_lo=(35, 60, 60),
         tile_hi=(92, 255, 255),
     ),
@@ -261,18 +272,31 @@ _SEAT_AVATAR_ASPECT_HI = 1.8
 #: only removes seats, never invents one.
 _SEAT_MIN_SEPARATION_FRAC = 0.25
 
-#: Piece-vs-tile discriminator for the ``tile_subtract`` green-tile subtraction
-#: (§5.6). The baseline tile mask marks WHERE a same-hue tile sits, but a real
-#: coloured piece PLACED on that tile is a vivid flat swatch that towers over the
-#: dull, textured board tile in BOTH saturation and value. So a baseline-tile pixel
-#: is spared from subtraction wherever the FRAME gained a vivid piece over the
-#: baseline there (frame sat AND val both jumped by these deltas). Bare tiles have
-#: frame≈baseline (near-zero delta) and are still killed; a green settlement sitting
-#: ON a green tile survives instead of being eaten. Both deltas are required (AND) so
-#: a global lighting drift in one channel alone cannot spare the whole board (which
-#: would defeat the tile kill). Genuinely-unrecoverable suppression (a piece whose
-#: paint is NOT vivid enough to clear the delta) still falls through to the
-#: ``:green_tile_suppressed`` typed reason — the residual §5.6 bias stays MEASURED.
+#: Piece-vs-tile discriminator for the GREEN-tile subtraction (§5.6). The baseline
+#: tile mask marks WHERE a same-hue tile sits, but a real coloured piece PLACED on
+#: that tile is a vivid flat swatch, so a baseline-tile pixel is spared from
+#: subtraction wherever the FRAME gained a vivid piece over the baseline there
+#: (frame sat AND val both jumped by these deltas). A piece too dull to clear the
+#: delta still falls through to the ``:green_tile_suppressed`` typed reason — the
+#: residual §5.6 bias stays MEASURED, never papered over.
+#:
+#: **Deltas measured from committed footage** (``game1_empty_baseline_t105.png``
+#: baseline vs ``game1_postsetup_t247.png`` frame; ``test_piece_over_tile_spare_
+#: measured_on_committed_game1_frame``). The AND is the load-bearing choice, and the
+#: measurement — not a hand-wave — is why:
+#:   * On real footage baseline↔frame carry a global **exposure drift** (bare green
+#:     tiles gain dVAL median +54), so a VALUE gate ALONE would falsely spare a large
+#:     fraction of bare-tile pixels (≈16% of the board's bare green tile; 58% on the
+#:     un-eroded hull) — it would defeat the tile kill and fabricate green pieces.
+#:   * But bare tiles simultaneously **desaturate** under that drift (dSAT median -87),
+#:     so requiring sat>25 AND val>40 cuts the bare-tile false-spare ~an order of
+#:     magnitude, to ≈1.6% — fail-closed preserved (the residual leaks are handled by
+#:     the downstream area-margin / head-vote guards, not this mask).
+#:   * A shared-exposure green settlement ON a green tile clears both comfortably
+#:     (single-frame piece-vs-forest-tile dVAL≈+71, dSAT≈+27), so the spare recovers
+#:     it. Under drift a real piece can read DARKER than the drift-brightened baseline
+#:     (game-1 v3/v11 dVAL median -37/-57 -> 0% spared): the spare then abstains and
+#:     the piece falls to ``:green_tile_suppressed`` rather than risk a mislabel.
 _PIECE_OVER_TILE_SAT_DELTA = 25
 _PIECE_OVER_TILE_VAL_DELTA = 40
 
@@ -439,11 +463,16 @@ def _color_masks(
         # could not prevent. Protection is dilated 3px to cover the piece's anti-alias
         # rim. A piece too dull to clear the delta still falls through to the
         # ``:green_tile_suppressed`` reason, so the residual bias stays MEASURED.
-        protect = cv2.dilate(
-            _piece_over_tile_mask(frame_hsv, baseline_hsv), np.ones((3, 3), np.uint8)
-        )
-        tile_piece = np.asarray(cv2.bitwise_and(tile_piece, cv2.bitwise_not(protect)), np.uint8)
-        tile_road = np.asarray(cv2.bitwise_and(tile_road, cv2.bitwise_not(protect)), np.uint8)
+        # SCOPED to ``piece_over_tile_spare`` (GREEN only): the deltas are measured
+        # for green pieces vs forest/pasture tiles; RED is ``tile_subtract`` too but
+        # its brick split is unmeasured, so RED keeps the full fail-closed subtraction
+        # (no spare) — never resurrecting a brick pixel into a spurious RED piece.
+        if profile.piece_over_tile_spare:
+            protect = cv2.dilate(
+                _piece_over_tile_mask(frame_hsv, baseline_hsv), np.ones((3, 3), np.uint8)
+            )
+            tile_piece = np.asarray(cv2.bitwise_and(tile_piece, cv2.bitwise_not(protect)), np.uint8)
+            tile_road = np.asarray(cv2.bitwise_and(tile_road, cv2.bitwise_not(protect)), np.uint8)
         piece = np.asarray(cv2.bitwise_and(piece, cv2.bitwise_not(tile_piece)), np.uint8)
         road = np.asarray(cv2.bitwise_and(road, cv2.bitwise_not(tile_road)), np.uint8)
     piece = np.asarray(cv2.bitwise_and(piece, board_mask), np.uint8)

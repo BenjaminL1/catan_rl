@@ -941,6 +941,192 @@ def test_green_settlement_fully_on_green_tile_survives_subtraction() -> None:
     assert not _survives(baked), "delta-less blob must still be killed as a tile"
 
 
+def test_bare_green_tile_under_lighting_drift_not_read_as_piece() -> None:
+    """SLICE green_seg FALSE-POSITIVE GUARD (§5.6): the piece-vs-tile spare must NOT
+    let a BARE green tile (no piece placed) be read as a spurious GREEN piece under
+    plausible frame-vs-baseline drift. The dull tile hue already leaks into the piece
+    band (that is why ``tile_subtract`` exists), so the ONLY thing keeping a bare tile
+    subtracted is that :func:`_piece_over_tile_mask` does not fire — it requires BOTH
+    saturation AND value to jump. Two drift cases must stay killed:
+
+    1. A realistic additive-white lighting lift RAISES value but LOWERS saturation
+       (paint washes out), so the sat channel never clears its delta -> not spared.
+    2. A single-channel synthetic value-only bump (sat flat, val +60) still fails the
+       AND -> not spared.
+
+    If either were spared the leaked bare-tile pixels would survive into the piece
+    mask and mislabel an empty vertex as a settlement. The positive control at the end
+    (a genuine vivid piece, both channels up) confirms the spare still fires when it
+    should — the test is not passing merely because the spare is dead."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import (
+        _MIN_HEAD_VOTES,
+        _MIN_PIECE_AREA,
+        PALETTE,
+        _color_masks,
+    )
+
+    h, w = 200, 200
+    tile_rgb = (46, 110, 52)  # dull tile green — already inside the GREEN piece band
+    baseline = np.full((h, w, 3), tile_rgb, np.uint8)
+    board_mask = np.full((h, w), 255, np.uint8)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+    vx, vy = 100, 100
+    vertex_px = np.full((54, 2), 5000.0)
+    vertex_px[3] = (float(vx), float(vy))
+
+    def _reads_as_piece(fr: np.ndarray) -> bool:
+        piece_mask, _road = _color_masks(
+            cv2.cvtColor(fr, cv2.COLOR_RGB2HSV), baseline_hsv, board_mask, PALETTE["GREEN"]
+        )
+        n, labels, stats, _cent = cv2.connectedComponentsWithStats(piece_mask)
+        for i in range(1, n):
+            if int(stats[i, cv2.CC_STAT_AREA]) < _MIN_PIECE_AREA:
+                continue
+            ys, xs = np.where(labels == i)
+            pts = np.stack([xs, ys], 1).astype(float)
+            dv = np.linalg.norm(vertex_px[:, None, :] - pts[None, :, :], axis=2)
+            if int((dv < 16.0).sum(1).max()) >= _MIN_HEAD_VOTES:
+                return True
+        return False
+
+    # Case 1: realistic additive-white lighting lift (val up, sat DOWN) over the whole
+    # bare tile. The AND fails on the sat channel -> tile stays subtracted, no piece.
+    lit = np.clip(baseline.astype(np.int16) + 60, 0, 255).astype(np.uint8)
+    lit_hsv = cv2.cvtColor(lit, cv2.COLOR_RGB2HSV)
+    assert int(lit_hsv[vy, vx, 1]) < int(baseline_hsv[vy, vx, 1]), "sanity: lighting drops sat"
+    assert not _reads_as_piece(lit), "bare tile under lighting drift mislabelled as a piece"
+
+    # Case 2: synthetic value-only bump (sat pinned to baseline, val +60). Single
+    # channel -> the AND still fails -> not spared, bare tile stays subtracted.
+    val_only_hsv = baseline_hsv.copy()
+    val_only_hsv[..., 2] = np.clip(val_only_hsv[..., 2].astype(np.int16) + 60, 0, 255).astype(
+        np.uint8
+    )
+    val_only = cv2.cvtColor(val_only_hsv, cv2.COLOR_HSV2RGB)
+    assert not _reads_as_piece(val_only), "value-only drift wrongly spared the bare tile"
+
+    # Positive control: a genuine vivid piece (both sat AND val jump) IS spared and read.
+    real = baseline.copy()
+    cv2.circle(real, (vx, vy), 14, (60, 220, 90), -1)
+    assert _reads_as_piece(real), "positive control: real on-tile piece must be read"
+
+
+def test_piece_over_tile_spare_scoped_to_green_not_red() -> None:
+    """SLICE green_seg finding 2: the piece-vs-tile SPARE must apply to GREEN ONLY,
+    never to RED (also ``tile_subtract`` but with an UNMEASURED brick split). RED's
+    subtraction must stay fully fail-closed: a vivid over-baseline blob sitting on a
+    RED brick tile is NOT resurrected into a spurious RED piece.
+
+    GREEN carries ``piece_over_tile_spare=True`` (measured deltas); RED carries
+    ``False``. Behaviourally: build a RED profile whose ``tile_lo/hi`` covers the
+    baseline swatch and drop a vivid same-hue blob on it in the frame — with the
+    spare OFF (RED) the blob is eaten by the tile subtraction; flipping ONLY the
+    spare flag on would resurrect it. This pins that RED never gets the green spare."""
+    cv2 = pytest.importorskip("cv2")
+    from dataclasses import replace
+
+    from catan_rl.human_data.openings import PALETTE, _color_masks
+
+    assert PALETTE["GREEN"].piece_over_tile_spare is True
+    assert PALETTE["RED"].piece_over_tile_spare is False
+    # RED is tile_subtract but must NOT spare (its brick split is unverified).
+    assert PALETTE["RED"].tile_subtract is True
+
+    h, w = 200, 200
+    # A dull red brick tile in the baseline (RED tile band hue 0-20, sat/val 60+).
+    baseline = np.full((h, w, 3), (120, 60, 60), np.uint8)  # RGB dull brick red
+    frame = baseline.copy()
+    cv2.circle(frame, (100, 100), 14, (240, 20, 20), -1)  # vivid RGB-red piece on the tile
+    board_mask = np.full((h, w), 255, np.uint8)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+
+    red = PALETTE["RED"]
+    piece_off, _ = _color_masks(frame_hsv, baseline_hsv, board_mask, red)
+    # Spare OFF (the shipped RED): the vivid blob is subtracted as tile — fail-closed.
+    assert int((piece_off > 0).sum()) == 0, "RED must NOT spare an on-brick blob (fail-closed)"
+    # Control: the SAME frame WITH the spare flag on WOULD resurrect the blob — proving
+    # the scoping (not a dead code path) is what protects RED.
+    red_spared = replace(red, piece_over_tile_spare=True)
+    piece_on, _ = _color_masks(frame_hsv, baseline_hsv, board_mask, red_spared)
+    assert int((piece_on > 0).sum()) > 0, "control: spare flag on WOULD resurrect the blob"
+
+
+@pytest.mark.slow
+def test_piece_over_tile_spare_measured_on_committed_game1_frame() -> None:
+    """SLICE green_seg finding 1: ground the piece-vs-tile deltas (25 sat / 40 val)
+    in REAL committed footage, not only synthetic blobs. On the committed game-1
+    frame/baseline (a global exposure drift between them) the spare must stay
+    FAIL-CLOSED: it must NOT resurrect bare green-tile pixels into a spurious green
+    piece, and it must not break detection of the two real green settlements (v3/v11).
+
+    Measured here and pinned: bare green-tile pixels DESATURATE under the drift, so
+    the sat AND val conjunction spares only a sub-percent fraction of them (far too
+    sparse to form a >=``_MIN_PIECE_AREA`` blob) — whereas a value gate ALONE would
+    spare a majority (the tiles brighten). This is the footage evidence the deltas
+    were chosen against."""
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data import read_board
+    from catan_rl.human_data.openings import (
+        _PIECE_OVER_TILE_VAL_DELTA,
+        PALETTE,
+        _piece_over_tile_mask,
+    )
+
+    frame = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_FRAME)), cv2.COLOR_BGR2RGB)
+    baseline = cv2.cvtColor(cv2.imread(str(_FIXTURES / _GAME1_BASELINE)), cv2.COLOR_BGR2RGB)
+    board = read_board(frame)
+    assert board is not None and board.desert_hex == 11
+    vertex_px = board.vertex_px
+
+    h, w = frame.shape[:2]
+    hull = cv2.convexHull(vertex_px.astype(np.float32)).astype(np.int32)
+    hull_mask = np.zeros((h, w), np.uint8)
+    cv2.fillConvexPoly(hull_mask, hull, 255)
+    board_mask = cv2.erode(hull_mask, np.ones((8, 8), np.uint8))
+    frame_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+
+    green = PALETTE["GREEN"]
+    # Green tile mask from the empty baseline, on the board.
+    from catan_rl.human_data.openings import _hsv_in_range
+
+    tile = _hsv_in_range(baseline_hsv, green.tile_lo, green.tile_hi)
+    tile = np.asarray(cv2.bitwise_and(tile, board_mask), np.uint8)
+    # Exclude the two real settlement neighbourhoods so we score BARE tile only.
+    bare = tile.copy()
+    for v in (3, 11):
+        x, y = int(vertex_px[v][0]), int(vertex_px[v][1])
+        cv2.circle(bare, (x, y), 22, 0, -1)
+    bare_px = int((bare > 0).sum())
+    assert bare_px > 5000, "sanity: the board has ample bare green tile to score"
+
+    dsat = frame_hsv[..., 1].astype(np.int16) - baseline_hsv[..., 1].astype(np.int16)
+    dval = frame_hsv[..., 2].astype(np.int16) - baseline_hsv[..., 2].astype(np.int16)
+
+    # MEASURED root cause: under the baseline↔frame exposure drift the bare green tiles
+    # BRIGHTEN (dVAL median > 0) yet DESATURATE (dSAT median < 0). That is exactly why
+    # value alone is unsafe but the sat-AND-val conjunction is safe.
+    assert int(np.median(dval[bare > 0])) > 0, "bare tiles should brighten under the drift"
+    assert int(np.median(dsat[bare > 0])) < 0, "bare tiles should desaturate under the drift"
+
+    # (1) VALUE alone would falsely spare a large fraction of bare tiles (they brighten).
+    val_only_frac = float(((dval > _PIECE_OVER_TILE_VAL_DELTA) & (bare > 0)).sum()) / bare_px
+    # (2) The shipped sat-AND-val spare cuts that by ~an order of magnitude, because the
+    # sat channel rejects the desaturating bare tiles — fail-closed, measured on footage.
+    protect = _piece_over_tile_mask(frame_hsv, baseline_hsv)
+    spared_bare = np.asarray(cv2.bitwise_and(protect, bare), np.uint8)
+    and_frac = float((spared_bare > 0).sum()) / bare_px
+    assert val_only_frac > 0.10, f"value-only bare false-spare should be sizeable: {val_only_frac}"
+    assert and_frac < 0.05, f"sat-AND-val bare false-spare must stay small; got {and_frac}"
+    assert val_only_frac > 5.0 * and_frac, (
+        f"the sat channel must cut bare false-spare by a wide margin: "
+        f"value-only={val_only_frac:.3f} vs sat-AND-val={and_frac:.3f}"
+    )
+
+
 def test_road_dominance_guard_rejects_occluded_true_road() -> None:
     # Review BLOCKER: the absolute floor alone lets an occluded true road snap to a
     # leaked wrong-but-incident edge (which the §5.7 re-check still passes). The
