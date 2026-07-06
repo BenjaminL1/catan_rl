@@ -47,6 +47,12 @@ dev = [
   # regression corpus importorskips on CI and the merged-box fail-closed
   # invariants are never exercised there. Headless build — no GUI libs on CI.
   "opencv-python-headless>=4.8",
+  # human_data gold-gate tooling (scripts/gold_gate.py + human_data/gold_gate.py):
+  # the blind-labeling packet writer saves frame PNGs and renders the engine-id
+  # reference grid via headless matplotlib (Agg, lazy-imported — no GUI). Without
+  # this dep on CI the gold-gate prepare/grid tests importorskip and the packet /
+  # reference-grid render paths go unexercised.
+  "matplotlib>=3.8",
 ]
 notebooks = ["jupyter>=1.0", "matplotlib>=3.8"]
 
