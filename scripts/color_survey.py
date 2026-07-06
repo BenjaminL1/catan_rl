@@ -479,17 +479,23 @@ def _hue_wrap_span(hues: list[float]) -> tuple[float, float]:
 
 # Piece-vs-tile hue collisions the on-board reader must handle. Derived from the
 # measured board tile-hue histogram (color_survey.md): which same-hued tile (or the
-# blue sea background) a colour's PIECE hue overlaps, and whether a saturation floor
-# still separates them (RED pieces tower over brick tiles in saturation).
+# blue sea background) a colour's PIECE hue overlaps, and whether it needs the
+# empty-baseline tile subtraction. The histogram measures tile HUE only (not tile
+# saturation), so a "saturation floor separates piece from tile" claim cannot be
+# verified from this survey -> fail-closed to tile_subtract=True whenever the piece
+# hue overlaps a same-hued tile band.
 _TILE_COLLISION: dict[str, dict] = {
     "RED": {
         "collides": True,
         "tiles": ["BRICK"],
-        "separable_by_sat": True,
-        "tile_subtract": False,
-        "note": "piece hue overlaps brick/red-hills tiles, but red pieces (sat med ~217) "
-        "tower over brick tiles (sat p90 ~194); a saturation floor separates them, "
-        "so no baseline subtraction is needed.",
+        "separable_by_sat": False,
+        "tile_subtract": True,
+        "note": "piece hue wraps the 0/180 seam and overlaps the brick/red-hills tile "
+        "band (measured hue 0-20 = ~11% of saturated board pixels). Red pieces are highly "
+        "saturated (measured piece sat median ~248, p5 ~176), but this survey measures "
+        "tile HUE only, not tile saturation, so a saturation-floor separation from brick "
+        "cannot be verified from the data; apply the empty-baseline tile subtraction "
+        "conservatively (fail-closed).",
     },
     "ORANGE": {
         "collides": True,

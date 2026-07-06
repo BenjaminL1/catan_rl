@@ -367,9 +367,9 @@
         "tiles": [
           "BRICK"
         ],
-        "separable_by_sat": true,
-        "tile_subtract": false,
-        "note": "piece hue overlaps brick/red-hills tiles, but red pieces (sat med ~217) tower over brick tiles (sat p90 ~194); a saturation floor separates them, so no baseline subtraction is needed."
+        "separable_by_sat": false,
+        "tile_subtract": true,
+        "note": "piece hue wraps the 0/180 seam and overlaps the brick/red-hills tile band (measured hue 0-20 = ~11% of saturated board pixels). Red pieces are highly saturated (measured piece sat median ~248, p5 ~176), but this survey measures tile HUE only, not tile saturation, so a saturation-floor separation from brick cannot be verified from the data; apply the empty-baseline tile subtraction conservatively (fail-closed)."
       }
     },
     "WHITE": {

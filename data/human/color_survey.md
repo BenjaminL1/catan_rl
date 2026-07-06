@@ -24,7 +24,7 @@ Measured from real ThePhantom `high`-tier footage by `scripts/color_survey.py` �
 | identity | ring H | ring S | ring V | piece H | piece S | piece V | tile_subtract |
 |---|---|---|---|---|---|---|---|
 | BLACK | [0, 179] | [0, 60] | [34, 130] | [0, 179] | [0, 60] | [0, 89] | False |
-| RED | [169, 4] | [88, 255] | [107, 255] | [174, 9] | [121, 255] | [107, 255] | False |
+| RED | [169, 4] | [88, 255] | [107, 255] | [174, 9] | [121, 255] | [107, 255] | True |
 | WHITE | [0, 179] | [0, 55] | [145, 255] | [0, 179] | [0, 55] | [195, 255] | False |
 | PURPLE | [129, 142] | [80, 156] | [121, 181] | [136, 147] | [152, 255] | [107, 253] | False |
 | BLUE | [102, 112] | [97, 252] | [118, 213] | [100, 108] | [112, 255] | [106, 255] | True |
@@ -65,7 +65,7 @@ Board saturated-pixel hue histogram (mean fraction per 10-wide bin, across all s
 Resulting flags:
 
 - **BLACK**: `tile_subtract=False` — dark pieces (val <75) vs grey ore tiles / the robber; the existing hex-centre exclusion handles the robber, no baseline subtraction.
-- **RED**: `tile_subtract=False` — piece hue overlaps brick/red-hills tiles, but red pieces (sat med ~217) tower over brick tiles (sat p90 ~194); a saturation floor separates them, so no baseline subtraction is needed.
+- **RED**: `tile_subtract=True` — piece hue wraps the 0/180 seam and overlaps the brick/red-hills tile band (measured hue 0-20 = ~11% of saturated board pixels). Red pieces are highly saturated (measured piece sat median ~248, p5 ~176), but this survey measures tile HUE only, not tile saturation, so a saturation-floor separation from brick cannot be verified from the data; apply the empty-baseline tile subtraction conservatively (fail-closed).
 - **WHITE**: `tile_subtract=False` — white pieces (val >200, sat <45) share their signature with white number tokens / vertex borders / port glyphs; the hex-centre + lattice-snap guards discriminate, not a hue subtraction.
 - **PURPLE**: `tile_subtract=False` — piece hue (~141) has no same-hued board tile (hue 130-150 is empty).
 - **BLUE**: `tile_subtract=True` — CRITICAL: the board sits on a blue sea background (hue 100-110 = 58% of saturated board pixels), the same hue as blue pieces; needs the sea/tile subtraction or a tight sat+val gate.
