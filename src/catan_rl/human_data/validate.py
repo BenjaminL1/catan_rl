@@ -50,10 +50,12 @@ from catan_rl.human_data.orientation import (
     MAX_AFFINE_RESIDUAL_PX,
     MIN_RESOLUTION,
     assert_glyph_anchor,
+    order_openings_by_grant,
 )
 from catan_rl.human_data.record import (
     PROVENANCE_BOARD_DESERT,
     PROVENANCE_OPENINGS_DESERT,
+    PROVENANCE_PLACEMENT_ORDER_ESTABLISHED,
     VALID_DICE_VALUES,
     GameRecord,
     OpponentStrength,
@@ -259,7 +261,13 @@ def cross_check(
        D6 flip that the desert-binding cannot see is caught here;
        ``rejection_reason=`` :data:`GLYPH_MISMATCH_REASON`.
 
-    A record that passes every check is built with ``passed_crosscheck=True``. The
+    A record that passes every check has its openings re-ordered to LOG PLACEMENT
+    ORDER (step6 §3.1): the readable granted-card multisets pin each player's
+    2nd/resource-granting settlement, so ``settlements[1]`` is the granting vertex
+    and ``provenance["placement_order_established"]`` records whether the order was
+    established (a granted multiset matching neither / both settlements leaves the
+    order UNESTABLISHED — frame order kept, the record then EVAL-excluded but still
+    seed-eligible). It is built with ``passed_crosscheck=True``. The
     ``GameRecord`` constructor then re-runs its own pure-value :meth:`validate`
     (standard resource/number multisets, distinctness, snake-draft, provenance
     orientation-binding, sub-1080p, dice-log range). Those finer contract invariants
@@ -310,6 +318,19 @@ def cross_check(
     anchor_mismatch = False
     if reason is None:
         assert opening_result.openings is not None  # guaranteed by check (4)
+        # Establish LOG PLACEMENT ORDER (step6 §3.1): the granted-card multiset
+        # (already readable for both players by the coverage gate above) pins each
+        # player's 2nd/resource-granting settlement, so the openings are re-ordered
+        # to ``settlements[1] == granting`` and the record stamps
+        # ``placement_order_established``. A grant that matches neither/both
+        # settlements leaves the order UNESTABLISHED (frame order kept; the record
+        # is then EVAL-excluded but still seed-eligible). ``cross_check`` carries no
+        # setup-event stream, so it uses the grant-only establisher; the harvest
+        # driver adds the log-side ordinal via ``establish_placement_order``.
+        board_resource_by_hex = {int(h["hex_id"]): str(h["resource"]) for h in board_hexes}
+        ordered_openings, order_established = order_openings_by_grant(
+            dict(opening_result.openings), readable_grants, board_resource_by_hex, topology
+        )
         try:
             record = GameRecord(
                 video_id=video_id,
@@ -319,7 +340,7 @@ def cross_check(
                 ruleset={"num_players": 2, "win_vp": 15},
                 hexes=board_hexes,
                 draft_order=draft_order,
-                openings=dict(opening_result.openings),
+                openings=ordered_openings,
                 dice_log=dice_log,
                 winner=winner,
                 episode_source="natural",
@@ -329,6 +350,7 @@ def cross_check(
                     "ts": ts,
                     PROVENANCE_BOARD_DESERT: board.desert_hex,
                     PROVENANCE_OPENINGS_DESERT: openings_desert_hex,
+                    PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: order_established,
                 },
                 rejection_reason=None,
             )
@@ -406,6 +428,9 @@ def cross_check(
                 "ts": ts,
                 PROVENANCE_BOARD_DESERT: desert_hex,
                 PROVENANCE_OPENINGS_DESERT: desert_hex,
+                # A rejected record is never scoreboard/seed-eligible; its openings
+                # are frame-order (or a placeholder), so order is not established.
+                PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False,
             },
             rejection_reason=reason,
         )

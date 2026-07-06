@@ -104,13 +104,16 @@ def _granted_for(vertex: int) -> Counter[str]:
     return granted_resources_under_orientation(vertex, by_hex, topo)
 
 
-# Readable, orientation-consistent grant reads for BOTH players (ThePhantom's 2nd
-# settlement is vertex 19; rayman147's is vertex 3). The joint-flip firewall is
+# Readable, orientation-consistent grant reads for BOTH players. The 2nd/
+# resource-granting settlements are the hand-verified game-1 grants (test_orientation):
+# ThePhantom v19 (SHEEP/ORE/ORE), rayman147 v11 (WHEAT/WOOD/BRICK) — so the openings
+# re-order to log-placement order (settlements[1] == granting) and the accepted
+# record is placement_order_established (step6 §3.1). The joint-flip firewall is
 # NON-OPTIONAL (expert BLOCKER 1): acceptance requires the anchor to run for both
 # players, so the default fixture must supply grants that let it run and pass.
 _VALID_GRANTS: dict[str, Counter[str] | None] = {
     "ThePhantom": _granted_for(19),
-    "rayman147": _granted_for(3),
+    "rayman147": _granted_for(11),
 }
 
 
@@ -394,10 +397,10 @@ def test_accept_path_bad_hex_number_is_rejected_not_raised() -> None:
 
 
 def test_gate_accepts_with_matching_glyph_anchor() -> None:
-    # ThePhantom's 2nd settlement is vertex 19, rayman147's is vertex 3; the granted
+    # ThePhantom's 2nd settlement is vertex 19, rayman147's is vertex 11; the granted
     # glyphs match their adjacencies under the correct orientation → the joint-flip
     # firewall runs for BOTH players and passes.
-    granted: dict[str, Any] = {"ThePhantom": _granted_for(19), "rayman147": _granted_for(3)}
+    granted: dict[str, Any] = {"ThePhantom": _granted_for(19), "rayman147": _granted_for(11)}
     result = _cross_check(granted_by_player=granted)
     assert result.accepted is True
     assert result.record.passed_crosscheck is True
@@ -422,7 +425,7 @@ def test_gate_rejects_joint_flip_via_glyph_anchor() -> None:
     impossible = Counter({"ORE": 3})
     assert tuple(sorted(impossible.items())) not in ph_adj
     result = _cross_check(
-        granted_by_player={"ThePhantom": impossible, "rayman147": _granted_for(3)}
+        granted_by_player={"ThePhantom": impossible, "rayman147": _granted_for(11)}
     )
     assert result.accepted is False
     assert result.record.rejection_reason == GLYPH_MISMATCH_REASON
@@ -440,7 +443,7 @@ def test_gate_rejects_unreadable_grant_none_read() -> None:
     # A player whose grant read came back None (the glyph reader's honest "could
     # not read") must be a typed REJECT — never an accepted game that silently
     # skipped the only joint-flip defence.
-    result = _cross_check(granted_by_player={"ThePhantom": None, "rayman147": _granted_for(3)})
+    result = _cross_check(granted_by_player={"ThePhantom": None, "rayman147": _granted_for(11)})
     assert result.accepted is False
     assert result.record.passed_crosscheck is False
     assert result.record.rejection_reason == GLYPH_UNREADABLE_REASON

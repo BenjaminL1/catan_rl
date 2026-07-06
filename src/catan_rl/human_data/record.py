@@ -195,6 +195,20 @@ RULESET_1V1: dict[str, int] = {"num_players": 2, "win_vp": 15}
 PROVENANCE_BOARD_DESERT = "board_desert_hex"
 PROVENANCE_OPENINGS_DESERT = "openings_desert_hex"
 
+#: Provenance flag (step6 §3.1, harvest-blocking placement-order contract): whether
+#: the record's :class:`PlayerOpening` tuples are in established LOG PLACEMENT ORDER
+#: (``settlements[1]`` = the 2nd/resource-granting settlement). ``True`` only when
+#: the setup-event sequence + granted-glyph adjacency together disambiguate each
+#: player's 1st vs 2nd settlement (see
+#: :func:`catan_rl.human_data.orientation.establish_placement_order`). Absent or
+#: ``False`` ⟹ **ORDER-UNESTABLISHED**: the tuple order is arbitrary (CV-detection
+#: order), so the record is EVAL-excluded — :meth:`GameRecord.is_scoreboard_eligible`
+#: requires this flag — but remains :meth:`GameRecord.is_seed_eligible` (the seed
+#: loader samples the grant hypothesis per episode). It is **not** enforced by
+#: :meth:`GameRecord.validate` (a missing flag is a valid, order-unestablished
+#: record), so pre-contract records stay loadable and default to seed-only.
+PROVENANCE_PLACEMENT_ORDER_ESTABLISHED = "placement_order_established"
+
 #: ``episode_source`` values. ``"natural"`` = a real parsed game (scoreboard
 #: + eval/anchor eligible). ``"human_seed"`` = an opening used to seed exploration
 #: (never re-imports the human cap; eval/anchor must filter these out).
@@ -361,7 +375,41 @@ def derive_opponent_strength(manifest_entry: dict[str, Any]) -> OpponentStrength
 
 @dataclass(frozen=True, slots=True)
 class PlayerOpening:
-    """One player's snake-draft opening: 2 settlements + 2 roads as engine IDs."""
+    """One player's snake-draft opening: 2 settlements + 2 roads as engine IDs.
+
+    **PLACEMENT-ORDER CONTRACT (harvest-blocking, step6 §3.1).** The
+    ``settlements`` and ``roads`` tuples are in **LOG PLACEMENT ORDER**, sourced
+    from the setup-event sequence — NOT the (order-blind) CV detection order:
+
+    - ``settlements[0]`` = the player's **first-placed** setup settlement;
+    - ``settlements[1]`` = the player's **second-placed** settlement, which is the
+      **resource-granting** one (Colonist grants starting resources from the 2nd
+      settlement; the bridge grants from ``settlements[1]``);
+    - ``roads[i]`` is the setup road placed immediately after ``settlements[i]``
+      (each setup road is incident to the settlement just placed), so ``roads[0]``
+      touches ``settlements[0]`` and ``roads[1]`` touches ``settlements[1]``.
+
+    **How the order is established (the disambiguation rule).** The openings CV
+    reads a single order-blind post-setup frame, so the raw tuple order carries no
+    placement information. The Colonist game log's setup-event sequence
+    (``<player> placed a Settlement / Road`` + ``<player> received starting
+    resources`` lines, in draft order) is the only order signal: the
+    ``"received starting resources"`` line's position identifies which of the
+    player's two settlement placements it followed — that placement is the 2nd
+    (granting) one (the grant event follows the 2nd settlement). The specific
+    *vertex* is then pinned by the glyph anchor: the granted-card multiset (read
+    from the grant line's card icons) equals the adjacent-resource multiset of
+    exactly one of the two opening settlements, and that vertex is
+    ``settlements[1]``. Both signals are required; when either is missing or
+    ambiguous (missing setup lines, or a granted multiset that matches neither or
+    *both* settlements) the record is marked **ORDER-UNESTABLISHED** via
+    ``provenance[`` :data:`PROVENANCE_PLACEMENT_ORDER_ESTABLISHED` ``] = False``.
+    :func:`catan_rl.human_data.orientation.establish_placement_order` implements
+    the rule; :meth:`GameRecord.is_scoreboard_eligible` additionally requires the
+    order to be established (an order-unestablished record is EVAL-excluded but
+    still :meth:`~GameRecord.is_seed_eligible` — the seed loader samples the grant
+    hypothesis per episode rather than trusting an arbitrary order).
+    """
 
     settlements: tuple[int, ...]
     roads: tuple[int, ...]
@@ -463,7 +511,10 @@ class GameRecord:
         - **scoreboard-eligible** ⟺ ``winner is not None`` AND ``passed_crosscheck``
           AND ``opponent_strength.tier == "high"`` AND
           ``opponent_strength.source in {"rank_badge", "tournament"}`` AND
-          ``rejection_reason is None`` (the §5.4 filter). Not asserted (eligibility
+          ``rejection_reason is None`` AND
+          ``provenance[placement_order_established] is True`` (the §5.4 filter +
+          the step6 §3.1 placement-order clause — an order-unestablished record is
+          EVAL-excluded, seed-only). Not asserted (eligibility
           is a *property*, not every record must be eligible), but it is
           implemented as the exported :meth:`is_scoreboard_eligible` — **that
           method is the single source of truth**; the scoreboard builder and the
@@ -809,10 +860,24 @@ class GameRecord:
         is the defensible primary scoreboard and is exposed as
         :meth:`is_strong_opponent_scoreboard_eligible`.
 
+        **Placement-order clause (step6 §3.1, harvest-blocking).** A scoreboard
+        game additionally requires the openings to be in established LOG PLACEMENT
+        ORDER (``provenance[`` :data:`PROVENANCE_PLACEMENT_ORDER_ESTABLISHED` ``]
+        is True``): the calibration scoreboard measures v8's opening value, which
+        depends on WHICH settlement grants the starting resources
+        (``settlements[1]``), so an **ORDER-UNESTABLISHED** record (missing setup
+        lines, or a granted multiset that disambiguates neither 1st-vs-2nd
+        settlement) must NOT enter the scoreboard — an arbitrary CV-detection order
+        would inject a Colonist-unreachable start state into the calibration. Such
+        a record stays :meth:`is_seed_eligible` (the seed loader samples the grant
+        hypothesis per episode); only the eval/scoreboard side excludes it. A
+        missing flag reads as ``False`` (order-unestablished, the safe default).
+
         scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
         AND ``opponent_strength.tier == "high"`` AND
         ``opponent_strength.source in {"rank_badge", "tournament"}`` AND
-        ``rejection_reason is None``.
+        ``rejection_reason is None`` AND
+        ``provenance[placement_order_established] is True``.
         """
         return (
             self.winner is not None
@@ -820,6 +885,7 @@ class GameRecord:
             and self.opponent_strength.tier == "high"
             and self.opponent_strength.source in ("rank_badge", "tournament")
             and self.rejection_reason is None
+            and self.provenance.get(PROVENANCE_PLACEMENT_ORDER_ESTABLISHED) is True
         )
 
     def is_strong_opponent_scoreboard_eligible(self) -> bool:
@@ -850,6 +916,15 @@ class GameRecord:
         seed-eligible ⟺ ``passed_crosscheck``. Eval/anchor consumers must
         *additionally* filter to ``episode_source == "natural"`` (that lives with
         the consumer, not the record).
+
+        **Independent of the placement-order flag (step6 §3.1).** Seed eligibility
+        deliberately does NOT require
+        ``provenance[`` :data:`PROVENANCE_PLACEMENT_ORDER_ESTABLISHED` ``]``: an
+        ORDER-UNESTABLISHED record (the openings are a real, structurally-legal
+        human placement but the 1st-vs-2nd order could not be recovered) is still a
+        usable exploration seed — the seed loader samples the grant hypothesis per
+        episode rather than trusting an arbitrary order. Only
+        :meth:`is_scoreboard_eligible` (the eval side) requires the flag.
 
         **NECESSARY, NOT SUFFICIENT (review finding §2).** ``passed_crosscheck``
         alone must NOT be read as "structurally legal opening". This predicate —

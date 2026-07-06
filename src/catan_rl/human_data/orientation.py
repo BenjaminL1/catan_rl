@@ -67,9 +67,13 @@ ran for both players" is an explicit precondition of acceptance (expert BLOCKER 
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING
 
+from catan_rl.human_data.record import PlayerOpening
+
 if TYPE_CHECKING:
+    from catan_rl.human_data.logparse import LogEvent
     from catan_rl.human_data.record import GameRecord
     from catan_rl.human_data.topology import Topology
 
@@ -143,6 +147,181 @@ def granted_multiset_matches_a_settlement(
         if predicted == granted:
             return True
     return False
+
+
+# --- placement-order contract (step6 §3.1, harvest-blocking) -----------------
+#
+# The openings CV reads a single order-blind post-setup frame, so a
+# :class:`~catan_rl.human_data.record.PlayerOpening`'s raw tuple order carries NO
+# placement information. Recovering "which settlement was placed 2nd (the
+# resource-granting one, ``settlements[1]``)" needs TWO signals, both required:
+#
+#   1. LOG-side (the ordinal): the game log's setup-event sequence shows each
+#      player placing 2 settlements with a ``"received starting resources"`` line
+#      immediately after their 2nd — :func:`_log_grant_ordinal` verifies the grant
+#      follows the 2nd settlement (ordinal ``1``). A missing setup/grant line →
+#      unestablished.
+#   2. VERTEX-side (which vertex): the glyph anchor's granted-card multiset equals
+#      the adjacent-resource multiset of exactly ONE of the two opening settlements
+#      — :func:`identify_granting_settlement`. A granted multiset that matches
+#      neither or (collision) both → unestablished.
+#
+# When both resolve, the tuples are re-ordered to log-placement order
+# (``settlements[1]`` = the granting vertex, ``roads[i]`` incident to
+# ``settlements[i]``). Otherwise the record is ORDER-UNESTABLISHED (EVAL-excluded,
+# seed-only; the bridge samples the grant hypothesis per episode).
+
+
+def _log_grant_ordinal(setup_events: Sequence[LogEvent], player: str) -> int | None:
+    """Which of ``player``'s two setup settlements the grant followed, from the log.
+
+    Returns the 0-based ordinal (``0`` = first-placed, ``1`` = second-placed) of the
+    settlement the ``"received starting resources"`` line immediately followed in
+    ``player``'s setup-event subsequence, or ``None`` when the log does not cleanly
+    establish it (not exactly 2 settlement placements, not exactly 1 grant line, or
+    a grant with no preceding settlement). A well-formed snake setup grants from the
+    2nd settlement, so a recoverable order returns ``1``.
+    """
+    kinds = [
+        e.kind
+        for e in setup_events
+        if e.actor == player and e.kind in ("setup_settlement", "starting_resources")
+    ]
+    settle_idx = [i for i, k in enumerate(kinds) if k == "setup_settlement"]
+    grant_idx = [i for i, k in enumerate(kinds) if k == "starting_resources"]
+    if len(settle_idx) != 2 or len(grant_idx) != 1:
+        return None
+    preceding = [i for i in settle_idx if i < grant_idx[0]]
+    if not preceding:
+        return None
+    return settle_idx.index(preceding[-1])
+
+
+def identify_granting_settlement(
+    opening: PlayerOpening,
+    granted: Counter[str],
+    board_resource_by_hex: dict[int, str],
+    topology: Topology,
+) -> int | None:
+    """The UNIQUE opening-settlement vertex whose setup grant equals ``granted``.
+
+    The vertex-side disambiguator of the placement-order contract: the granted-card
+    multiset (glyph read) equals the adjacent-resource multiset of exactly one of
+    the two opening settlements — that vertex is the 2nd/resource-granting settlement
+    (``settlements[1]``). Returns ``None`` when the multiset matches neither (a joint
+    D6 flip, already caught by the glyph anchor) or **both** (a collision — the
+    granted multiset is a weak discriminator, see
+    :func:`granted_multiset_matches_a_settlement`), i.e. the order is not
+    establishable from the grant alone.
+    """
+    matches = [
+        v
+        for v in opening.settlements
+        if granted_resources_under_orientation(v, board_resource_by_hex, topology) == granted
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _order_player_opening(
+    opening: PlayerOpening, granting_vertex: int, topology: Topology
+) -> PlayerOpening | None:
+    """Re-order one opening to log-placement order given its granting (2nd) vertex.
+
+    ``settlements = (first_placed, granting_vertex)``; each road is paired to the
+    settlement it is incident to (``roads[i]`` touches ``settlements[i]`` — every
+    setup road is placed adjacent to the settlement just placed). Returns ``None``
+    when the roads cannot be cleanly paired (an isolated snap, or both roads on one
+    settlement), so a record with un-orderable roads is treated as unestablished.
+    """
+    others = [v for v in opening.settlements if v != granting_vertex]
+    if len(others) != 1:
+        return None
+    first_vertex = others[0]
+    edge_vertices = topology.edge_vertices
+
+    def _incident(vertex: int) -> list[int]:
+        return [e for e in opening.roads if vertex in edge_vertices[e]]
+
+    first_roads = _incident(first_vertex)
+    grant_roads = _incident(granting_vertex)
+    if len(first_roads) != 1 or len(grant_roads) != 1 or first_roads[0] == grant_roads[0]:
+        return None
+    return PlayerOpening(
+        settlements=(first_vertex, granting_vertex),
+        roads=(first_roads[0], grant_roads[0]),
+    )
+
+
+def order_openings_by_grant(
+    openings: Mapping[str, PlayerOpening],
+    granted_by_player: Mapping[str, Counter[str] | None],
+    board_resource_by_hex: dict[int, str],
+    topology: Topology,
+) -> tuple[dict[str, PlayerOpening], bool]:
+    """Re-order every opening to log-placement order using the VERTEX-side signal
+    only (the granted-card multiset), returning ``(ordered, established)``.
+
+    ``established`` is ``True`` only if EVERY player's granting settlement is
+    uniquely identified (:func:`identify_granting_settlement`) and its roads pair
+    cleanly (:func:`_order_player_opening`); otherwise the original (order-blind)
+    ``openings`` are returned unchanged with ``established=False``. This is the
+    grant-only establisher used by the record-construction gate
+    (:func:`catan_rl.human_data.validate.cross_check`), which does not carry the
+    setup-event stream; :func:`establish_placement_order` adds the LOG-side gate on
+    top for the harvest driver.
+    """
+    ordered: dict[str, PlayerOpening] = {}
+    established = True
+    for player, opening in openings.items():
+        granted = granted_by_player.get(player)
+        granting = (
+            identify_granting_settlement(opening, granted, board_resource_by_hex, topology)
+            if granted is not None
+            else None
+        )
+        reordered = (
+            _order_player_opening(opening, granting, topology) if granting is not None else None
+        )
+        if reordered is None:
+            established = False
+        else:
+            ordered[player] = reordered
+    if not established:
+        return dict(openings), False
+    return ordered, True
+
+
+def establish_placement_order(
+    setup_events: Sequence[LogEvent],
+    openings: Mapping[str, PlayerOpening],
+    granted_by_player: Mapping[str, Counter[str] | None],
+    board_resource_by_hex: dict[int, str],
+    topology: Topology,
+) -> tuple[dict[str, PlayerOpening], bool]:
+    """Establish LOG PLACEMENT ORDER for both openings (step6 §3.1 helper).
+
+    Combines the two required signals (see the module note above): the LOG-side
+    ordinal (:func:`_log_grant_ordinal` must report the grant follows each player's
+    2nd settlement) AND the VERTEX-side grant match (:func:`order_openings_by_grant`).
+    Returns ``(ordered_openings, established)``: when both signals resolve for BOTH
+    players, ``ordered_openings`` are the re-ordered tuples (``settlements[1]`` =
+    the 2nd/resource-granting settlement) with ``established=True``; otherwise the
+    input ``openings`` are returned unchanged with ``established=False`` (the record
+    is ORDER-UNESTABLISHED — EVAL-excluded, seed-only).
+
+    ``setup_events`` is the game's ordered
+    :class:`~catan_rl.human_data.logparse.LogEvent` setup stream (``setup_settlement``
+    / ``setup_road`` / ``starting_resources`` lines, actor-resolved); ``openings``
+    are the order-blind CV detections; ``granted_by_player`` are the glyph-read
+    granted-card multisets (``None`` where unreadable).
+    """
+    log_ok = all(_log_grant_ordinal(setup_events, player) == 1 for player in openings)
+    ordered, grant_ok = order_openings_by_grant(
+        openings, granted_by_player, board_resource_by_hex, topology
+    )
+    if log_ok and grant_ok:
+        return ordered, True
+    return dict(openings), False
 
 
 def assert_glyph_anchor(

@@ -82,9 +82,14 @@ def _sample_record() -> GameRecord:
         # screen rule). The earlier desert=17 IDs (TP s[4,10] r[7,20]; ray s[20,0]
         # r[34,2]) were snapped under a REJECTED D6 orientation and were physically
         # wrong; see ``tests/fixtures/human_data/game1_resnap_overlay.png``.
+        # Openings in LOG PLACEMENT ORDER (step6 §3.1): settlements[1] is the
+        # 2nd/resource-granting settlement (ThePhantom v19, rayman147 v11 — the
+        # hand-verified game-1 grants, test_orientation), roads[i] incident to
+        # settlements[i]. The order-blind CV frame tuples are re-ordered by the
+        # grant glyph; provenance.placement_order_established records it.
         openings={
             "ThePhantom": PlayerOpening(settlements=(1, 19), roads=(0, 35)),
-            "rayman147": PlayerOpening(settlements=(11, 3), roads=(19, 8)),
+            "rayman147": PlayerOpening(settlements=(3, 11), roads=(8, 19)),
         },
         dice_log=(8, 6, 11, 4),
         # Game 1 (the t=80..620 segment) ended by CONCESSION with NO victory log
@@ -111,6 +116,10 @@ def _sample_record() -> GameRecord:
             "ts": 247,
             "board_desert_hex": 11,
             "openings_desert_hex": 11,
+            # Placement order established (step6 §3.1): the grant glyph pinned each
+            # 2nd settlement, so the openings above are in log-placement order and
+            # the record is scoreboard-eligible (when it also has a real winner).
+            "placement_order_established": True,
         },
         rejection_reason=None,
     )

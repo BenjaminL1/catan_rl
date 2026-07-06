@@ -54,5 +54,33 @@
         35
       ]
     }
+  },
+  "placement_order_note": "ADDITIVE metadata (step6 §3.1 placement-order contract) — the 'openings' block above stays in the order-blind CV-detection order (unchanged IDs, asserted by test_golden_fixtures_exist_and_load). The openings CV reads a single post-setup frame with no placement order; order is recovered from the log's setup-event sequence ('log_setup_sequence' above) + the grant glyph. From the snake draft the grant follows each player's 2nd settlement, and the granted-card multiset pins WHICH vertex that is: ThePhantom received SHEEP/ORE/ORE == the adjacency of v19 (so 1st=v1, 2nd/granting=v19); rayman147 received WHEAT/WOOD/BRICK == the adjacency of v11 (so 1st=v3, 2nd/granting=v11) — the hand-verified game-1 grants (test_orientation.test_glyph_anchor_accepts_correct_grants). roads[i] is the setup road incident to settlements[i]. 'placement_order' below is the resulting log-placement-ordered tuples (settlements[1] == the resource-granting settlement); it round-trips through catan_rl.human_data.orientation.establish_placement_order (test_placement_order.test_golden_game1_round_trips_with_order_established).",
+  "granted_resources": {
+    "rayman147": {"WHEAT": 1, "WOOD": 1, "BRICK": 1},
+    "ThePhantom": {"SHEEP": 1, "ORE": 2}
+  },
+  "placement_order": {
+    "established": true,
+    "rayman147": {
+      "settlements": [
+        3,
+        11
+      ],
+      "roads": [
+        8,
+        19
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        1,
+        19
+      ],
+      "roads": [
+        0,
+        35
+      ]
+    }
   }
 }
