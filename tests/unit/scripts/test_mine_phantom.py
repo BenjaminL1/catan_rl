@@ -125,3 +125,75 @@ def test_batch_plan_reports_manifest_harvest(
     assert "1 scoreboard-eligible (high)" in out
     assert "1 seed-only (unknown)" in out
     assert "1 excluded" in out
+
+
+# --- harvest subcommand ------------------------------------------------------
+
+
+def _harvest_manifest(tmp_path: Path) -> Path:
+    manifest = tmp_path / "strength_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "videos": [
+                    {"video_id": "vidHIGH00001", "strength": "high", "source": "tournament"},
+                    {"video_id": "vidUNKNOWN00", "strength": "unknown", "source": "none"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def test_harvest_runs_and_writes_telemetry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from catan_rl.human_data.batch import BatchResult
+    from catan_rl.human_data.harvest import HarvestTelemetry
+
+    monkeypatch.setattr(mine, "MANIFEST", _harvest_manifest(tmp_path))
+    monkeypatch.setattr(mine, "load_glyph_validation", lambda path: object())
+
+    captured: dict[str, Any] = {}
+
+    def _fake_run_harvest(**kwargs: Any) -> tuple[BatchResult, HarvestTelemetry]:
+        captured.update(kwargs)
+        return (
+            BatchResult(videos_processed=1),
+            HarvestTelemetry(games_seen=2, accepted=2, grant_read_coverage=1.0),
+        )
+
+    monkeypatch.setattr(mine, "run_harvest", _fake_run_harvest)
+
+    out_dir = tmp_path / "corpus"
+    rc = mine.main(["harvest", "--manifest", "high", "--out-dir", str(out_dir)])
+    out = capsys.readouterr().out
+
+    assert rc == 0
+    # --manifest high harvests only the scoreboard-eligible (high) video.
+    assert captured["video_ids"] == ["vidHIGH00001"]
+    assert "games_seen=2 accepted=2" in out
+    telemetry = json.loads((out_dir / "telemetry.json").read_text(encoding="utf-8"))
+    assert telemetry["accepted"] == 2
+    assert telemetry["grant_read_coverage"] == 1.0
+
+
+def test_harvest_blocks_when_glyph_validation_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from catan_rl.human_data.orientation import GlyphClassifierNotValidated
+
+    monkeypatch.setattr(mine, "MANIFEST", _harvest_manifest(tmp_path))
+    monkeypatch.setattr(mine, "load_glyph_validation", lambda path: None)
+
+    def _blocked(**kwargs: Any) -> Any:
+        raise GlyphClassifierNotValidated("glyph classifier not validated")
+
+    monkeypatch.setattr(mine, "run_harvest", _blocked)
+
+    rc = mine.main(["harvest", "--out-dir", str(tmp_path / "corpus")])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "BLOCKED" in out

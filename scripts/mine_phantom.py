@@ -18,13 +18,20 @@ Subcommands:
     also scoreboard-eligible), and how many ``excluded`` rows are dropped. No
     download / parse is performed.
 
-Downstream stages (``logparse`` / ``segment`` / ``board_cv`` / ``openings`` /
-``validate``) attach further subcommands as they land. CPU-only; no ``gui/`` or
-training-path import (build brief §6).
+  * ``harvest`` — the e2e driver: run the FULL per-game chain
+    (ingest → logparse → segment → board_cv → openings → placement-order →
+    glyph-anchor consensus → cross-check → GameRecord → resumable batch ledger)
+    over the manifest ``high`` (scoreboard) + ``unknown`` (seed) corpus, or an
+    explicit id subset, and print + write per-run telemetry. HARD-GATED on the
+    fingerprint-validated glyph classifier (``data/human/glyph_validation.json``)
+    — an absent/failed/unbound validation refuses to run before any download.
+
+CPU-only; no ``gui/`` or training-path import (build brief §6).
 
 Usage:
     PYTHONPATH=src python3 scripts/mine_phantom.py ingest 9Sm86ml04aI --duration 300
     PYTHONPATH=src python3 scripts/mine_phantom.py batch-plan
+    PYTHONPATH=src python3 scripts/mine_phantom.py harvest --manifest high --out-dir OUT
 """
 
 from __future__ import annotations
@@ -38,13 +45,17 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
 from catan_rl.human_data.batch import harvest_plan
+from catan_rl.human_data.glyph_anchor import load_glyph_validation
+from catan_rl.human_data.harvest import run_harvest
 from catan_rl.human_data.ingest import (
     build_sampling_schedule,
     ingest_video,
     schedule_ocr_eta_s,
 )
+from catan_rl.human_data.orientation import GlyphClassifierNotValidated
 
 MANIFEST = REPO / "data" / "human" / "strength_manifest.json"
+GLYPH_VALIDATION = REPO / "data" / "human" / "glyph_validation.json"
 
 
 def _manifest_entry(video_id: str) -> dict[str, object] | None:
@@ -154,6 +165,71 @@ def _cmd_batch_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_harvest(args: argparse.Namespace) -> int:
+    """Run the e2e harvest over the manifest corpus (or an id subset) → JSONL + telemetry.
+
+    Resolves the id set (explicit positional ids override ``--manifest``: ``high``
+    = scoreboard-eligible ``high`` videos only, ``high+unknown`` = the full harvest
+    corpus), truncates to ``--limit``, loads the fingerprint-gated glyph validation
+    (:func:`~catan_rl.human_data.glyph_anchor.load_glyph_validation`), and hands off
+    to :func:`~catan_rl.human_data.harvest.run_harvest` (the resumable batch ledger
+    + the once-per-run glyph HARD GATE). Telemetry is printed and written to
+    ``<out-dir>/telemetry.json``.
+    """
+    if not MANIFEST.exists():
+        print(f"[harvest] ERROR: strength manifest not found at {MANIFEST}")
+        return 1
+
+    plan = harvest_plan(MANIFEST)
+    if args.video_ids:
+        ids = list(args.video_ids)
+    elif args.manifest == "high":
+        ids = list(plan.scoreboard)
+    else:
+        ids = list(plan.harvested)
+    if args.limit is not None:
+        ids = ids[: args.limit]
+    if not ids:
+        print("[harvest] no videos to process (empty manifest / id set)")
+        return 1
+
+    # Fail-closed: an absent/failed/unbound validation returns None, and run_batch
+    # (inside run_harvest) then raises GlyphClassifierNotValidated before any
+    # download — the joint-flip firewall can never run silently unvalidated.
+    validation = load_glyph_validation(GLYPH_VALIDATION)
+    print(
+        f"[harvest] {len(ids)} videos ({args.manifest}); out={args.out_dir}; "
+        f"glyph_validation={'loaded' if validation is not None else 'MISSING (gate will block)'}"
+    )
+
+    try:
+        _result, telemetry = run_harvest(
+            manifest_path=MANIFEST,
+            out_dir=args.out_dir,
+            video_ids=ids,
+            max_workers=args.max_workers,
+            net_concurrency=args.net_concurrency,
+            work_dir=args.work_dir,
+            glyph_validation=validation,
+        )
+    except GlyphClassifierNotValidated as exc:
+        print(f"[harvest] BLOCKED — glyph classifier not validated: {exc}")
+        print(
+            f"[harvest] remedy: re-run scripts/glyph_valset.py score over {GLYPH_VALIDATION.name}"
+        )
+        return 2
+
+    print(telemetry.render())
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    telemetry_path = out_dir / "telemetry.json"
+    telemetry_path.write_text(
+        json.dumps(telemetry.to_dict(), indent=1, sort_keys=True), encoding="utf-8"
+    )
+    print(f"[harvest] telemetry written to {telemetry_path}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mine_phantom", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -216,6 +292,58 @@ def build_parser() -> argparse.ArgumentParser:
         help="perf cores OCR fans out across in the ETA (brief §5.10; default 1)",
     )
     batch.set_defaults(func=_cmd_batch_plan)
+
+    harvest = sub.add_parser(
+        "harvest",
+        help="run the e2e per-game chain over the manifest corpus → JSONL + telemetry",
+    )
+    harvest.add_argument(
+        "video_ids",
+        nargs="*",
+        help="explicit YouTube video ids to harvest (overrides --manifest; still "
+        "manifest-gated — an id that is excluded/absent is dropped)",
+    )
+    harvest.add_argument(
+        "--manifest",
+        choices=("high", "high+unknown"),
+        default="high+unknown",
+        help="corpus to harvest when no ids are given: 'high' = scoreboard-eligible "
+        "high videos only; 'high+unknown' = the full harvest corpus (default)",
+    )
+    harvest.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="cap the number of videos processed (smoke / staged rollout)",
+    )
+    harvest.add_argument(
+        "--out-dir",
+        dest="out_dir",
+        required=True,
+        help="destination for corpus.jsonl / rejected.jsonl / ledger.jsonl / telemetry.json "
+        "(created if absent; existing runs are resumed)",
+    )
+    harvest.add_argument(
+        "--max-workers",
+        dest="max_workers",
+        type=int,
+        default=4,
+        help="CPU/OCR fan-out width (thread-pool width; default 4)",
+    )
+    harvest.add_argument(
+        "--net-concurrency",
+        dest="net_concurrency",
+        type=int,
+        default=2,
+        help="max concurrent yt-dlp downloads (§5.11; default 2)",
+    )
+    harvest.add_argument(
+        "--work-dir",
+        dest="work_dir",
+        default=None,
+        help="scratch dir for per-video downloads (deleted per video; default the system temp)",
+    )
+    harvest.set_defaults(func=_cmd_harvest)
     return parser
 
 
