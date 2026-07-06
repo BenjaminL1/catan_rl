@@ -410,6 +410,47 @@ def test_missing_terminal_then_identical_reset_merges_not_split() -> None:
     assert len(segs) == 1
 
 
+def test_noisy_ocr_two_games_split_despite_lingering_opener_reocr() -> None:
+    # SLICE green_seg (finding 5: noisy-OCR weld). Game N plays to a cutoff (its
+    # terminal was never sampled), then its opener reset LINGERS on the scrolling
+    # panel and re-OCRs (byte-identical) AFTER the play — and only THEN does game
+    # N+1's own reset arrive with a NOISY (byte-DIFFERENT) OCR of the reset text.
+    # The lingering duplicate must NOT erase the "real play happened" memory, else
+    # game N+1's genuinely-new noisy reset is welded onto game N (both games lost to
+    # one setup-only fragment). Boundary detection must SPLIT into two games. This is
+    # distinct from the deliberate identical-reset merge below: here game N+1's reset
+    # text DIFFERS (a new line), so it is not the ambiguous lingering-opener case.
+    parsed = parse_log(
+        [
+            # game N: full round of play, terminal NOT captured (cutoff)
+            "Happy settling! Learn how to play in the",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            # game N's opener reset lingers + re-OCRs (byte-identical) AFTER the play
+            "Happy settling! Learn how to play in the",
+            # game N+1 opens with a NOISY (byte-different) OCR of the reset marker —
+            # still matches the reset regex ("happy settling"), but differs in the
+            # trailing bytes, so it is a genuinely-new reset line, not the opener dup
+            "Happy settling! Learn how to play in thc",
+            "ThePhantom placed a Settlement",
+            "rayman147 placed a Settlement",
+            "ThePhantom rolled",
+            "rayman147 rolled",
+            "rayman147 won the game!",
+        ],
+        _HANDLES,
+    )
+    segs = segment_games(parsed.events, handles=_HANDLES)
+    assert len(segs) == 2  # split, not welded into one setup-only fragment
+    assert segs[0].winner is None  # game N: cutoff (terminal not sampled)
+    assert segs[0].ended_by == "cutoff"
+    assert segs[1].winner == "rayman147"  # game N+1: its own victory
+    assert segs[1].ended_by == "victory"
+    assert segs[1].is_scoreboard_terminal() is True
+
+
 def test_spurious_midgame_reset_does_not_false_split_one_game() -> None:
     # The primary BLOCKER the merge-favouring design fixes: a single game whose opener
     # reset re-OCRs mid-game (after both seats have rolled) must stay ONE game — never

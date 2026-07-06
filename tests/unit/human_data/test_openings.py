@@ -888,6 +888,59 @@ def test_green_settlement_on_green_baseline_tile_survives_subtraction() -> None:
     assert survived, "on-green-tile GREEN settlement was eaten by the tile subtraction"
 
 
+def test_green_settlement_fully_on_green_tile_survives_subtraction() -> None:
+    """SLICE green_seg (§5.6, finding 4): a vivid GREEN settlement sitting FULLY on a
+    green baseline tile (not merely straddling a seam) must survive the tile
+    subtraction. The piece-vs-tile discriminator (:func:`_piece_over_tile_mask`)
+    spares the pixels where the frame gained a vivid piece (sat+val jump) over the
+    dull baseline tile, so the on-tile settlement is DETECTED. The control proves the
+    discriminator is load-bearing: with NO frame-vs-baseline delta (the piece already
+    baked into the baseline) the same blob IS eaten — exactly the prior suppression."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data.openings import (
+        _MIN_HEAD_VOTES,
+        _MIN_PIECE_AREA,
+        PALETTE,
+        _color_masks,
+    )
+
+    h, w = 200, 200
+    tile_rgb = (46, 110, 52)  # dull, textured forest/pasture tile green
+    piece_rgb = (60, 220, 90)  # vivid flat settlement paint
+    baseline = np.full((h, w, 3), tile_rgb, np.uint8)  # the vertex sits INSIDE the tile
+    frame = baseline.copy()
+    vx, vy = 100, 100
+    cv2.circle(frame, (vx, vy), 14, piece_rgb, -1)  # settlement fully on the green tile
+    board_mask = np.full((h, w), 255, np.uint8)
+    baseline_hsv = cv2.cvtColor(baseline, cv2.COLOR_RGB2HSV)
+
+    vertex_px = np.full((54, 2), 5000.0)
+    vertex_px[3] = (float(vx), float(vy))
+
+    def _survives(fr: np.ndarray) -> bool:
+        piece_mask, _road = _color_masks(
+            cv2.cvtColor(fr, cv2.COLOR_RGB2HSV), baseline_hsv, board_mask, PALETTE["GREEN"]
+        )
+        n, labels, stats, _cent = cv2.connectedComponentsWithStats(piece_mask)
+        for i in range(1, n):
+            if int(stats[i, cv2.CC_STAT_AREA]) < _MIN_PIECE_AREA:
+                continue
+            ys, xs = np.where(labels == i)
+            pts = np.stack([xs, ys], 1).astype(float)
+            dv = np.linalg.norm(vertex_px[:, None, :] - pts[None, :, :], axis=2)
+            if int((dv < 16.0).sum(1).max()) >= _MIN_HEAD_VOTES:
+                return True
+        return False
+
+    # The real on-tile settlement (a vivid piece added over the dull baseline) survives.
+    assert _survives(frame), "on-green-tile GREEN settlement was eaten by the subtraction"
+    # Control: no frame-vs-baseline delta (piece baked into the baseline too) -> the
+    # discriminator cannot fire and the blob is (correctly) subtracted as tile.
+    baked = frame.copy()
+    baseline_hsv = cv2.cvtColor(baked, cv2.COLOR_RGB2HSV)
+    assert not _survives(baked), "delta-less blob must still be killed as a tile"
+
+
 def test_road_dominance_guard_rejects_occluded_true_road() -> None:
     # Review BLOCKER: the absolute floor alone lets an occluded true road snap to a
     # leaked wrong-but-incident edge (which the §5.7 re-check still passes). The

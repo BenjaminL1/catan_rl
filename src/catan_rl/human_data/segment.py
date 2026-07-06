@@ -231,8 +231,15 @@ def segment_games(
     #     the game demonstrably ended, so the next reset is a fresh game even when
     #     its OCR text repeats the previous reset verbatim; OR
     #   * this reset's text has NOT already appeared in the current window AND new
-    #     gameplay has appeared since the last reset — a genuinely different reset
-    #     line separated from the opener by real play.
+    #     gameplay has appeared since THIS WINDOW'S START — a genuinely different
+    #     reset line separated from the opener by real play. "Since the window's
+    #     start" (not "since the last reset EVENT") is deliberate: a lingering
+    #     re-OCR of the opener (a non-opening duplicate reset) must NOT erase the
+    #     memory that real play has happened, else a genuinely-new NEXT reset whose
+    #     noisy OCR text differs from the opener would be welded onto this game
+    #     (finding: noisy-OCR weld — the scrolling opener re-OCRs after play, then
+    #     game N+1's own reset arrives). So the gameplay flag is cleared ONLY when a
+    #     start actually opens, never on a swallowed duplicate reset.
     # A BYTE-IDENTICAL reset with NO terminal seen is DELIBERATELY NOT split (design
     # decision — favour merge-then-discard over a guessed cut). Such a reset is
     # ambiguous: it is EITHER a lingering re-OCR of this game's own opener (mid-game,
@@ -266,9 +273,13 @@ def segment_games(
                 starts.append(i)
                 reset_texts_in_window = {event.text}
                 terminal_since_start = False
+                # Clear the gameplay memory ONLY on a real start. A swallowed
+                # duplicate reset (the lingering-opener re-OCR) must not erase the
+                # "real play happened" signal, else the next genuinely-new noisy
+                # reset welds onto this game (finding: noisy-OCR weld).
+                new_gameplay_since_reset = False
             else:
                 reset_texts_in_window.add(event.text)
-            new_gameplay_since_reset = False
         else:
             if event.kind in _TERMINAL_KINDS:
                 terminal_since_start = True

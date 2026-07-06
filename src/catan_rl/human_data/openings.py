@@ -261,6 +261,21 @@ _SEAT_AVATAR_ASPECT_HI = 1.8
 #: only removes seats, never invents one.
 _SEAT_MIN_SEPARATION_FRAC = 0.25
 
+#: Piece-vs-tile discriminator for the ``tile_subtract`` green-tile subtraction
+#: (§5.6). The baseline tile mask marks WHERE a same-hue tile sits, but a real
+#: coloured piece PLACED on that tile is a vivid flat swatch that towers over the
+#: dull, textured board tile in BOTH saturation and value. So a baseline-tile pixel
+#: is spared from subtraction wherever the FRAME gained a vivid piece over the
+#: baseline there (frame sat AND val both jumped by these deltas). Bare tiles have
+#: frame≈baseline (near-zero delta) and are still killed; a green settlement sitting
+#: ON a green tile survives instead of being eaten. Both deltas are required (AND) so
+#: a global lighting drift in one channel alone cannot spare the whole board (which
+#: would defeat the tile kill). Genuinely-unrecoverable suppression (a piece whose
+#: paint is NOT vivid enough to clear the delta) still falls through to the
+#: ``:green_tile_suppressed`` typed reason — the residual §5.6 bias stays MEASURED.
+_PIECE_OVER_TILE_SAT_DELTA = 25
+_PIECE_OVER_TILE_VAL_DELTA = 40
+
 #: Minimum piece-blob area (px) at 1080p — smaller connected components are OCR /
 #: anti-alias speckle, never a settlement or road piece.
 _MIN_PIECE_AREA = 250
@@ -365,6 +380,27 @@ def _hsv_in_range(
     return np.asarray(cv2.bitwise_or(lower, upper), np.uint8)
 
 
+def _piece_over_tile_mask(
+    frame_hsv: npt.NDArray[np.uint8],
+    baseline_hsv: npt.NDArray[np.uint8],
+) -> npt.NDArray[np.uint8]:
+    """Pixels where the FRAME gained a vivid piece over the empty BASELINE (§5.6).
+
+    A real coloured piece painted onto a same-hue board tile raises BOTH saturation
+    and value far above the dull, textured baseline tile at that pixel, whereas a
+    bare tile has ``frame ≈ baseline``. Flag the pixels whose frame sat AND val both
+    jumped by :data:`_PIECE_OVER_TILE_SAT_DELTA` / :data:`_PIECE_OVER_TILE_VAL_DELTA`
+    over the baseline — the on-tile piece footprint the tile subtraction must SPARE
+    so it is not eaten. Requiring both channels (AND) keeps a single-channel global
+    lighting drift from sparing the whole board (which would defeat the tile kill)."""
+    fs = frame_hsv[..., 1].astype(np.int16)
+    fv = frame_hsv[..., 2].astype(np.int16)
+    bs = baseline_hsv[..., 1].astype(np.int16)
+    bv = baseline_hsv[..., 2].astype(np.int16)
+    added = ((fs - bs) > _PIECE_OVER_TILE_SAT_DELTA) & ((fv - bv) > _PIECE_OVER_TILE_VAL_DELTA)
+    return np.asarray(added.astype(np.uint8) * 255, np.uint8)
+
+
 def _color_masks(
     frame_hsv: npt.NDArray[np.uint8],
     baseline_hsv: npt.NDArray[np.uint8],
@@ -375,7 +411,9 @@ def _color_masks(
 
     For a ``tile_subtract`` colour the same-hue tile pixels present in the
     empty baseline are dilated and removed from both masks (green pieces vs green
-    tiles, §5.13 / spike VERDICT caveat 1)."""
+    tiles, §5.13 / spike VERDICT caveat 1), EXCEPT where the frame gained a vivid
+    piece over the baseline (:func:`_piece_over_tile_mask`) — a real settlement/road
+    ON a green tile is spared so it is not eaten (§5.6)."""
     import cv2
 
     piece = _hsv_in_range(frame_hsv, profile.piece_lo, profile.piece_hi)
@@ -393,6 +431,19 @@ def _color_masks(
         tile = _hsv_in_range(baseline_hsv, profile.tile_lo, profile.tile_hi)
         tile_piece = cv2.dilate(tile, np.ones((9, 9), np.uint8))
         tile_road = cv2.dilate(tile, np.ones((11, 11), np.uint8))
+        # Spare the on-tile piece footprint: a real settlement/road painted ON a
+        # green tile jumps sat+val over the dull baseline tile, so protect those
+        # pixels from the subtraction (§5.6). This lets a green piece sitting on a
+        # green tile SURVIVE while bare tiles (frame≈baseline, unprotected) are still
+        # killed — the asymmetric, feature-correlated loss the minimal kernel alone
+        # could not prevent. Protection is dilated 3px to cover the piece's anti-alias
+        # rim. A piece too dull to clear the delta still falls through to the
+        # ``:green_tile_suppressed`` reason, so the residual bias stays MEASURED.
+        protect = cv2.dilate(
+            _piece_over_tile_mask(frame_hsv, baseline_hsv), np.ones((3, 3), np.uint8)
+        )
+        tile_piece = np.asarray(cv2.bitwise_and(tile_piece, cv2.bitwise_not(protect)), np.uint8)
+        tile_road = np.asarray(cv2.bitwise_and(tile_road, cv2.bitwise_not(protect)), np.uint8)
         piece = np.asarray(cv2.bitwise_and(piece, cv2.bitwise_not(tile_piece)), np.uint8)
         road = np.asarray(cv2.bitwise_and(road, cv2.bitwise_not(tile_road)), np.uint8)
     piece = np.asarray(cv2.bitwise_and(piece, board_mask), np.uint8)
