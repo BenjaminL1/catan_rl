@@ -145,7 +145,7 @@ _PLACEHOLDER_DESERT_HEX = 11
 
 @dataclass(frozen=True, slots=True)
 class GameFrames:
-    """The sampled frames routed to ONE game (index-aligned with ``segment_games``).
+    """The sampled frames routed to ONE game (its slot is index-aligned with ``segment_games``).
 
     ``setup_frames`` are the ≥2 setup-window frames the board-stability gate agrees
     across; ``post_setup_frame`` is the order-blind 8-pieces-down frame the openings
@@ -170,7 +170,8 @@ class VideoContext:
     binding (§5.14); ``seat_order`` the handle order top→bottom the HUD assignment
     check pairs with; ``events`` the whole-video parsed :class:`LogEvent` stream;
     ``game_frames`` the per-game frame routing (index-aligned with
-    :func:`~catan_rl.human_data.segment.segment_games`).
+    :func:`~catan_rl.human_data.segment.segment_games` — one entry per segment,
+    ``None`` for a segment that gathered too few frames to gate board stability).
     """
 
     players: dict[str, str]
@@ -178,7 +179,7 @@ class VideoContext:
     player_colors: dict[str, str]
     seat_order: tuple[str, ...]
     events: tuple[LogEvent, ...]
-    game_frames: tuple[GameFrames, ...]
+    game_frames: tuple[GameFrames | None, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -417,7 +418,7 @@ def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
     events = parse_log(all_lines, handles).events
     seat_colours = read_hud_seat_colors(frames[len(frames) // 2].frame) if frames else ()
     player_colors, seat_order = _bind_colours(handles, seat_colours)
-    game_frames = _route_frames_to_games(frames, per_frame_lines)
+    game_frames = _route_frames_to_games(frames, per_frame_lines, handles)
     return VideoContext(
         players=_agent_binding(handles),
         handles=handles,
@@ -430,21 +431,26 @@ def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
 
 def _read_game_inputs(
     video_id: str,
-    game_index: int,
+    segment_index: int,
     segment_events: Sequence[LogEvent],
     ctx: VideoContext,
     topology: Topology,
 ) -> GameInputs:
     """Stage-2 CV for one game: stable board + HUD-keyed openings + consensus grants.
 
-    Composes the exported CV functions over the game's routed frames
-    (:class:`GameFrames`). Any CV failure returns a typed reject via
+    ``segment_index`` is the game's position in the FULL ``segment_games`` list —
+    the same index ``ctx.game_frames`` is aligned to — so the routed frames belong to
+    THIS game (never a ruleset-dropped neighbour's). Composes the exported CV
+    functions over the game's routed frames (:class:`GameFrames`). Any CV failure —
+    unrouted / too-few frames included — returns a typed reject via
     :func:`_reject_inputs` so the glue's single ``cross_check`` call still emits a
     loadable audit row.
     """  # pragma: no cover - real-run CV path (exercised on hardware, mocked in CI)
-    if game_index - 1 >= len(ctx.game_frames):
+    if segment_index >= len(ctx.game_frames):
         return _reject_inputs(segment_events, ctx.handles, FRAMES_UNROUTED_REASON)
-    gf = ctx.game_frames[game_index - 1]
+    gf = ctx.game_frames[segment_index]
+    if gf is None:  # segment gathered < 2 frames — too few to gate board stability
+        return _reject_inputs(segment_events, ctx.handles, FRAMES_UNROUTED_REASON)
     board = read_board_stable([f.frame for f in gf.setup_frames])
     if board is None:
         return _reject_inputs(segment_events, ctx.handles, BOARD_UNREADABLE_REASON)
@@ -514,11 +520,17 @@ def parse_video(
 
     records: list[GameRecord] = []
     game_index = 0
-    for segment in segments:
+    for seg_idx, segment in enumerate(segments):
         if not ruleset_ok(segment):
             continue  # not a 1v1 game window — pre-filtered, not a record
         game_index += 1
-        gi = _read_game_inputs(video_id, game_index, segment.events, ctx, topology)
+        # ``seg_idx`` (raw position in the FULL segment list) — NOT ``game_index``
+        # (the post-ruleset-filter ordinal) — indexes the frame routing: both
+        # ``segments`` and ``ctx.game_frames`` are aligned to ``segment_games``, so a
+        # ruleset-dropped window ahead of this one must NOT shift the frame lookup
+        # (that would weld another game's frames on — a cross-game mismatch no
+        # firewall can catch). ``game_index`` remains the record's real-game ordinal.
+        gi = _read_game_inputs(video_id, seg_idx, segment.events, ctx, topology)
         result = cross_check(
             video_id=video_id,
             game_index=game_index,
@@ -744,35 +756,75 @@ def _bind_colours(
 
 
 def _route_frames_to_games(
-    frames: list[DecodedFrame], per_frame_lines: list[list[str]]
-) -> tuple[GameFrames, ...]:  # pragma: no cover - real-run path
-    """Group sampled frames per game by the ``game_reset`` markers, in source order.
+    frames: list[DecodedFrame], per_frame_lines: list[list[str]], handles: tuple[str, str]
+) -> tuple[GameFrames | None, ...]:  # pragma: no cover - real-run path
+    """Route sampled frames to games using the SAME boundaries ``segment_games`` computes.
 
-    Frames are bucketed at each reset line (same boundary signal
-    :func:`~catan_rl.human_data.segment.segment_games` uses on the event stream), so
-    the returned tuple is index-aligned with the segment list. Within a game the
-    first frames are the setup window (board-stability source), a later frame is the
-    order-blind post-setup read, the first frame is the empty baseline, and every
-    frame carrying a grant line feeds the consensus grant read.
+    The frame router MUST agree with the event-side segmentation it is later indexed
+    against (:func:`parse_video` walks ``segment_games`` and looks each game's frames
+    up by its segment index). A naive per-frame reset regex RE-IMPLEMENTS — and can
+    DISAGREE with — the reset-hygiene rules :func:`~catan_rl.human_data.segment.segment_games`
+    embodies (consecutive-reset runs, a lingering re-OCR'd reset, the byte-identical
+    merge decision): a router split where the segmenter merges (or vice versa) welds
+    one game's frames onto another — a cross-game mismatch no downstream firewall can
+    catch. So the boundaries come from ``segment_games`` itself.
+
+    :func:`~catan_rl.human_data.logparse.parse_log` is per-line stateless, so parsing
+    each frame's lines and concatenating reproduces the exact event stream
+    :func:`_extract_context` builds; ``segment_games`` windows are contiguous and cover
+    the stream except the dropped pre-first-reset prefix, so each segment's event-index
+    range is reconstructed from the window lengths alone — never a re-derived reset scan.
+    Each frame is assigned to the segment its events overlap most (ties → the later
+    segment); a frame that only re-OCRs pre-first-reset noise is dropped.
+
+    Returns a tuple index-aligned with ``segment_games(events, handles)`` (one slot per
+    segment). A segment that gathered < 2 frames — too few to gate board stability — is
+    ``None`` (its game reads out as ``frames_unrouted``, a typed reject), never dropped,
+    so the segment index stays aligned. Within a game the first frames are the setup
+    window (board-stability source), the last is the order-blind post-setup read, the
+    first is the empty baseline, and every frame carrying a grant line feeds the
+    consensus grant read.
     """
-    reset = re.compile(r"happy settling|list of commands|/help")
-    grant = re.compile(r"received starting resources")
-    buckets: list[list[DecodedFrame]] = []
-    current: list[DecodedFrame] = []
-    for frame, lines in zip(frames, per_frame_lines, strict=True):
-        if any(reset.search(line.lower()) for line in lines):
-            if current:
-                buckets.append(current)
-            current = []
-        current.append(frame)
-    if current:
-        buckets.append(current)
+    per_frame_events = [parse_log(lines, handles).events for lines in per_frame_lines]
+    all_events = tuple(e for evs in per_frame_events for e in evs)
+    segments = segment_games(all_events, list(handles))
+    n_seg = len(segments)
+    if n_seg == 0:
+        return ()
 
-    routed: list[GameFrames] = []
+    # segment_games windows are contiguous and cover all_events[start0:], dropping only
+    # the pre-first-reset prefix, so the (lo, hi) event-index range of each segment is
+    # reconstructed from the window LENGTHS — the boundaries are segment_games', not a
+    # second reset scan.
+    seg_lens = [len(s.events) for s in segments]
+    start0 = len(all_events) - sum(seg_lens)
+    ranges: list[tuple[int, int]] = []
+    cursor = start0
+    for length in seg_lens:
+        ranges.append((cursor, cursor + length))
+        cursor += length
+
+    buckets: list[list[DecodedFrame]] = [[] for _ in range(n_seg)]
+    offset = 0
+    last_seg = 0
+    for frame, evs in zip(frames, per_frame_events, strict=True):
+        lo, hi = offset, offset + len(evs)
+        offset = hi
+        seg = _dominant_segment(lo, hi, ranges)
+        if seg is None:
+            if lo < start0:
+                continue  # only pre-first-reset noise — dropped
+            seg = last_seg  # a zero-event frame inside the corpus — carry forward
+        last_seg = seg
+        buckets[seg].append(frame)
+
+    grant = re.compile(r"received starting resources")
     line_by_frame = dict(zip((id(f) for f in frames), per_frame_lines, strict=True))
+    routed: list[GameFrames | None] = []
     for bucket in buckets:
         if len(bucket) < 2:
-            continue  # too few frames to gate board stability — dropped (frames_unrouted)
+            routed.append(None)  # too few frames to gate board stability (frames_unrouted)
+            continue
         grant_frames = tuple(
             f for f in bucket if any(grant.search(line.lower()) for line in line_by_frame[id(f)])
         )
@@ -785,6 +837,22 @@ def _route_frames_to_games(
             )
         )
     return tuple(routed)
+
+
+def _dominant_segment(lo: int, hi: int, ranges: list[tuple[int, int]]) -> int | None:
+    """The segment whose event-index window overlaps ``[lo, hi)`` most (ties → later).
+
+    ``None`` when the frame overlaps no segment (its events fall entirely in the dropped
+    pre-first-reset prefix, or it contributed no events at all).
+    """
+    best: int | None = None
+    best_overlap = 0
+    for k, (rlo, rhi) in enumerate(ranges):
+        overlap = min(hi, rhi) - max(lo, rlo)
+        if overlap > 0 and overlap >= best_overlap:
+            best = k
+            best_overlap = overlap
+    return best
 
 
 def _consensus_grant(

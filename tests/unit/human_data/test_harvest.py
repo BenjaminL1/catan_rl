@@ -296,6 +296,55 @@ def test_ruleset_filter_drops_single_actor_window(monkeypatch: pytest.MonkeyPatc
     assert called == []  # a non-game window never reaches Stage-2 CV
 
 
+# --- frame routing is indexed by SEGMENT position, not the ruleset ordinal ----
+
+
+def test_frame_lookup_uses_segment_index_not_ruleset_ordinal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A ruleset-failing window (single actor) precedes the real 1v1 game, so the
+    # post-ruleset ordinal (1) and the raw segment position (1) diverge from the
+    # frame-bucket index: the OLD code passed the ordinal, indexing ctx.game_frames
+    # at 0 — the DROPPED game's frames — a cross-game weld no firewall can catch.
+    # The frame lookup must use the segment position instead.
+    dropped = (
+        LogEvent("game_reset", None, "happy settling"),
+        LogEvent("setup_settlement", "ThePhantom", "thephantom placed a settlement"),
+        LogEvent("roll", "ThePhantom", "thephantom rolled a 8"),
+        LogEvent("victory", "ThePhantom", "thephantom won the game"),
+    )
+    events = dropped + _events(established=True)
+    seen_index: list[int] = []
+
+    def _capture(
+        video_id: str, segment_index: int, segment_events: Any, ctx: Any, topology: Any
+    ) -> GameInputs:
+        seen_index.append(segment_index)
+        return _game_inputs("accept")
+
+    monkeypatch.setattr(harvest, "_ingest", lambda vid, **kw: [object()])
+    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames: _context(events))
+    monkeypatch.setattr(harvest, "_read_game_inputs", _capture)
+
+    records = parse_video("vidHIGH00000", manifest=_MANIFEST_OBJ, topology=_TOPO)
+    assert seen_index == [1]  # segment position 1, NOT the ruleset ordinal's 0
+    assert len(records) == 1
+    assert records[0].game_index == 1  # the record keeps the 1-based real-game ordinal
+
+
+def test_dominant_segment_assigns_by_max_overlap_ties_to_later() -> None:
+    # segment_games windows are contiguous; a frame is routed to the segment its
+    # events overlap most (ties -> the later segment), so the router agrees with the
+    # segmenter it is indexed against (the SHOULD-FIX: reuse segment_games boundaries).
+    ranges = [(2, 5), (5, 9)]
+    assert harvest._dominant_segment(0, 2, ranges) is None  # pre-first-reset prefix -> dropped
+    assert harvest._dominant_segment(2, 4, ranges) == 0
+    assert harvest._dominant_segment(2, 6, ranges) == 0  # 3 in seg0 vs 1 in seg1 -> seg0
+    assert harvest._dominant_segment(4, 6, ranges) == 1  # 1 vs 1 tie -> later segment
+    assert harvest._dominant_segment(6, 9, ranges) == 1
+    assert harvest._dominant_segment(5, 5, ranges) is None  # zero-event frame -> carry-forward
+
+
 # --- pure helpers ------------------------------------------------------------
 
 
