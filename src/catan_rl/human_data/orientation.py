@@ -22,17 +22,19 @@ firewalls, of increasing power:
 Scope-lock (brief §6): the pure value contract (``record.py``) stays
 topology-free; the topology-aware orientation checks live here.
 
-**FIX 4 status — glyph READER built, scale-up still HARD-GATED on VALIDATION.**
-The CHECK (:func:`granted_resources_under_orientation`,
+**FIX 4 status — glyph reader built AND VALIDATED (PASS 2026-07-04); the gate
+stays fingerprint-bound to that PASS.** The CHECK
+(:func:`granted_resources_under_orientation`,
 :func:`granted_multiset_matches_a_settlement`) and the glyph *reader*
 (:mod:`catan_rl.human_data.glyph_anchor`:
 :func:`~catan_rl.human_data.glyph_anchor.classify_granted_glyphs` colour-classifies
 the granted resource card icons into a per-player multiset) are both implemented and
-tested. The reader is PER-GAME calibrated (a
-:class:`~catan_rl.human_data.glyph_anchor.GlyphPalette` derived from the game's own
-board tiles via
-:func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette`, never a global
-hue constant) and BEST-EFFORT / fails closed: an ambiguous / too-dark / near-white /
+tested. The reader classifies under the MEASURED fixed card-icon palette
+(:data:`~catan_rl.human_data.glyph_anchor.CARD_PALETTE` — the icons are a
+game-invariant Colonist UI asset; the original per-game-calibration premise was
+measured false for glyphs, see
+:func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette`'s warning) and is
+BEST-EFFORT / fails closed: an ambiguous / too-dark / near-white /
 text-abutting (impure) glyph returns ``None`` rather than a guess, the hue median is
 wrap-safe, and a per-game multi-frame CONSENSUS
 (:func:`~catan_rl.human_data.glyph_anchor.consensus_granted_glyphs`) rejects a lone
@@ -44,9 +46,13 @@ labelled post-grant corpus via
 whose result is threaded through
 :func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_is_validated` into
 :func:`assert_scale_up_orientation_gates`'s ``glyph_classifier_validated`` argument.
-The validation harness exists (``scripts/glyph_valset.py`` + the labelled crops
-under ``data/human/glyph_valset/``; result artifact
-``data/human/glyph_validation.json``), and the batch path
+That validation RAN and PASSED on 2026-07-04 (``scripts/glyph_valset.py`` over the
+labelled crops under ``data/human/glyph_valset/``): 24/24 frames, 72/72 labelled
+boxes, zero confusions, video-disjoint 2-fold cross-check — artifact
+``data/human/glyph_validation.json``, fingerprint-bound to the exact
+detector+classifier+constants scored, so any :mod:`~catan_rl.human_data.glyph_anchor`
+edit re-closes the gate until ``scripts/glyph_valset.py score`` is re-run. The
+batch path
 (:func:`catan_rl.human_data.batch.run_batch`) now calls
 :func:`assert_scale_up_orientation_gates` **structurally, once per harvest run**
 — an absent/failed validation raises before any video is parsed, so the batch can

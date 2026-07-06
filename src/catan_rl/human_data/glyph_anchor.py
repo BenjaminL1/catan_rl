@@ -27,17 +27,23 @@ promoted from the validation harness (expert review 2026-07-05) so production an
 ``scripts/glyph_valset.py`` share one source of truth, and the module fingerprint
 binds the PASS to the detector as well as the classifier.
 
-**Per-game calibration (brief §5.13 / §13 / §14 — never a global constant).**
-The card icons render in the SAME resource colour family as the board tiles, so
-the reader is calibrated PER GAME from the board's own 19 hex HSV samples via
-:func:`calibrate_glyph_palette` — the identical rank-relative convention
-``board_cv.classify_resources`` uses (ORE = lowest-saturation cluster; the rest
-hue-sorted and rank-sliced BRICK→WHEAT→SHEEP→WOOD). :func:`classify_glyph` /
-:func:`classify_granted_glyphs` take that :class:`GlyphPalette` as an argument;
-they never read absolute module constants for a real game. :data:`FALLBACK_PALETTE`
-(built from the module-level prior centres) exists ONLY as a default for the
-synthetic unit tests and as a last-resort prior — it is documented as such and
-CANNOT pass real-corpus validation without a per-game palette.
+**Fixed measured card palette (supersedes the brief-§5.13 per-game premise).**
+The card icons are a FIXED Colonist UI asset, not board-tile renders: their hues
+are game-invariant across skins/themes (measured 2026-07-04 on the hand-labelled
+valset — see :data:`RESOURCE_CARD_HUES`). Real-corpus glyph reads therefore use
+the measured global :data:`CARD_PALETTE` (:data:`RESOURCE_CARD_HUES` +
+:data:`ORE_MAX_SATURATION`) — the palette the 2026-07-04 validation PASS scored
+(``data/human/glyph_validation.json``: 24/24 frames, 72/72 boxes, zero
+confusions, video-disjoint 2-fold cross-check). The original §5.13 premise
+("cards share the tile colour family, calibrate per game from the board") was
+EMPIRICALLY WRONG for glyphs; :func:`calibrate_glyph_palette`'s warning is the
+single explanation of WHY, and that function is kept only for API compatibility
+/ board-side tooling — never substitute its board-derived palette for glyph
+reads. (Board TILES are a different story: they vary by skin and stay per-game
+calibrated in ``board_cv``.) :func:`classify_glyph` / :func:`classify_granted_glyphs`
+still take a :class:`GlyphPalette` argument (defaulting to :data:`CARD_PALETTE`
+via its :data:`FALLBACK_PALETTE` alias) so the valset harness can score
+fold-fitted palettes.
 
 **BEST-EFFORT honesty (brief §5 / task spec).** The card glyphs are ~14px,
 line-wrapped, and abut the adjacent log text. :func:`classify_glyph` returns
@@ -103,8 +109,12 @@ HUE_RESOURCES_BY_RANK: tuple[str, ...] = ("BRICK", "WHEAT", "SHEEP", "WOOD")
 
 #: **THE CANONICAL CARD PALETTE — MEASURED, not assumed.** OpenCV hues (0..180) of
 #: the four hue-classified resource card icons, measured on the 2026-07-04
-#: validation set (74 hand-labelled icon boxes across 24 real games spanning the
-#: manifest). The card icons are a FIXED Colonist UI asset: their hues cluster
+#: validation set: 74 readable hand-labelled icon boxes across 24 real games
+#: spanning the manifest. 72 of those 74 are the scored PASS denominator in
+#: ``data/human/glyph_validation.json`` (72/72 correct); the other 2 readable
+#: labels share a frame with a SKIP-labelled merged/unreadable box, and scoring
+#: is frame-fail-closed, so their frames are excluded from the score. The card
+#: icons are a FIXED Colonist UI asset: their hues cluster
 #: within ~±2 units across every sampled game (BRICK 4.6-7.3, WHEAT 19.2-19.7,
 #: SHEEP 40.8-44.9, WOOD 51.9-55.9), independent of board skin/theme. The original
 #: §5.13 premise — "cards share the tile colour family, calibrate per game from the
@@ -205,15 +215,17 @@ MIN_GRANT_CONSENSUS_FRAMES = 2
 
 @dataclass(frozen=True, slots=True)
 class GlyphPalette:
-    """Per-game card-glyph colour calibration (brief §5.13 — never a constant).
+    """Card-glyph colour palette: four hue centres + the ORE saturation ceiling.
 
-    ``hue_centres`` maps each of the four HUE-classified resources to that game's
-    own card-icon hue (OpenCV 0..180), clustered from the board tiles the same way
-    ``board_cv.classify_resources`` clusters the non-ORE hexes (hue-sorted, rank-
-    sliced BRICK→WHEAT→SHEEP→WOOD). ``ore_max_saturation`` is the game's ORE-vs-
-    coloured saturation boundary derived from its own ORE tiles. Build one per game
-    with :func:`calibrate_glyph_palette`; :data:`FALLBACK_PALETTE` is the synthetic-
-    test / last-resort prior only.
+    ``hue_centres`` maps each of the four HUE-classified resources to a card-icon
+    hue centre (OpenCV 0..180); ``ore_max_saturation`` is the ORE-vs-coloured
+    saturation boundary. Real-corpus glyph reads use the MEASURED fixed
+    :data:`CARD_PALETTE` — the card icons are a game-invariant Colonist UI asset,
+    so a validated global palette is correct here; the brief-§5.13 per-game
+    premise was measured FALSE for glyphs (see :func:`calibrate_glyph_palette`'s
+    warning for why a board-derived palette must never be substituted). Other
+    instances exist only for the valset harness's fold-fitted cross-check and
+    the synthetic unit tests.
     """
 
     hue_centres: dict[str, float]
@@ -511,9 +523,11 @@ def classify_glyph(
     ``hsv`` is either the robust body statistics of a swatch (a :class:`_GlyphStats`
     from :func:`_glyph_median_hsv`, used on real frames) or a bare
     ``(hue, sat, val)`` median tuple (OpenCV hue 0..180, sat/val 0..255 — used by
-    the synthetic tests and callers with a single colour). ``palette`` is the
-    PER-GAME calibration (:func:`calibrate_glyph_palette`); it defaults to the
-    synthetic-test :data:`FALLBACK_PALETTE`, which a real game must NOT rely on.
+    the synthetic tests and callers with a single colour). ``palette`` defaults to
+    :data:`FALLBACK_PALETTE` — i.e. :data:`CARD_PALETTE`, the measured fixed
+    card-icon palette real-corpus reads use (validated 2026-07-04,
+    ``data/human/glyph_validation.json``); never substitute a board-derived
+    :func:`calibrate_glyph_palette` palette here (see its warning).
 
     Returns ``None`` — never a guess — when:
 
@@ -681,10 +695,11 @@ def classify_granted_glyphs(
     ``log_crop_rgb`` is the RGB log-panel crop of a frame captured right after the
     player's ``"received starting resources"`` event; ``glyph_boxes`` are the
     ``(x0, y0, x1, y1)`` pixel boxes of that line's card icons (from
-    :func:`detect_glyph_boxes`; a box per granted card). ``palette`` is
-    the PER-GAME calibration (:func:`calibrate_glyph_palette`); it defaults to the
-    synthetic-test :data:`FALLBACK_PALETTE`. Returns a ``Counter`` over the granted
-    resource literals on success.
+    :func:`detect_glyph_boxes`; a box per granted card). ``palette`` defaults to
+    :data:`FALLBACK_PALETTE` — i.e. :data:`CARD_PALETTE`, the measured fixed
+    card-icon palette real-corpus reads use (never a board-derived
+    :func:`calibrate_glyph_palette` palette; see its warning). Returns a
+    ``Counter`` over the granted resource literals on success.
 
     **Fail closed (BEST-EFFORT).** If ``glyph_boxes`` is empty, or any box does
     not classify to a granted resource (:func:`classify_glyph` returned ``None``),
@@ -751,8 +766,10 @@ class LabeledGrantFrame:
     ``log_crop_rgb`` is the RGB log-panel crop right after a
     ``"received starting resources"`` event; ``glyph_boxes`` the granted card
     boxes for the ONE player that line grants; ``expected`` the hand-labelled
-    granted multiset (ground truth); ``palette`` the per-game glyph calibration
-    (defaults to the synthetic-test :data:`FALLBACK_PALETTE`). The classifier is
+    granted multiset (ground truth); ``palette`` the palette to score under
+    (defaults to :data:`FALLBACK_PALETTE` = :data:`CARD_PALETTE`, the measured
+    fixed card-icon palette production uses; the valset harness also scores
+    fold-fitted palettes in its cross-check). The classifier is
     scored per frame: a frame is CORRECT iff :func:`classify_granted_glyphs`
     returns exactly ``expected`` under that palette.
 
@@ -975,8 +992,10 @@ def load_glyph_validation(path: Path) -> GlyphValidation | None:
 def validate_glyph_classifier(frames: list[LabeledGrantFrame]) -> GlyphValidation:
     """Score the glyph classifier against labelled post-grant frames.
 
-    Runs :func:`classify_granted_glyphs` on each frame UNDER THAT FRAME'S per-game
-    palette and counts a frame CORRECT iff the returned multiset equals the frame's
+    Runs :func:`classify_granted_glyphs` on each frame UNDER THAT FRAME'S
+    ``palette`` (normally the fixed :data:`CARD_PALETTE`; the valset's video-
+    disjoint cross-check supplies fold-fitted palettes) and counts a frame
+    CORRECT iff the returned multiset equals the frame's
     ``expected`` label (an unreadable ``None`` counts as wrong — an honest miss, not
     a pass). For frames carrying ``expected_by_box`` it also classifies each box
     individually into the per-box confusion matrix (fail-closed ``None`` reads are

@@ -700,9 +700,11 @@ def board_hsv_samples(
 
     Recomputes the same per-hex fill samples :func:`read_board` used internally,
     under the board's locked affine — the input
-    :func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette` needs to
-    build the per-game glyph palette (brief §5.13: the card icons share the tile
-    colour family, so the palette is derived from the game's own board).
+    :func:`~catan_rl.human_data.glyph_anchor.calibrate_glyph_palette` takes.
+    NOTE: that palette is board-side tooling only — real glyph reads use the
+    measured fixed :data:`~catan_rl.human_data.glyph_anchor.CARD_PALETTE` (the
+    brief-§5.13 "cards share the tile colour family" premise was measured false
+    for glyphs; see ``calibrate_glyph_palette``'s warning).
     """
     import cv2
 
