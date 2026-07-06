@@ -22,7 +22,11 @@ Three deliverables (the CLI ``scripts/gold_gate.py`` is a thin wrapper over thes
   pipeline records **field-by-field**, report per-field accuracy against the
   PRE-REGISTERED bars (board ≥98% of hexes, openings ≥95% of placements, winner
   ~100%, orientation flips 0) with Wilson CIs and a verdict line, written to
-  ``docs/plans/gold_gate_report.md``.
+  ``docs/plans/gold_gate_report.md``. A blank label is SKIPPED (unlabeled); a
+  PARTIALLY filled label is skipped as INCOMPLETE (its nulls are never scored as
+  pipeline mismatches); and READY additionally requires at least
+  :data:`MIN_SCORED_GAMES` complete labeled games so the harvest can't be
+  green-lit on a thin sample.
 
 - **reference grid** (:func:`render_reference_grid`) — a canonical image mapping
   engine hex / vertex / edge integer IDs to positions, so a labeler can name IDs
@@ -101,6 +105,14 @@ ORIENTATION_FLIPS_BAR = 0
 
 #: Default target gold-game count (the "30-game exam").
 DEFAULT_GOLD_COUNT = 30
+
+#: Minimum number of COMPLETE labeled games :func:`score_gold` requires before it may
+#: return READY. Without a floor a single labeled game could green-light the whole
+#: 204-video harvest (build brief §4 — the gate is statistical, not one-shot). Defaults
+#: to the full designed exam (:data:`DEFAULT_GOLD_COUNT`); an operator with fewer usable
+#: labels must lower it EXPLICITLY (``score --min-games N``), which surfaces the reduced
+#: statistical power rather than hiding it.
+MIN_SCORED_GAMES = DEFAULT_GOLD_COUNT
 
 #: The stated orientation convention the reference grid is rendered under and the
 #: labeler names hex IDs by (brief §5.2 screen-space lock).
@@ -342,6 +354,11 @@ def write_blind_packet(
     )
     (packet / _README).write_text(_packet_readme(gid), encoding="utf-8")
 
+    # Prove blindness on the REAL write path (not only in tests): the packet must
+    # contain nothing derived from the pipeline's parse before we ship it to a
+    # labeler. Fail-closed — a leak raises rather than writing a compromised packet.
+    assert_packet_blind(packet, record)
+
     write_answer_key(record, gold_dir / ANSWERS_DIRNAME)
     return packet
 
@@ -576,17 +593,27 @@ class GoldScoreReport:
     orientation_flips: int
     n_games: int
     scored_game_ids: tuple[str, ...]
+    min_games: int = MIN_SCORED_GAMES
     skipped_unlabeled: tuple[str, ...] = field(default=())
+    skipped_incomplete: tuple[str, ...] = field(default=())
 
     @property
     def flips_ok(self) -> bool:
         return self.orientation_flips <= ORIENTATION_FLIPS_BAR
 
     @property
+    def enough_games(self) -> bool:
+        """Whether at least :attr:`min_games` complete labeled games were scored.
+
+        The floor keeps a thin sample (one lucky labeled game) from green-lighting
+        the 204-video harvest (build brief §4)."""
+        return self.n_games >= self.min_games
+
+    @property
     def ready(self) -> bool:
-        """READY iff every bar is met and there are zero orientation flips."""
+        """READY iff the min-games floor is met, every bar passes, and flips are zero."""
         return (
-            self.n_games > 0
+            self.enough_games
             and self.board.passed
             and self.openings.passed
             and self.winner.passed
@@ -595,8 +622,12 @@ class GoldScoreReport:
 
     def failures(self) -> list[str]:
         out: list[str] = []
+        if not self.enough_games:
+            out.append(
+                f"only {self.n_games} complete labeled game(s) < min floor {self.min_games} "
+                "(harvest not green-lit)"
+            )
         if self.n_games == 0:
-            out.append("no labeled gold games to score")
             return out
         if not self.board.passed:
             out.append(f"board {self.board.accuracy:.4f} < bar {self.board.bar}")
@@ -662,9 +693,37 @@ def _score_winner(label: dict[str, Any], record: GameRecord) -> tuple[int, int]:
     return (1 if labeled == _record_winner_label(record) else 0), 1
 
 
-def _label_is_filled(label: dict[str, Any]) -> bool:
-    """Whether a label has been filled (any answer field set) — else it is skipped."""
-    return not _is_blank_label(label)
+def _is_complete_label(label: dict[str, Any]) -> bool:
+    """Whether EVERY answer slot a labeler owns is filled (a fully-scoreable label).
+
+    A partially filled label (some hexes / openings still ``null``) must NOT be
+    scored: its unfilled slots would otherwise count as pipeline mismatches and
+    unfairly depress the accuracy against the bars (the incomplete-label trap). Such
+    a label is routed to ``skipped_incomplete`` instead. Completeness requires:
+
+    * all 19 board hexes present, each with a ``resource``; every non-``DESERT`` hex
+      also has a ``number`` (``DESERT`` legitimately carries a ``null`` number);
+    * both seat roles' 2 settlements + 2 roads all non-``null``;
+    * a non-``null`` ``winner``.
+    """
+    board = label.get("board", {})
+    if len(board) != NUM_HEXES:
+        return False
+    for cell in board.values():
+        resource = cell.get("resource")
+        if resource is None:
+            return False
+        if resource != "DESERT" and cell.get("number") is None:
+            return False
+    for role in (POV_ROLE, OPPONENT_ROLE):
+        opening = label.get("openings", {}).get(role, {})
+        settlements = opening.get("settlements", [])
+        roads = opening.get("roads", [])
+        if len(settlements) != 2 or any(v is None for v in settlements):
+            return False
+        if len(roads) != 2 or any(v is None for v in roads):
+            return False
+    return label.get("winner") is not None
 
 
 def score_gold(
@@ -672,19 +731,24 @@ def score_gold(
     *,
     labels_dir: str | Path | None = None,
     answers_dir: str | Path | None = None,
+    min_games: int = MIN_SCORED_GAMES,
     alpha: float = 0.05,
 ) -> GoldScoreReport:
     """Grade completed gold labels against the pipeline answer keys (the ``score`` core).
 
-    For each game with BOTH a filled label and an answer key, compares board /
+    For each game with BOTH a COMPLETE label and an answer key, compares board /
     openings / winner field-by-field and detects orientation flips, then aggregates
     to a :class:`GoldScoreReport` with per-field Wilson CIs.
 
     Labels are read from ``<labels_dir>/<game_id>.json`` when ``labels_dir`` is
     given, else from the in-packet ``<gold_dir>/<game_id>/label_template.json``
     (the labeler fills it in place). Answer keys are read from ``answers_dir`` (else
-    ``<gold_dir>/_answers``). A game whose label is still blank is SKIPPED (not
-    scored) and reported in ``skipped_unlabeled``.
+    ``<gold_dir>/_answers``). A game whose label is still blank is SKIPPED and
+    reported in ``skipped_unlabeled``; a PARTIALLY filled label is skipped as
+    ``skipped_incomplete`` (its unfilled slots are never scored as pipeline
+    mismatches). ``min_games`` is the READY floor (default :data:`MIN_SCORED_GAMES`):
+    fewer than that many complete labeled games can never return READY, so a thin
+    sample cannot green-light the harvest.
     """
     gold_dir = Path(gold_dir)
     ans_dir = Path(answers_dir) if answers_dir is not None else gold_dir / ANSWERS_DIRNAME
@@ -698,9 +762,10 @@ def score_gold(
     flips = 0
     scored: list[str] = []
     skipped: list[str] = []
+    incomplete: list[str] = []
 
     if not ans_dir.exists():
-        return _empty_report(alpha)
+        return _empty_report(min_games, alpha)
 
     for ans_path in sorted(ans_dir.glob("*.json")):
         gid = ans_path.stem
@@ -712,8 +777,11 @@ def score_gold(
             skipped.append(gid)
             continue
         label = json.loads(label_path.read_text(encoding="utf-8"))
-        if not _label_is_filled(label):
+        if _is_blank_label(label):
             skipped.append(gid)
+            continue
+        if not _is_complete_label(label):
+            incomplete.append(gid)
             continue
 
         bc, bt = _score_board(label, record)
@@ -736,7 +804,9 @@ def score_gold(
         orientation_flips=flips,
         n_games=len(scored),
         scored_game_ids=tuple(scored),
+        min_games=min_games,
         skipped_unlabeled=tuple(skipped),
+        skipped_incomplete=tuple(incomplete),
     )
 
 
@@ -749,7 +819,7 @@ def _field_score(name: str, correct: int, total: int, bar: float, alpha: float) 
     return FieldScore(name=name, correct=correct, total=total, bar=bar, ci=ci)
 
 
-def _empty_report(alpha: float) -> GoldScoreReport:
+def _empty_report(min_games: int, alpha: float) -> GoldScoreReport:
     return GoldScoreReport(
         board=_field_score("board", 0, 0, BOARD_BAR, alpha),
         openings=_field_score("openings", 0, 0, OPENINGS_BAR, alpha),
@@ -757,7 +827,9 @@ def _empty_report(alpha: float) -> GoldScoreReport:
         orientation_flips=0,
         n_games=0,
         scored_game_ids=(),
+        min_games=min_games,
         skipped_unlabeled=(),
+        skipped_incomplete=(),
     )
 
 
@@ -771,8 +843,9 @@ def render_score_report(report: GoldScoreReport) -> str:
     lines.append("# Gold-Gate Report — 30-game blind-labeling exam")
     lines.append("")
     lines.append(
-        f"**Verdict:** {verdict} — {report.n_games} labeled game(s) scored "
-        f"({len(report.skipped_unlabeled)} unlabeled skipped)."
+        f"**Verdict:** {verdict} — {report.n_games} complete labeled game(s) scored "
+        f"(min floor {report.min_games}; {len(report.skipped_unlabeled)} unlabeled + "
+        f"{len(report.skipped_incomplete)} incomplete skipped)."
     )
     lines.append("")
     lines.append("| field | correct / total | accuracy | 95% CI | bar | pass |")
@@ -804,6 +877,12 @@ def render_score_report(report: GoldScoreReport) -> str:
     if report.scored_game_ids:
         lines.append("")
         lines.append("Scored games: " + ", ".join(f"`{g}`" for g in report.scored_game_ids) + ".")
+    if report.skipped_incomplete:
+        lines.append("")
+        lines.append(
+            "Incomplete labels (finish before re-scoring; NOT counted as pipeline "
+            "errors): " + ", ".join(f"`{g}`" for g in report.skipped_incomplete) + "."
+        )
     return "\n".join(lines) + "\n"
 
 

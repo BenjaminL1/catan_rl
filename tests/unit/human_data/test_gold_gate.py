@@ -263,7 +263,9 @@ def test_score_perfect_label_is_ready(tmp_path: Path) -> None:
         json.dumps(_perfect_label(record)), encoding="utf-8"
     )
 
-    report = score_gold(tmp_path, labels_dir=labels)
+    # min_games=1 isolates the field-scoring logic from the harvest floor: a single
+    # fully-correct label at/above the floor is READY.
+    report = score_gold(tmp_path, labels_dir=labels, min_games=1)
     assert report.n_games == 1
     assert report.board.correct == 19 and report.board.total == 19
     assert report.openings.correct == 8 and report.openings.total == 8
@@ -271,6 +273,45 @@ def test_score_perfect_label_is_ready(tmp_path: Path) -> None:
     assert report.orientation_flips == 0
     assert report.ready
     assert report.failures() == []
+
+
+def test_score_one_perfect_game_below_floor_is_not_ready(tmp_path: Path) -> None:
+    # A single perfect label must NOT green-light the 204-video harvest: the default
+    # min-games floor blocks READY even when every field is flawless.
+    record = _make_record()
+    write_answer_key(record, tmp_path / ANSWERS_DIRNAME)
+    labels = tmp_path / "labels"
+    labels.mkdir()
+    (labels / f"{game_id(record)}.json").write_text(
+        json.dumps(_perfect_label(record)), encoding="utf-8"
+    )
+
+    report = score_gold(tmp_path, labels_dir=labels)  # default MIN_SCORED_GAMES floor
+    assert report.n_games == 1
+    assert report.board.passed and report.openings.passed and report.winner.passed
+    assert not report.enough_games
+    assert not report.ready
+    assert any("floor" in f for f in report.failures())
+
+
+def test_score_skips_incomplete_label_not_scored_as_mismatch(tmp_path: Path) -> None:
+    # A partially filled label (openings left null) must be reported as INCOMPLETE,
+    # never scored — otherwise its nulls would count as pipeline errors.
+    record = _make_record()
+    write_answer_key(record, tmp_path / ANSWERS_DIRNAME)
+    labels = tmp_path / "labels"
+    labels.mkdir()
+
+    label = _perfect_label(record)
+    label["openings"]["pov"]["settlements"] = [None, None]  # unfinished
+    (labels / f"{game_id(record)}.json").write_text(json.dumps(label), encoding="utf-8")
+
+    report = score_gold(tmp_path, labels_dir=labels, min_games=1)
+    assert report.n_games == 0  # not scored
+    assert game_id(record) in report.skipped_incomplete
+    assert game_id(record) not in report.skipped_unlabeled
+    assert report.openings.total == 0  # its nulls never became mismatches
+    assert not report.ready
 
 
 def test_score_label_with_errors_computes_accuracies_and_fails(tmp_path: Path) -> None:

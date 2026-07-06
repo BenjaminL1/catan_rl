@@ -40,6 +40,7 @@ sys.path.insert(0, str(REPO / "src"))
 
 from catan_rl.human_data.gold_gate import (
     DEFAULT_GOLD_COUNT,
+    MIN_SCORED_GAMES,
     GoldFrames,
     load_records,
     prepare_packets,
@@ -153,12 +154,14 @@ def _cmd_score(args: argparse.Namespace) -> int:
         args.gold_dir,
         labels_dir=args.labels_dir,
         answers_dir=args.answers_dir,
+        min_games=args.min_games,
     )
     path = write_score_report(report, args.report)
     verdict = "READY" if report.ready else "NOT READY"
     print(
-        f"[score] {report.n_games} game(s) scored "
-        f"({len(report.skipped_unlabeled)} unlabeled skipped) → {path}"
+        f"[score] {report.n_games} complete game(s) scored "
+        f"(min floor {report.min_games}; {len(report.skipped_unlabeled)} unlabeled + "
+        f"{len(report.skipped_incomplete)} incomplete skipped) → {path}"
     )
     print(
         f"[score] board={report.board.accuracy:.4f} openings={report.openings.accuracy:.4f} "
@@ -226,6 +229,14 @@ def build_parser() -> argparse.ArgumentParser:
         dest="answers_dir",
         default=None,
         help="read answer keys from here (default <gold-dir>/_answers)",
+    )
+    score.add_argument(
+        "--min-games",
+        dest="min_games",
+        type=int,
+        default=MIN_SCORED_GAMES,
+        help="minimum COMPLETE labeled games required for a READY verdict "
+        f"(default {MIN_SCORED_GAMES}); lower it explicitly to accept a smaller sample",
     )
     score.add_argument(
         "--report",
