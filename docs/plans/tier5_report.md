@@ -235,3 +235,11 @@ requires the anchor to have run for both players); no game reached acceptance he
    subtraction) so supported green games accept.
 3. **Harden Stage-1 segmentation on noisy OCR** so per-game windows are not welded (fixes
    the setup-fragment / wrong-post-setup-frame failure).
+
+> **UPDATE 2026-07-06 — step 1 done + re-run measured.** The palette extension (step 1)
+> shipped (`39b02b1`–`000f509`) and the harvest was re-run over 25 `high` videos. The
+> colour blocker is confirmed fixed — `hud_unreadable` fell from 100% of the baseline
+> (3/3 games) to 16% (5/31). But acceptance is still **0/31** (Wilson-95 [0.000, 0.110]):
+> the block moved downstream to the **opening piece/road CV (42%)** and `board_unreadable`
+> (26%) — steps 2 & 3 above are now the top of the queue. Full numbers, per-video table,
+> yield CI, and the 204-video ETA: **`docs/plans/tier5_rerun_report.md`**.
