@@ -781,8 +781,10 @@ def _route_frames_to_games(
     segment). A segment that gathered < 2 frames — too few to gate board stability — is
     ``None`` (its game reads out as ``frames_unrouted``, a typed reject), never dropped,
     so the segment index stays aligned. Within a game the first frames are the setup
-    window (board-stability source), the last is the order-blind post-setup read, the
-    first is the empty baseline, and every frame carrying a grant line feeds the
+    window (board-stability source), the first is the empty baseline, the post-setup
+    read is the latest frame still showing the 8-pieces-down opening board — the last
+    frame BEFORE the game's first main-game build, NOT the game's last (end-game) frame
+    (:func:`_post_setup_frame`) — and every frame carrying a grant line feeds the
     consensus grant read.
     """
     per_frame_events = [parse_log(lines, handles).events for lines in per_frame_lines]
@@ -805,6 +807,7 @@ def _route_frames_to_games(
         cursor += length
 
     buckets: list[list[DecodedFrame]] = [[] for _ in range(n_seg)]
+    global_hi_by_frame: dict[int, int] = {}
     offset = 0
     last_seg = 0
     for frame, evs in zip(frames, per_frame_events, strict=True):
@@ -817,11 +820,12 @@ def _route_frames_to_games(
             seg = last_seg  # a zero-event frame inside the corpus — carry forward
         last_seg = seg
         buckets[seg].append(frame)
+        global_hi_by_frame[id(frame)] = hi  # last all_events index this frame's OCR covers
 
     grant = re.compile(r"received starting resources")
     line_by_frame = dict(zip((id(f) for f in frames), per_frame_lines, strict=True))
     routed: list[GameFrames | None] = []
-    for bucket in buckets:
+    for seg_idx, bucket in enumerate(buckets):
         if len(bucket) < 2:
             routed.append(None)  # too few frames to gate board stability (frames_unrouted)
             continue
@@ -831,12 +835,50 @@ def _route_frames_to_games(
         routed.append(
             GameFrames(
                 setup_frames=tuple(bucket[: max(2, len(bucket) // 2)]),
-                post_setup_frame=bucket[-1],
+                post_setup_frame=_post_setup_frame(
+                    bucket, ranges[seg_idx], all_events, global_hi_by_frame
+                ),
                 empty_baseline=bucket[0].frame,
                 grant_frames=grant_frames,
             )
         )
     return tuple(routed)
+
+
+#: The main-game piece-placing events. The FIRST of these inside a game window marks
+#: the end of the stable 8-pieces-down opening board — after it the board no longer
+#: shows exactly the setup pieces the openings CV demands.
+_MAIN_GAME_BUILD_KINDS = frozenset({"built_settlement", "built_city", "built_road"})
+
+
+def _post_setup_frame(
+    bucket: list[DecodedFrame],
+    seg_range: tuple[int, int],
+    all_events: tuple[LogEvent, ...],
+    global_hi_by_frame: dict[int, int],
+) -> DecodedFrame:
+    """The 8-pieces-down post-setup frame for a game — NOT the game's last frame.
+
+    The openings detector demands exactly the opening 8 setup pieces (4 settlements +
+    4 roads). ``bucket[-1]`` is the game's LAST (end-game) frame — a board cluttered
+    with every main-game piece — which the detector cannot read. The opening board is
+    stable from the final setup placement until the game's FIRST main-game build
+    (``built_settlement`` / ``built_city`` / ``built_road``), so the latest frame whose
+    whole OCR window precedes that first build still shows exactly the 8 setup pieces.
+    Falls back to the first bucket frame when the first build already lands inside the
+    opening frame's window, and to the last frame when the game logs no build at all (a
+    cutoff that never left the setup board — the whole window is still 8-pieces-down).
+    """
+    rlo, rhi = seg_range
+    boundary: int | None = None
+    for i in range(rlo, rhi):
+        if all_events[i].kind in _MAIN_GAME_BUILD_KINDS:
+            boundary = i
+            break
+    if boundary is None:
+        return bucket[-1]
+    pre_build = [f for f in bucket if global_hi_by_frame[id(f)] <= boundary]
+    return pre_build[-1] if pre_build else bucket[0]
 
 
 def _dominant_segment(lo: int, hi: int, ranges: list[tuple[int, int]]) -> int | None:

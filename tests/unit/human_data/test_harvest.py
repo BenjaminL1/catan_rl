@@ -332,6 +332,53 @@ def test_frame_lookup_uses_segment_index_not_ruleset_ordinal(
     assert records[0].game_index == 1  # the record keeps the 1-based real-game ordinal
 
 
+def test_post_setup_frame_picks_pre_first_build_not_end_game() -> None:
+    # A game whose event window spans setup -> main-game builds. bucket[-1] is the
+    # END-GAME frame (board full of pieces); the openings CV needs the 8-pieces-down
+    # opening board, so _post_setup_frame returns the latest frame whose whole OCR
+    # window precedes the game's FIRST main-game build.
+    all_events = (
+        LogEvent("setup_settlement", "a", ""),  # 0
+        LogEvent("setup_road", "a", ""),  # 1
+        LogEvent("starting_resources", "a", ""),  # 2  (setup ends here; 8 pieces down)
+        LogEvent("roll", "a", ""),  # 3
+        LogEvent("built_road", "a", ""),  # 4  <- first main-game build (boundary)
+        LogEvent("built_settlement", "a", ""),  # 5
+        LogEvent("victory", "a", ""),  # 6
+    )
+    frames = [object() for _ in range(4)]
+    # frame OCR windows (global_hi): f0 covers [0,2), f1 [2,4) (still pre-build),
+    # f2 [4,6) (includes the build line), f3 [6,7) (end-game).
+    hi = {id(frames[0]): 2, id(frames[1]): 4, id(frames[2]): 6, id(frames[3]): 7}
+    got = harvest._post_setup_frame(frames, (0, 7), all_events, hi)
+    assert got is frames[1]  # latest frame fully before the first build, NOT frames[-1]
+
+
+def test_post_setup_frame_no_build_falls_back_to_last() -> None:
+    # A cutoff game that never left the setup board (no main-game build) — the whole
+    # window is 8-pieces-down, so the last frame is a fine post-setup read.
+    all_events = (
+        LogEvent("setup_settlement", "a", ""),
+        LogEvent("starting_resources", "a", ""),
+        LogEvent("roll", "a", ""),
+    )
+    frames = [object(), object()]
+    hi = {id(frames[0]): 2, id(frames[1]): 3}
+    assert harvest._post_setup_frame(frames, (0, 3), all_events, hi) is frames[-1]
+
+
+def test_post_setup_frame_build_in_opening_window_falls_back_to_first() -> None:
+    # The first build already lands inside the earliest frame's OCR window — no frame
+    # cleanly shows the opening board, so fall back to the first (openings then rejects).
+    all_events = (
+        LogEvent("setup_settlement", "a", ""),
+        LogEvent("built_settlement", "a", ""),  # boundary at index 1
+    )
+    frames = [object(), object()]
+    hi = {id(frames[0]): 2, id(frames[1]): 2}  # both windows straddle the boundary
+    assert harvest._post_setup_frame(frames, (0, 2), all_events, hi) is frames[0]
+
+
 def test_dominant_segment_assigns_by_max_overlap_ties_to_later() -> None:
     # segment_games windows are contiguous; a frame is routed to the segment its
     # events overlap most (ties -> the later segment), so the router agrees with the
