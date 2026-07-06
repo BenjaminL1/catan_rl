@@ -1,0 +1,4487 @@
+[
+  {
+    "video_id": "-dOEmCbAGjc",
+    "t": 107.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.292,
+          "hue": 176.5,
+          "hue_conc": 0.752,
+          "sat": 187.0,
+          "val": 215.0,
+          "sat_lo": 119.0,
+          "sat_hi": 236.0,
+          "val_lo": 146.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 8,
+          "n_px": 8659,
+          "hue": 5.7,
+          "hue_conc": 0.992,
+          "sat": 217.0,
+          "val": 208.0,
+          "sat_lo": 171.0,
+          "sat_hi": 255.0,
+          "val_lo": 159.0,
+          "val_hi": 223.0,
+          "hue_lo": 1.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 83.0,
+          "sat_lo": 2.0,
+          "sat_hi": 27.0,
+          "val_lo": 58.0,
+          "val_hi": 194.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 575,
+          "sat": 8.0,
+          "val": 55.0,
+          "sat_lo": 0.0,
+          "sat_hi": 44.299999999999955,
+          "val_lo": 16.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.051,
+      "20-30": 0.157,
+      "30-40": 0.065,
+      "50-60": 0.01,
+      "60-70": 0.051,
+      "90-100": 0.049,
+      "100-110": 0.565
+    }
+  },
+  {
+    "video_id": "-dOEmCbAGjc",
+    "t": 147.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.295,
+          "hue": 176.8,
+          "hue_conc": 0.752,
+          "sat": 186.0,
+          "val": 216.0,
+          "sat_lo": 118.2,
+          "sat_hi": 225.0,
+          "val_lo": 143.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 7,
+          "n_px": 9076,
+          "hue": 5.6,
+          "hue_conc": 0.992,
+          "sat": 217.0,
+          "val": 209.0,
+          "sat_lo": 170.0,
+          "sat_hi": 255.0,
+          "val_lo": 158.0,
+          "val_hi": 228.0,
+          "hue_lo": 1.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 4.0,
+          "sat_hi": 25.0,
+          "val_lo": 59.0,
+          "val_hi": 195.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 388,
+          "sat": 41.0,
+          "val": 58.0,
+          "sat_lo": 23.0,
+          "sat_hi": 69.64999999999998,
+          "val_lo": 35.7,
+          "val_hi": 67.64999999999998
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.071,
+      "20-30": 0.14,
+      "30-40": 0.061,
+      "50-60": 0.011,
+      "60-70": 0.052,
+      "90-100": 0.05,
+      "100-110": 0.564
+    }
+  },
+  {
+    "video_id": "0EtcbG16kHA",
+    "t": 145.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.323,
+          "hue": 174.0,
+          "hue_conc": 0.579,
+          "sat": 181.0,
+          "val": 216.0,
+          "sat_lo": 112.0,
+          "sat_hi": 198.0,
+          "val_lo": 131.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 11,
+          "n_px": 9567,
+          "hue": 0.0,
+          "hue_conc": 0.997,
+          "sat": 253.0,
+          "val": 190.0,
+          "sat_lo": 194.0,
+          "sat_hi": 255.0,
+          "val_lo": 138.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 32.0,
+          "val_lo": 75.0,
+          "val_hi": 141.10000000000127
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 232,
+          "sat": 0.0,
+          "val": 37.0,
+          "sat_lo": 0.0,
+          "sat_hi": 32.44999999999999,
+          "val_lo": 0.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.048,
+      "20-30": 0.145,
+      "30-40": 0.065,
+      "50-60": 0.01,
+      "60-70": 0.046,
+      "90-100": 0.045,
+      "100-110": 0.583
+    }
+  },
+  {
+    "video_id": "0EtcbG16kHA",
+    "t": 185.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.322,
+          "hue": 173.8,
+          "hue_conc": 0.582,
+          "sat": 179.0,
+          "val": 216.0,
+          "sat_lo": 110.0,
+          "sat_hi": 196.0,
+          "val_lo": 133.0,
+          "val_hi": 231.0
+        },
+        "piece": {
+          "n_blobs": 10,
+          "n_px": 9021,
+          "hue": 179.7,
+          "hue_conc": 0.998,
+          "sat": 254.0,
+          "val": 189.0,
+          "sat_lo": 194.0,
+          "sat_hi": 255.0,
+          "val_lo": 138.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 27.0,
+          "val_lo": 75.0,
+          "val_hi": 141.40000000000146
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 217,
+          "sat": 0.0,
+          "val": 35.0,
+          "sat_lo": 0.0,
+          "sat_hi": 51.0,
+          "val_lo": 1.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.048,
+      "20-30": 0.144,
+      "30-40": 0.065,
+      "60-70": 0.046,
+      "90-100": 0.045,
+      "100-110": 0.583
+    }
+  },
+  {
+    "video_id": "1n_7Uo5QW6E",
+    "t": 142.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.293,
+          "hue": 176.4,
+          "hue_conc": 0.67,
+          "sat": 184.0,
+          "val": 214.0,
+          "sat_lo": 115.0,
+          "sat_hi": 241.0,
+          "val_lo": 148.0,
+          "val_hi": 238.0
+        },
+        "piece": {
+          "n_blobs": 10,
+          "n_px": 12037,
+          "hue": 4.1,
+          "hue_conc": 0.99,
+          "sat": 218.0,
+          "val": 212.0,
+          "sat_lo": 173.0,
+          "sat_hi": 255.0,
+          "val_lo": 157.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 82.0,
+          "sat_lo": 0.0,
+          "sat_hi": 17.0,
+          "val_lo": 55.0,
+          "val_hi": 195.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.08,
+      "20-30": 0.124,
+      "30-40": 0.057,
+      "50-60": 0.011,
+      "60-70": 0.047,
+      "90-100": 0.048,
+      "100-110": 0.58
+    }
+  },
+  {
+    "video_id": "1n_7Uo5QW6E",
+    "t": 182.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.302,
+          "hue": 176.9,
+          "hue_conc": 0.71,
+          "sat": 190.0,
+          "val": 221.0,
+          "sat_lo": 116.0,
+          "sat_hi": 236.0,
+          "val_lo": 148.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 17411,
+          "hue": 5.2,
+          "hue_conc": 0.991,
+          "sat": 218.0,
+          "val": 210.0,
+          "sat_lo": 187.0,
+          "sat_hi": 255.0,
+          "val_lo": 161.0,
+          "val_hi": 231.0,
+          "hue_lo": 0.0,
+          "hue_hi": 177.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 2.0,
+          "sat_hi": 20.0,
+          "val_lo": 56.0,
+          "val_hi": 197.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.037,
+      "10-20": 0.058,
+      "20-30": 0.147,
+      "30-40": 0.064,
+      "50-60": 0.011,
+      "60-70": 0.047,
+      "90-100": 0.046,
+      "100-110": 0.573
+    }
+  },
+  {
+    "video_id": "2PirCk3Sxc4",
+    "t": 67.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.039,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 19.0,
+          "val": 151.0,
+          "sat_lo": 8.0,
+          "sat_hi": 30.0,
+          "val_lo": 73.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 41,
+          "n_px": 67685,
+          "sat": 10.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 27.0,
+          "val_lo": 215.0,
+          "val_hi": 255.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.742,
+          "hue": 134.3,
+          "hue_conc": 0.983,
+          "sat": 126.0,
+          "val": 155.0,
+          "sat_lo": 105.0,
+          "sat_hi": 134.0,
+          "val_lo": 146.0,
+          "val_hi": 160.0
+        },
+        "piece": {
+          "n_blobs": 2,
+          "n_px": 4543,
+          "hue": 141.4,
+          "hue_conc": 0.999,
+          "sat": 195.0,
+          "val": 202.0,
+          "sat_lo": 173.0,
+          "sat_hi": 241.0,
+          "val_lo": 133.0,
+          "val_hi": 232.0,
+          "hue_lo": 139.0,
+          "hue_hi": 144.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.031,
+      "10-20": 0.064,
+      "20-30": 0.106,
+      "30-40": 0.064,
+      "50-60": 0.023,
+      "60-70": 0.037,
+      "90-100": 0.04,
+      "100-110": 0.606
+    }
+  },
+  {
+    "video_id": "2PirCk3Sxc4",
+    "t": 107.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.045,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 22.0,
+          "val": 152.0,
+          "sat_lo": 8.0,
+          "sat_hi": 38.0,
+          "val_lo": 73.0,
+          "val_hi": 228.0
+        },
+        "piece_white": {
+          "n_blobs": 40,
+          "n_px": 69336,
+          "sat": 10.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 28.0,
+          "val_lo": 217.0,
+          "val_hi": 254.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.737,
+          "hue": 134.4,
+          "hue_conc": 0.984,
+          "sat": 127.0,
+          "val": 155.0,
+          "sat_lo": 105.0,
+          "sat_hi": 136.0,
+          "val_lo": 145.0,
+          "val_hi": 161.0
+        },
+        "piece": {
+          "n_blobs": 3,
+          "n_px": 5606,
+          "hue": 141.5,
+          "hue_conc": 0.999,
+          "sat": 197.0,
+          "val": 198.0,
+          "sat_lo": 175.0,
+          "sat_hi": 241.0,
+          "val_lo": 133.0,
+          "val_hi": 231.0,
+          "hue_lo": 139.0,
+          "hue_hi": 144.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.075,
+      "20-30": 0.124,
+      "30-40": 0.061,
+      "50-60": 0.01,
+      "60-70": 0.046,
+      "90-100": 0.039,
+      "100-110": 0.574
+    }
+  },
+  {
+    "video_id": "33KR75rhTgo",
+    "t": 67.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.311,
+          "hue": 175.0,
+          "hue_conc": 0.619,
+          "sat": 187.0,
+          "val": 218.5,
+          "sat_lo": 132.10000000000002,
+          "sat_hi": 214.4999999999999,
+          "val_lo": 141.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 25,
+          "n_px": 10833,
+          "hue": 2.7,
+          "hue_conc": 0.992,
+          "sat": 230.0,
+          "val": 195.0,
+          "sat_lo": 166.0,
+          "sat_hi": 255.0,
+          "val_lo": 144.0,
+          "val_hi": 235.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 3.0,
+          "sat_hi": 20.0,
+          "val_lo": 56.0,
+          "val_hi": 193.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 679,
+          "sat": 13.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 69.10000000000002,
+          "val_lo": 1.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.073,
+      "20-30": 0.12,
+      "30-40": 0.061,
+      "50-60": 0.014,
+      "60-70": 0.044,
+      "90-100": 0.053,
+      "100-110": 0.576
+    }
+  },
+  {
+    "video_id": "33KR75rhTgo",
+    "t": 107.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.312,
+          "hue": 174.8,
+          "hue_conc": 0.625,
+          "sat": 187.0,
+          "val": 219.0,
+          "sat_lo": 134.0,
+          "sat_hi": 218.80000000000064,
+          "val_lo": 143.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 10981,
+          "hue": 0.5,
+          "hue_conc": 0.996,
+          "sat": 253.0,
+          "val": 189.0,
+          "sat_lo": 153.0,
+          "sat_hi": 255.0,
+          "val_lo": 134.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 5.0,
+          "sat_hi": 21.0,
+          "val_lo": 56.0,
+          "val_hi": 194.0
+        },
+        "piece_dark": {
+          "n_blobs": 9,
+          "n_px": 2525,
+          "sat": 38.0,
+          "val": 48.0,
+          "sat_lo": 0.0,
+          "sat_hi": 78.0,
+          "val_lo": 24.0,
+          "val_hi": 67.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.046,
+      "10-20": 0.071,
+      "20-30": 0.128,
+      "30-40": 0.06,
+      "50-60": 0.01,
+      "60-70": 0.046,
+      "70-80": 0.011,
+      "90-100": 0.046,
+      "100-110": 0.567
+    }
+  },
+  {
+    "video_id": "4oRadHB-WwM",
+    "t": 110.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.282,
+          "hue": 176.4,
+          "hue_conc": 0.745,
+          "sat": 189.0,
+          "val": 218.0,
+          "sat_lo": 137.0,
+          "sat_hi": 215.0,
+          "val_lo": 146.0,
+          "val_hi": 235.0
+        },
+        "piece": {
+          "n_blobs": 10,
+          "n_px": 16414,
+          "hue": 6.4,
+          "hue_conc": 0.995,
+          "sat": 216.0,
+          "val": 210.0,
+          "sat_lo": 178.0,
+          "sat_hi": 253.0,
+          "val_lo": 168.0,
+          "val_hi": 222.0,
+          "hue_lo": 3.0,
+          "hue_hi": 178.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 83.0,
+          "sat_lo": 2.0,
+          "sat_hi": 24.0,
+          "val_lo": 59.0,
+          "val_hi": 196.0
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 482,
+          "sat": 11.0,
+          "val": 65.0,
+          "sat_lo": 0.0,
+          "sat_hi": 59.94999999999999,
+          "val_lo": 0.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.076,
+      "20-30": 0.128,
+      "30-40": 0.061,
+      "50-60": 0.011,
+      "60-70": 0.047,
+      "90-100": 0.046,
+      "100-110": 0.577
+    }
+  },
+  {
+    "video_id": "4oRadHB-WwM",
+    "t": 150.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.284,
+          "hue": 176.4,
+          "hue_conc": 0.745,
+          "sat": 189.0,
+          "val": 221.0,
+          "sat_lo": 131.4,
+          "sat_hi": 232.0,
+          "val_lo": 144.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 20014,
+          "hue": 5.1,
+          "hue_conc": 0.991,
+          "sat": 217.0,
+          "val": 211.0,
+          "sat_lo": 180.0,
+          "sat_hi": 255.0,
+          "val_lo": 165.0,
+          "val_hi": 231.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.001,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 82.0,
+          "sat_lo": 2.0,
+          "sat_hi": 26.0,
+          "val_lo": 58.0,
+          "val_hi": 195.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 710,
+          "sat": 19.0,
+          "val": 63.0,
+          "sat_lo": 0.0,
+          "sat_hi": 64.0,
+          "val_lo": 25.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.043,
+      "10-20": 0.077,
+      "20-30": 0.124,
+      "30-40": 0.061,
+      "50-60": 0.01,
+      "60-70": 0.049,
+      "90-100": 0.049,
+      "100-110": 0.57
+    }
+  },
+  {
+    "video_id": "59bAYptAX28",
+    "t": 180.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.065,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 25.0,
+          "val": 152.0,
+          "sat_lo": 13.0,
+          "sat_hi": 52.0,
+          "val_lo": 80.0,
+          "val_hi": 229.0
+        },
+        "piece_white": {
+          "n_blobs": 38,
+          "n_px": 66775,
+          "sat": 9.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 29.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 6.0,
+          "val": 175.0,
+          "sat_lo": 3.0,
+          "sat_hi": 16.0,
+          "val_lo": 143.0,
+          "val_hi": 217.0
+        },
+        "piece_white": {
+          "n_blobs": 38,
+          "n_px": 66775,
+          "sat": 9.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 29.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.033,
+      "10-20": 0.054,
+      "20-30": 0.151,
+      "30-40": 0.062,
+      "60-70": 0.049,
+      "90-100": 0.048,
+      "100-110": 0.581
+    }
+  },
+  {
+    "video_id": "59bAYptAX28",
+    "t": 220.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.067,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 23.0,
+          "val": 152.0,
+          "sat_lo": 11.0,
+          "sat_hi": 47.0,
+          "val_lo": 79.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 42,
+          "n_px": 67905,
+          "sat": 10.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 30.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 5.0,
+          "val": 175.0,
+          "sat_lo": 3.0,
+          "sat_hi": 14.0,
+          "val_lo": 141.0,
+          "val_hi": 216.0
+        },
+        "piece_white": {
+          "n_blobs": 42,
+          "n_px": 67905,
+          "sat": 10.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 30.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.037,
+      "10-20": 0.076,
+      "20-30": 0.128,
+      "30-40": 0.057,
+      "60-70": 0.051,
+      "90-100": 0.05,
+      "100-110": 0.578
+    }
+  },
+  {
+    "video_id": "5RLq1NX4nAo",
+    "t": 117.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.039,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 21.0,
+          "val": 151.0,
+          "sat_lo": 8.0,
+          "sat_hi": 32.30000000000018,
+          "val_lo": 74.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 38,
+          "n_px": 64907,
+          "sat": 9.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 27.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.742,
+          "hue": 134.6,
+          "hue_conc": 0.98,
+          "sat": 125.0,
+          "val": 154.0,
+          "sat_lo": 105.0,
+          "sat_hi": 134.0,
+          "val_lo": 145.0,
+          "val_hi": 161.0
+        },
+        "piece": {
+          "n_blobs": 3,
+          "n_px": 4586,
+          "hue": 141.4,
+          "hue_conc": 0.998,
+          "sat": 196.0,
+          "val": 201.0,
+          "sat_lo": 172.0,
+          "sat_hi": 242.0,
+          "val_lo": 136.0,
+          "val_hi": 231.0,
+          "hue_lo": 138.0,
+          "hue_hi": 144.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.028,
+      "10-20": 0.062,
+      "20-30": 0.122,
+      "30-40": 0.061,
+      "50-60": 0.013,
+      "60-70": 0.039,
+      "90-100": 0.051,
+      "100-110": 0.596
+    }
+  },
+  {
+    "video_id": "5RLq1NX4nAo",
+    "t": 157.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.046,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 23.0,
+          "val": 216.0,
+          "sat_lo": 9.0,
+          "sat_hi": 36.0,
+          "val_lo": 74.0,
+          "val_hi": 232.0
+        },
+        "piece_white": {
+          "n_blobs": 41,
+          "n_px": 68574,
+          "sat": 10.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 27.0,
+          "val_lo": 217.0,
+          "val_hi": 254.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.751,
+          "hue": 134.5,
+          "hue_conc": 0.98,
+          "sat": 125.0,
+          "val": 154.0,
+          "sat_lo": 103.0,
+          "sat_hi": 135.0,
+          "val_lo": 145.0,
+          "val_hi": 160.0
+        },
+        "piece": {
+          "n_blobs": 3,
+          "n_px": 5590,
+          "hue": 141.5,
+          "hue_conc": 0.999,
+          "sat": 198.0,
+          "val": 198.0,
+          "sat_lo": 176.0,
+          "sat_hi": 241.0,
+          "val_lo": 136.0,
+          "val_hi": 233.0,
+          "hue_lo": 140.0,
+          "hue_hi": 144.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.036,
+      "10-20": 0.074,
+      "20-30": 0.118,
+      "30-40": 0.06,
+      "50-60": 0.01,
+      "60-70": 0.046,
+      "90-100": 0.038,
+      "100-110": 0.592
+    }
+  },
+  {
+    "video_id": "6--qCkGT0pI",
+    "t": 157.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.315,
+          "hue": 175.2,
+          "hue_conc": 0.625,
+          "sat": 185.0,
+          "val": 219.0,
+          "sat_lo": 123.0,
+          "sat_hi": 216.60000000000014,
+          "val_lo": 137.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 21,
+          "n_px": 11130,
+          "hue": 2.8,
+          "hue_conc": 0.992,
+          "sat": 226.0,
+          "val": 194.0,
+          "sat_lo": 170.0,
+          "sat_hi": 255.0,
+          "val_lo": 153.0,
+          "val_hi": 233.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 0.0,
+          "sat_hi": 22.0,
+          "val_lo": 56.0,
+          "val_hi": 192.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 610,
+          "sat": 8.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 65.09999999999991,
+          "val_lo": 0.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.069,
+      "20-30": 0.123,
+      "30-40": 0.059,
+      "60-70": 0.045,
+      "90-100": 0.049,
+      "100-110": 0.592
+    }
+  },
+  {
+    "video_id": "6--qCkGT0pI",
+    "t": 197.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.313,
+          "hue": 174.8,
+          "hue_conc": 0.627,
+          "sat": 186.0,
+          "val": 219.0,
+          "sat_lo": 125.0,
+          "sat_hi": 213.60000000000014,
+          "val_lo": 138.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 10225,
+          "hue": 0.2,
+          "hue_conc": 0.996,
+          "sat": 253.0,
+          "val": 189.0,
+          "sat_lo": 181.0,
+          "sat_hi": 255.0,
+          "val_lo": 140.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 5.0,
+          "sat_hi": 19.0,
+          "val_lo": 56.0,
+          "val_hi": 190.0
+        },
+        "piece_dark": {
+          "n_blobs": 5,
+          "n_px": 1744,
+          "sat": 14.0,
+          "val": 52.0,
+          "sat_lo": 0.0,
+          "sat_hi": 68.0,
+          "val_lo": 10.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.042,
+      "10-20": 0.068,
+      "20-30": 0.127,
+      "30-40": 0.06,
+      "60-70": 0.043,
+      "70-80": 0.01,
+      "90-100": 0.043,
+      "100-110": 0.588
+    }
+  },
+  {
+    "video_id": "9Sm86ml04aI",
+    "t": 220.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.316,
+          "hue": 65.0,
+          "hue_conc": 0.786,
+          "sat": 205.0,
+          "val": 180.0,
+          "sat_lo": 121.0,
+          "sat_hi": 227.0,
+          "val_lo": 129.0,
+          "val_hi": 210.0
+        },
+        "piece": {
+          "n_blobs": 4,
+          "n_px": 3169,
+          "hue": 61.9,
+          "hue_conc": 0.996,
+          "sat": 220.0,
+          "val": 202.0,
+          "sat_lo": 165.0,
+          "sat_hi": 255.0,
+          "val_lo": 132.0,
+          "val_hi": 243.0,
+          "hue_lo": 56.0,
+          "hue_hi": 64.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 30.0,
+          "val_lo": 75.0,
+          "val_hi": 135.40000000000146
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 863,
+          "sat": 0.0,
+          "val": 51.0,
+          "sat_lo": 0.0,
+          "sat_hi": 42.89999999999998,
+          "val_lo": 0.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.067,
+      "20-30": 0.129,
+      "30-40": 0.063,
+      "50-60": 0.011,
+      "60-70": 0.049,
+      "90-100": 0.05,
+      "100-110": 0.578
+    }
+  },
+  {
+    "video_id": "9Sm86ml04aI",
+    "t": 260.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.317,
+          "hue": 64.9,
+          "hue_conc": 0.78,
+          "sat": 203.0,
+          "val": 180.0,
+          "sat_lo": 120.0,
+          "sat_hi": 226.0,
+          "val_lo": 132.0,
+          "val_hi": 209.9000000000001
+        },
+        "piece": {
+          "n_blobs": 6,
+          "n_px": 17202,
+          "hue": 65.0,
+          "hue_conc": 0.99,
+          "sat": 220.0,
+          "val": 138.0,
+          "sat_lo": 160.0,
+          "sat_hi": 250.0,
+          "val_lo": 122.0,
+          "val_hi": 235.0,
+          "hue_lo": 57.0,
+          "hue_hi": 70.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 30.0,
+          "val_lo": 75.0,
+          "val_hi": 141.40000000000146
+        },
+        "piece_dark": {
+          "n_blobs": 10,
+          "n_px": 3267,
+          "sat": 26.0,
+          "val": 58.0,
+          "sat_lo": 0.0,
+          "sat_hi": 66.0,
+          "val_lo": 2.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.072,
+      "20-30": 0.13,
+      "30-40": 0.063,
+      "50-60": 0.011,
+      "60-70": 0.051,
+      "70-80": 0.011,
+      "90-100": 0.047,
+      "100-110": 0.569
+    }
+  },
+  {
+    "video_id": "AoOXWyxaTkA",
+    "t": 147.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.321,
+          "hue": 174.1,
+          "hue_conc": 0.579,
+          "sat": 182.0,
+          "val": 222.0,
+          "sat_lo": 110.0,
+          "sat_hi": 201.0,
+          "val_lo": 136.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 10870,
+          "hue": 180.0,
+          "hue_conc": 0.997,
+          "sat": 254.0,
+          "val": 193.0,
+          "sat_lo": 190.0,
+          "sat_hi": 255.0,
+          "val_lo": 140.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 27.0,
+          "val_lo": 75.0,
+          "val_hi": 147.20000000000073
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 500,
+          "sat": 8.0,
+          "val": 61.0,
+          "sat_lo": 0.0,
+          "sat_hi": 33.0,
+          "val_lo": 24.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.056,
+      "20-30": 0.153,
+      "30-40": 0.069,
+      "50-60": 0.011,
+      "60-70": 0.048,
+      "90-100": 0.046,
+      "100-110": 0.556
+    }
+  },
+  {
+    "video_id": "AoOXWyxaTkA",
+    "t": 187.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.322,
+          "hue": 174.5,
+          "hue_conc": 0.573,
+          "sat": 181.0,
+          "val": 219.0,
+          "sat_lo": 120.0,
+          "sat_hi": 200.0,
+          "val_lo": 133.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 15,
+          "n_px": 13859,
+          "hue": 179.9,
+          "hue_conc": 0.997,
+          "sat": 253.0,
+          "val": 195.0,
+          "sat_lo": 177.0,
+          "sat_hi": 255.0,
+          "val_lo": 141.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 28.0,
+          "val_lo": 74.0,
+          "val_hi": 141.00000000000182
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 946,
+          "sat": 11.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 42.75,
+          "val_lo": 26.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.044,
+      "10-20": 0.077,
+      "20-30": 0.13,
+      "30-40": 0.064,
+      "50-60": 0.013,
+      "60-70": 0.048,
+      "70-80": 0.01,
+      "90-100": 0.047,
+      "100-110": 0.555
+    }
+  },
+  {
+    "video_id": "EdMnUD-eZ6A",
+    "t": 117.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.324,
+          "hue": 173.8,
+          "hue_conc": 0.583,
+          "sat": 176.5,
+          "val": 216.0,
+          "sat_lo": 107.7,
+          "sat_hi": 197.0,
+          "val_lo": 130.0,
+          "val_hi": 231.0
+        },
+        "piece": {
+          "n_blobs": 8,
+          "n_px": 7609,
+          "hue": 179.3,
+          "hue_conc": 0.999,
+          "sat": 254.0,
+          "val": 192.0,
+          "sat_lo": 191.0,
+          "sat_hi": 255.0,
+          "val_lo": 131.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 0.0,
+          "sat_hi": 30.0,
+          "val_lo": 75.0,
+          "val_hi": 144.90000000000055
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 426,
+          "sat": 8.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 34.75,
+          "val_lo": 1.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.037,
+      "10-20": 0.051,
+      "20-30": 0.143,
+      "30-40": 0.067,
+      "50-60": 0.01,
+      "60-70": 0.046,
+      "90-100": 0.045,
+      "100-110": 0.582
+    }
+  },
+  {
+    "video_id": "EdMnUD-eZ6A",
+    "t": 157.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.324,
+          "hue": 174.2,
+          "hue_conc": 0.581,
+          "sat": 178.0,
+          "val": 214.0,
+          "sat_lo": 117.0,
+          "sat_hi": 196.20000000000005,
+          "val_lo": 132.0,
+          "val_hi": 231.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 12147,
+          "hue": 0.0,
+          "hue_conc": 0.997,
+          "sat": 252.0,
+          "val": 193.0,
+          "sat_lo": 176.0,
+          "sat_hi": 255.0,
+          "val_lo": 139.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 30.0,
+          "val_lo": 75.0,
+          "val_hi": 146.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 1212,
+          "sat": 8.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 36.0,
+          "val_lo": 5.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.073,
+      "20-30": 0.123,
+      "30-40": 0.059,
+      "60-70": 0.045,
+      "90-100": 0.045,
+      "100-110": 0.584
+    }
+  },
+  {
+    "video_id": "EkmCZkOb2yM",
+    "t": 222.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.285,
+          "hue": 176.8,
+          "hue_conc": 0.745,
+          "sat": 189.0,
+          "val": 222.0,
+          "sat_lo": 131.0,
+          "sat_hi": 228.0,
+          "val_lo": 147.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 19,
+          "n_px": 29379,
+          "hue": 5.8,
+          "hue_conc": 0.993,
+          "sat": 216.0,
+          "val": 209.0,
+          "sat_lo": 149.0,
+          "sat_hi": 255.0,
+          "val_lo": 169.0,
+          "val_hi": 228.0,
+          "hue_lo": 0.0,
+          "hue_hi": 178.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 6.0,
+          "val": 176.0,
+          "sat_lo": 2.0,
+          "sat_hi": 12.0,
+          "val_lo": 141.0,
+          "val_hi": 216.0
+        },
+        "piece_white": {
+          "n_blobs": 44,
+          "n_px": 71052,
+          "sat": 9.0,
+          "val": 226.0,
+          "sat_lo": 2.0,
+          "sat_hi": 28.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.074,
+      "20-30": 0.123,
+      "30-40": 0.059,
+      "50-60": 0.01,
+      "60-70": 0.051,
+      "90-100": 0.045,
+      "100-110": 0.585
+    }
+  },
+  {
+    "video_id": "EkmCZkOb2yM",
+    "t": 262.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.287,
+          "hue": 176.4,
+          "hue_conc": 0.706,
+          "sat": 188.0,
+          "val": 222.0,
+          "sat_lo": 120.60000000000001,
+          "sat_hi": 228.0,
+          "val_lo": 147.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 18183,
+          "hue": 5.9,
+          "hue_conc": 0.994,
+          "sat": 217.0,
+          "val": 212.0,
+          "sat_lo": 167.0,
+          "sat_hi": 252.0,
+          "val_lo": 171.0,
+          "val_hi": 229.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 6.0,
+          "val": 175.0,
+          "sat_lo": 0.0,
+          "sat_hi": 9.0,
+          "val_lo": 139.0,
+          "val_hi": 216.0
+        },
+        "piece_white": {
+          "n_blobs": 45,
+          "n_px": 70387,
+          "sat": 10.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 30.0,
+          "val_lo": 217.0,
+          "val_hi": 255.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.083,
+      "20-30": 0.116,
+      "30-40": 0.057,
+      "50-60": 0.01,
+      "60-70": 0.05,
+      "90-100": 0.047,
+      "100-110": 0.59
+    }
+  },
+  {
+    "video_id": "IVvj3NgRWCs",
+    "t": 155.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.295,
+          "hue": 105.9,
+          "hue_conc": 0.994,
+          "sat": 181.0,
+          "val": 172.0,
+          "sat_lo": 117.0,
+          "sat_hi": 222.0,
+          "val_lo": 137.60000000000002,
+          "val_hi": 189.0
+        },
+        "piece": {
+          "n_blobs": 18,
+          "n_px": 15690,
+          "hue": 102.3,
+          "hue_conc": 0.979,
+          "sat": 218.0,
+          "val": 185.0,
+          "sat_lo": 133.0,
+          "sat_hi": 255.0,
+          "val_lo": 126.0,
+          "val_hi": 253.0,
+          "hue_lo": 94.0,
+          "hue_hi": 113.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 82.0,
+          "sat_lo": 3.0,
+          "sat_hi": 19.0,
+          "val_lo": 56.0,
+          "val_hi": 193.0
+        },
+        "piece_dark": {
+          "n_blobs": 4,
+          "n_px": 1598,
+          "sat": 53.5,
+          "val": 44.0,
+          "sat_lo": 0.0,
+          "sat_hi": 87.0,
+          "val_lo": 23.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.029,
+      "10-20": 0.07,
+      "20-30": 0.122,
+      "30-40": 0.045,
+      "50-60": 0.024,
+      "60-70": 0.042,
+      "90-100": 0.053,
+      "100-110": 0.597
+    }
+  },
+  {
+    "video_id": "IVvj3NgRWCs",
+    "t": 195.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.287,
+          "hue": 106.0,
+          "hue_conc": 0.993,
+          "sat": 184.0,
+          "val": 174.0,
+          "sat_lo": 126.0,
+          "sat_hi": 232.0,
+          "val_lo": 147.0,
+          "val_hi": 189.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 14945,
+          "hue": 103.0,
+          "hue_conc": 0.976,
+          "sat": 229.0,
+          "val": 188.0,
+          "sat_lo": 133.0,
+          "sat_hi": 255.0,
+          "val_lo": 151.0,
+          "val_hi": 254.0,
+          "hue_lo": 94.0,
+          "hue_hi": 114.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 12.0,
+          "val": 83.0,
+          "sat_lo": 3.0,
+          "sat_hi": 26.0,
+          "val_lo": 59.0,
+          "val_hi": 196.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 672,
+          "sat": 8.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 33.0,
+          "val_lo": 4.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.033,
+      "10-20": 0.055,
+      "20-30": 0.147,
+      "30-40": 0.061,
+      "60-70": 0.048,
+      "90-100": 0.045,
+      "100-110": 0.587
+    }
+  },
+  {
+    "video_id": "ImdSLYZyTj8",
+    "t": 87.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.321,
+          "hue": 174.5,
+          "hue_conc": 0.573,
+          "sat": 179.0,
+          "val": 212.0,
+          "sat_lo": 126.0,
+          "sat_hi": 198.4000000000001,
+          "val_lo": 131.0,
+          "val_hi": 231.0
+        },
+        "piece": {
+          "n_blobs": 14,
+          "n_px": 10191,
+          "hue": 0.5,
+          "hue_conc": 0.996,
+          "sat": 250.0,
+          "val": 192.0,
+          "sat_lo": 169.0,
+          "sat_hi": 255.0,
+          "val_lo": 143.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 7.0,
+          "val": 90.0,
+          "sat_lo": 0.0,
+          "sat_hi": 28.0,
+          "val_lo": 74.0,
+          "val_hi": 146.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 358,
+          "sat": 8.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 23.0,
+          "val_lo": 23.85,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.068,
+      "20-30": 0.126,
+      "30-40": 0.059,
+      "50-60": 0.01,
+      "60-70": 0.047,
+      "90-100": 0.047,
+      "100-110": 0.586
+    }
+  },
+  {
+    "video_id": "ImdSLYZyTj8",
+    "t": 127.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.32,
+          "hue": 173.8,
+          "hue_conc": 0.574,
+          "sat": 180.0,
+          "val": 216.0,
+          "sat_lo": 111.5,
+          "sat_hi": 198.0,
+          "val_lo": 127.0,
+          "val_hi": 231.0
+        },
+        "piece": {
+          "n_blobs": 6,
+          "n_px": 8197,
+          "hue": 179.6,
+          "hue_conc": 0.998,
+          "sat": 254.0,
+          "val": 193.0,
+          "sat_lo": 191.8,
+          "sat_hi": 255.0,
+          "val_lo": 133.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 0.0,
+          "sat_hi": 29.0,
+          "val_lo": 75.0,
+          "val_hi": 145.60000000000036
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 353,
+          "sat": 8.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 16.399999999999977,
+          "val_lo": 24.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.049,
+      "20-30": 0.144,
+      "30-40": 0.063,
+      "60-70": 0.047,
+      "90-100": 0.048,
+      "100-110": 0.583
+    }
+  },
+  {
+    "video_id": "JHZnNTrhoT8",
+    "t": 147.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.32,
+          "hue": 174.4,
+          "hue_conc": 0.566,
+          "sat": 187.0,
+          "val": 223.0,
+          "sat_lo": 115.5,
+          "sat_hi": 205.5,
+          "val_lo": 136.0,
+          "val_hi": 237.0
+        },
+        "piece": {
+          "n_blobs": 11,
+          "n_px": 8782,
+          "hue": 1.1,
+          "hue_conc": 0.995,
+          "sat": 240.0,
+          "val": 193.0,
+          "sat_lo": 141.0,
+          "sat_hi": 255.0,
+          "val_lo": 152.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.002,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 90.0,
+          "sat_lo": 2.0,
+          "sat_hi": 37.0,
+          "val_lo": 74.0,
+          "val_hi": 147.90000000000055
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.032,
+      "10-20": 0.071,
+      "20-30": 0.118,
+      "30-40": 0.048,
+      "40-50": 0.011,
+      "50-60": 0.023,
+      "60-70": 0.042,
+      "70-80": 0.017,
+      "90-100": 0.06,
+      "100-110": 0.571
+    }
+  },
+  {
+    "video_id": "JHZnNTrhoT8",
+    "t": 187.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.319,
+          "hue": 174.7,
+          "hue_conc": 0.56,
+          "sat": 186.0,
+          "val": 222.0,
+          "sat_lo": 129.10000000000002,
+          "sat_hi": 206.0,
+          "val_lo": 136.0,
+          "val_hi": 237.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 8374,
+          "hue": 0.3,
+          "hue_conc": 0.996,
+          "sat": 245.0,
+          "val": 196.0,
+          "sat_lo": 171.0,
+          "sat_hi": 255.0,
+          "val_lo": 150.0,
+          "val_hi": 240.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.002,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 90.0,
+          "sat_lo": 3.0,
+          "sat_hi": 36.0,
+          "val_lo": 73.0,
+          "val_hi": 143.90000000000055
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 578,
+          "sat": 14.5,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 53.0,
+          "val_lo": 22.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.083,
+      "20-30": 0.116,
+      "30-40": 0.059,
+      "50-60": 0.011,
+      "60-70": 0.042,
+      "70-80": 0.015,
+      "90-100": 0.045,
+      "100-110": 0.579
+    }
+  },
+  {
+    "video_id": "KvH76fJI4f0",
+    "t": 70.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.074,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 22.0,
+          "val": 150.5,
+          "sat_lo": 5.0,
+          "sat_hi": 47.0,
+          "val_lo": 86.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 42,
+          "n_px": 73239,
+          "sat": 9.0,
+          "val": 226.0,
+          "sat_lo": 2.0,
+          "sat_hi": 31.0,
+          "val_lo": 215.0,
+          "val_hi": 255.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.779,
+          "hue": 137.3,
+          "hue_conc": 0.985,
+          "sat": 120.0,
+          "val": 154.0,
+          "sat_lo": 101.0,
+          "sat_hi": 128.0,
+          "val_lo": 145.0,
+          "val_hi": 159.0
+        },
+        "piece": {
+          "n_blobs": 3,
+          "n_px": 4285,
+          "hue": 141.8,
+          "hue_conc": 0.999,
+          "sat": 195.0,
+          "val": 201.0,
+          "sat_lo": 174.0,
+          "sat_hi": 239.0,
+          "val_lo": 127.0,
+          "val_hi": 232.0,
+          "hue_lo": 140.0,
+          "hue_hi": 144.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.035,
+      "10-20": 0.066,
+      "20-30": 0.115,
+      "30-40": 0.061,
+      "50-60": 0.022,
+      "60-70": 0.039,
+      "90-100": 0.055,
+      "100-110": 0.576
+    }
+  },
+  {
+    "video_id": "KvH76fJI4f0",
+    "t": 110.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.074,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 24.0,
+          "val": 208.0,
+          "sat_lo": 6.0,
+          "sat_hi": 50.30000000000018,
+          "val_lo": 86.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 44,
+          "n_px": 74347,
+          "sat": 9.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 30.0,
+          "val_lo": 217.0,
+          "val_hi": 255.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.78,
+          "hue": 137.3,
+          "hue_conc": 0.984,
+          "sat": 120.0,
+          "val": 154.0,
+          "sat_lo": 102.0,
+          "sat_hi": 128.0,
+          "val_lo": 143.0,
+          "val_hi": 159.0
+        },
+        "piece": {
+          "n_blobs": 4,
+          "n_px": 5850,
+          "hue": 141.7,
+          "hue_conc": 0.999,
+          "sat": 197.0,
+          "val": 197.0,
+          "sat_lo": 176.0,
+          "sat_hi": 241.0,
+          "val_lo": 133.0,
+          "val_hi": 231.0,
+          "hue_lo": 140.0,
+          "hue_hi": 143.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.072,
+      "20-30": 0.126,
+      "30-40": 0.061,
+      "50-60": 0.01,
+      "60-70": 0.048,
+      "90-100": 0.04,
+      "100-110": 0.577
+    }
+  },
+  {
+    "video_id": "MY6EsxBSAaw",
+    "t": 167.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.286,
+          "hue": 176.2,
+          "hue_conc": 0.703,
+          "sat": 189.0,
+          "val": 217.0,
+          "sat_lo": 129.2,
+          "sat_hi": 234.0,
+          "val_lo": 146.0,
+          "val_hi": 235.80000000000007
+        },
+        "piece": {
+          "n_blobs": 14,
+          "n_px": 30667,
+          "hue": 5.1,
+          "hue_conc": 0.991,
+          "sat": 217.0,
+          "val": 212.0,
+          "sat_lo": 176.0,
+          "sat_hi": 255.0,
+          "val_lo": 162.0,
+          "val_hi": 234.39999999999418,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 83.0,
+          "sat_lo": 3.0,
+          "sat_hi": 18.0,
+          "val_lo": 58.0,
+          "val_hi": 193.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.043,
+      "10-20": 0.079,
+      "20-30": 0.125,
+      "30-40": 0.061,
+      "50-60": 0.011,
+      "60-70": 0.049,
+      "90-100": 0.048,
+      "100-110": 0.566
+    }
+  },
+  {
+    "video_id": "MY6EsxBSAaw",
+    "t": 207.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.28,
+          "hue": 176.6,
+          "hue_conc": 0.741,
+          "sat": 189.0,
+          "val": 221.0,
+          "sat_lo": 138.0,
+          "sat_hi": 220.0,
+          "val_lo": 140.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 11,
+          "n_px": 14134,
+          "hue": 4.2,
+          "hue_conc": 0.99,
+          "sat": 218.0,
+          "val": 208.0,
+          "sat_lo": 178.6500000000001,
+          "sat_hi": 255.0,
+          "val_lo": 152.6500000000001,
+          "val_hi": 232.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 83.0,
+          "sat_lo": 0.0,
+          "sat_hi": 21.0,
+          "val_lo": 58.0,
+          "val_hi": 195.0
+        },
+        "piece_dark": {
+          "n_blobs": 11,
+          "n_px": 2719,
+          "sat": 45.0,
+          "val": 46.0,
+          "sat_lo": 0.0,
+          "sat_hi": 87.0,
+          "val_lo": 24.0,
+          "val_hi": 67.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.033,
+      "10-20": 0.068,
+      "20-30": 0.139,
+      "30-40": 0.065,
+      "60-70": 0.041,
+      "90-100": 0.049,
+      "100-110": 0.576
+    }
+  },
+  {
+    "video_id": "MZBLarAmNXw",
+    "t": 145.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.259,
+          "hue": 107.0,
+          "hue_conc": 0.993,
+          "sat": 179.0,
+          "val": 178.0,
+          "sat_lo": 121.0,
+          "sat_hi": 196.0,
+          "val_lo": 152.0,
+          "val_hi": 192.0
+        },
+        "piece": {
+          "n_blobs": 15,
+          "n_px": 9563,
+          "hue": 102.4,
+          "hue_conc": 0.979,
+          "sat": 189.0,
+          "val": 201.0,
+          "sat_lo": 132.0,
+          "sat_hi": 255.0,
+          "val_lo": 146.0,
+          "val_hi": 255.0,
+          "hue_lo": 95.0,
+          "hue_hi": 114.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 2.0,
+          "val": 235.0,
+          "sat_lo": 0.0,
+          "sat_hi": 14.0,
+          "val_lo": 215.0,
+          "val_hi": 249.0
+        },
+        "piece_white": {
+          "n_blobs": 40,
+          "n_px": 77531,
+          "sat": 12.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 28.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.062,
+      "20-30": 0.155,
+      "30-40": 0.064,
+      "50-60": 0.011,
+      "60-70": 0.054,
+      "90-100": 0.051,
+      "100-110": 0.549
+    }
+  },
+  {
+    "video_id": "MZBLarAmNXw",
+    "t": 185.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.26,
+          "hue": 107.0,
+          "hue_conc": 0.994,
+          "sat": 180.0,
+          "val": 178.0,
+          "sat_lo": 120.0,
+          "sat_hi": 197.0,
+          "val_lo": 151.60000000000002,
+          "val_hi": 193.0
+        },
+        "piece": {
+          "n_blobs": 15,
+          "n_px": 9588,
+          "hue": 102.4,
+          "hue_conc": 0.979,
+          "sat": 188.0,
+          "val": 201.0,
+          "sat_lo": 132.0,
+          "sat_hi": 255.0,
+          "val_lo": 145.0,
+          "val_hi": 255.0,
+          "hue_lo": 95.0,
+          "hue_hi": 114.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 3.0,
+          "val": 235.0,
+          "sat_lo": 0.0,
+          "sat_hi": 14.0,
+          "val_lo": 216.0,
+          "val_hi": 249.0
+        },
+        "piece_white": {
+          "n_blobs": 42,
+          "n_px": 77483,
+          "sat": 11.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 29.0,
+          "val_lo": 217.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.059,
+      "20-30": 0.155,
+      "30-40": 0.065,
+      "50-60": 0.011,
+      "60-70": 0.053,
+      "90-100": 0.05,
+      "100-110": 0.551
+    }
+  },
+  {
+    "video_id": "MrvZ1OD_u_8",
+    "t": 130.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.282,
+          "hue": 176.4,
+          "hue_conc": 0.742,
+          "sat": 189.0,
+          "val": 221.0,
+          "sat_lo": 137.5,
+          "sat_hi": 233.0,
+          "val_lo": 150.0,
+          "val_hi": 237.0
+        },
+        "piece": {
+          "n_blobs": 9,
+          "n_px": 8522,
+          "hue": 5.6,
+          "hue_conc": 0.992,
+          "sat": 217.0,
+          "val": 209.0,
+          "sat_lo": 168.0,
+          "sat_hi": 255.0,
+          "val_lo": 161.0,
+          "val_hi": 218.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 2.0,
+          "sat_hi": 24.0,
+          "val_lo": 59.0,
+          "val_hi": 196.60000000000036
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 388,
+          "sat": 12.0,
+          "val": 59.0,
+          "sat_lo": 0.0,
+          "sat_hi": 64.0,
+          "val_lo": 22.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.055,
+      "20-30": 0.146,
+      "30-40": 0.065,
+      "60-70": 0.048,
+      "90-100": 0.046,
+      "100-110": 0.571
+    }
+  },
+  {
+    "video_id": "MrvZ1OD_u_8",
+    "t": 170.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.283,
+          "hue": 176.8,
+          "hue_conc": 0.742,
+          "sat": 188.0,
+          "val": 218.0,
+          "sat_lo": 133.0,
+          "sat_hi": 225.0,
+          "val_lo": 138.0,
+          "val_hi": 237.0
+        },
+        "piece": {
+          "n_blobs": 7,
+          "n_px": 8870,
+          "hue": 5.7,
+          "hue_conc": 0.992,
+          "sat": 217.0,
+          "val": 209.0,
+          "sat_lo": 179.0,
+          "sat_hi": 255.0,
+          "val_lo": 165.0,
+          "val_hi": 222.0,
+          "hue_lo": 1.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 2.0,
+          "sat_hi": 25.0,
+          "val_lo": 59.0,
+          "val_hi": 197.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 449,
+          "sat": 12.0,
+          "val": 56.0,
+          "sat_lo": 0.0,
+          "sat_hi": 59.0,
+          "val_lo": 17.400000000000002,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.051,
+      "20-30": 0.146,
+      "30-40": 0.065,
+      "60-70": 0.046,
+      "90-100": 0.047,
+      "100-110": 0.575
+    }
+  },
+  {
+    "video_id": "R-d63v4OmVg",
+    "t": 187.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.302,
+          "hue": 177.0,
+          "hue_conc": 0.702,
+          "sat": 192.0,
+          "val": 224.0,
+          "sat_lo": 122.0,
+          "sat_hi": 242.0,
+          "val_lo": 150.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 8,
+          "n_px": 6660,
+          "hue": 1.2,
+          "hue_conc": 0.991,
+          "sat": 253.0,
+          "val": 200.0,
+          "sat_lo": 191.0,
+          "sat_hi": 255.0,
+          "val_lo": 136.0,
+          "val_hi": 239.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.001,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 3.0,
+          "sat_hi": 21.0,
+          "val_lo": 56.0,
+          "val_hi": 200.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.086,
+      "20-30": 0.124,
+      "30-40": 0.058,
+      "50-60": 0.011,
+      "60-70": 0.05,
+      "90-100": 0.047,
+      "100-110": 0.572
+    }
+  },
+  {
+    "video_id": "R-d63v4OmVg",
+    "t": 227.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.303,
+          "hue": 176.9,
+          "hue_conc": 0.703,
+          "sat": 193.0,
+          "val": 223.0,
+          "sat_lo": 121.0,
+          "sat_hi": 242.0,
+          "val_lo": 150.0,
+          "val_hi": 235.0
+        },
+        "piece": {
+          "n_blobs": 17,
+          "n_px": 29781,
+          "hue": 4.8,
+          "hue_conc": 0.99,
+          "sat": 219.0,
+          "val": 211.0,
+          "sat_lo": 189.0,
+          "sat_hi": 255.0,
+          "val_lo": 164.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 177.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.001,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 4.0,
+          "sat_hi": 20.0,
+          "val_lo": 56.0,
+          "val_hi": 200.0
+        },
+        "piece_dark": {
+          "n_blobs": 7,
+          "n_px": 1656,
+          "sat": 17.0,
+          "val": 45.5,
+          "sat_lo": 0.0,
+          "sat_hi": 64.0,
+          "val_lo": 17.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.092,
+      "20-30": 0.124,
+      "30-40": 0.061,
+      "50-60": 0.011,
+      "60-70": 0.046,
+      "90-100": 0.05,
+      "100-110": 0.559
+    }
+  },
+  {
+    "video_id": "fdaFyQBIkEI",
+    "t": 135.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.3,
+          "hue": 176.4,
+          "hue_conc": 0.716,
+          "sat": 187.0,
+          "val": 218.0,
+          "sat_lo": 114.0,
+          "sat_hi": 245.0,
+          "val_lo": 150.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 15,
+          "n_px": 19061,
+          "hue": 5.1,
+          "hue_conc": 0.991,
+          "sat": 217.0,
+          "val": 211.0,
+          "sat_lo": 173.0,
+          "sat_hi": 255.0,
+          "val_lo": 161.0,
+          "val_hi": 232.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.112,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 12.0,
+          "val": 79.0,
+          "sat_lo": 3.0,
+          "sat_hi": 134.60000000000036,
+          "val_lo": 54.0,
+          "val_hi": 219.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 410,
+          "sat": 16.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 60.09999999999991,
+          "val_lo": 23.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.082,
+      "20-30": 0.123,
+      "30-40": 0.058,
+      "50-60": 0.01,
+      "60-70": 0.049,
+      "90-100": 0.046,
+      "100-110": 0.581
+    }
+  },
+  {
+    "video_id": "fdaFyQBIkEI",
+    "t": 175.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.294,
+          "hue": 176.8,
+          "hue_conc": 0.751,
+          "sat": 188.0,
+          "val": 218.0,
+          "sat_lo": 119.0,
+          "sat_hi": 235.0,
+          "val_lo": 144.0,
+          "val_hi": 235.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 6700,
+          "hue": 0.4,
+          "hue_conc": 0.994,
+          "sat": 252.0,
+          "val": 195.0,
+          "sat_lo": 160.0,
+          "sat_hi": 255.0,
+          "val_lo": 138.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.11,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 13.0,
+          "val": 80.0,
+          "sat_lo": 3.0,
+          "sat_hi": 135.30000000000018,
+          "val_lo": 54.0,
+          "val_hi": 215.0
+        },
+        "piece_dark": {
+          "n_blobs": 6,
+          "n_px": 1826,
+          "sat": 57.0,
+          "val": 41.0,
+          "sat_lo": 8.0,
+          "sat_hi": 87.0,
+          "val_lo": 28.0,
+          "val_hi": 66.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.031,
+      "10-20": 0.067,
+      "20-30": 0.122,
+      "30-40": 0.059,
+      "50-60": 0.02,
+      "60-70": 0.052,
+      "90-100": 0.046,
+      "100-110": 0.582
+    }
+  },
+  {
+    "video_id": "fqJB9w4gp0w",
+    "t": 82.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.252,
+          "hue": 179.8,
+          "hue_conc": 0.997,
+          "sat": 190.0,
+          "val": 226.0,
+          "sat_lo": 111.0,
+          "sat_hi": 206.0,
+          "val_lo": 160.0,
+          "val_hi": 238.0
+        },
+        "piece": {
+          "n_blobs": 5,
+          "n_px": 2848,
+          "hue": 179.9,
+          "hue_conc": 0.999,
+          "sat": 239.0,
+          "val": 194.0,
+          "sat_lo": 153.0,
+          "sat_hi": 255.0,
+          "val_lo": 145.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 95.0,
+          "sat_lo": 2.0,
+          "sat_hi": 18.0,
+          "val_lo": 56.0,
+          "val_hi": 210.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 692,
+          "sat": 12.0,
+          "val": 61.0,
+          "sat_lo": 0.0,
+          "sat_hi": 48.0,
+          "val_lo": 18.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.038,
+      "10-20": 0.083,
+      "20-30": 0.112,
+      "30-40": 0.053,
+      "50-60": 0.01,
+      "60-70": 0.045,
+      "90-100": 0.044,
+      "100-110": 0.601
+    }
+  },
+  {
+    "video_id": "fqJB9w4gp0w",
+    "t": 122.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.25,
+          "hue": 179.9,
+          "hue_conc": 0.989,
+          "sat": 190.0,
+          "val": 226.0,
+          "sat_lo": 114.0,
+          "sat_hi": 207.0,
+          "val_lo": 164.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 6,
+          "n_px": 5966,
+          "hue": 179.3,
+          "hue_conc": 0.998,
+          "sat": 255.0,
+          "val": 195.0,
+          "sat_lo": 168.0,
+          "sat_hi": 255.0,
+          "val_lo": 136.0,
+          "val_hi": 239.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 95.0,
+          "sat_lo": 3.0,
+          "sat_hi": 19.0,
+          "val_lo": 55.0,
+          "val_hi": 211.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 1004,
+          "sat": 14.0,
+          "val": 53.0,
+          "sat_lo": 0.0,
+          "sat_hi": 54.0,
+          "val_lo": 15.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.037,
+      "10-20": 0.081,
+      "20-30": 0.115,
+      "30-40": 0.052,
+      "50-60": 0.01,
+      "60-70": 0.045,
+      "90-100": 0.045,
+      "100-110": 0.598
+    }
+  },
+  {
+    "video_id": "l-3s-xPwyIs",
+    "t": 90.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.34,
+          "hue": 13.6,
+          "hue_conc": 0.56,
+          "sat": 209.0,
+          "val": 224.0,
+          "sat_lo": 120.0,
+          "sat_hi": 224.0,
+          "val_lo": 134.0,
+          "val_hi": 243.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 4577,
+          "hue": 15.9,
+          "hue_conc": 0.998,
+          "sat": 190.0,
+          "val": 185.0,
+          "sat_lo": 141.0,
+          "sat_hi": 221.0,
+          "val_lo": 131.0,
+          "val_hi": 237.0,
+          "hue_lo": 12.0,
+          "hue_hi": 18.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 7.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 28.0,
+          "val_lo": 75.0,
+          "val_hi": 146.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 300,
+          "sat": 8.0,
+          "val": 63.0,
+          "sat_lo": 0.0,
+          "sat_hi": 31.100000000000023,
+          "val_lo": 24.950000000000003,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.084,
+      "20-30": 0.13,
+      "30-40": 0.067,
+      "50-60": 0.01,
+      "60-70": 0.049,
+      "90-100": 0.047,
+      "100-110": 0.559
+    }
+  },
+  {
+    "video_id": "l-3s-xPwyIs",
+    "t": 130.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.338,
+          "hue": 13.8,
+          "hue_conc": 0.558,
+          "sat": 207.0,
+          "val": 224.0,
+          "sat_lo": 122.0,
+          "sat_hi": 225.0,
+          "val_lo": 133.0,
+          "val_hi": 244.0
+        },
+        "piece": {
+          "n_blobs": 20,
+          "n_px": 12627,
+          "hue": 17.2,
+          "hue_conc": 0.995,
+          "sat": 195.0,
+          "val": 204.0,
+          "sat_lo": 140.0,
+          "sat_hi": 234.0,
+          "val_lo": 140.0,
+          "val_hi": 240.0,
+          "hue_lo": 12.0,
+          "hue_hi": 22.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 30.0,
+          "val_lo": 75.0,
+          "val_hi": 146.5000000000009
+        },
+        "piece_dark": {
+          "n_blobs": 5,
+          "n_px": 1960,
+          "sat": 15.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 54.0,
+          "val_lo": 24.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.082,
+      "20-30": 0.131,
+      "30-40": 0.062,
+      "60-70": 0.049,
+      "90-100": 0.047,
+      "100-110": 0.561
+    }
+  },
+  {
+    "video_id": "lCsB4X60YhQ",
+    "t": 140.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.322,
+          "hue": 173.9,
+          "hue_conc": 0.58,
+          "sat": 178.0,
+          "val": 217.0,
+          "sat_lo": 111.20000000000002,
+          "sat_hi": 198.0,
+          "val_lo": 133.0,
+          "val_hi": 231.9000000000001
+        },
+        "piece": {
+          "n_blobs": 12,
+          "n_px": 6469,
+          "hue": 0.1,
+          "hue_conc": 0.997,
+          "sat": 251.0,
+          "val": 187.0,
+          "sat_lo": 179.0,
+          "sat_hi": 255.0,
+          "val_lo": 145.0,
+          "val_hi": 236.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 29.0,
+          "val_lo": 75.0,
+          "val_hi": 141.60000000000036
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 444,
+          "sat": 8.0,
+          "val": 62.0,
+          "sat_lo": 0.0,
+          "sat_hi": 28.0,
+          "val_lo": 23.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.071,
+      "20-30": 0.13,
+      "30-40": 0.062,
+      "50-60": 0.014,
+      "60-70": 0.046,
+      "90-100": 0.046,
+      "100-110": 0.575
+    }
+  },
+  {
+    "video_id": "lCsB4X60YhQ",
+    "t": 180.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.322,
+          "hue": 174.0,
+          "hue_conc": 0.578,
+          "sat": 183.0,
+          "val": 215.0,
+          "sat_lo": 109.0,
+          "sat_hi": 198.0,
+          "val_lo": 129.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 16,
+          "n_px": 11024,
+          "hue": 0.5,
+          "hue_conc": 0.996,
+          "sat": 251.0,
+          "val": 189.0,
+          "sat_lo": 155.0,
+          "sat_hi": 255.0,
+          "val_lo": 145.14999999999998,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 28.0,
+          "val_lo": 75.0,
+          "val_hi": 144.90000000000055
+        },
+        "piece_dark": {
+          "n_blobs": 8,
+          "n_px": 2268,
+          "sat": 38.0,
+          "val": 49.0,
+          "sat_lo": 0.0,
+          "sat_hi": 75.0,
+          "val_lo": 23.0,
+          "val_hi": 67.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.071,
+      "20-30": 0.132,
+      "30-40": 0.064,
+      "60-70": 0.044,
+      "70-80": 0.011,
+      "90-100": 0.037,
+      "100-110": 0.575
+    }
+  },
+  {
+    "video_id": "lMCemfE1bDY",
+    "t": 147.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.321,
+          "hue": 95.9,
+          "hue_conc": 0.986,
+          "sat": 143.0,
+          "val": 212.0,
+          "sat_lo": 108.0,
+          "sat_hi": 204.80000000000018,
+          "val_lo": 139.0,
+          "val_hi": 229.0
+        },
+        "piece": {
+          "n_blobs": 11,
+          "n_px": 19197,
+          "hue": 95.5,
+          "hue_conc": 0.99,
+          "sat": 158.0,
+          "val": 176.0,
+          "sat_lo": 133.0,
+          "sat_hi": 242.0,
+          "val_lo": 147.0,
+          "val_hi": 208.0,
+          "hue_lo": 91.0,
+          "hue_hi": 103.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 0.0,
+          "sat_hi": 20.300000000000182,
+          "val_lo": 56.0,
+          "val_hi": 192.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.036,
+      "10-20": 0.071,
+      "20-30": 0.123,
+      "30-40": 0.061,
+      "60-70": 0.044,
+      "90-100": 0.049,
+      "100-110": 0.591
+    }
+  },
+  {
+    "video_id": "lMCemfE1bDY",
+    "t": 187.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.314,
+          "hue": 96.1,
+          "hue_conc": 0.986,
+          "sat": 143.0,
+          "val": 212.0,
+          "sat_lo": 110.0,
+          "sat_hi": 207.0,
+          "val_lo": 139.0,
+          "val_hi": 229.0
+        },
+        "piece": {
+          "n_blobs": 10,
+          "n_px": 16635,
+          "hue": 95.8,
+          "hue_conc": 0.988,
+          "sat": 160.0,
+          "val": 174.0,
+          "sat_lo": 134.0,
+          "sat_hi": 245.0,
+          "val_lo": 146.0,
+          "val_hi": 209.0,
+          "hue_lo": 91.0,
+          "hue_hi": 103.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 82.0,
+          "sat_lo": 0.0,
+          "sat_hi": 20.0,
+          "val_lo": 58.0,
+          "val_hi": 190.0
+        },
+        "piece_dark": {
+          "n_blobs": 7,
+          "n_px": 1693,
+          "sat": 45.0,
+          "val": 46.0,
+          "sat_lo": 28.0,
+          "sat_hi": 78.0,
+          "val_lo": 28.0,
+          "val_hi": 56.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.073,
+      "20-30": 0.124,
+      "30-40": 0.062,
+      "50-60": 0.01,
+      "60-70": 0.044,
+      "70-80": 0.011,
+      "90-100": 0.042,
+      "100-110": 0.589
+    }
+  },
+  {
+    "video_id": "lMCemfE1bDY",
+    "t": 207.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.318,
+          "hue": 95.7,
+          "hue_conc": 0.986,
+          "sat": 143.0,
+          "val": 212.0,
+          "sat_lo": 109.0,
+          "sat_hi": 208.0,
+          "val_lo": 139.0,
+          "val_hi": 230.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 18704,
+          "hue": 96.2,
+          "hue_conc": 0.987,
+          "sat": 162.0,
+          "val": 173.0,
+          "sat_lo": 133.0,
+          "sat_hi": 242.0,
+          "val_lo": 129.0,
+          "val_hi": 209.0,
+          "hue_lo": 91.0,
+          "hue_hi": 103.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 4.0,
+          "sat_hi": 19.0,
+          "val_lo": 58.0,
+          "val_hi": 189.0
+        },
+        "piece_dark": {
+          "n_blobs": 11,
+          "n_px": 2769,
+          "sat": 52.0,
+          "val": 45.0,
+          "sat_lo": 28.0,
+          "sat_hi": 85.0,
+          "val_lo": 32.0,
+          "val_hi": 56.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.027,
+      "10-20": 0.071,
+      "20-30": 0.126,
+      "30-40": 0.046,
+      "50-60": 0.022,
+      "60-70": 0.045,
+      "70-80": 0.012,
+      "90-100": 0.045,
+      "100-110": 0.596
+    }
+  },
+  {
+    "video_id": "mY2X6Dw0iFE",
+    "t": 127.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.305,
+          "hue": 174.8,
+          "hue_conc": 0.616,
+          "sat": 186.0,
+          "val": 221.0,
+          "sat_lo": 137.0,
+          "sat_hi": 238.0,
+          "val_lo": 147.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 12,
+          "n_px": 8316,
+          "hue": 0.3,
+          "hue_conc": 0.996,
+          "sat": 246.0,
+          "val": 192.0,
+          "sat_lo": 166.0,
+          "sat_hi": 255.0,
+          "val_lo": 136.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 82.0,
+          "sat_lo": 4.0,
+          "sat_hi": 17.0,
+          "val_lo": 56.0,
+          "val_hi": 192.0
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 1018,
+          "sat": 8.0,
+          "val": 61.0,
+          "sat_lo": 0.0,
+          "sat_hi": 67.0,
+          "val_lo": 4.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.08,
+      "20-30": 0.119,
+      "30-40": 0.061,
+      "50-60": 0.01,
+      "60-70": 0.047,
+      "90-100": 0.047,
+      "100-110": 0.58
+    }
+  },
+  {
+    "video_id": "mY2X6Dw0iFE",
+    "t": 167.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.307,
+          "hue": 174.7,
+          "hue_conc": 0.618,
+          "sat": 188.0,
+          "val": 219.0,
+          "sat_lo": 133.5,
+          "sat_hi": 230.0,
+          "val_lo": 147.0,
+          "val_hi": 234.0
+        },
+        "piece": {
+          "n_blobs": 13,
+          "n_px": 12999,
+          "hue": 180.0,
+          "hue_conc": 0.997,
+          "sat": 254.0,
+          "val": 195.0,
+          "sat_lo": 177.0,
+          "sat_hi": 255.0,
+          "val_lo": 136.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 81.0,
+          "sat_lo": 2.0,
+          "sat_hi": 16.0,
+          "val_lo": 56.0,
+          "val_hi": 192.0
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 605,
+          "sat": 0.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 35.0,
+          "val_lo": 2.0,
+          "val_hi": 67.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.043,
+      "10-20": 0.078,
+      "20-30": 0.122,
+      "30-40": 0.059,
+      "60-70": 0.044,
+      "90-100": 0.047,
+      "100-110": 0.575
+    }
+  },
+  {
+    "video_id": "nmk59XWFRBU",
+    "t": 110.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.074,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 22.0,
+          "val": 151.0,
+          "sat_lo": 3.0,
+          "sat_hi": 47.600000000000364,
+          "val_lo": 84.0,
+          "val_hi": 231.0
+        },
+        "piece_white": {
+          "n_blobs": 44,
+          "n_px": 71843,
+          "sat": 9.0,
+          "val": 226.0,
+          "sat_lo": 2.0,
+          "sat_hi": 32.0,
+          "val_lo": 215.0,
+          "val_hi": 255.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.788,
+          "hue": 137.2,
+          "hue_conc": 0.984,
+          "sat": 120.0,
+          "val": 154.0,
+          "sat_lo": 100.30000000000001,
+          "sat_hi": 127.0,
+          "val_lo": 144.0,
+          "val_hi": 158.0
+        },
+        "piece": {
+          "n_blobs": 2,
+          "n_px": 4056,
+          "hue": 141.6,
+          "hue_conc": 0.999,
+          "sat": 195.0,
+          "val": 200.0,
+          "sat_lo": 177.0,
+          "sat_hi": 239.0,
+          "val_lo": 134.0,
+          "val_hi": 232.0,
+          "hue_lo": 140.0,
+          "hue_hi": 143.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.031,
+      "10-20": 0.064,
+      "20-30": 0.132,
+      "30-40": 0.048,
+      "50-60": 0.024,
+      "60-70": 0.04,
+      "90-100": 0.042,
+      "100-110": 0.59
+    }
+  },
+  {
+    "video_id": "nmk59XWFRBU",
+    "t": 150.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.074,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 23.0,
+          "val": 207.0,
+          "sat_lo": 4.7000000000000455,
+          "sat_hi": 47.30000000000018,
+          "val_lo": 86.0,
+          "val_hi": 230.0
+        },
+        "piece_white": {
+          "n_blobs": 45,
+          "n_px": 75915,
+          "sat": 9.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 32.0,
+          "val_lo": 216.0,
+          "val_hi": 255.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.782,
+          "hue": 137.2,
+          "hue_conc": 0.982,
+          "sat": 119.0,
+          "val": 154.0,
+          "sat_lo": 101.0,
+          "sat_hi": 128.0,
+          "val_lo": 141.0,
+          "val_hi": 158.0
+        },
+        "piece": {
+          "n_blobs": 2,
+          "n_px": 5897,
+          "hue": 141.6,
+          "hue_conc": 0.999,
+          "sat": 196.0,
+          "val": 196.0,
+          "sat_lo": 177.0,
+          "sat_hi": 239.0,
+          "val_lo": 134.0,
+          "val_hi": 230.0,
+          "hue_lo": 140.0,
+          "hue_hi": 143.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.071,
+      "20-30": 0.128,
+      "30-40": 0.059,
+      "50-60": 0.011,
+      "60-70": 0.047,
+      "90-100": 0.04,
+      "100-110": 0.575
+    }
+  },
+  {
+    "video_id": "sG05DoaOmM4",
+    "t": 200.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.268,
+          "hue": 179.0,
+          "hue_conc": 0.999,
+          "sat": 184.0,
+          "val": 219.0,
+          "sat_lo": 112.0,
+          "sat_hi": 201.0,
+          "val_lo": 157.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 6,
+          "n_px": 5149,
+          "hue": 179.1,
+          "hue_conc": 0.999,
+          "sat": 254.0,
+          "val": 192.0,
+          "sat_lo": 196.0,
+          "sat_hi": 255.0,
+          "val_lo": 130.0,
+          "val_hi": 238.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 3.0,
+          "val": 223.0,
+          "sat_lo": 0.0,
+          "sat_hi": 10.0,
+          "val_lo": 158.0,
+          "val_hi": 249.0
+        },
+        "piece_white": {
+          "n_blobs": 45,
+          "n_px": 80376,
+          "sat": 12.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 28.0,
+          "val_lo": 218.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.083,
+      "20-30": 0.128,
+      "30-40": 0.061,
+      "50-60": 0.015,
+      "60-70": 0.031,
+      "90-100": 0.066,
+      "100-110": 0.556
+    }
+  },
+  {
+    "video_id": "sG05DoaOmM4",
+    "t": 240.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.265,
+          "hue": 178.9,
+          "hue_conc": 0.999,
+          "sat": 184.0,
+          "val": 221.0,
+          "sat_lo": 114.0,
+          "sat_hi": 201.0,
+          "val_lo": 159.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 6,
+          "n_px": 5741,
+          "hue": 179.4,
+          "hue_conc": 0.998,
+          "sat": 254.0,
+          "val": 192.0,
+          "sat_lo": 190.0,
+          "sat_hi": 255.0,
+          "val_lo": 127.0,
+          "val_hi": 238.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 0.0,
+          "val": 224.0,
+          "sat_lo": 0.0,
+          "sat_hi": 10.0,
+          "val_lo": 159.0,
+          "val_hi": 249.0
+        },
+        "piece_white": {
+          "n_blobs": 45,
+          "n_px": 81334,
+          "sat": 12.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 29.0,
+          "val_lo": 218.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.045,
+      "10-20": 0.087,
+      "20-30": 0.131,
+      "30-40": 0.059,
+      "60-70": 0.053,
+      "90-100": 0.05,
+      "100-110": 0.55
+    }
+  },
+  {
+    "video_id": "u5g69_rPTsg",
+    "t": 170.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.272,
+          "hue": 179.0,
+          "hue_conc": 0.999,
+          "sat": 184.0,
+          "val": 222.0,
+          "sat_lo": 113.0,
+          "sat_hi": 198.0,
+          "val_lo": 166.9,
+          "val_hi": 235.0
+        },
+        "piece": {
+          "n_blobs": 5,
+          "n_px": 5497,
+          "hue": 179.0,
+          "hue_conc": 0.999,
+          "sat": 254.0,
+          "val": 192.0,
+          "sat_lo": 190.0,
+          "sat_hi": 255.0,
+          "val_lo": 139.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 0.0,
+          "val": 224.0,
+          "sat_lo": 0.0,
+          "sat_hi": 10.0,
+          "val_lo": 159.0,
+          "val_hi": 247.60000000000036
+        },
+        "piece_white": {
+          "n_blobs": 43,
+          "n_px": 75503,
+          "sat": 12.0,
+          "val": 229.0,
+          "sat_lo": 2.0,
+          "sat_hi": 29.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.082,
+      "20-30": 0.119,
+      "30-40": 0.061,
+      "50-60": 0.024,
+      "60-70": 0.033,
+      "90-100": 0.052,
+      "100-110": 0.567
+    }
+  },
+  {
+    "video_id": "u5g69_rPTsg",
+    "t": 210.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.27,
+          "hue": 178.8,
+          "hue_conc": 0.999,
+          "sat": 184.0,
+          "val": 223.0,
+          "sat_lo": 115.0,
+          "sat_hi": 200.0,
+          "val_lo": 169.0,
+          "val_hi": 237.0
+        },
+        "piece": {
+          "n_blobs": 5,
+          "n_px": 5471,
+          "hue": 179.1,
+          "hue_conc": 0.999,
+          "sat": 254.0,
+          "val": 190.0,
+          "sat_lo": 192.0,
+          "sat_hi": 255.0,
+          "val_lo": 139.0,
+          "val_hi": 237.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "white",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 2.0,
+          "val": 235.0,
+          "sat_lo": 0.0,
+          "sat_hi": 14.0,
+          "val_lo": 216.0,
+          "val_hi": 250.0
+        },
+        "piece_white": {
+          "n_blobs": 41,
+          "n_px": 79155,
+          "sat": 11.0,
+          "val": 228.0,
+          "sat_lo": 2.0,
+          "sat_hi": 28.0,
+          "val_lo": 216.0,
+          "val_hi": 254.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.059,
+      "20-30": 0.154,
+      "30-40": 0.065,
+      "50-60": 0.011,
+      "60-70": 0.054,
+      "90-100": 0.05,
+      "100-110": 0.551
+    }
+  },
+  {
+    "video_id": "wDBo8V765lk",
+    "t": 135.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.312,
+          "hue": 175.1,
+          "hue_conc": 0.619,
+          "sat": 186.0,
+          "val": 221.0,
+          "sat_lo": 126.0,
+          "sat_hi": 208.5,
+          "val_lo": 140.0,
+          "val_hi": 232.0
+        },
+        "piece": {
+          "n_blobs": 26,
+          "n_px": 12014,
+          "hue": 2.9,
+          "hue_conc": 0.992,
+          "sat": 223.0,
+          "val": 196.0,
+          "sat_lo": 164.0,
+          "sat_hi": 255.0,
+          "val_lo": 154.0,
+          "val_hi": 233.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 4.0,
+          "sat_hi": 20.0,
+          "val_lo": 56.0,
+          "val_hi": 190.0
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 840,
+          "sat": 12.0,
+          "val": 51.0,
+          "sat_lo": 0.0,
+          "sat_hi": 67.04999999999995,
+          "val_lo": 8.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.074,
+      "20-30": 0.129,
+      "30-40": 0.062,
+      "50-60": 0.01,
+      "60-70": 0.045,
+      "90-100": 0.049,
+      "100-110": 0.574
+    }
+  },
+  {
+    "video_id": "wDBo8V765lk",
+    "t": 175.0,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.312,
+          "hue": 175.1,
+          "hue_conc": 0.622,
+          "sat": 188.0,
+          "val": 222.0,
+          "sat_lo": 119.4,
+          "sat_hi": 215.0,
+          "val_lo": 138.0,
+          "val_hi": 233.0
+        },
+        "piece": {
+          "n_blobs": 20,
+          "n_px": 14770,
+          "hue": 1.6,
+          "hue_conc": 0.993,
+          "sat": 249.0,
+          "val": 196.0,
+          "sat_lo": 169.0,
+          "sat_hi": 255.0,
+          "val_lo": 146.0,
+          "val_hi": 235.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 82.0,
+          "sat_lo": 3.0,
+          "sat_hi": 18.0,
+          "val_lo": 56.0,
+          "val_hi": 189.0
+        },
+        "piece_dark": {
+          "n_blobs": 6,
+          "n_px": 1272,
+          "sat": 26.0,
+          "val": 58.0,
+          "sat_lo": 0.0,
+          "sat_hi": 61.0,
+          "val_lo": 23.0,
+          "val_hi": 68.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.071,
+      "20-30": 0.124,
+      "30-40": 0.058,
+      "50-60": 0.01,
+      "60-70": 0.045,
+      "90-100": 0.047,
+      "100-110": 0.586
+    }
+  },
+  {
+    "video_id": "yAXZJvDzFAg",
+    "t": 212.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.288,
+          "hue": 176.8,
+          "hue_conc": 0.699,
+          "sat": 191.0,
+          "val": 224.0,
+          "sat_lo": 126.0,
+          "sat_hi": 238.0,
+          "val_lo": 150.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 15,
+          "n_px": 27000,
+          "hue": 5.3,
+          "hue_conc": 0.992,
+          "sat": 217.0,
+          "val": 214.0,
+          "sat_lo": 178.0,
+          "sat_hi": 255.0,
+          "val_lo": 168.0,
+          "val_hi": 233.0,
+          "hue_lo": 0.0,
+          "hue_hi": 177.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 10.0,
+          "val": 83.0,
+          "sat_lo": 3.0,
+          "sat_hi": 20.0,
+          "val_lo": 56.0,
+          "val_hi": 196.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 3,
+          "n_px": 924,
+          "sat": 13.0,
+          "val": 53.5,
+          "sat_lo": 0.0,
+          "sat_hi": 62.69999999999982,
+          "val_lo": 1.1500000000000057,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.04,
+      "10-20": 0.086,
+      "20-30": 0.106,
+      "30-40": 0.058,
+      "50-60": 0.011,
+      "60-70": 0.041,
+      "70-80": 0.013,
+      "90-100": 0.046,
+      "100-110": 0.591
+    }
+  },
+  {
+    "video_id": "yAXZJvDzFAg",
+    "t": 252.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.283,
+          "hue": 177.3,
+          "hue_conc": 0.74,
+          "sat": 192.0,
+          "val": 225.0,
+          "sat_lo": 128.0,
+          "sat_hi": 241.0,
+          "val_lo": 150.0,
+          "val_hi": 236.0
+        },
+        "piece": {
+          "n_blobs": 7,
+          "n_px": 5216,
+          "hue": 179.4,
+          "hue_conc": 0.997,
+          "sat": 255.0,
+          "val": 193.0,
+          "sat_lo": 154.0,
+          "sat_hi": 255.0,
+          "val_lo": 139.0,
+          "val_hi": 242.0,
+          "hue_lo": 0.0,
+          "hue_hi": 179.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 9.0,
+          "val": 83.0,
+          "sat_lo": 0.0,
+          "sat_hi": 23.0,
+          "val_lo": 56.0,
+          "val_hi": 198.60000000000036
+        },
+        "piece_dark": {
+          "n_blobs": 8,
+          "n_px": 2343,
+          "sat": 25.0,
+          "val": 47.0,
+          "sat_lo": 0.0,
+          "sat_hi": 71.0,
+          "val_lo": 22.0,
+          "val_hi": 67.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.041,
+      "10-20": 0.08,
+      "20-30": 0.098,
+      "30-40": 0.045,
+      "40-50": 0.012,
+      "50-60": 0.032,
+      "60-70": 0.042,
+      "70-80": 0.016,
+      "90-100": 0.042,
+      "100-110": 0.584
+    }
+  },
+  {
+    "video_id": "yQ4GZloiG08",
+    "t": 147.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.344,
+          "hue": 13.5,
+          "hue_conc": 0.565,
+          "sat": 207.0,
+          "val": 228.0,
+          "sat_lo": 109.0,
+          "sat_hi": 226.0,
+          "val_lo": 132.0,
+          "val_hi": 244.0
+        },
+        "piece": {
+          "n_blobs": 40,
+          "n_px": 26067,
+          "hue": 19.2,
+          "hue_conc": 0.992,
+          "sat": 171.0,
+          "val": 202.0,
+          "sat_lo": 133.0,
+          "sat_hi": 232.0,
+          "val_lo": 134.0,
+          "val_hi": 237.0,
+          "hue_lo": 13.0,
+          "hue_hi": 25.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 7.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 30.0,
+          "val_lo": 76.0,
+          "val_hi": 145.30000000000018
+        },
+        "piece_dark": {
+          "n_blobs": 1,
+          "n_px": 593,
+          "sat": 8.0,
+          "val": 60.0,
+          "sat_lo": 0.0,
+          "sat_hi": 59.0,
+          "val_lo": 3.0,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.036,
+      "10-20": 0.056,
+      "20-30": 0.144,
+      "30-40": 0.066,
+      "50-60": 0.011,
+      "60-70": 0.046,
+      "90-100": 0.047,
+      "100-110": 0.579
+    }
+  },
+  {
+    "video_id": "yQ4GZloiG08",
+    "t": 187.5,
+    "seats": {
+      "top": {
+        "ring": {
+          "kind": "colored",
+          "colored_frac": 0.338,
+          "hue": 13.6,
+          "hue_conc": 0.561,
+          "sat": 208.0,
+          "val": 225.0,
+          "sat_lo": 124.0,
+          "sat_hi": 225.0,
+          "val_lo": 136.0,
+          "val_hi": 243.0
+        },
+        "piece": {
+          "n_blobs": 20,
+          "n_px": 14390,
+          "hue": 17.8,
+          "hue_conc": 0.997,
+          "sat": 183.0,
+          "val": 207.0,
+          "sat_lo": 133.0,
+          "sat_hi": 224.0,
+          "val_lo": 145.0,
+          "val_hi": 231.0,
+          "hue_lo": 14.0,
+          "hue_hi": 21.0
+        }
+      },
+      "bot": {
+        "ring": {
+          "kind": "dark",
+          "colored_frac": 0.0,
+          "hue": null,
+          "hue_conc": null,
+          "sat": 8.0,
+          "val": 90.0,
+          "sat_lo": 4.0,
+          "sat_hi": 25.300000000000182,
+          "val_lo": 76.0,
+          "val_hi": 145.8000000000011
+        },
+        "piece_dark": {
+          "n_blobs": 2,
+          "n_px": 1029,
+          "sat": 8.0,
+          "val": 61.0,
+          "sat_lo": 0.0,
+          "sat_hi": 54.59999999999991,
+          "val_lo": 13.800000000000011,
+          "val_hi": 69.0
+        }
+      }
+    },
+    "tile_hues": {
+      "0-10": 0.039,
+      "10-20": 0.08,
+      "20-30": 0.127,
+      "30-40": 0.045,
+      "50-60": 0.021,
+      "60-70": 0.037,
+      "90-100": 0.047,
+      "100-110": 0.588
+    }
+  }
+]
