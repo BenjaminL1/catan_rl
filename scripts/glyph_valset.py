@@ -213,14 +213,22 @@ def find_grant_events(url: str, dur: float) -> list[tuple[float, str]]:
     return hits
 
 
-def cmd_extract(n_videos: int, seed: int) -> int:
+def cmd_extract(n_videos: int, seed: int, video_ids: list[str], ui_era: str) -> int:
     import random
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    manifest = json.loads(MANIFEST.read_text())
-    high = [v["video_id"] for v in manifest["videos"] if v["strength"] == "high"]
-    rng = random.Random(seed)
-    picks = rng.sample(high, min(n_videos, len(high)))
+    if video_ids:
+        # Explicit id list (old-UI probe / targeted ORE-BRICK oversampling): bypass
+        # the random manifest sample. Dedupe preserving order. The strength filter is
+        # intentionally NOT applied — an explicit id is a deliberate pick (e.g. an
+        # old-UI video that is not tier 'high'); tier is orthogonal to the glyph
+        # colour question this valset measures.
+        picks = list(dict.fromkeys(video_ids))
+    else:
+        manifest = json.loads(MANIFEST.read_text())
+        high = [v["video_id"] for v in manifest["videos"] if v["strength"] == "high"]
+        rng = random.Random(seed)
+        picks = rng.sample(high, min(n_videos, len(high)))
 
     done_videos = set()
     if META.exists():
@@ -290,6 +298,7 @@ def cmd_extract(n_videos: int, seed: int) -> int:
                 "video_id": vid,
                 "t": round(t, 1),
                 "event_index": ev_i,
+                "ui_era": ui_era,
                 "line_text": line_text,
                 "boxes": [list(b) for b in boxes],
                 "palette": {
@@ -511,12 +520,46 @@ def _fold_results(
     return out
 
 
-def cmd_score(folds: int) -> int:
+def _ui_breakout(
+    old_entries: list[tuple[str, LabeledGrantFrame]],
+    old_ids: list[str],
+    excluded: bool,
+) -> dict[str, Any]:
+    """Per-box results for the old-UI subset (slice olduiprobe requirement).
+
+    Scores ONLY the old-UI frames under the canonical CARD_PALETTE and reports the
+    same per-box confusion + coverage the whole-set score reports, plus a derived
+    ``zero_ore_brick`` for the subset (the subset is usually below the 8-frame floor,
+    so ``passed`` is not the signal — the accuracy + confusion + ORE<->BRICK count
+    are). ``excluded`` records whether these frames were kept OUT of the gated set
+    (the honest-negative path: old-UI icons that misclassify are marked for
+    harvest exclusion rather than tuned around).
+    """
+    frames = [f for _, f in old_entries]
+    v = validate_glyph_classifier(frames)
+    ore_brick = sum(c for t, p, c in v.confusion if {t, p} == {"ORE", "BRICK"})
+    return {
+        "excluded_from_gate": excluded,
+        "videos": sorted({vid for vid, _ in old_entries}),
+        "frames": old_ids,
+        "n_frames": v.n_frames,
+        "n_correct": v.n_correct,
+        "accuracy": round(v.accuracy, 4),
+        "n_boxes": v.n_boxes,
+        "n_unread_boxes": v.n_unread_boxes,
+        "confusion": [list(c) for c in v.confusion],
+        "ore_brick_confusions": ore_brick,
+        "reason": v.reason,
+    }
+
+
+def cmd_score(folds: int, exclude_ui_era: str | None) -> int:
     if not LABELS.exists():
         print(f"no labels at {LABELS} — label the sheets first")
         return 1
     labels: dict[str, str] = json.loads(LABELS.read_text())
     all_rows = [json.loads(line) for line in META.read_text().splitlines()]
+    ui_era_by_cid = {r["crop_id"]: r.get("ui_era", "modern") for r in all_rows}
     rows, n_dupes = _dedupe_events(all_rows)
     if n_dupes:
         print(f"deduped {n_dupes} near-duplicate grant event(s) (same line re-sampled)")
@@ -560,6 +603,20 @@ def cmd_score(folds: int) -> int:
             )
         )
         scored_ids.append(cid)
+
+    # Old-UI subset (slice olduiprobe): always broken out for the report; optionally
+    # held OUT of the gated set on the honest-negative path (--exclude-ui-era old).
+    old_idx = [i for i, cid in enumerate(scored_ids) if ui_era_by_cid.get(cid) == "old"]
+    old_entries = [entries[i] for i in old_idx]
+    old_ids = [scored_ids[i] for i in old_idx]
+    excluded = exclude_ui_era == "old"
+    old_ui = _ui_breakout(old_entries, old_ids, excluded) if old_entries else None
+    if excluded:
+        old_set = set(old_idx)
+        gated = [(i, e) for i, e in enumerate(entries) if i not in old_set]
+        entries = [e for _, e in gated]
+        scored_ids = [scored_ids[i] for i, _ in gated]
+
     frames = [f for _, f in entries]
     v = validate_glyph_classifier(frames)
     fold_results = _fold_results(entries, folds) if folds >= 2 else []
@@ -591,6 +648,7 @@ def cmd_score(folds: int) -> int:
         },
         "margins": _margin_summary(frames),
         "folds": fold_results,
+        "old_ui": old_ui,
     }
     VALIDATION_OUT.write_text(json.dumps(result, indent=2) + "\n")
     lines = [
@@ -611,6 +669,22 @@ def cmd_score(folds: int) -> int:
         "|---|---|",
     ]
     lines += [f"| {t} -> {p} | {c} |" for t, p, c in v.confusion]
+    if old_ui is not None:
+        lines += [
+            "",
+            "## Old-UI subset breakout",
+            "",
+            f"- videos: {', '.join(old_ui['videos'])}"
+            + (" (excluded from gated set)" if old_ui["excluded_from_gate"] else " (in gated set)"),
+            f"- frames: {old_ui['n_frames']} labelled, {old_ui['n_correct']} exact"
+            f" ({old_ui['accuracy']:.1%} accuracy)",
+            f"- boxes: {old_ui['n_boxes']} labelled, {old_ui['n_unread_boxes']} fail-closed unread",
+            f"- ORE<->BRICK confusions: {old_ui['ore_brick_confusions']}",
+            "",
+            "| true \\ predicted | count |",
+            "|---|---|",
+        ]
+        lines += [f"| {t} -> {p} | {c} |" for t, p, c in old_ui["confusion"]]
     for fr in fold_results:
         lines.append(
             f"- fold {fr['fold']}: "
@@ -633,6 +707,18 @@ def main() -> int:
     ex = sub.add_parser("extract")
     ex.add_argument("--videos", type=int, default=30)
     ex.add_argument("--seed", type=int, default=0)
+    ex.add_argument(
+        "--video-ids",
+        type=str,
+        default="",
+        help="comma-separated explicit video ids (bypasses the random manifest sample)",
+    )
+    ex.add_argument(
+        "--ui-era",
+        choices=["modern", "old"],
+        default="modern",
+        help="UI-era tag stored in meta for the old-UI breakout in `score`",
+    )
     sub.add_parser("sheet")
     sc = sub.add_parser("score")
     sc.add_argument(
@@ -641,12 +727,20 @@ def main() -> int:
         default=2,
         help="video-disjoint cross-check folds written into the artifact (0 disables)",
     )
+    sc.add_argument(
+        "--exclude-ui-era",
+        choices=["old"],
+        default=None,
+        help="hold the given UI era OUT of the gated set (honest-negative path); "
+        "the subset is still reported in the old-UI breakout",
+    )
     args = ap.parse_args()
     if args.cmd == "extract":
-        return cmd_extract(args.videos, args.seed)
+        ids = [s.strip() for s in args.video_ids.split(",") if s.strip()]
+        return cmd_extract(args.videos, args.seed, ids, args.ui_era)
     if args.cmd == "sheet":
         return cmd_sheet()
-    return cmd_score(args.folds)
+    return cmd_score(args.folds, args.exclude_ui_era)
 
 
 if __name__ == "__main__":

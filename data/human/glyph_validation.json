@@ -1,41 +1,41 @@
 {
   "passed": true,
-  "n_frames": 24,
-  "n_correct": 24,
+  "n_frames": 33,
+  "n_correct": 33,
   "accuracy": 1.0,
-  "n_boxes": 72,
+  "n_boxes": 99,
   "n_unread_boxes": 0,
   "confusion": [
     [
       "BRICK",
       "BRICK",
-      16
-    ],
-    [
-      "ORE",
-      "ORE",
-      9
-    ],
-    [
-      "SHEEP",
-      "SHEEP",
-      13
-    ],
-    [
-      "WHEAT",
-      "WHEAT",
-      12
-    ],
-    [
-      "WOOD",
-      "WOOD",
       22
+    ],
+    [
+      "ORE",
+      "ORE",
+      15
+    ],
+    [
+      "SHEEP",
+      "SHEEP",
+      17
+    ],
+    [
+      "WHEAT",
+      "WHEAT",
+      18
+    ],
+    [
+      "WOOD",
+      "WOOD",
+      27
     ]
   ],
   "reason": null,
   "classifier_fingerprint": "988bb2ebe308eb390dd71fe6064ed4d1aaf6557920578f78001d668d1353d58a",
   "validation_fingerprint": "45ea71af201464c2a7b189c823e29c8f8f7123a66968cb3578efe9bcf500e361",
-  "git_rev": "5d64dd9c6b31cf3acd9f679194b58fd2b24d9cae",
+  "git_rev": "d15da597c910074af2f447a2ec6910aa0bb33711",
   "scored_frames": [
     "EdMnUD-eZ6A_t117",
     "AoOXWyxaTkA_t147",
@@ -60,7 +60,16 @@
     "yAXZJvDzFAg_t212",
     "lMCemfE1bDY_t147",
     "6--qCkGT0pI_t157",
-    "fdaFyQBIkEI_t135"
+    "fdaFyQBIkEI_t135",
+    "EkmCZkOb2yM_t222",
+    "9Sm86ml04aI_t220",
+    "A5atIV8ty9g_t290",
+    "lCsB4X60YhQ_t140",
+    "l-3s-xPwyIs_t90",
+    "nmk59XWFRBU_t110",
+    "KvH76fJI4f0_t70",
+    "0EtcbG16kHA_t145",
+    "yQ4GZloiG08_t147"
   ],
   "skipped_frames": [
     "sG05DoaOmM4_t200",
@@ -79,17 +88,17 @@
       95.0
     ],
     "sat_gap_ore_side": {
-      "n": 9,
+      "n": 15,
       "min": 18.0,
       "median": 26.0
     },
     "sat_gap_hue_side": {
-      "n": 63,
+      "n": 84,
       "min": 4.0,
-      "median": 89.5
+      "median": 88.75
     },
     "hue_margin": {
-      "n": 63,
+      "n": 84,
       "min": 5.93,
       "median": 11.9
     },
@@ -101,29 +110,34 @@
       "fold": 0,
       "score_videos": [
         "-dOEmCbAGjc",
-        "2PirCk3Sxc4",
-        "4oRadHB-WwM",
-        "5RLq1NX4nAo",
-        "AoOXWyxaTkA",
+        "1n_7Uo5QW6E",
+        "33KR75rhTgo",
+        "59bAYptAX28",
+        "6--qCkGT0pI",
+        "A5atIV8ty9g",
+        "EdMnUD-eZ6A",
         "IVvj3NgRWCs",
         "JHZnNTrhoT8",
-        "MZBLarAmNXw",
-        "R-d63v4OmVg",
-        "fqJB9w4gp0w",
-        "mY2X6Dw0iFE",
-        "wDBo8V765lk"
+        "MY6EsxBSAaw",
+        "MrvZ1OD_u_8",
+        "fdaFyQBIkEI",
+        "l-3s-xPwyIs",
+        "lMCemfE1bDY",
+        "nmk59XWFRBU",
+        "wDBo8V765lk",
+        "yQ4GZloiG08"
       ],
       "fitted_palette": {
         "hue_centres": {
-          "BRICK": 5.76,
-          "WHEAT": 19.52,
-          "SHEEP": 42.98,
-          "WOOD": 54.87
+          "BRICK": 6.07,
+          "WHEAT": 19.57,
+          "SHEEP": 42.99,
+          "WOOD": 54.91
         },
-        "ore_max_saturation": 77.75
+        "ore_max_saturation": 77.0
       },
-      "n_frames": 12,
-      "n_correct": 12,
+      "n_frames": 17,
+      "n_correct": 17,
       "accuracy": 1.0,
       "passed": true,
       "reason": null
@@ -131,33 +145,82 @@
     {
       "fold": 1,
       "score_videos": [
-        "1n_7Uo5QW6E",
-        "33KR75rhTgo",
-        "59bAYptAX28",
-        "6--qCkGT0pI",
-        "EdMnUD-eZ6A",
+        "0EtcbG16kHA",
+        "2PirCk3Sxc4",
+        "4oRadHB-WwM",
+        "5RLq1NX4nAo",
+        "9Sm86ml04aI",
+        "AoOXWyxaTkA",
+        "EkmCZkOb2yM",
         "ImdSLYZyTj8",
-        "MY6EsxBSAaw",
-        "MrvZ1OD_u_8",
-        "fdaFyQBIkEI",
-        "lMCemfE1bDY",
+        "KvH76fJI4f0",
+        "MZBLarAmNXw",
+        "R-d63v4OmVg",
+        "fqJB9w4gp0w",
+        "lCsB4X60YhQ",
+        "mY2X6Dw0iFE",
         "u5g69_rPTsg",
         "yAXZJvDzFAg"
       ],
       "fitted_palette": {
         "hue_centres": {
-          "BRICK": 6.07,
-          "WHEAT": 19.54,
-          "SHEEP": 42.94,
-          "WOOD": 54.7
+          "BRICK": 5.79,
+          "WHEAT": 19.42,
+          "SHEEP": 42.98,
+          "WOOD": 54.85
         },
         "ore_max_saturation": 78.0
       },
-      "n_frames": 12,
-      "n_correct": 12,
+      "n_frames": 16,
+      "n_correct": 16,
       "accuracy": 1.0,
       "passed": true,
       "reason": null
     }
-  ]
+  ],
+  "old_ui": {
+    "excluded_from_gate": false,
+    "videos": [
+      "A5atIV8ty9g",
+      "EkmCZkOb2yM"
+    ],
+    "frames": [
+      "EkmCZkOb2yM_t222",
+      "A5atIV8ty9g_t290"
+    ],
+    "n_frames": 2,
+    "n_correct": 2,
+    "accuracy": 1.0,
+    "n_boxes": 6,
+    "n_unread_boxes": 0,
+    "confusion": [
+      [
+        "BRICK",
+        "BRICK",
+        1
+      ],
+      [
+        "ORE",
+        "ORE",
+        2
+      ],
+      [
+        "SHEEP",
+        "SHEEP",
+        1
+      ],
+      [
+        "WHEAT",
+        "WHEAT",
+        1
+      ],
+      [
+        "WOOD",
+        "WOOD",
+        1
+      ]
+    ],
+    "ore_brick_confusions": 0,
+    "reason": "only 2 labelled post-grant frame(s) < required 8 \u2014 not enough to validate the glyph classifier; scale-up stays blocked"
+  }
 }
