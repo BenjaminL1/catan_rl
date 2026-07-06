@@ -38,13 +38,23 @@ Outputs (default under ``data/human/``):
   COLLAPSE VERDICT (≥70% one-bucket mass), and M0 = AUC + M2-analog partial
   Spearman with permutation strata ``draft_position`` only.
 
+**Measurement condition (disclosed in the artifact):** the champion is always
+seated at ``agent_seat=0`` (draft position 0, first drafter), so the mass table
+and its collapse verdict measure v8's **first-drafter openings only** — v8's
+draft-position-1 openings are not represented. This is recorded in
+``pregate0_mass.json`` (``measured_draft_position`` / ``measurement_note``) and
+the report so the frozen artifact carries its own scope.
+
 **Resumable:** each game is atomically appended (flush + fsync); a re-run skips
 game IDs already present, so a kill + restart appends without duplicates. The
 mass table + report are recomputed from the full JSONL on every run (idempotent).
 
 **Deterministic:** per-game seeds derive from a SHA-256 of ``(seed, matchup,
-game_index)`` (never Python ``hash()`` — PYTHONHASHSEED-salted); the champion's
-torch sampling stream is seeded per game. CPU-only (rule 7: eval on CPU).
+game_index)`` (never Python ``hash()`` — PYTHONHASHSEED-salted). Both the
+champion's torch sampling stream AND the frozen opponent's action stream are
+re-seeded per game from that seed (the opponent object is shared across games,
+so its RNG is reset explicitly each game — determinism is structural, not
+incidental to the run order or resume boundaries). CPU-only (rule 7: eval on CPU).
 
 This is the PRE-CORPUS runner; the long ``n>=400`` run is launched detached. Use
 ``--smoke`` for an end-to-end n=3/matchup check.
@@ -323,6 +333,18 @@ def play_game(
     try:
         torch.manual_seed(seed % (2**31 - 1))
         obs, _ = env.reset(seed=seed, options={"agent_seat": 0})
+        # STRUCTURAL per-game opponent determinism (finding: the frozen
+        # opponent object is shared across every game, so its ``_call_count``
+        # advances game-to-game; without a per-game reset the record's
+        # reproducibility is incidental — it holds only for one uninterrupted
+        # sequential run and silently breaks on resume or reorder). ``env.reset``
+        # already reseeds the opponent from the env RNG, but that is an internal
+        # env side-effect; the runner OWNS its determinism by reseeding the
+        # opponent here from its own per-game seed (drawn from a distinct stream
+        # so the agent and opponent do not sample in lockstep). Reset AFTER
+        # ``env.reset`` so the runner's seed — not the env's draw — is the
+        # authority.
+        opponent.reset_rng(seed=game_seed(seed, f"{matchup}:opp", game_index))
         masks = env.get_action_masks()
         setup_entropies: list[float] = []
         post: dict[str, Any] | None = None
@@ -422,6 +444,20 @@ def build_mass_table(
         "max_mass": max_mass,
         "collapse_threshold": threshold,
         "collapse_verdict": ("COLLAPSED" if (n > 0 and max_mass >= threshold) else "NO_COLLAPSE"),
+        # DISCLOSURE (finding): v8 is seated at ``agent_seat=0`` in every game,
+        # so seat 0's opening is always v8's FIRST-DRAFTER (draft position 0)
+        # opening. This mass table and its collapse verdict therefore measure
+        # v8's draft-position-0 opening distribution ONLY — v8's openings as the
+        # second drafter (draft position 1) are not represented. Recorded so the
+        # frozen artifact carries its own measurement condition.
+        "measured_seat": 0,
+        "measured_draft_position": 0,
+        "measurement_note": (
+            "v8 is seated at agent_seat=0 (draft position 0, first drafter) in "
+            "every game; the counts/mass/collapse verdict measure v8's "
+            "first-drafter openings only. Draft-position-1 openings are not "
+            "represented."
+        ),
         "freeze": freeze or {},
     }
 
@@ -563,6 +599,14 @@ def render_report(
     lines.append(
         f"**{mass['collapse_verdict']}** — threshold ≥{mass['collapse_threshold']:.0%} "
         "one-bucket mass (v8-vs-anchor subset)."
+    )
+    lines.append("")
+    lines.append(
+        "> **Measurement condition (disclosure):** v8 is seated at `agent_seat=0` "
+        "(draft position 0, first drafter) in every game, so the histogram, mass, "
+        "and collapse verdict above measure v8's **first-drafter openings only**. "
+        "v8's openings as second drafter (draft position 1) are not represented in "
+        "this subset."
     )
     lines.append("")
     lines.append("## openings/setup_head_entropy (mean setup-decision policy entropy)")

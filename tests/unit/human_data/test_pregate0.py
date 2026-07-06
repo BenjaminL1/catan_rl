@@ -114,6 +114,20 @@ def test_mass_table_uses_v8_anchor_subset_only() -> None:
     assert mass["max_bucket"] == "ORE_ENGINE"
 
 
+def test_mass_table_discloses_draft_position_scope() -> None:
+    # Finding: v8 is always seat 0 (draft position 0), so the mass table measures
+    # v8's first-drafter openings only. The frozen artifact must disclose this.
+    records = [
+        _rec(matchup="v8_anchor", gi=0, archetype="ORE_ENGINE"),
+        _rec(matchup="v8_anchor", gi=1, archetype="WOOD_BRICK"),
+    ]
+    mass = pregate0.build_mass_table(records, v8_ckpt="v8.pt", anchor_ckpt="a.pt")
+    assert mass["measured_seat"] == 0
+    assert mass["measured_draft_position"] == 0
+    assert "first-drafter" in mass["measurement_note"]
+    assert "draft position 0" in mass["measurement_note"]
+
+
 def test_mass_table_collapse_verdict() -> None:
     # 4/5 = 0.8 ≥ 0.70 threshold ⇒ COLLAPSED.
     records = [_rec(matchup="v8_anchor", gi=i, archetype="ORE_ENGINE") for i in range(4)] + [
@@ -327,3 +341,47 @@ def test_deterministic_given_seed(tmp_path: Path, cheap_policy: Any) -> None:
     lines_a = (dir_a / "games.jsonl").read_text()
     lines_b = (dir_b / "games.jsonl").read_text()
     assert lines_a == lines_b
+
+
+def test_opponent_rng_reset_is_structural(cheap_policy: Any) -> None:
+    """Finding: a game's record must be independent of the shared opponent's
+    incoming RNG state (i.e. of how many games preceded it in the same process).
+
+    The frozen opponent object is reused across games, so its ``_call_count``
+    advances game-to-game. ``play_game`` reseeds the opponent per game, so the
+    same game index yields a byte-identical record whether the opponent is fresh
+    or has been advanced by unrelated sampling first — determinism is structural,
+    not incidental to run order / resume boundaries.
+    """
+    import torch
+
+    from catan_rl.human_data.topology import load_topology
+    from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
+
+    device = torch.device("cpu")
+    topology = load_topology()
+    gseed = pregate0.game_seed(0, "v8_v8", 1)
+
+    def _play(opp: Any) -> dict[str, Any]:
+        return pregate0.play_game(
+            agent_policy=cheap_policy,
+            opponent=opp,
+            device=device,
+            seed=gseed,
+            max_turns=15,
+            topology=topology,
+            matchup="v8_v8",
+            game_index=1,
+        )
+
+    rec_fresh = _play(FrozenSnapshotOpponent(cheap_policy, device=device, seed=0))
+
+    # A DIRTY opponent: advance its RNG stream with unrelated sampling so its
+    # ``_call_count`` / ``_seed`` differ from a fresh opponent's before the game.
+    dirty = FrozenSnapshotOpponent(cheap_policy, device=device, seed=999)
+    dirty.reset_rng(seed=12345)
+    for _ in range(7):
+        dirty._call_count += 1  # simulate games having been played on it
+    rec_dirty = _play(dirty)
+
+    assert rec_fresh == rec_dirty
