@@ -417,7 +417,7 @@ def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
     handles = _discover_handles(all_lines)
     players = _agent_binding(handles)
     events = parse_log(all_lines, handles).events
-    seat_colours = read_hud_seat_colors(frames[len(frames) // 2].frame) if frames else ()
+    seat_colours = _video_seat_colours(frames)
     player_colors, seat_order = _bind_colours(players, seat_colours)
     game_frames = _route_frames_to_games(frames, per_frame_lines, handles)
     return VideoContext(
@@ -744,6 +744,52 @@ def _agent_binding(handles: tuple[str, str]) -> dict[str, str]:  # pragma: no co
     return {"agent": agent, "opponent": opponent}
 
 
+#: How many frames the per-video HUD colour vote samples across the whole video.
+#: The two seat rings are a fixed overlay, so a couple dozen spread samples is
+#: ample; the cap keeps the extra ``read_hud_seat_colors`` (cv2) calls cheap.
+_HUD_VOTE_SAMPLES = 24
+
+
+def _majority_two_colour(reads: Sequence[tuple[str, ...]]) -> tuple[str, ...]:
+    """The most common exactly-two-DISTINCT-colour HUD read across ``reads``.
+
+    A ThePhantom compilation stitches back-to-back games whose OPPONENT colour
+    varies (ThePhantom self-seats a fixed colour throughout); only a game whose
+    opponent is in :data:`~catan_rl.human_data.openings.PALETTE` yields a
+    two-distinct-colour HUD read, so a single arbitrary frame (the old per-video
+    middle-frame read) fails the whole video whenever that frame lands on a
+    palette-unsupported game — even when a supported game exists elsewhere in the
+    compilation. Voting the two-distinct reads across the video recovers the
+    supported game's binding (a one-colour read — the unsupported-opponent games —
+    casts no vote). Returns ``()`` when no frame yields two distinct colours.
+    """
+    votes: Counter[tuple[str, ...]] = Counter()
+    for read in reads:
+        if len(set(read)) == 2:
+            votes[tuple(read)] += 1
+    if not votes:
+        return ()
+    return votes.most_common(1)[0][0]
+
+
+def _video_seat_colours(
+    frames: Sequence[DecodedFrame],
+) -> tuple[str, ...]:  # pragma: no cover - real-run CV path (mocked in CI)
+    """The video's seat-colour pair by majority vote over spread HUD reads (§5.14).
+
+    Reads the HUD seat rings (:func:`~catan_rl.human_data.openings.read_hud_seat_colors`)
+    on up to :data:`_HUD_VOTE_SAMPLES` frames spread across the video and returns the
+    most common two-distinct-colour read (:func:`_majority_two_colour`). Robust to a
+    compilation whose sampled middle frame lands on a palette-unsupported game, and to
+    a lone mis-read frame — unlike the single-frame read it replaces.
+    """
+    if not frames:
+        return ()
+    step = max(1, len(frames) // _HUD_VOTE_SAMPLES)
+    reads = [read_hud_seat_colors(f.frame) for f in frames[::step]]
+    return _majority_two_colour(reads)
+
+
 def _bind_colours(
     players: dict[str, str], seat_colours: tuple[str, ...]
 ) -> tuple[dict[str, str], tuple[str, ...]]:
@@ -936,6 +982,21 @@ def _consensus_grant(
     return consensus_granted_glyphs(frames_boxes)
 
 
+#: Cached easyocr reader for the box-returning grant-line OCR (built once — a fresh
+#: reader per grant frame per player dominated the real-run wall clock).
+_BOXES_READER: Any = None
+
+
+def _boxes_reader() -> Any:  # pragma: no cover - real-run path (easyocr, mocked in CI)
+    """Lazily build + cache a CPU easyocr reader for :func:`_grant_line_boxes`."""
+    global _BOXES_READER
+    if _BOXES_READER is None:
+        import easyocr  # lazy: never imported on the headless CI path
+
+        _BOXES_READER = easyocr.Reader(["en"], gpu=False, verbose=False)
+    return _BOXES_READER
+
+
 def _grant_line_boxes(
     crop_rgb: npt.NDArray[np.uint8], handle: str
 ) -> tuple[tuple[int, int, int, int] | None, list[tuple[int, int, int, int]]]:  # pragma: no cover
@@ -943,12 +1004,12 @@ def _grant_line_boxes(
 
     Uses easyocr's box-returning read (the same lazy reader logparse/board_cv use) to
     locate ``handle``'s ``"received starting resources"`` line and every text box the
-    grant-icon detector must avoid.
+    grant-icon detector must avoid. The reader is built once and cached
+    (:func:`_boxes_reader`) — the model load is ~seconds, and this runs once per
+    grant frame per player, so a fresh reader per call dominated the harvest wall
+    clock.
     """
-    import easyocr  # lazy: never imported on the headless CI path
-
-    reader = easyocr.Reader(["en"], gpu=False)
-    results: list[tuple[list[list[int]], str, float]] = reader.readtext(crop_rgb)
+    results: list[tuple[list[list[int]], str, float]] = _boxes_reader().readtext(crop_rgb)
     text_boxes: list[tuple[int, int, int, int]] = []
     line_box: tuple[int, int, int, int] | None = None
     for poly, text, _conf in results:

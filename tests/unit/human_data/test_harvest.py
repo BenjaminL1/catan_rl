@@ -431,6 +431,27 @@ def test_bind_colours_rejects_non_distinct_hud() -> None:
         harvest._bind_colours({"agent": "a", "opponent": "b"}, ("GREEN", "GREEN"))
 
 
+def test_majority_two_colour_recovers_supported_game_in_compilation() -> None:
+    # A compilation: half the sampled frames are a palette-supported GREEN/BLACK game
+    # (two-distinct reads) and half a palette-unsupported opponent (only BLACK reads,
+    # one distinct). The single-frame middle read could land on a one-colour frame and
+    # fail the whole video; the vote recovers the supported game's pair.
+    reads = [
+        ("BLACK",),
+        ("BLACK",),
+        ("GREEN", "BLACK"),
+        ("BLACK", "GREEN"),
+        ("BLACK",),
+        ("GREEN", "BLACK"),
+    ]
+    assert harvest._majority_two_colour(reads) == ("GREEN", "BLACK")
+
+
+def test_majority_two_colour_empty_when_no_two_distinct_read() -> None:
+    # Every game's opponent is palette-unsupported -> only one-colour reads -> no vote.
+    assert harvest._majority_two_colour([("BLACK",), (), ("BLACK",)]) == ()
+
+
 def test_dice_log_extracts_valid_rolls_only() -> None:
     events = (
         LogEvent("roll", "ThePhantom", "thephantom rolled a 8"),
