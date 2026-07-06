@@ -150,10 +150,11 @@ def test_detect_openings_rejects_bad_player_colors() -> None:
         pip_ok=True,
     )
     frame = np.zeros((1080, 1920, 3), np.uint8)
-    # one handle, one colour, an unknown colour, and two handles sharing a colour.
+    # one handle, one colour, an out-of-palette colour (BLUE is low-sample/excluded),
+    # and two handles sharing a colour.
     for bad in (
         {"a": "GREEN"},
-        {"a": "GREEN", "b": "PURPLE"},
+        {"a": "GREEN", "b": "BLUE"},
         {"a": "GREEN", "b": "GREEN"},
     ):
         assert detect_openings(frame, frame, board, player_colors=bad) is None
@@ -187,8 +188,9 @@ def test_detect_openings_result_carries_typed_rejection_reasons() -> None:
     board = _blank_board()
     frame = np.zeros((1080, 1920, 3), np.uint8)
 
-    # player_colors_invalid fires first (before the HUD read).
-    for bad in ({"a": "GREEN"}, {"a": "GREEN", "b": "PURPLE"}, {"a": "GREEN", "b": "GREEN"}):
+    # player_colors_invalid fires first (before the HUD read). BLUE is a low-sample
+    # colour intentionally left out of the extended palette (fail-closed sentinel).
+    for bad in ({"a": "GREEN"}, {"a": "GREEN", "b": "BLUE"}, {"a": "GREEN", "b": "GREEN"}):
         res = detect_openings_result(frame, frame, board, player_colors=bad)
         assert isinstance(res, OpeningResult)
         assert res.openings is None
@@ -379,6 +381,224 @@ def test_detect_settlements_accepts_exactly_two_vote_passing_blobs() -> None:
     heads, reason = _detect_settlements(mask, vertex_px, hex_px, count=2)
     assert reason is None
     assert set(heads or []) == {7, 33}
+
+
+# --- palette widening: survey-calibrated colours (cv2, fast) ----------------
+
+_SURVEY_PATH = Path(__file__).resolve().parents[3] / "data" / "human" / "color_survey.json"
+
+#: A synthetic 2-seat game on the engine-template lattice (identity affine): the TOP
+#: seat holds settlements v0/v1 with roads on edges 1 (0,5) / 4 (1,10); the BOTTOM
+#: seat holds v3/v4 with roads on edges 5 (2,3) / 10 (4,19). All four are interior
+#: vertices (>18px from every hex centre, deep inside the hull), so the head-vote and
+#: hex-centre guards behave exactly as on a real board.
+_SYN_TOP = {"settle": (0, 1), "roads": {0: (0, 5), 1: (1, 10)}}  # settlement roads -> edges 1, 4
+_SYN_BOT = {"settle": (3, 4), "roads": {3: (2, 3), 4: (4, 19)}}  # settlement roads -> edges 5, 10
+
+#: Paint HSV (inside each colour's PALETTE piece range) and ring HSV (inside its
+#: _HUD_RING range). RED's are on the wrap side of the 0/180 seam (hue ~0-3).
+_PIECE_PAINT = {
+    "RED": (3, 220, 200),
+    "WHITE": (0, 10, 230),
+    "PURPLE": (141, 200, 200),
+    "GREEN": (63, 220, 200),
+    "BLACK": (0, 0, 50),
+}
+_RING_PAINT = {
+    "RED": (0, 180, 200),
+    "WHITE": (0, 10, 175),
+    "PURPLE": (135, 120, 150),
+    "GREEN": (65, 200, 180),
+    "BLACK": (0, 0, 80),
+}
+#: Board/HUD background at a hue matched by NO palette ring or piece range (hue 100 is
+#: the empty band between GREEN's upper 90 and PURPLE's 129), so the fill can never be
+#: mistaken for a seat colour or a piece.
+_SYN_BG = (100, 200, 200)
+
+
+def _hsv_to_rgb(hsv: tuple[int, int, int]) -> tuple[int, int, int]:
+    import cv2
+
+    px = np.array([[list(hsv)]], np.uint8)
+    r = cv2.cvtColor(px, cv2.COLOR_HSV2RGB)[0, 0]
+    return (int(r[0]), int(r[1]), int(r[2]))
+
+
+def _paint_synthetic_game(
+    top_color: str, bot_color: str, *, green_tile_leak: bool = False
+) -> tuple[np.ndarray, np.ndarray, BoardRead]:
+    """A 1080p synthetic post-setup frame + empty baseline + template-lattice board for
+    a two-seat game (``top_color`` top seat, ``bot_color`` bottom seat). Paints the two
+    HUD seat rings bottom-right and the 2 settlements + 2 roads per seat on the board.
+    With ``green_tile_leak`` a dull-green tile disk is baked into the BASELINE (and
+    frame) on a bare board vertex, forcing the GREEN tile-subtraction branch to run."""
+    import cv2
+
+    from catan_rl.human_data.board_cv import BoardRead, load_engine_template
+
+    vertex_px = load_engine_template().vertex_px
+    frame = np.full((1080, 1920, 3), _hsv_to_rgb(_SYN_BG), np.uint8)
+    baseline = frame.copy()
+    if green_tile_leak:
+        # A same-hued green tile blob on the bare v15 corner: without the tile
+        # subtraction it survives as a spurious GREEN piece blob; the subtraction must
+        # remove it so the two real GREEN settlements are still cleanly detected.
+        cv2.circle(baseline, (638, 480), 15, _hsv_to_rgb((65, 140, 120)), -1)
+        frame = baseline.copy()
+    # HUD seat rings (top seat higher on screen): square swatches in the LEFT avatar
+    # column (x=1550 -> cx~0.20 of the cropped region) so they clear the avatar gates.
+    cv2.circle(frame, (1550, 900), 18, _hsv_to_rgb(_RING_PAINT[top_color]), -1)
+    cv2.circle(frame, (1550, 1010), 18, _hsv_to_rgb(_RING_PAINT[bot_color]), -1)
+    for color, plan in ((top_color, _SYN_TOP), (bot_color, _SYN_BOT)):
+        rgb = _hsv_to_rgb(_PIECE_PAINT[color])
+        for s in plan["settle"]:
+            cv2.circle(frame, (int(vertex_px[s][0]), int(vertex_px[s][1])), 14, rgb, -1)
+            a, b = plan["roads"][s]
+            other = b if a == s else a
+            cv2.line(
+                frame,
+                (int(vertex_px[s][0]), int(vertex_px[s][1])),
+                (int(vertex_px[other][0]), int(vertex_px[other][1])),
+                rgb,
+                6,
+            )
+    board = BoardRead(
+        hexes=(),
+        affine=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        vertex_px=vertex_px,
+        desert_hex=9,
+        residual_px=0.5,
+        screen_rule_gap=40.0,
+        pip_ok=True,
+    )
+    return frame, baseline, board
+
+
+def test_palette_and_hud_ring_keys_match_calibrated_survey_colours() -> None:
+    """The palette tables cover exactly the calibrated (non-low-sample) survey colours
+    plus the retained committed spike seat GREEN, and each colour's ``tile_subtract``
+    matches the survey's same-hue tile-collision flag (only same-hue-tile colours get
+    it — NOT blanket-enabled). Keeps the PALETTE / _HUD_RING key sets and the survey
+    from silently drifting apart."""
+    from catan_rl.human_data.openings import _HUD_RING
+
+    survey = json.loads(_SURVEY_PATH.read_text(encoding="utf-8"))["identities"]
+    calibrated = {c for c, e in survey.items() if not e["low_sample"]}
+    # GREEN is low-sample but retained (the committed spike game's seat).
+    expected = calibrated | {"GREEN"}
+    assert set(PALETTE) == expected
+    assert set(_HUD_RING) == expected
+    # tile_subtract is wired from the survey's tile-collision flag for every colour.
+    for color in PALETTE:
+        assert PALETTE[color].tile_subtract is bool(
+            survey[color]["tile_collision"]["tile_subtract"]
+        ), color
+    # Same-hue tile colours (and only those) carry a non-empty subtract band.
+    assert PALETTE["RED"].tile_subtract is True
+    assert PALETTE["RED"].tile_hi != (0, 0, 0)
+    assert PALETTE["WHITE"].tile_subtract is False
+    assert PALETTE["PURPLE"].tile_subtract is False
+
+
+@pytest.mark.parametrize(("top_color", "bot_color"), [("RED", "WHITE"), ("PURPLE", "RED")])
+def test_new_palette_colour_roundtrips(top_color: str, bot_color: str) -> None:
+    """Each newly-calibrated colour round-trips through ``detect_openings_result`` on a
+    synthetic frame painted at its measured HSV: both settlements + both roads are
+    detected and bound to the correct handle (POV = bottom seat). Exercises RED's
+    hue-seam wrap (piece + ring), WHITE's achromatic bright range, and PURPLE."""
+    pytest.importorskip("cv2")
+    from catan_rl.human_data import detect_openings_result
+
+    frame, baseline, board = _paint_synthetic_game(top_color, bot_color)
+    res = detect_openings_result(
+        frame,
+        baseline,
+        board,
+        player_colors={"top_handle": top_color, "bot_handle": bot_color},
+        pov_handle="bot_handle",
+    )
+    assert res.rejection_reason is None, res.rejection_reason
+    assert res.openings is not None
+    assert set(res.openings["top_handle"].settlements) == {0, 1}
+    assert set(res.openings["top_handle"].roads) == {1, 4}
+    assert set(res.openings["bot_handle"].settlements) == {3, 4}
+    assert set(res.openings["bot_handle"].roads) == {5, 10}
+
+
+def test_green_roundtrip_exercises_tile_subtraction() -> None:
+    """GREEN is still handled end-to-end via ``detect_openings_result``, and the
+    green-tile-subtraction path is load-bearing: a dull green tile blob baked into the
+    baseline (which without subtraction would float in as a spurious GREEN piece and
+    trip the area-margin guard) is removed, so the two real GREEN settlements are
+    detected cleanly. Paired with the achromatic BLACK bottom seat."""
+    pytest.importorskip("cv2")
+    from catan_rl.human_data import detect_openings_result
+
+    frame, baseline, board = _paint_synthetic_game("GREEN", "BLACK", green_tile_leak=True)
+    assert PALETTE["GREEN"].tile_subtract is True  # the subtraction branch runs
+    res = detect_openings_result(
+        frame,
+        baseline,
+        board,
+        player_colors={"top_handle": "GREEN", "bot_handle": "BLACK"},
+        pov_handle="bot_handle",
+    )
+    assert res.rejection_reason is None, res.rejection_reason
+    assert res.openings is not None
+    assert set(res.openings["top_handle"].settlements) == {0, 1}
+    assert set(res.openings["bot_handle"].settlements) == {3, 4}
+
+
+def test_out_of_gamut_colour_still_rejects_fail_closed() -> None:
+    """Fail-closed regression: widening the palette must NOT weaken the abstention
+    guarantee. A binding naming a colour outside the extended palette (BLUE, a
+    low-sample colour deliberately excluded) is typed-rejected ``player_colors_invalid``
+    before any CV; and a frame whose HUD shows an out-of-gamut colour (no ring matches)
+    is typed-rejected ``hud_unreadable`` — never a silent mislabel onto a palette seat."""
+    pytest.importorskip("cv2")
+    from catan_rl.human_data import detect_openings_result
+
+    # (1) binding names an out-of-palette colour -> player_colors_invalid.
+    frame, baseline, board = _paint_synthetic_game("RED", "WHITE")
+    res = detect_openings_result(frame, baseline, board, player_colors={"a": "RED", "b": "BLUE"})
+    assert res.openings is None
+    assert res.rejection_reason == "player_colors_invalid"
+
+    # (2) HUD painted at an out-of-gamut hue (the bg band, matched by no ring) with an
+    # otherwise-valid palette binding -> hud_unreadable (no seat colour readable).
+    from catan_rl.human_data.board_cv import BoardRead, load_engine_template
+
+    blank = np.full((1080, 1920, 3), _hsv_to_rgb(_SYN_BG), np.uint8)
+    board2 = BoardRead(
+        hexes=(),
+        affine=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+        vertex_px=load_engine_template().vertex_px,
+        desert_hex=9,
+        residual_px=0.5,
+        screen_rule_gap=40.0,
+        pip_ok=True,
+    )
+    res2 = detect_openings_result(blank, blank, board2, player_colors={"a": "RED", "b": "WHITE"})
+    assert res2.openings is None
+    assert res2.rejection_reason == "hud_unreadable"
+
+
+def test_read_hud_suppresses_colocated_white_glyph() -> None:
+    """Regression (the game-1 palette-widening break): the achromatic WHITE range
+    catches the white avatar-glyph / VP-badge pixels that sit ON another seat's ring (a
+    690px square WHITE blob co-located with the BLACK seat). The larger true ring must
+    dominate its seat, so a GREEN(top)/BLACK(bottom) HUD with a white glyph on the black
+    seat still reads exactly (GREEN, BLACK) — WHITE is suppressed, not read as a seat."""
+    cv2 = pytest.importorskip("cv2")
+    from catan_rl.human_data import read_hud_seat_colors
+
+    frame = np.full((1080, 1920, 3), _hsv_to_rgb(_SYN_BG), np.uint8)
+    cv2.circle(frame, (1550, 900), 22, _hsv_to_rgb(_RING_PAINT["GREEN"]), -1)
+    cv2.circle(frame, (1550, 1010), 26, _hsv_to_rgb(_RING_PAINT["BLACK"]), -1)
+    # A smaller (but >area-floor, square, avatar-column) white glyph on the black seat.
+    cv2.rectangle(frame, (1537, 997), (1563, 1023), _hsv_to_rgb((0, 8, 235)), -1)
+    assert read_hud_seat_colors(frame) == ("GREEN", "BLACK")
 
 
 # --- integration: real frame decode (slow, cv2) -----------------------------

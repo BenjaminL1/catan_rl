@@ -53,13 +53,21 @@ Correctness constraints honoured (build brief §5):
   separate it from a generic count shortfall.
 
 **Palette precondition.** The palette is a **per-colour table** (:data:`PALETTE`),
-not a two-colour hardcode, but only the calibrated colours (currently
-``GREEN``/``BLACK``, the committed spike game's seats) are populated. A game whose
-seats use other Colonist colours is **rejected with a named reason**
-(``player_colors_invalid`` if the binding names a non-palette colour, or
-``hud_unreadable`` if the HUD shows none of the palette colours) — never a silent
-mislabel — so the §5.6 audit surfaces the palette-coverage yield limit. Extend
-:data:`PALETTE` / :data:`_HUD_RING` with data-derived HSV ranges to widen coverage.
+now populated for every *calibrated* (non-low-sample) Colonist seat colour measured
+in ``data/human/color_survey.json`` — ``RED``/``WHITE``/``PURPLE``/``BLACK`` (the
+corpus-dominant seats) plus ``GREEN`` (the committed spike game's seat, retained).
+Their HSV ``piece`` / ring ranges are the survey's measured bands; ``tile_subtract``
+is set only for the colours the survey flags as colliding with a same-hue board tile
+(``GREEN`` vs the forest/pasture tiles, ``RED`` vs the brick tile — the survey could
+not verify a saturation-floor separation for red, so subtraction is applied
+conservatively/fail-closed), NOT blanket-enabled. ``RED``'s piece/ring hue wraps the
+0/180 seam, handled by :func:`_hsv_in_range`. A game whose seats use a colour still
+**outside** this extended palette (e.g. the low-sample ``BLUE``/``ORANGE``/
+``LIGHTGREEN``) is **rejected with a named reason** (``player_colors_invalid`` if the
+binding names a non-palette colour, or ``hud_unreadable`` if the HUD shows none of the
+palette colours) — never a silent mislabel — so the §5.6 audit surfaces the residual
+palette-coverage yield limit. Extend :data:`PALETTE` / :data:`_HUD_RING` with further
+data-derived HSV ranges to widen coverage.
 
 CPU-only; ``cv2`` is imported lazily. Never imports ``gui/`` or the training
 path (brief §6).
@@ -167,20 +175,89 @@ PALETTE: dict[str, ColorProfile] = {
         road_hi=(179, 110, 72),
         tile_subtract=False,
     ),
+    # --- survey-calibrated colours (data/human/color_survey.json) ---
+    # RED: corpus-dominant opponent seat. Piece/ring hue WRAPS the 0/180 seam
+    # (survey ``piece`` [174, 9], ``ring`` [169, 4]) — handled by _hsv_in_range.
+    # tile_subtract=True: red pieces overlap the brick tile band (hue 0-20); the
+    # survey could not verify a saturation-floor split from brick, so subtraction is
+    # applied conservatively (fail-closed). The brick tile band is the subtract mask.
+    "RED": ColorProfile(
+        name="RED",
+        piece_lo=(174, 121, 107),
+        piece_hi=(9, 255, 255),
+        road_lo=(174, 121, 107),
+        road_hi=(9, 255, 255),
+        tile_subtract=True,
+        tile_lo=(0, 60, 60),
+        tile_hi=(20, 255, 255),
+    ),
+    # WHITE: achromatic bright seat (survey ``piece`` sat<=55 val>=195, ``ring``
+    # val>=145). No hue subtraction — white pieces collide with white number tokens /
+    # borders / port glyphs, discriminated by the hex-centre + lattice-snap guards.
+    "WHITE": ColorProfile(
+        name="WHITE",
+        piece_lo=(0, 0, 195),
+        piece_hi=(179, 55, 255),
+        road_lo=(0, 0, 195),
+        road_hi=(179, 55, 255),
+        tile_subtract=False,
+    ),
+    # PURPLE: chromatic seat with NO same-hue board tile (hue 130-150 is empty), so
+    # no tile subtraction (survey ``piece`` [136, 147], ``ring`` [129, 142]).
+    "PURPLE": ColorProfile(
+        name="PURPLE",
+        piece_lo=(136, 152, 107),
+        piece_hi=(147, 255, 253),
+        road_lo=(136, 152, 107),
+        road_hi=(147, 255, 253),
+        tile_subtract=False,
+    ),
 }
 
 #: HUD seat-avatar ring HSV ranges (RGB→HSV). One per palette colour; the two
 #: seats' rings are matched against these to read the per-game player→colour
 #: binding off the authoritative HUD (§5.14), never a global constant.
+#: RED's ring hue WRAPS the 0/180 seam ([169, 4]) — :func:`read_hud_seat_colors`
+#: matches it via :func:`_hsv_in_range`. Ranges are pairwise-disjoint (the survey's
+#: ``test_ranges_pairwise_non_overlapping`` guarantee), so a two-seat game is always
+#: separable and the reader can never mislabel one seat's colour as another's.
 _HUD_RING: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
     "GREEN": ((40, 120, 90), (90, 255, 255)),
     "BLACK": ((0, 0, 0), (179, 90, 90)),
+    "RED": ((169, 88, 107), (4, 255, 255)),
+    "WHITE": ((0, 0, 145), (179, 55, 255)),
+    "PURPLE": ((129, 80, 121), (142, 156, 181)),
 }
 
 #: Fraction of the frame taken by the bottom-right HUD seat panel (x0, y0) — the
 #: two stacked seat-avatar rings live in this region. Screen-space landmark, skin-
 #: stable at 1080p (the HUD is a fixed Colonist overlay), independent of board CV.
 _HUD_REGION_FRAC: tuple[float, float] = (0.76, 0.78)
+
+#: Seat-avatar candidate gates for :func:`read_hud_seat_colors` (§5.14). With the
+#: palette widened past GREEN+BLACK the naive "largest matching blob is a seat" rule
+#: over-reads: the achromatic WHITE range catches the HUD's white TEXT (a huge blob)
+#: and a stray PURPLE UI element registers a spurious seat. The real seat-avatar swatch
+#: is a compact, roughly-SQUARE blob in the LEFT avatar column of each seat panel; the
+#: text/icon confounders sit in the right-hand text column or are strongly elongated.
+#: These gates (all fractions of the cropped HUD region) keep the widened palette from
+#: reading spurious seats while preserving the GREEN/BLACK read. FAIL-CLOSED: tightening
+#: them only ever yields MORE ``hud_unreadable`` rejections, never a seat mislabel.
+_SEAT_RING_MIN_AREA = 400
+#: Max centroid-x (as a fraction of the cropped region width) for the avatar column —
+#: confounder text/icons live to the right of this.
+_SEAT_AVATAR_MAX_CX_FRAC = 0.4
+#: Bounding-box aspect (w/h) band for a roundish avatar swatch — rejects the wide-flat
+#: and tall-thin text bars the achromatic ranges otherwise pick up.
+_SEAT_AVATAR_ASPECT_LO = 0.55
+_SEAT_AVATAR_ASPECT_HI = 1.8
+#: Two avatar candidates whose centroid-y differ by less than this fraction of the
+#: cropped region height belong to the SAME seat. A seat's true ring is the largest
+#: avatar blob there; a smaller co-located blob of another colour (e.g. the white
+#: avatar-glyph / VP badge pixels that sit on EVERY seat, chromatic or not) is a
+#: confounder and is suppressed in favour of the dominant colour. Fail-closed: this
+#: only removes seats, never invents one.
+_SEAT_MIN_SEPARATION_FRAC = 0.25
 
 #: Minimum piece-blob area (px) at 1080p — smaller connected components are OCR /
 #: anti-alias speckle, never a settlement or road piece.
@@ -261,6 +338,31 @@ _MIN_ROAD_PIXELS = 20
 _ROAD_DOMINANCE_RATIO = 2.0
 
 
+def _hsv_in_range(
+    hsv: npt.NDArray[np.uint8],
+    lo: tuple[int, int, int],
+    hi: tuple[int, int, int],
+) -> npt.NDArray[np.uint8]:
+    """``cv2.inRange`` with 0/180 hue-seam wrap support. When ``lo[0] > hi[0]`` the
+    hue range wraps the red seam (e.g. RED ``[169, 4]``), so the mask is the UNION of
+    ``[lo_h, 179]`` and ``[0, hi_h]`` at the shared sat/val bounds — a plain
+    ``inRange`` with ``lo_h > hi_h`` yields an all-zero mask and would silently drop
+    every red pixel. Non-wrapping ranges (every other palette colour) take the single-
+    ``inRange`` fast path, so GREEN/BLACK segmentation is byte-identical to before."""
+    import cv2
+
+    if lo[0] <= hi[0]:
+        mask = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
+        return np.asarray(mask, np.uint8)
+    lower = cv2.inRange(
+        hsv, np.array((lo[0], lo[1], lo[2]), np.uint8), np.array((179, hi[1], hi[2]), np.uint8)
+    )
+    upper = cv2.inRange(
+        hsv, np.array((0, lo[1], lo[2]), np.uint8), np.array((hi[0], hi[1], hi[2]), np.uint8)
+    )
+    return np.asarray(cv2.bitwise_or(lower, upper), np.uint8)
+
+
 def _color_masks(
     frame_hsv: npt.NDArray[np.uint8],
     baseline_hsv: npt.NDArray[np.uint8],
@@ -274,11 +376,8 @@ def _color_masks(
     tiles, §5.13 / spike VERDICT caveat 1)."""
     import cv2
 
-    def _b(bound: tuple[int, int, int]) -> npt.NDArray[np.uint8]:
-        return np.array(bound, np.uint8)
-
-    piece = cv2.inRange(frame_hsv, _b(profile.piece_lo), _b(profile.piece_hi))
-    road = cv2.inRange(frame_hsv, _b(profile.road_lo), _b(profile.road_hi))
+    piece = _hsv_in_range(frame_hsv, profile.piece_lo, profile.piece_hi)
+    road = _hsv_in_range(frame_hsv, profile.road_lo, profile.road_hi)
     if profile.tile_subtract:
         # Same-hue tile subtraction is an asymmetric, feature-correlated rejection
         # source (review finding §5.6): a GREEN piece ON a green tile is eaten by
@@ -289,16 +388,18 @@ def _color_masks(
         # removed at the mask level (piece-green and tile-green are near-colocated
         # in HSV on real frames), so it is MEASURED via that rejection reason, not
         # hidden.
-        tile = cv2.inRange(baseline_hsv, _b(profile.tile_lo), _b(profile.tile_hi))
+        tile = _hsv_in_range(baseline_hsv, profile.tile_lo, profile.tile_hi)
         tile_piece = cv2.dilate(tile, np.ones((9, 9), np.uint8))
         tile_road = cv2.dilate(tile, np.ones((11, 11), np.uint8))
-        piece = cv2.bitwise_and(piece, cv2.bitwise_not(tile_piece))
-        road = cv2.bitwise_and(road, cv2.bitwise_not(tile_road))
-    piece = cv2.bitwise_and(piece, board_mask)
-    road = cv2.bitwise_and(road, board_mask)
-    piece = cv2.morphologyEx(piece, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    piece = cv2.morphologyEx(piece, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8))
-    return np.asarray(piece, np.uint8), np.asarray(road, np.uint8)
+        piece = np.asarray(cv2.bitwise_and(piece, cv2.bitwise_not(tile_piece)), np.uint8)
+        road = np.asarray(cv2.bitwise_and(road, cv2.bitwise_not(tile_road)), np.uint8)
+    piece = np.asarray(cv2.bitwise_and(piece, board_mask), np.uint8)
+    road = np.asarray(cv2.bitwise_and(road, board_mask), np.uint8)
+    piece = np.asarray(cv2.morphologyEx(piece, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)), np.uint8)
+    piece = np.asarray(
+        cv2.morphologyEx(piece, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)), np.uint8
+    )
+    return piece, road
 
 
 def _detect_settlements(
@@ -437,33 +538,67 @@ def read_hud_seat_colors(frame_rgb: npt.NDArray[np.uint8]) -> tuple[str, ...]:
     global constant).
 
     Segments the bottom-right HUD seat panel for each :data:`PALETTE` colour's
-    ring (:data:`_HUD_RING`); each colour whose largest ring blob clears the seat-
-    ring area threshold contributes a seat at its blob's y. Returns the colours
-    sorted by screen y (top seat first). The caller pairs this order with the
-    draft/seat order to build the ``player_colors`` binding.
+    ring (:data:`_HUD_RING`). A blob is a seat-avatar candidate only if it clears the
+    :data:`_SEAT_RING_MIN_AREA` floor AND sits in the left avatar column
+    (:data:`_SEAT_AVATAR_MAX_CX_FRAC`) AND is roughly square
+    (:data:`_SEAT_AVATAR_ASPECT_LO`/``_HI``) — the gates that stop the widened palette's
+    achromatic WHITE range from reading HUD text and a stray PURPLE UI blob as seats.
+    Each colour's largest CANDIDATE blob is its seat proposal; a proposal co-located
+    with a larger-area proposal of another colour (:data:`_SEAT_MIN_SEPARATION_FRAC`) is
+    a confounder and is suppressed in favour of the dominant colour at that seat. The
+    surviving colours are returned sorted by screen y (top seat first). The caller pairs
+    this order with the draft/seat order to build the ``player_colors`` binding.
     """
     import cv2
 
     height, width = frame_rgb.shape[:2]
     x0 = int(_HUD_REGION_FRAC[0] * width)
     y0 = int(_HUD_REGION_FRAC[1] * height)
-    hsv = cv2.cvtColor(frame_rgb[y0:height, x0:width], cv2.COLOR_RGB2HSV)
-    # Seat-ring area floor: the avatar ring is a substantial blob; speckle in the
-    # HUD (card pips, timer) is far smaller. 400px at 1080p separates them.
-    seat_ring_area = 400
-    seats: list[tuple[float, str]] = []
+    hsv: npt.NDArray[np.uint8] = np.asarray(
+        cv2.cvtColor(frame_rgb[y0:height, x0:width], cv2.COLOR_RGB2HSV), np.uint8
+    )
+    region_w = float(width - x0)
+    region_h = float(height - y0)
+    # Per-colour seat proposal: the largest avatar-gated blob for that colour.
+    proposals: list[tuple[float, str, int]] = []  # (cy, color, area)
     for color, (lo, hi) in _HUD_RING.items():
-        mask = cv2.inRange(hsv, np.array(lo, np.uint8), np.array(hi, np.uint8))
+        mask = _hsv_in_range(hsv, lo, hi)
         _n, _labels, stats, centroids = cv2.connectedComponentsWithStats(mask)
         best_area = 0
         best_y = 0.0
         for i in range(1, _n):
             area = int(stats[i, cv2.CC_STAT_AREA])
-            if area > best_area:
-                best_area = area
-                best_y = float(centroids[i][1])
-        if best_area >= seat_ring_area:
-            seats.append((best_y, color))
+            # Largest CANDIDATE blob: apply the avatar gates before accepting, so a
+            # larger-but-non-avatar confounder never shadows a smaller true avatar.
+            if area < _SEAT_RING_MIN_AREA or area <= best_area:
+                continue
+            bw = int(stats[i, cv2.CC_STAT_WIDTH])
+            bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+            if bh == 0 or bw == 0:
+                continue
+            aspect = bw / bh
+            cx, cy = centroids[i]
+            if cx > _SEAT_AVATAR_MAX_CX_FRAC * region_w:
+                continue  # right-hand text/icon column, not the avatar swatch
+            if not (_SEAT_AVATAR_ASPECT_LO <= aspect <= _SEAT_AVATAR_ASPECT_HI):
+                continue  # wide-flat / tall-thin text bar, not a roundish avatar
+            best_area = area
+            best_y = float(cy)
+        if best_area >= _SEAT_RING_MIN_AREA:
+            proposals.append((best_y, color, best_area))
+    # Suppress a proposal co-located (same seat y-band) with a larger-area proposal of
+    # another colour: the true ring dominates the white-glyph / badge confounder that
+    # sits on the same seat. Fail-closed — this only ever removes seats.
+    y_gap = _SEAT_MIN_SEPARATION_FRAC * region_h
+    seats: list[tuple[float, str]] = []
+    for cy, color, area in proposals:
+        if any(
+            other_area > area and abs(other_cy - cy) < y_gap
+            for other_cy, other_color, other_area in proposals
+            if other_color != color
+        ):
+            continue
+        seats.append((cy, color))
     seats.sort(key=lambda z: z[0])
     return tuple(color for _y, color in seats)
 

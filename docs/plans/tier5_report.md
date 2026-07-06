@@ -182,6 +182,15 @@ requires the anchor to have run for both players); no game reached acceptance he
    vote because the opponent colour is unsupported. **This is the dominant blocker to
    harvesting the real corpus** — the palette needs the actual opponent colours
    (red/orange/blue/…) with validated HSV piece/road/tile-subtract/HUD-ring ranges.
+   **RESOLVED (slice `palette_wire`).** `PALETTE` / `_HUD_RING` now cover every
+   calibrated (non-low-sample) survey colour — `RED`/`WHITE`/`PURPLE`/`BLACK` + the
+   retained `GREEN` — with the measured HSV bands from `data/human/color_survey.json`
+   (`tile_subtract` on for the same-hue-tile colours GREEN + RED only). RED's hue-seam
+   wrap is handled by `openings._hsv_in_range`; and because the widened palette made the
+   naive HUD reader over-read (the achromatic WHITE range catches HUD text / avatar-glyph
+   pixels), `read_hud_seat_colors` now gates seat-avatar candidates by avatar-column
+   position + squareness and suppresses a colour co-located with a larger seat ring.
+   Out-of-gamut colours still fail closed (`player_colors_invalid` / `hud_unreadable`).
 4. **GREEN openings suppressed** (`settlement_blob_shortfall:GREEN:green_tile_suppressed`).
    Even on the one supported (green-opponent) game, the openings CV fails: GREEN is the
    tile-subtract colour (§5.13) and a clean empty baseline is unavailable at setup, so
