@@ -1,9 +1,11 @@
 # Step 6 — Human-Corpus Use: Opening Scoreboard + Opening-Diversity Training
 
-**Status:** **v5.1 — RATIFIED** (2026-07-05). Council: **unanimous ACCEPT 4/4**
-(round 4). Expert: **READY** (round 5) — every round-4 item verified landed; the
-READY verdict's pre-freeze pin pack (1 SHOULD-FIX + 6 NITs) is folded into this
-v5.1. Full history: v1–v5 per §8/git.
+**Status:** **v5.2 — RATIFIED + user-amended** (2026-07-05). Council: **unanimous
+ACCEPT 4/4** (round 4). Expert: **READY** (round 5). v5.1 folded the READY pin pack;
+**v5.2 is a user decision narrowing the archetype buckets to measurement-only**
+(§2.1/§5 — buckets never touch training or seed selection; seed draws are
+uniform-over-distinct-openings; the GATE-B0 style-coverage gate is deleted).
+Full history: v1–v5 per §8/git.
 **Depends on:** the human_data harvest completing. The corpus does **not exist yet**;
 the pre-corpus lane (§2) runs first. **One item is harvest-blocking (§3.1): the
 settlement placement-order contract must land in `record.py` before the harvest runs.**
@@ -84,6 +86,12 @@ ORE_ENGINE ≥0.45 / WOOD_BRICK ≥0.45 / PORT_LED / BALANCED_HIGH ≥26 pips /
 BALANCED_LOW; zero-pip ⇒ BALANCED_LOW; 26-pip boundary sanity-checked against
 PRE-GATE-0 with any amendment committed pre-corpus; collinearity note: buckets never
 enter M2 as covariates).
+
+**Scope restriction (user decision, v5.2): the buckets are MEASUREMENT-ONLY.** They
+are consumed by exactly two gates — PRE-GATE-0's collapse verdict and GATE-B3(3)'s
+diversity criterion — plus descriptive reporting/TB dashboards. They never enter
+training, seed selection, or any other gate. The model learns from the raw opening
+positions; nothing is ever steered, filtered, or weighted by bucket.
 
 ### 2.2 PRE-GATE-0 measurements
 
@@ -207,13 +215,18 @@ Deliverables/spike as v4.
 
 ## 5. Workstream B — training response (gated on GATE-A GO + PRE-GATE-0)
 
-Mechanism, B-alt (EVAL-A-only logistic fit), B1 seed loader (incl. the
-two-lowest-buckets fallback and the first-class "corpus adds no unexplored mass"
-finding; **seed draws are uniform-over-qualifying-buckets, never at empirical corpus
-frequency** — the D6-dedup removes almost nothing on all-distinct boards, and
-frequency-weighting would concentrate `seed_prob` in ThePhantom's modal archetype),
-B2 wiring (`reset_source`; `anchor_window_stats()` unit test; harness assertion; TB
-incl. per-archetype `seeded/return`) — all as v4, plus:
+Mechanism, B-alt (EVAL-A-only logistic fit), B2 wiring (`reset_source`;
+`anchor_window_stats()` unit test; harness assertion) — as v4, with the **v5.2
+user amendment to B1**: **seed draws are uniform over DISTINCT openings**
+(dedup key `(board, both openings)` after D6 canonicalization; every distinct
+opening equally likely — no bucket grouping, no empirical-frequency weighting, so
+ThePhantom's modal opening cannot dominate `seed_prob` mass). **The former GATE-B0
+style-coverage requirement (≥25% qualifying-bucket mass + two-lowest-buckets
+fallback) is DELETED**: GATE-B0 now only logs the pool's archetype histogram +
+entropy as a dashboard, and "the corpus adds no unexplored opening mass" (if
+observed) is a report line for the B decision, not a gate. Per-archetype
+`seeded/return` TB remains as an **optional dashboard** (kill-time diagnostic,
+not a gate input). Plus:
 
 **B-launch precondition (expert round-5 — moved from B3 time):** immediately after
 GATE-A GO, compute frozen v8's HOLDOUT-B M2 effect (contaminates nothing — v8 is
@@ -309,6 +322,11 @@ bridge gate; M0 strata = draft_position only; B3(2) replication precondition mov
 to a B-launch precondition with cached reuse; uniform-over-qualifying-buckets seed
 draw; per-episode grant-hypothesis sampling for order-unestablished seeds;
 GATE-B1 operative-branch (persistence) note. **Expert verdict: READY (round 5).**
+**v5.1→v5.2 (user decision, 2026-07-05):** archetype buckets narrowed to
+measurement-only (PRE-GATE-0 collapse + B3(3) diversity + dashboards); seed draws
+uniform-over-distinct-openings; GATE-B0 style-coverage gate deleted (histogram
+becomes a logged dashboard; "no unexplored mass" becomes a report line);
+per-archetype seeded/return demoted to optional dashboard.
 
 ## 9. Risks — as v4, plus:
 
