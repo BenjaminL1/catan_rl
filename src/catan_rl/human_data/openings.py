@@ -218,9 +218,11 @@ PALETTE: dict[str, ColorProfile] = {
 #: seats' rings are matched against these to read the per-game player→colour
 #: binding off the authoritative HUD (§5.14), never a global constant.
 #: RED's ring hue WRAPS the 0/180 seam ([169, 4]) — :func:`read_hud_seat_colors`
-#: matches it via :func:`_hsv_in_range`. Ranges are pairwise-disjoint (the survey's
-#: ``test_ranges_pairwise_non_overlapping`` guarantee), so a two-seat game is always
-#: separable and the reader can never mislabel one seat's colour as another's.
+#: matches it via :func:`_hsv_in_range`. These wired ranges are pairwise-disjoint 3-D
+#: HSV boxes (pinned on THIS table by ``test_wired_hud_ring_ranges_pairwise_disjoint``;
+#: the survey's ``test_ranges_pairwise_non_overlapping`` covers only the source JSON
+#: boxes, not the hand-transcribed table below), so a two-seat game is always separable
+#: and the reader can never mislabel one seat's colour as another's.
 _HUD_RING: dict[str, tuple[tuple[int, int, int], tuple[int, int, int]]] = {
     "GREEN": ((40, 120, 90), (90, 255, 255)),
     "BLACK": ((0, 0, 0), (179, 90, 90)),

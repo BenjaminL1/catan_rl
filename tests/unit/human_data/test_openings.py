@@ -501,6 +501,39 @@ def test_palette_and_hud_ring_keys_match_calibrated_survey_colours() -> None:
     assert PALETTE["PURPLE"].tile_subtract is False
 
 
+def test_wired_hud_ring_ranges_pairwise_disjoint() -> None:
+    """The fail-closed separability guarantee — :func:`read_hud_seat_colors` can never
+    mislabel one seat's ring colour as another's — rests on the ranges the reader
+    actually matches against, i.e. the **wired** ``_HUD_RING`` dict, being pairwise
+    non-overlapping 3-D HSV boxes. ``test_color_survey`` pins only the survey JSON
+    boxes; the wired ranges are hand-transcribed from that survey (RED's seam-wrap,
+    the retained committed GREEN/BLACK bands) and could drift from it, so this pins the
+    live table directly. Reuses ``color_survey._box_overlap`` — the same overlap logic
+    behind the survey guarantee — so the two cannot silently diverge."""
+    import importlib.util
+    import itertools
+    import sys
+
+    from catan_rl.human_data.openings import _HUD_RING
+
+    survey_script = Path(__file__).resolve().parents[3] / "scripts" / "color_survey.py"
+    spec = importlib.util.spec_from_file_location("color_survey", survey_script)
+    assert spec is not None and spec.loader is not None
+    cs = importlib.util.module_from_spec(spec)
+    sys.modules["color_survey"] = cs
+    spec.loader.exec_module(cs)
+
+    def _box(rng: tuple[tuple[int, int, int], tuple[int, int, int]]) -> dict[str, list[int]]:
+        lo, hi = rng
+        return {"hue": [lo[0], hi[0]], "sat": [lo[1], hi[1]], "val": [lo[2], hi[2]]}
+
+    for a, b in itertools.combinations(sorted(_HUD_RING), 2):
+        assert not cs._box_overlap(_box(_HUD_RING[a]), _box(_HUD_RING[b])), (
+            f"wired _HUD_RING boxes overlap: {a}={_HUD_RING[a]} vs {b}={_HUD_RING[b]} — two "
+            "seats using these ring colours would not be separable (fail-closed abstention broken)"
+        )
+
+
 @pytest.mark.parametrize(("top_color", "bot_color"), [("RED", "WHITE"), ("PURPLE", "RED")])
 def test_new_palette_colour_roundtrips(top_color: str, bot_color: str) -> None:
     """Each newly-calibrated colour round-trips through ``detect_openings_result`` on a
