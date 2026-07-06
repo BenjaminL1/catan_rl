@@ -1,0 +1,46 @@
+{
+  "anchor_ckpt": "runs/anchors/v7_final_u399.pt",
+  "collapse_threshold": 0.7,
+  "collapse_verdict": "NO_COLLAPSE",
+  "counts": {
+    "BALANCED_HIGH": 0,
+    "BALANCED_LOW": 74,
+    "ORE_ENGINE": 220,
+    "PORT_LED": 0,
+    "WOOD_BRICK": 106
+  },
+  "entropy_bits": 1.4324605542355584,
+  "freeze": {
+    "anchor_ckpt": {
+      "bytes": 572060231,
+      "path": "runs/anchors/v7_final_u399.pt",
+      "sha256": "2a4348ed3f74947ac9662c2e858991a4ef27148da15a28c6e7d9b8e27e756316"
+    },
+    "docs/plans/v2/step6_human_corpus.md": "e5680ef34fd4d7fcd3cdd47c9a2b2da99b288a9fca24143e92951dad07db7637",
+    "scripts/pregate0.py": "9265a38b4c66b00462593a2e77570307d4db0644686738234a9d335ef2e1e453",
+    "src/catan_rl/human_data/engine_bridge.py": "ae57f8a5c85f219b777ce0478325e45c7c3a0991b9e4201f3fc0a81a5dbb6b16",
+    "src/catan_rl/human_data/opening_archetypes.py": "012eaee87134dc6ca9179d2f45936fdf373b0cc2458e28e88f1279240c9b734b",
+    "v8_ckpt": {
+      "bytes": 361015767,
+      "path": "runs/anchors/v8_promobar_u243.pt",
+      "sha256": "0968b4fafbc49109f18e84d5069ff2f5d87d125e5291dadf706fa9f6ccaeb273"
+    }
+  },
+  "generated_by": "scripts/pregate0.py",
+  "mass": {
+    "BALANCED_HIGH": 0.0,
+    "BALANCED_LOW": 0.185,
+    "ORE_ENGINE": 0.55,
+    "PORT_LED": 0.0,
+    "WOOD_BRICK": 0.265
+  },
+  "max_bucket": "ORE_ENGINE",
+  "max_mass": 0.55,
+  "measured_draft_position": 0,
+  "measured_seat": 0,
+  "measurement_note": "v8 is seated at agent_seat=0 (draft position 0, first drafter) in every game; the counts/mass/collapse verdict measure v8's first-drafter openings only. Draft-position-1 openings are not represented.",
+  "n_games": 400,
+  "schema": "pregate0_mass_v1",
+  "source": "v8-vs-anchor",
+  "v8_ckpt": "runs/anchors/v8_promobar_u243.pt"
+}

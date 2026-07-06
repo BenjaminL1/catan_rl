@@ -92,3 +92,6 @@ data/human/glyph_valset/*.png
 data/human/strength_manifest.shard*.json
 data/human/strength_manifest.sample.json
 data/human/strength_manifest_preview.md
+# PRE-GATE-0 per-game log — re-derivable (deterministic seed + freeze-manifest
+# checkpoint hashes); the committed core is pregate0_mass.json + pregate0_report.md.
+data/human/pregate0_games.jsonl
