@@ -459,11 +459,19 @@ def _open_tb_writer(run_dir: Path) -> Any:
 
 def _log_update_metrics(writer: Any, metrics: Any, *, global_step: int) -> None:
     """Write every scalar field on the ``UpdateMetrics`` dataclass to TB
-    under ``train/<field>``. Unknown / non-scalar fields are skipped."""
+    under ``train/<field>``. Unknown / non-scalar fields are skipped.
+
+    ``setup_head_entropy`` is the one exception: it is the opening-diversity
+    diagnostic (mean policy entropy over setup decisions per update, step6
+    §2.2) and is namespaced under ``openings/`` rather than ``train/``."""
     if writer is None:
         return
     for k, v in vars(metrics).items():
-        if isinstance(v, int | float):
+        if not isinstance(v, int | float):
+            continue
+        if k == "setup_head_entropy":
+            writer.add_scalar("openings/setup_head_entropy", v, global_step)
+        else:
             writer.add_scalar(f"train/{k}", v, global_step)
 
 

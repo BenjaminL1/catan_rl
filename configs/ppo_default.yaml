@@ -38,6 +38,7 @@ loss:
   entropy_anneal_end_update: 200
   belief_coef: 0.05              # belief-head aux (CE vs engine ground truth)
   opp_action_coef: 0.03          # opp-action aux (only fires vs league opponents)
+  setup_entropy_coef: 0.0        # step6 §2.2: extra entropy bonus on setup-phase decisions only; 0 = off (opt-in for the opening-diversity sweep)
 
 optimizer:
   lr_start: 3.0e-4

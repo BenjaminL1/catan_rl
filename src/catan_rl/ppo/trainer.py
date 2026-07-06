@@ -54,6 +54,7 @@ class UpdateMetrics:
     policy_loss: float
     value_loss: float
     entropy_bonus: float
+    setup_head_entropy: float
     belief_loss: float
     total_loss: float
     approx_kl: float
@@ -175,6 +176,7 @@ class PPOTrainer:
             "policy_loss": 0.0,
             "value_loss": 0.0,
             "entropy_bonus": 0.0,
+            "setup_head_entropy": 0.0,
             "belief_loss": 0.0,
             "total_loss": 0.0,
             "approx_kl": 0.0,
@@ -216,6 +218,7 @@ class PPOTrainer:
             policy_loss=means["policy_loss"],
             value_loss=means["value_loss"],
             entropy_bonus=means["entropy_bonus"],
+            setup_head_entropy=means["setup_head_entropy"],
             belief_loss=means["belief_loss"],
             total_loss=means["total_loss"],
             approx_kl=means["approx_kl"],
@@ -297,6 +300,21 @@ class PPOTrainer:
             use_value_clipping=self.cfg.ppo.use_value_clipping,
         )
         entropy_term = compute_entropy_bonus(joint_entropy=joint_entropy)
+
+        # Setup-phase-only entropy: masked mean of H(π) over the transitions
+        # taken during the initial settlement-placement phase (step6 §2.2).
+        # Computed for the TB diagnostic regardless of the coef; only folded
+        # into the loss when the run opts in (coef != 0) so a coef-0 run is
+        # byte-identical to before this term existed.
+        setup_coef = self.cfg.loss.setup_entropy_coef
+        is_setup = batch.get("is_setup")
+        if is_setup is not None:
+            setup_mask = cast(torch.Tensor, is_setup).to(joint_entropy.dtype)
+            n_setup = setup_mask.sum().clamp(min=1.0)
+            setup_entropy_mean = (joint_entropy * setup_mask).sum() / n_setup
+        else:
+            setup_entropy_mean = torch.zeros((), device=self.device)
+
         belief_loss = torch.zeros((), device=self.device)
         if "belief_logits" in head_out and "belief_target" in batch:
             belief_loss = compute_belief_loss(
@@ -310,6 +328,11 @@ class PPOTrainer:
             - entropy_coef * entropy_term
             + self.cfg.loss.belief_coef * belief_loss
         )
+        # Additional setup-phase-only entropy bonus. Guarded on ``!= 0`` so the
+        # coef-0 default leaves ``total`` bit-for-bit identical to the four-term
+        # objective above (no dependence on ``is_setup`` at all).
+        if setup_coef != 0.0:
+            total = total - setup_coef * setup_entropy_mean
 
         self.optimizer.zero_grad(set_to_none=True)
         total.backward()
@@ -336,6 +359,7 @@ class PPOTrainer:
             "policy_loss": policy_loss.detach(),
             "value_loss": value_loss.detach(),
             "entropy_bonus": entropy_term.detach(),
+            "setup_head_entropy": setup_entropy_mean.detach(),
             "belief_loss": belief_loss.detach(),
             "total_loss": total.detach(),
             "approx_kl": approx_kl.detach(),

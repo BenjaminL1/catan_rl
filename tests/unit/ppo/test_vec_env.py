@@ -60,6 +60,42 @@ class TestResetAll:
 
 
 # ---------------------------------------------------------------------------
+# Setup-phase flags (step6 setup-entropy signal)
+# ---------------------------------------------------------------------------
+
+
+class TestSetupFlags:
+    def test_true_at_reset_flips_false_after_setup(self) -> None:
+        """After reset the agent's first decision is a setup placement, so
+        setup_flags() is True; it flips to False once the 4-placement snake
+        draft completes (the signal that drives the setup-entropy bonus)."""
+        random.seed(0)
+        np.random.seed(0)
+        ve = SerialVecEnv(env_kwargs_list=[{"opponent_type": "random", "max_turns": 50}] * 2)
+        try:
+            ve.reset_all(seeds=[0, 1])
+            flags = ve.setup_flags()
+            assert flags.dtype == bool
+            assert flags.shape == (2,)
+            assert bool(flags.all()), "expected initial-placement phase right after reset"
+            # Drive each env through its 4 agent setup placements (settle,
+            # road, settle, road); after that setup is complete.
+            for env in ve.envs:
+                for _ in range(8):  # generous cap; loop exits when setup ends
+                    if not env.initial_placement_phase:
+                        break
+                    masks = env.get_action_masks()
+                    act = np.zeros(6, dtype=np.int64)
+                    act[0] = int(np.argmax(masks["type"]))
+                    act[1] = int(np.argmax(masks["corner_settlement"]))
+                    act[2] = int(np.argmax(masks["edge"]))
+                    env.step(act)
+            assert not bool(ve.setup_flags().any()), "setup flags should clear post-setup"
+        finally:
+            ve.close()
+
+
+# ---------------------------------------------------------------------------
 # Step
 # ---------------------------------------------------------------------------
 

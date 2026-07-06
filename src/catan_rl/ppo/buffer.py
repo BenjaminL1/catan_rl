@@ -144,6 +144,12 @@ class CompositeRolloutBuffer:
         # GAE bootstrap for mid-rollout truncations (values[t+1] would be the
         # next game's start value under auto-reset). Overwritten every add().
         self.truncation_values: np.ndarray = np.zeros(TN, dtype=np.float32)
+        # Per-transition flag: was this decision taken during the initial
+        # settlement-placement phase? Consumed by the setup-phase-only entropy
+        # bonus (``loss.setup_entropy_coef``, step6 §2.2). Always allocated
+        # (cheap, additive); defaults to False when ``add`` omits ``is_setup``,
+        # so it never affects the loss unless a run opts into the bonus.
+        self.is_setup: np.ndarray = np.zeros(TN, dtype=bool)
 
         # --- masks (one (T,N,K_i) per key) -----------------------------
         self.masks: dict[str, np.ndarray] = {
@@ -209,6 +215,7 @@ class CompositeRolloutBuffer:
         opp_kind: np.ndarray | None = None,
         opp_policy_id: np.ndarray | None = None,
         truncation_value: np.ndarray | None = None,
+        is_setup: np.ndarray | None = None,
     ) -> None:
         """Write one step's worth of transitions into the buffer.
 
@@ -224,6 +231,9 @@ class CompositeRolloutBuffer:
         * (optional) ``opp_action_target`` is ``(N,)`` int64;
           ``opp_action_target_valid`` is ``(N,)`` bool
         * (optional) ``opp_kind``, ``opp_policy_id`` are ``(N,)`` int64
+        * (optional) ``is_setup`` is ``(N,)`` bool — True for decisions
+          taken during the initial settlement-placement phase (defaults
+          to all-False when omitted)
         """
         if self._finalised:
             raise RuntimeError(
@@ -264,6 +274,13 @@ class CompositeRolloutBuffer:
         # 0 when not supplied (no truncations this step, or pre-fix callers) —
         # compute_gae only reads it where truncated[t] & ~terminated[t].
         self.truncation_values[t] = 0.0 if truncation_value is None else truncation_value
+        # False when not supplied (pre-flag callers) — the setup-entropy bonus
+        # then contributes nothing, preserving byte-identical behaviour.
+        if is_setup is None:
+            self.is_setup[t] = False
+        else:
+            self._check_shape("is_setup", is_setup.shape, (N,))
+            self.is_setup[t] = is_setup
 
         for k, arr in masks.items():
             if k not in self.masks:
@@ -455,6 +472,7 @@ class CompositeRolloutBuffer:
             "truncated": _gather(self.truncated),
             "advantages": _gather(self.advantages),
             "returns": _gather(self.returns),
+            "is_setup": _gather(self.is_setup),
         }
         if self.belief_target is not None:
             out["belief_target"] = _gather(self.belief_target)

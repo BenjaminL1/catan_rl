@@ -241,6 +241,17 @@ class LossConfig:
     the opponent took). Only fires when the opponent is a historical
     league policy; filtered out for random/heuristic/self."""
 
+    setup_entropy_coef: float = 0.0
+    """Setup-phase-only entropy bonus (step6 human-corpus plan §2.2/§5).
+    An ADDITIONAL entropy bonus, applied on top of the annealed global
+    entropy term but ONLY to decisions taken during the initial
+    settlement-placement phase (the buffer's per-transition ``is_setup``
+    flag). The term is ``setup_entropy_coef * mean(H(π) over setup rows)``
+    (a masked mean over the rollout's setup transitions). Default ``0.0``
+    → byte-identical to before this field existed: a run must opt in. Used
+    by the opening-diversity calibration sweep to widen the agent's opening
+    exploration without perturbing mid-/late-game play."""
+
     def __post_init__(self) -> None:
         for name in (
             "value_coef",
@@ -248,6 +259,7 @@ class LossConfig:
             "entropy_coef_end",
             "belief_coef",
             "opp_action_coef",
+            "setup_entropy_coef",
         ):
             _check_non_negative(name, getattr(self, name))
         if self.entropy_anneal_end_update < self.entropy_anneal_start_update:

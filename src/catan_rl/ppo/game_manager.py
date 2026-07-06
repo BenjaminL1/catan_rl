@@ -144,6 +144,12 @@ class RolloutCollector:
             # post-auto-reset opponent). Only when a league is wired (PFSP on).
             pre_opp_ids = self.vec_env.current_opponent_ids() if self.league is not None else None
 
+            # Setup-phase flag for the CURRENT decision (the obs the agent is
+            # about to act on). Read BEFORE stepping — after step_all the env has
+            # advanced past this placement. Feeds the setup-phase-only entropy
+            # bonus; stored unconditionally (cheap, additive, no-op at coef 0).
+            setup_flags_np = self.vec_env.setup_flags()
+
             # Step the vec env. ``next_obs`` / ``next_masks`` are
             # auto-reset-aware: on terminated/truncated envs they
             # already reflect the next episode's start state.
@@ -193,6 +199,7 @@ class RolloutCollector:
                 masks=masks,
                 belief_target=belief_target_np,
                 truncation_value=truncation_value_np,
+                is_setup=setup_flags_np,
             )
             obs, masks = next_obs, next_masks
             # On the very last in-buffer step, the truncated terminal

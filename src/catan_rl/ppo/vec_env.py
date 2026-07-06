@@ -203,6 +203,18 @@ class SerialVecEnv:
         ``step_all`` to attribute the finishing game to the correct snapshot."""
         return list(self._current_opponent_id)
 
+    def setup_flags(self) -> np.ndarray:
+        """``(n_envs,)`` bool — True for each env currently in the initial
+        settlement-placement phase (i.e. the decision the agent is ABOUT to
+        take is a setup placement).
+
+        The rollout collector reads this BEFORE ``step_all`` so the flag
+        aligns with the obs the agent is acting on. Consumed by the
+        setup-phase-only entropy bonus (``loss.setup_entropy_coef``,
+        step6 §2.2) — a training-only signal that never enters the obs.
+        """
+        return np.array([env.initial_placement_phase for env in self.envs], dtype=bool)
+
     def belief_targets(self) -> np.ndarray:
         """``(n_envs, N_DEV_TYPES)`` belief-head targets for the CURRENT state
         (the obs last returned by ``reset_all`` / ``step_all``).
