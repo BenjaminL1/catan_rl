@@ -30,6 +30,19 @@ class SearchConfig:
     time_budget_s: float | None = None
     #: Number of determinizations (independent dice/opponent worlds) to average.
     n_determinizations: int = 1
+    #: Fixed-budget n-det split (spec 008 FR-003). When True (and sims mode), each
+    #: of the ``n_determinizations`` trees runs ``max(1, sims_per_move // n_det)``
+    #: simulations so the TOTAL leaf-eval budget stays ~``sims_per_move`` regardless
+    #: of ``n_determinizations`` — the MATCHED-total control the K-sweep diagnostic
+    #: needs. Default False = the shipped behavior (each tree runs the FULL
+    #: ``sims_per_move``, total = K·sims), byte-identical to today.
+    split_sims_across_determinizations: bool = False
+    #: Diagnostic-only (spec 008 FR-003): when True, ``MCTS.run`` walks the last
+    #: determinization tree and adds a ``per_depth_concentration`` key to the
+    #: diagnostics (fraction of decision nodes at depths 0/1/2 whose visits
+    #: collapse >50% onto one action). Read-only tree walk — no RNG draw, no output
+    #: change; default False keeps the deployed/bake-off path allocation-clean.
+    collect_depth_stats: bool = False
     #: PUCT exploration constant (applied on the SQUASHED value scale, in (0,1)).
     c_puct: float = 1.5
     #: Value-head squash: P(win) = sigmoid(a * V + b). Fitted on peer games

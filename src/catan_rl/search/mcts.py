@@ -106,6 +106,46 @@ def _lcb_select(
     return best_action if best_action is not None else actions[0]
 
 
+#: Depths reported by the per-depth visit-concentration diagnostic (FR-003).
+_CONCENTRATION_DEPTHS: tuple[int, ...] = (0, 1, 2)
+#: A node "collapses" when >50% of its child visits land on ONE action.
+_COLLAPSE_SHARE = 0.50
+
+
+def _per_depth_concentration(root: SearchNode) -> dict[int, dict[str, float]]:
+    """Per-depth visit-collapse readout for one search tree (FR-003 diagnostic).
+
+    For each of depths 0/1/2, walk every decision node reached at that depth and
+    measure the fraction whose visits collapse >50% onto a single child action
+    (``max(child_N) / sum(child_N) > 0.5``). A high depth-0 fraction is the
+    "visit-collapse" the kill-gate is looking for; the depth-1/2 fractions say
+    whether the collapse also wastes sims deeper in the tree (US1 scenario 3).
+
+    Pure read of the built tree — no RNG, no mutation — so it is safe to compute
+    without perturbing byte-identity. Nodes with no landed visits are skipped
+    (not a decision the search actually made).
+    """
+    out: dict[int, dict[str, float]] = {}
+    level = [root]
+    for depth in _CONCENTRATION_DEPTHS:
+        collapsed = 0
+        n_nodes = 0
+        next_level: list[SearchNode] = []
+        for node in level:
+            total = sum(node.child_N.values())
+            if total > 0:
+                n_nodes += 1
+                if max(node.child_N.values()) / total > _COLLAPSE_SHARE:
+                    collapsed += 1
+            next_level.extend(node.children.values())
+        out[depth] = {
+            "n_nodes": float(n_nodes),
+            "collapse_frac": (collapsed / n_nodes) if n_nodes else 0.0,
+        }
+        level = next_level
+    return out
+
+
 def clone_env(env: CatanEnv, opponent: SnapshotOpponent | None) -> CatanEnv:
     """Deep-copy ``env`` for simulation, attaching ``opponent`` as the model.
 
@@ -283,9 +323,11 @@ class MCTS:
         agg_n: dict[ActionTuple, int] = {}
         agg_w: dict[ActionTuple, float] = {}
         agg_q2: dict[ActionTuple, float] = {}
+        last_root: SearchNode | None = None
 
         for d in range(n_det):
             root = self._make_node(clone_env(root_env, self.opponent), obs, terminal=False)
+            last_root = root
             if legal_actions is None:
                 legal_actions = root.legal_actions
                 # Capture a COPY of the clean (pre-noise) policy prior for diagnostics
@@ -361,6 +403,11 @@ class MCTS:
             # second search pass. Search-internal in-memory stats; never persisted.
             "action_q2": {a: agg_q2[a] for a, n in agg_n.items() if n > 0},
         }
+        # Per-depth visit-collapse (FR-003 diagnostic; opt-in, read-only tree walk
+        # on the LAST determinization tree). NEW key only, gated off by default so
+        # the deployed/bake-off path stays allocation-clean and byte-identical.
+        if self.cfg.collect_depth_stats and last_root is not None and not forced:
+            diagnostics["per_depth_concentration"] = _per_depth_concentration(last_root)
         return best, diagnostics
 
     def _run_one_tree(self, root: SearchNode, det_base: int, n_det: int) -> int:
@@ -383,7 +430,13 @@ class MCTS:
                 sims_run += 1
         else:
             assert self.cfg.sims_per_move is not None
-            for i in range(self.cfg.sims_per_move):
+            n_sims = self.cfg.sims_per_move
+            if self.cfg.split_sims_across_determinizations and n_det > 1:
+                # Fixed-budget split (FR-003): each tree gets an EQUAL share so the
+                # total leaf-eval budget across the K trees stays ~sims_per_move
+                # (matched total). At least one sim per tree.
+                n_sims = max(1, self.cfg.sims_per_move // n_det)
+            for i in range(n_sims):
                 self._reseed(det_base + i)
                 self._simulate(root)
                 sims_run += 1

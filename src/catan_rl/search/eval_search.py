@@ -29,15 +29,23 @@ from catan_rl.eval.rules_invariants import run_all_invariants
 from catan_rl.eval.wilson import wilson_interval
 
 if TYPE_CHECKING:
+    from typing import Protocol
+
     from catan_rl.env.catan_env import CatanEnv
     from catan_rl.search.agent import SearchAgent
     from catan_rl.search.config import SearchConfig
     from catan_rl.selfplay.snapshot_opponent import SnapshotOpponent
 
+    class _ActionChooser(Protocol):
+        """The decision surface ``_play_search_game`` needs (SearchAgent + the
+        spec-008 oracle-root agent both satisfy it structurally)."""
+
+        def choose_action(self, env: CatanEnv) -> np.ndarray: ...
+
 
 def _play_search_game(
     env: CatanEnv,
-    agent: SearchAgent,
+    agent: _ActionChooser,
     *,
     seed: int,
     agent_seat: int,
