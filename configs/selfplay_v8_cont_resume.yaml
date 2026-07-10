@@ -1,0 +1,95 @@
+# v8 continuation — chain the promotion ratchet from the new champion. The promobar run proved
+# lowering auto_reanchor_winrate_threshold 0.85->0.63 unsticks the plateau (+121 Elo over v7 in one
+# promotion), but its cooldown=200 blocked a 2nd promotion before the 244-update budget ran out. This
+# run warm-starts + anchors from v8 (the banked champion) and shortens the reanchor cadence so
+# promotions CHAIN within one run, climbing past v8. Same v7/promobar recipe otherwise.
+# GATE (at completion): champion vs FROZEN v7 should EXCEED 0.668 (the v8 mark), and vs v8 itself > 0.5.
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic
+  engine_backend: python
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.03
+
+optimizer:
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  # NOTE (audit 2026-07): pre-fix runs silently trained at torch-default
+  # eps=1e-8 — the v8 lineage is de facto 1e-8. From the fix onward this
+  # value is honored (fresh runs AND re-stamped on resume with a warning).
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 0
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 16
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 40
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 0.25
+  snapshot_weight: 0.5
+  anchor_weight: 0.25
+  anchor_checkpoint_path: runs/anchors/v8_promobar_u243.pt   # anchor on the NEW frontier -> every promotion is real progress past v8
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63          # keep the working bar
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 25          # was 50 — test promotion twice as often
+  auto_reanchor_min_games: 150                   # was 200 — promote a touch sooner
+  auto_reanchor_cooldown_updates: 75             # was 200 — let promotions CHAIN within the run
+
+# RESUME after the 2026-07-10 power-loss (machine unplugged, died at update 140/610).
+# Warm-start from the update-124 checkpoint (strongest weights, 124 updates past v8) instead of
+# v8 itself — recovers ~4.1M steps of progress. Anchor stays frozen v8, so the "beat v8" gate is
+# unchanged; the league snapshot pool + Adam moments rebuild from this stronger start.
+init_policy_checkpoint: runs/train/selfplay_v8_chain_wgate_20260710_054321/checkpoints/ckpt_000000124.pt
+
+total_steps: 19988480            # 610 rollouts * 128 * 256 (~20.0M); room for several chained promotions (~21h)
+seed: 8
+device: auto
+torch_compile: false
+run_name: selfplay_v8_cont
+output_dir: runs/train
