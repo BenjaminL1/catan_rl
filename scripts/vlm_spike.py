@@ -303,6 +303,18 @@ def snap_localized_openings(
 # --------------------------------------------------------------------------- #
 
 
+# Canonical human-readable phrase per setup event kind — the inverse of the
+# substring grammar :func:`build_setup_events` parses (mirrors the game-1 fixture's
+# ``log_setup_sequence`` form). The real-video ``prepare_frames_from_video`` emits
+# ``log_setup_sequence`` through this so the grant (``starting_resources``) line is
+# carried and re-parses correctly for placement-order establishment.
+_SETUP_PHRASE: dict[str, str] = {
+    "setup_settlement": "placed a Settlement",
+    "setup_road": "placed a Road",
+    "starting_resources": "received starting resources",
+}
+
+
 def build_setup_events(sequence: Sequence[str], handles: Iterable[str]) -> list[LogEvent]:
     """Turn a human-readable log setup sequence (the game-1 fixture's
     ``log_setup_sequence`` form — ``"<handle> placed a Settlement / Road"`` /
@@ -594,6 +606,16 @@ def prepare_frames_from_video(
         baseline = game_dir / "empty_baseline.png"
         iio.imwrite(post, gf.post_setup_frame.frame)
         iio.imwrite(baseline, gf.empty_baseline)
+        # Consensus grant read — REUSE the harvest multi-frame grant path so the LOG
+        # placement order can be established downstream (localize_game +
+        # establish_placement_order need the granting player's card multiset). Only
+        # the readable (non-None) grants are serialised; an unreadable grant is simply
+        # absent, and localize_game treats an absent handle as an unread grant.
+        granted_resources = {
+            handle: dict(grant)
+            for handle in ctx.handles
+            if (grant := harvest._consensus_grant(handle, gf.grant_frames)) is not None
+        }
         meta: dict[str, Any] = {
             "video": video,
             "game_index": game_index,
@@ -602,9 +624,12 @@ def prepare_frames_from_video(
             "player_colors": dict(ctx.player_colors),
             "draft_order": list(harvest._draft_order(segment.events, ctx.handles)),
             "dice_log": list(harvest._dice_log(segment.events)),
+            "granted_resources": granted_resources,
             "winner": segment.winner,
             "log_setup_sequence": [
-                f"{e.actor} {e.kind}" for e in segment.events if e.kind.startswith("setup_")
+                f"{e.actor} {_SETUP_PHRASE[e.kind]}"
+                for e in segment.events
+                if e.kind in _SETUP_PHRASE
             ],
             "board_desert_hex": None if board is None else board.desert_hex,
             "board_residual_px": None if board is None else board.residual_px,

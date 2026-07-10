@@ -322,6 +322,72 @@ def test_missing_log_grant_downgrades_order_but_still_accepts() -> None:
     assert result.record.is_seed_eligible() is True
 
 
+# --- real-video meta round-trip: grant line survives -> order establishes ----
+
+
+# The per-game setup LogEvent kinds as ``segment.events`` carries them (real-video
+# path). ``prepare_frames_from_video`` serialises these to ``log_setup_sequence``.
+_GAME1_SETUP_KINDS: tuple[tuple[str, str], ...] = (
+    ("rayman147", "setup_settlement"),
+    ("rayman147", "setup_road"),
+    ("ThePhantom", "setup_settlement"),
+    ("ThePhantom", "setup_road"),
+    ("ThePhantom", "setup_settlement"),
+    ("ThePhantom", "starting_resources"),
+    ("ThePhantom", "setup_road"),
+    ("rayman147", "setup_settlement"),
+    ("rayman147", "starting_resources"),
+    ("rayman147", "setup_road"),
+)
+
+
+def test_real_video_meta_setup_sequence_carries_grant_line() -> None:
+    # Emit log_setup_sequence EXACTLY as prepare_frames_from_video now does (canonical
+    # phrase per kind, INCLUDING starting_resources) then re-parse via build_setup_events.
+    emitted = [
+        f"{actor} {vlm._SETUP_PHRASE[kind]}"
+        for actor, kind in _GAME1_SETUP_KINDS
+        if kind in vlm._SETUP_PHRASE
+    ]
+    events = vlm.build_setup_events(emitted, _PLAYERS.values())
+    kinds = [e.kind for e in events]
+    # The grant lines survive the serialization boundary (the bug dropped them).
+    assert kinds.count("starting_resources") == 2
+    assert [(e.actor, e.kind) for e in events] == list(_GAME1_SETUP_KINDS)
+
+
+def test_real_video_round_trip_establishes_placement_order() -> None:
+    # The regression: the real-video path must be able to establish placement order.
+    # Serialize setup events as prepare_frames_from_video does, re-parse, and confirm
+    # snap_and_validate stamps placement_order_established (grant read + grant line).
+    topo = load_topology()
+    localizer = vlm.MockLocalizer(scripted=_true_localized())
+    localized = localizer.localize(Path("p.png"), Path("b.png"), _board())
+    emitted = [
+        f"{actor} {vlm._SETUP_PHRASE[kind]}"
+        for actor, kind in _GAME1_SETUP_KINDS
+        if kind in vlm._SETUP_PHRASE
+    ]
+    setup_events = vlm.build_setup_events(emitted, _PLAYERS.values())
+    result = vlm.snap_and_validate(
+        localized=localized,
+        board=_board(),
+        players=dict(_PLAYERS),
+        opponent_strength=_strength(),
+        draft_order=_DRAFT_ORDER,
+        dice_log=(8,),
+        winner=None,
+        granted_by_player=_granted(),
+        resolution=1080,
+        topology=topo,
+        setup_events=setup_events,
+    )
+    assert result.accepted is True
+    assert result.record.provenance["placement_order_established"] is True
+    assert result.record.openings["rayman147"].settlements[1] == 11
+    assert result.record.openings["ThePhantom"].settlements[1] == 19
+
+
 # --- (e) joint-flip glyph firewall still guards (a D6-flipped board rejects) --
 
 
