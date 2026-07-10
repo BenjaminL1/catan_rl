@@ -513,6 +513,12 @@ _FIXTURE_DIR = REPO / "tests" / "fixtures" / "human_data"
 _FRAMES_ROOT = REPO / "data" / "human" / "vlm_spike" / "frames"
 _LOCALIZED_ROOT = REPO / "data" / "human" / "vlm_spike" / "localized"
 _RECORDS_ROOT = REPO / "data" / "human" / "vlm_spike" / "records"
+# Ground-truth openings live in a SEPARATE tree the localize/VLM phase is never
+# pointed at — NOT co-located in the ``frames/<game>/meta.json`` the localizer
+# reads for the tile layout. Keeping the answer out of the localizer's legitimate
+# input is what stops a VLM from snooping the correct openings while learning the
+# board (only the ``score`` command reads this tree).
+_TRUTH_ROOT = REPO / "data" / "human" / "vlm_spike" / "truth"
 
 
 def _game_key(video: str, game_index: int) -> str:
@@ -524,8 +530,10 @@ def prepare_frames_from_fixture(out_root: Path = _FRAMES_ROOT) -> Path:
     spike game dir — the offline, network-free ``prepare-frames`` path. Copies the
     committed post-setup + empty-baseline PNGs and writes a ``meta.json`` carrying
     the board CV read + the fixture's handles / draft order / setup sequence /
-    granted resources / true openings so ``localize`` and ``score`` can run without
-    the video."""
+    granted resources so ``localize`` can run without the video. The ground-truth
+    openings are written to a SEPARATE ``truth/<game>.json`` (NOT ``meta.json``) so
+    the localize/VLM phase — which reads ``meta.json`` for the tile layout — can
+    never snoop the answer; only ``score`` reads the truth tree."""
     import shutil
 
     import imageio.v3 as iio
@@ -556,7 +564,6 @@ def prepare_frames_from_fixture(out_root: Path = _FRAMES_ROOT) -> Path:
         "granted_resources": fixture["granted_resources"],
         "player_colors": fixture["player_colors"],
         "winner": fixture["winner"],
-        "openings_truth": fixture["openings"],
         "board_desert_hex": board.desert_hex,
         "board_residual_px": board.residual_px,
         "board_hexes": list(board.hexes),
@@ -565,6 +572,10 @@ def prepare_frames_from_fixture(out_root: Path = _FRAMES_ROOT) -> Path:
         "empty_baseline_png": str(baseline),
     }
     (game_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    # Ground truth to its OWN tree, deliberately outside the frames dir the VLM reads.
+    truth_path = _TRUTH_ROOT / f"{_game_key('game1', 1)}.json"
+    truth_path.parent.mkdir(parents=True, exist_ok=True)
+    truth_path.write_text(json.dumps(fixture["openings"], indent=2), encoding="utf-8")
     return game_dir
 
 
@@ -744,8 +755,15 @@ def _cmd_localize(args: argparse.Namespace) -> int:
 
 def _cmd_score(args: argparse.Namespace) -> int:
     game_dir = _FRAMES_ROOT / args.game
-    meta = json.loads((game_dir / "meta.json").read_text(encoding="utf-8"))
-    truth = openings_from_dict(meta["openings_truth"])
+    truth_path = _TRUTH_ROOT / f"{args.game}.json"
+    if not truth_path.exists():
+        print(
+            f"{args.game}: no ground-truth openings (truth/{args.game}.json absent) — "
+            "nothing to score (real videos have no hand-verified answer)",
+            file=sys.stderr,
+        )
+        return 2
+    truth = openings_from_dict(json.loads(truth_path.read_text(encoding="utf-8")))
     result = localize_game(game_dir)
     if not result.accepted:
         print(f"{args.game}: REJECTED ({result.rejection_reason}) — no openings to score")
