@@ -390,12 +390,18 @@ class CatanEnv(gym.Env):
         self._game_over = False
         self.last_dice_roll = 0
 
-        # Restart the snapshot opponent's action stream with a FRESH per-game
-        # seed drawn from the env RNG — otherwise every game replays the same
-        # seed sequence, seed-locking the opponent's sampling and collapsing
-        # self-play opponent diversity. Reproducible: seeded by the env seed.
+        # Restart the snapshot opponent's action stream. Default: a FRESH per-game
+        # seed drawn from the env RNG — otherwise every game replays the same seed
+        # sequence, seed-locking the opponent's sampling and collapsing self-play
+        # opponent diversity. When the caller pins an explicit ``opponent_seed``
+        # (the SPRT differential driver, which needs the reference to play a
+        # BYTE-IDENTICAL stream in the A-side and B-side game of a pair for its
+        # variance cancellation), use that instead. Reproducible either way.
         if self._snapshot_opponent is not None:
-            self._snapshot_opponent.reset_rng(seed=int(self.np_random.integers(0, 2**31 - 1)))
+            opp_seed = options.get("opponent_seed")
+            if opp_seed is None:
+                opp_seed = int(self.np_random.integers(0, 2**31 - 1))
+            self._snapshot_opponent.reset_rng(seed=int(opp_seed))
 
         # Snake draft P1→P2→P2→P1. If agent is seat 1 (P2), opponent
         # places their FIRST settle+road before the agent acts. The

@@ -104,6 +104,21 @@ class OracleRootAgent:
         self.last_diagnostics: dict[str, Any] = {}
 
     def choose_action(self, env: CatanEnv) -> np.ndarray:
+        # Uphold the same global-RNG snapshot/restore contract ``SearchAgent``
+        # does (FR-006): the candidate rollouts below reseed torch/numpy/stdlib
+        # and advance the opponent stream, so without this the oracle would
+        # perturb the surrounding game's RNG and desync the common-random-numbers
+        # the SPRT differential relies on. The inner PUCT call restores its own
+        # state; this outer guard covers the rollout scoring.
+        from catan_rl.search.agent import _restore_rng, _snapshot_rng
+
+        rng = _snapshot_rng()
+        try:
+            return self._choose_action(env)
+        finally:
+            _restore_rng(rng)
+
+    def _choose_action(self, env: CatanEnv) -> np.ndarray:
         from catan_rl.search.mcts import clone_env
 
         # PUCT once -> candidate set + depth-0 concentration.

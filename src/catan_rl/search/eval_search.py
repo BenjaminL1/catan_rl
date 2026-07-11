@@ -50,9 +50,20 @@ def _play_search_game(
     seed: int,
     agent_seat: int,
     audit_rules: bool,
+    opponent_seed: int | None = None,
 ) -> GameOutcome:
-    """Play one game with the agent seat driven by search; agent-POV outcome."""
-    env.reset(seed=seed, options={"agent_seat": agent_seat})
+    """Play one game with the agent seat driven by search; agent-POV outcome.
+
+    ``opponent_seed`` (optional) pins the snapshot opponent's per-game RNG seed
+    explicitly instead of letting the env draw one from its own RNG — the SPRT
+    differential driver uses it so A's and B's game at the same seed face an
+    identical reference stream. ``None`` preserves the env's default draw exactly
+    (byte-identical for every existing caller).
+    """
+    options: dict[str, object] = {"agent_seat": agent_seat}
+    if opponent_seed is not None:
+        options["opponent_seed"] = int(opponent_seed)
+    env.reset(seed=seed, options=options)
     terminated = False
     truncated = False
     n_steps = 0

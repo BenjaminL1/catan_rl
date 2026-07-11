@@ -47,16 +47,35 @@ if TYPE_CHECKING:
     from catan_rl.selfplay.snapshot_opponent import SnapshotOpponent
 
 __all__ = [
+    "PAIRING_COMMON_REF_DIFF",
+    "PAIRING_HEAD_TO_HEAD",
     "PENTANOMIAL_SCORES",
     "PentanomialSPRT",
     "SPRTConfig",
     "SPRTResult",
     "assert_matched_budget",
     "config_total_sim_budget",
+    "elo_from_pair_mean",
     "elo_to_score",
+    "pair_mean_for_elo",
     "run_sprt_config_vs_config",
     "score_to_elo",
 ]
+
+#: Pentanomial pairing modes — how a per-pair score maps to the Elo of A over B.
+#:
+#: * ``head_to_head`` — a pair is 2 DIRECT A-vs-B games (seat-swapped). The
+#:   per-game win prob IS ``elo_to_score(elo_AB)``, so a pair means
+#:   ``2*elo_to_score(elo_AB)``.
+#: * ``common_reference_diff`` — A and B each play the SAME frozen reference on
+#:   common seeds and the pair score is ``(Σ(win_A - win_B) + 2)/2``. Splitting the
+#:   A-over-B advantage symmetrically around the reference gives a pair mean of
+#:   ``2*elo_to_score(elo_AB/2)`` — HALF the Elo sensitivity of head-to-head.
+#:   Scoring a differential stream with the head-to-head map mis-scales every Elo
+#:   estimate and every hypothesis target by ~2x (biasing toward NO-GO/REJECT):
+#:   the observed pair mean deviates from 1 only half as fast per Elo.
+PAIRING_HEAD_TO_HEAD = "head_to_head"
+PAIRING_COMMON_REF_DIFF = "common_reference_diff"
 
 #: The five possible seat-swapped-block (pair) scores.
 PENTANOMIAL_SCORES: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0)
@@ -78,6 +97,33 @@ def score_to_elo(score: float) -> float:
     """Inverse of :func:`elo_to_score` — per-game score in (0,1) -> Elo."""
     s = min(1.0 - _SCORE_EPS, max(_SCORE_EPS, score))
     return -400.0 * math.log10(1.0 / s - 1.0)
+
+
+def pair_mean_for_elo(elo: float, pairing: str = PAIRING_HEAD_TO_HEAD) -> float:
+    """Expected per-pair score for an Elo advantage of A over B under ``pairing``.
+
+    Head-to-head: ``2*elo_to_score(elo)``. Common-reference differential:
+    ``2*elo_to_score(elo/2)`` — the reference splits the A-over-B advantage
+    symmetrically, halving the per-pair Elo sensitivity (see
+    :data:`PAIRING_COMMON_REF_DIFF`). Both map ``elo=0 -> 1`` and are strictly
+    monotone in ``elo``.
+    """
+    if pairing == PAIRING_COMMON_REF_DIFF:
+        return 2.0 * elo_to_score(0.5 * elo)
+    return 2.0 * elo_to_score(elo)
+
+
+def elo_from_pair_mean(mean: float, pairing: str = PAIRING_HEAD_TO_HEAD) -> float:
+    """Inverse of :func:`pair_mean_for_elo` — per-pair mean score -> Elo of A over B.
+
+    The load-bearing calibration fix (BLOCKER): a differential common-reference
+    pair mean of ``m`` corresponds to ``2*score_to_elo(m/2)`` Elo, TWICE what the
+    head-to-head map ``score_to_elo(m/2)`` would report — using the latter on
+    differential data under-reads every on-net Elo by ~2x.
+    """
+    if pairing == PAIRING_COMMON_REF_DIFF:
+        return 2.0 * score_to_elo(0.5 * mean)
+    return score_to_elo(0.5 * mean)
 
 
 def _tilt_pdf(support: tuple[float, ...], pdf: list[float], theta: float) -> list[float]:
@@ -118,6 +164,10 @@ class SPRTConfig:
     beta: float = 0.05
     #: Hard cap on pentanomial pairs (seat-swapped blocks) -> INCONCLUSIVE.
     max_pairs: int = 2000
+    #: How a per-pair score maps to Elo (see the pairing-mode constants). Default
+    #: ``head_to_head`` (direct A-vs-B pairs); the common-reference differential
+    #: driver forces ``common_reference_diff`` so its Elo is not ~2x miscalibrated.
+    pairing: str = PAIRING_HEAD_TO_HEAD
 
     def __post_init__(self) -> None:
         if not 0.0 < self.alpha < 1.0:
@@ -128,6 +178,11 @@ class SPRTConfig:
             raise ValueError(f"elo1 ({self.elo1}) must exceed elo0 ({self.elo0})")
         if self.max_pairs < 1:
             raise ValueError(f"max_pairs must be >= 1, got {self.max_pairs}")
+        if self.pairing not in (PAIRING_HEAD_TO_HEAD, PAIRING_COMMON_REF_DIFF):
+            raise ValueError(
+                f"pairing must be one of "
+                f"{(PAIRING_HEAD_TO_HEAD, PAIRING_COMMON_REF_DIFF)}, got {self.pairing!r}"
+            )
 
     @property
     def upper_bound(self) -> float:
@@ -201,9 +256,10 @@ class PentanomialSPRT:
         raw = [float(c) + _REGULARIZE for c in self.counts]
         z = sum(raw)
         pdf = [r / z for r in raw]
-        # Per-pair expected scores (a pair maxes at 2 -> 2 * per-game score).
-        t0 = 2.0 * elo_to_score(self.cfg.elo0)
-        t1 = 2.0 * elo_to_score(self.cfg.elo1)
+        # Per-pair expected scores under the configured pairing (differential
+        # halves the Elo sensitivity vs head-to-head — the BLOCKER calibration).
+        t0 = pair_mean_for_elo(self.cfg.elo0, self.cfg.pairing)
+        t1 = pair_mean_for_elo(self.cfg.elo1, self.cfg.pairing)
         q0 = _tilt_to_mean(PENTANOMIAL_SCORES, pdf, t0)
         q1 = _tilt_to_mean(PENTANOMIAL_SCORES, pdf, t1)
         return sum(self.counts[i] * math.log(q1[i] / q0[i]) for i in range(len(self.counts)))
@@ -211,7 +267,7 @@ class PentanomialSPRT:
     def elo_estimate(self) -> float:
         """Point Elo of A over B from the observed per-pair mean score."""
         mean, _ = self.mean_var()
-        return score_to_elo(mean / 2.0)
+        return elo_from_pair_mean(mean, self.cfg.pairing)
 
     def decision(self) -> str:
         """One of ``PROMOTE`` / ``REJECT`` / ``INCONCLUSIVE`` / ``CONTINUE``."""
@@ -341,10 +397,23 @@ def _seat_swapped_block_score(
     """
     from catan_rl.search.eval_search import _play_search_game
 
-    a0 = _play_search_game(env, agent_a, seed=seed0, agent_seat=0, audit_rules=audit_rules).won
-    a1 = _play_search_game(env, agent_a, seed=seed1, agent_seat=1, audit_rules=audit_rules).won
-    b0 = _play_search_game(env, agent_b, seed=seed0, agent_seat=0, audit_rules=audit_rules).won
-    b1 = _play_search_game(env, agent_b, seed=seed1, agent_seat=1, audit_rules=audit_rules).won
+    # Pin the reference opponent's per-game RNG seed to the GAME seed so A's game
+    # and B's game at the same seed face a BYTE-IDENTICAL reference stream — the
+    # driver owns this reset rather than relying on the env's incidental per-game
+    # draw, so the pentanomial's shared-variance cancellation actually holds
+    # (A and B differ only in their own decision rule, never in the reference).
+    a0 = _play_search_game(
+        env, agent_a, seed=seed0, agent_seat=0, audit_rules=audit_rules, opponent_seed=seed0
+    ).won
+    a1 = _play_search_game(
+        env, agent_a, seed=seed1, agent_seat=1, audit_rules=audit_rules, opponent_seed=seed1
+    ).won
+    b0 = _play_search_game(
+        env, agent_b, seed=seed0, agent_seat=0, audit_rules=audit_rules, opponent_seed=seed0
+    ).won
+    b1 = _play_search_game(
+        env, agent_b, seed=seed1, agent_seat=1, audit_rules=audit_rules, opponent_seed=seed1
+    ).won
     diff = (int(a0) - int(b0)) + (int(a1) - int(b1))
     return (diff + 2) / 2.0
 
@@ -367,10 +436,18 @@ def run_sprt_agents_vs_reference(
     reproducible and side-effect-free (mirrors ``eval_search``). Both agents wrap
     the SAME frozen net; only their decision rule differs.
     """
+    import dataclasses
+
     import numpy as np
     import torch
 
     from catan_rl.env.catan_env import CatanEnv
+
+    # This driver ALWAYS scores common-reference differential pairs, so it forces
+    # the differential pairing regardless of the caller's cfg — otherwise the
+    # per-pair Elo/target-mean map would be ~2x miscalibrated (the BLOCKER).
+    if sprt_cfg.pairing != PAIRING_COMMON_REF_DIFF:
+        sprt_cfg = dataclasses.replace(sprt_cfg, pairing=PAIRING_COMMON_REF_DIFF)
 
     np_state = np.random.get_state()
     py_state = random.getstate()

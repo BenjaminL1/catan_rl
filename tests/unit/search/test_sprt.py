@@ -20,11 +20,14 @@ import pytest
 
 from catan_rl.search.config import SearchConfig
 from catan_rl.search.sprt import (
+    PAIRING_COMMON_REF_DIFF,
     PentanomialSPRT,
     SPRTConfig,
     assert_matched_budget,
     config_total_sim_budget,
+    elo_from_pair_mean,
     elo_to_score,
+    pair_mean_for_elo,
     run_sprt_stream,
     score_to_elo,
 )
@@ -181,6 +184,74 @@ def test_matched_budget_ndet_mismatch_raises() -> None:
     b = SearchConfig(sims_per_move=100, n_determinizations=2)
     with pytest.raises(ValueError, match="n_determinizations differ"):
         assert_matched_budget(a, b)
+
+
+# --- (f) differential common-reference pairing calibration (BLOCKER) --------
+
+
+def _differential_pair_stream(elo_ab: float, seed: int, n: int) -> list[float]:
+    """A and B each play a COMMON reference; A-over-B Elo split symmetrically.
+
+    Per game the reference-relative win probs are ``elo_to_score(±elo_ab/2)``; a
+    pentanomial pair is two seat-swapped games scored ``(Σ(win_A - win_B) + 2)/2``
+    — exactly what ``_seat_swapped_block_score`` produces in the real driver.
+    """
+    p_a = elo_to_score(elo_ab / 2.0)
+    p_b = elo_to_score(-elo_ab / 2.0)
+    rng = random.Random(seed)
+    out: list[float] = []
+    for _ in range(n):
+        diff = 0
+        for _seat in range(2):
+            a = 1 if rng.random() < p_a else 0
+            b = 1 if rng.random() < p_b else 0
+            diff += a - b
+        out.append((diff + 2) / 2.0)
+    return out
+
+
+def test_differential_pairing_recovers_true_elo() -> None:
+    # A differential common-reference stream at a KNOWN +80-Elo A-over-B gap: the
+    # differential pairing must recover ~+80, while the head-to-head map (the bug)
+    # under-reads it by ~2x (~+40). The two estimates differ by EXACTLY a factor
+    # of two because elo_from_pair_mean(diff) == 2 * elo_from_pair_mean(hh).
+    elo_true = 80.0
+    stream = _differential_pair_stream(elo_true, seed=2024, n=20000)
+
+    diff_sprt = PentanomialSPRT(SPRTConfig(pairing=PAIRING_COMMON_REF_DIFF, max_pairs=10**9))
+    hh_sprt = PentanomialSPRT(SPRTConfig(max_pairs=10**9))  # default head_to_head
+    for s in stream:
+        diff_sprt.update(s)
+        hh_sprt.update(s)
+
+    diff_est = diff_sprt.elo_estimate()
+    hh_est = hh_sprt.elo_estimate()
+    # Calibrated: the differential estimate lands near the true gap.
+    assert abs(diff_est - elo_true) < 20.0, f"differential mis-reads Elo: {diff_est:.1f}"
+    # The head-to-head map (the BLOCKER) is ~2x too small -> biased toward NO-GO.
+    assert abs(hh_est - elo_true / 2.0) < 12.0, f"head-to-head not ~half: {hh_est:.1f}"
+    # And the miscalibration is precisely the factor of two.
+    assert math.isclose(diff_est, 2.0 * hh_est, rel_tol=1e-9)
+
+
+def test_pair_mean_and_elo_roundtrip_per_pairing() -> None:
+    for pairing in ("head_to_head", PAIRING_COMMON_REF_DIFF):
+        for elo in (-40.0, 0.0, 25.0):
+            m = pair_mean_for_elo(elo, pairing)
+            assert 0.0 < m < 2.0
+            assert math.isclose(elo_from_pair_mean(m, pairing), elo, abs_tol=1e-6)
+    # elo=0 is a dead-even pair mean of 1.0 under both pairings.
+    assert math.isclose(pair_mean_for_elo(0.0, "head_to_head"), 1.0)
+    assert math.isclose(pair_mean_for_elo(0.0, PAIRING_COMMON_REF_DIFF), 1.0)
+    # Differential has HALF the head-to-head Elo sensitivity around parity.
+    d_hh = pair_mean_for_elo(4.0, "head_to_head") - 1.0
+    d_diff = pair_mean_for_elo(4.0, PAIRING_COMMON_REF_DIFF) - 1.0
+    assert math.isclose(d_diff, 0.5 * d_hh, rel_tol=1e-3)
+
+
+def test_invalid_pairing_raises() -> None:
+    with pytest.raises(ValueError, match="pairing must be one of"):
+        SPRTConfig(pairing="gauntlet")
 
 
 def test_config_total_budget_split_vs_unsplit() -> None:
