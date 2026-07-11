@@ -11,16 +11,30 @@ headroom lands as a single Elo number with a decision.
 The oracle (documented "near-perfect" chooser)
 -----------------------------------------------
 ``OracleRootAgent`` enumerates the SAME candidate root actions PUCT expands (the
-modal sub-action per legal type) and scores each by ``rollouts`` INDEPENDENT
-Monte-Carlo playouts to terminal under the frozen v8 net on both seats (the
-fresh-seeded ``StackedDice`` open-loop determinization used by
-``probe_root_headroom``). It picks ``argmax`` estimated win-prob. A rollout
-estimate of the true on-net win-prob is the strongest reasonable root evaluator
-on a frozen net, so it is a faithful UPPER BOUND on root-decision headroom — if
-even it cannot beat PUCT-root, no decision-rule change (Gumbel included) will,
-and STAGE-B is NO-GO. The oracle is INTENTIONALLY given a strong (rollout)
-evaluator; the matched-total-sim-budget invariant governs the *real* search A/Bs
-(LCB, and the future Gumbel-vs-PUCT bake-off), not this ceiling probe.
+modal sub-action per legal type) and scores each by ``rollouts`` Monte-Carlo
+playouts to terminal under the frozen v8 net on both seats (the fresh-seeded
+``StackedDice`` open-loop determinization used by ``probe_root_headroom``). It
+picks ``argmax`` estimated win-prob.
+
+**Resolution (why the argmax is trustworthy).** The quantity the argmax depends
+on is the PAIRWISE difference ``q(a) − q(b)`` between candidate root moves, and
+the kill-probe must resolve edges of ~2pp/move (a +15-Elo headroom is only
+~2pp/move of decision quality). Scoring each candidate on INDEPENDENT rollout
+seeds gives a per-candidate win-prob SE of ``sqrt(p(1−p)/n) ≈ ±10pp`` at n=24 —
+coarser than the signal, so the argmax would be dominated by rollout noise (and
+winner's-curse would inflate whichever candidate got lucky draws), making the
+oracle a NOISY, not near-perfect, chooser. The fix is **common random numbers
+(CRN)**: every candidate's k-th rollout shares ONE seed, so the shared dice bag
+and opponent line cancel in the difference, collapsing its SE to
+``sqrt(2·p(1−p)(1−ρ)/n)`` where ρ = corr(win_a, win_b) is high (~0.8–0.95) for
+near-tied root moves in the same position. At ρ≈0.9, n=64 that is ~±2.8pp on the
+difference — fine enough to resolve the ~2pp/move signal. So with CRN + a
+rollout budget of ~64 the argmax is a faithful upper bound on root-decision
+headroom: if even it cannot beat PUCT-root, no decision-rule change (Gumbel
+included) will, and STAGE-B is NO-GO. The oracle is INTENTIONALLY given a strong
+(rollout) evaluator; the matched-total-sim-budget invariant governs the *real*
+search A/Bs (LCB, and the future Gumbel-vs-PUCT bake-off), not this ceiling
+probe.
 
 Verdict (pre-registered GO rule, FR-004 — DO NOT ALTER)
 -------------------------------------------------------
@@ -37,7 +51,7 @@ Usage (smoke — proves the readout is well-formed)::
 
 Usage (full — run by the human)::
 
-    python scripts/dev/probe_oracle_sprt.py --rollouts 24 --sims 100 --max-pairs 400
+    python scripts/dev/probe_oracle_sprt.py --rollouts 64 --sims 100 --max-pairs 400
 """
 
 from __future__ import annotations
@@ -133,20 +147,30 @@ class OracleRootAgent:
         candidates = list(visit_counts.keys())
 
         self._call += 1
+        # COMMON RANDOM NUMBERS across candidates (the resolution fix): the k-th
+        # rollout of EVERY candidate shares one seed, so the shared dice bag +
+        # opponent line cancel in the pairwise difference q(a)-q(b) the argmax
+        # depends on. This collapses the difference SE from ~±14pp (independent)
+        # to ~±3pp at n=64, letting the oracle resolve the ~2pp/move edge it must
+        # detect. The seed depends only on (position call, rollout index k), NOT
+        # the candidate index, so it is identical across candidates.
+        common_seeds = [
+            (self.seed * 7919 + self._call * 104_729 + k * _SEED_STRIDE) & 0x7FFF_FFFF
+            for k in range(self.rollouts)
+        ]
         best_action = puct_action
         best_q = -1.0
-        for ci, action in enumerate(candidates):
-            cand_seed = (self.seed * 7919 + self._call * 104_729 + ci * _SEED_STRIDE) & 0x7FFF_FFFF
+        for action in candidates:
             base = clone_env(env, self._opponent)
             base.step(np.asarray(action, dtype=np.int64))
             wins = 0.0
-            for k in range(self.rollouts):
+            for seed_k in common_seeds:
                 wins += _rollout_win(
                     base,
                     self.policy,
                     self._opponent,
                     device=self.device,
-                    seed=(cand_seed + k) & 0x7FFF_FFFF,
+                    seed=seed_k,
                 )
             base.close()
             q = wins / max(1, self.rollouts)
@@ -338,6 +362,7 @@ def run(
             "reference": "frozen v8 (raw, no search)",
             "sims_per_move": sims,
             "rollouts_per_candidate": rollouts,
+            "rollout_pairing": "common-random-numbers (shared per-rollout seed across candidates)",
             "sprt": {
                 "elo0": 0.0,
                 "elo1": 10.0,
@@ -383,7 +408,13 @@ def run(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sims", type=int, default=100, help="PUCT sim budget/move")
-    parser.add_argument("--rollouts", type=int, default=24, help="MC rollouts/candidate (oracle)")
+    parser.add_argument(
+        "--rollouts",
+        type=int,
+        default=64,
+        help="MC rollouts/candidate (oracle); CRN-paired across candidates for ~±3pp "
+        "difference resolution at 64 (default 64)",
+    )
     parser.add_argument("--max-pairs", type=int, default=400, help="SPRT pair cap")
     parser.add_argument("--collapse-games", type=int, default=50, help="games: collapse/Spearman")
     parser.add_argument("--seed", type=int, default=0)

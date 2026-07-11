@@ -72,6 +72,44 @@ def test_oracle_choose_action_preserves_global_rng() -> None:
     assert before[2] == py_after, "oracle perturbed the stdlib RNG stream"
 
 
+def test_oracle_scores_candidates_on_common_random_numbers(monkeypatch: Any) -> None:
+    # The resolution fix (BLOCKER): the oracle must score every candidate on the
+    # SAME per-rollout seeds (common random numbers) so the shared dice/opponent
+    # randomness cancels in the pairwise q(a)-q(b) the argmax depends on. We stub
+    # _rollout_win to record its seeds; candidates are processed sequentially, each
+    # doing `rollouts` calls, so the seed stream must tile: chunk it into groups of
+    # `rollouts` and every group must be identical across candidates.
+    policy = make_policy()
+    device = torch.device("cpu")
+    env = CatanEnv(opponent_type="heuristic", max_turns=60)
+    env.reset(seed=7)
+    assert drive_to_decision(env)
+
+    rollouts = 3
+    oracle = probe_oracle_sprt.OracleRootAgent(
+        policy, device=device, sims=4, rollouts=rollouts, seed=0
+    )
+
+    seen_seeds: list[int] = []
+
+    def _fake_rollout_win(*_args: Any, seed: int, **_kwargs: Any) -> float:
+        seen_seeds.append(int(seed))
+        return 0.0
+
+    monkeypatch.setattr(probe_oracle_sprt, "_rollout_win", _fake_rollout_win)
+
+    oracle.choose_action(env)
+
+    n_candidates = len(oracle.last_diagnostics.get("visit_counts", {}))
+    assert n_candidates >= 2, "need >1 candidate to test CRN pairing"
+    assert len(seen_seeds) == n_candidates * rollouts, (n_candidates, rollouts, len(seen_seeds))
+    chunks = [seen_seeds[i * rollouts : (i + 1) * rollouts] for i in range(n_candidates)]
+    for c in chunks[1:]:
+        assert c == chunks[0], f"candidate rollout seeds not paired (CRN broken): {chunks}"
+    # And the shared seeds within a chunk are distinct (rollouts are not identical).
+    assert len(set(chunks[0])) == rollouts, "per-rollout seeds must differ within a candidate"
+
+
 class _RecordingOpponent:
     """Minimal SnapshotOpponent stub that records every ``reset_rng`` seed."""
 
