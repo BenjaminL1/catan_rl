@@ -109,13 +109,15 @@ estimate is **exactly 0** and there is **zero evidence of the demonstrated > +15
 requires** — so the headroom clause is not satisfied.
 
 **Sanity check that the smoke was underpower, not a real negative ceiling.** The discarded smoke
-(`008a_verdict_smoke.json`, rollouts=6/20 games) reported headroom **−381.7** — physically
-impossible for a genuine near-perfect chooser (headroom ≥ 0 by construction): its 6-rollout oracle
-was pure variance and picked *worse* moves than PUCT (mean pair 0.5). Raising the oracle to
-rollouts=24 moved headroom from **−381.7 → −0.0**, i.e. toward ≥ 0 exactly as a strengthening
-oracle must. This **confirms the smoke was underpower** and that the true root headroom is ≈ 0, not
-negative and not > +15. (Reproducibility: the seed-0 pair scored an identical 1.0 / elo −0.0 on two
-independent launches.)
+(`008a_verdict_smoke.json`, rollouts=6/20 games) reported headroom **−381.7** — impossible for a
+*genuinely* near-perfect chooser (headroom ≥ 0 in the strong-oracle limit; a finite-rollout oracle
+can fall below that floor, which is exactly what happened): its 6-rollout oracle was pure variance
+and picked *worse* moves than PUCT (mean pair 0.5). Raising the oracle to rollouts=24 moved
+headroom from **−381.7 → −0.0**, toward the strong-oracle floor exactly as a strengthening oracle
+should — **consistent with underpower, not a real negative ceiling**. The 4-game sample cannot pin
+the true headroom precisely; what it establishes is **zero evidence of the > +15 Elo the
+pre-registered GO rule demands**, and the rule places the burden of proof on GO. (Reproducibility:
+the seed-0 pair scored an identical 1.0 / elo −0.0 on two independent launches.)
 
 **Headroom clause:** −0.0 Elo **is not > +15 Elo → FAIL → NO-GO.**
 
