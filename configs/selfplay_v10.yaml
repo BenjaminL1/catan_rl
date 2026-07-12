@@ -1,0 +1,113 @@
+# v10 — chain the promotion ratchet on from v9 (the new champion).
+#
+# LINEAGE: v8_chain_resume warm+anchored on v8 and CHAINED 2 promotions (updates 150, 425), producing
+# ckpt_424 = v9_chain_u424: beats v8 head-to-head 0.643 CI[0.604,0.681] (n=600) and out-ranks the whole
+# ladder (Elo 1219.8 > ckpt_524 1193 > v8 1161), beating BOTH un-gamed anchors by more than v8 does
+# (+37.3 Elo vs v6_u1399, +30.4 vs v7_u399). The hardened ladder gate WITHHELD on clause-1 only because
+# the min-anchor-delta bootstrap CI [-5.3,+51.5] straddles 0 at n=600 (underpowered, NOT proven flat) —
+# user CROWNED v9 on the point evidence. So this run's promotions are measured against a champion whose
+# global edge is point-positive but not yet CI-confirmed; the completion gate below is what settles it.
+#
+# WHY ckpt_424 AND NOT the final ckpt_609: 424 is the ratchet-proven, stronger checkpoint (0.643 vs v8);
+# 609 came after and had DRIFTED DOWN (0.610 vs v8; its anchor_wr_window ended ~0.507, i.e. tied with its
+# own u425 anchor and falling). Seeding from the frontier's best, not its last.
+#
+# RECIPE: identical to the run that just worked (bar 0.63 / sustained 2 / check every 25 / min_games 150 /
+# cooldown 75) — the windowed promotion gate (audit 2026-07: N_eff = min_games, replacing the noisy
+# alpha=0.1 EMA at N_eff~19) is what made those 2 promotions trustworthy. Do not retune it here; the only
+# deliberate change is warm+anchor on v9 and a LONGER budget so more promotions can chain in one run.
+#
+# GATE (at completion, gate-first — do NOT bank a v11 before this returns):
+#   scripts/ladder_gate.py --candidate-ckpt <best> --baseline v9_chain_u424 --nps 300
+#   Promote only if clause-1 (min over un-gamed anchors {v6_u1399, v7_u399} of the per-anchor Elo delta,
+#   bootstrap CI LB > 0) passes. A candidate that only COUNTERS v9 head-to-head fails by design.
+# KILL RULE (the user's "train as long as it keeps getting stronger"): if the ratchet fires 0 promotions
+#   for ~300 consecutive updates AND anchor_wr_window sits flat <= ~0.55, the lever has stopped
+#   compounding -> kill and pivot (this is exactly how v8_cont ended: 0 promotions, a lateral counter).
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic
+  engine_backend: python
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.03
+
+optimizer:
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  # NOTE (audit 2026-07): pre-fix runs silently trained at torch-default eps=1e-8 — the v8/v9 lineage is
+  # de facto 1e-8. From the fix onward this value is honored (fresh runs AND re-stamped on resume).
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 0
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 16          # 16 x ~551MB ~= 8.8GB; 400 updates of retention so a promotion-era best
+                           # cannot be pruned before the completion gate reads it. Disk: 23GB free.
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 40
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 0.25
+  snapshot_weight: 0.5
+  anchor_weight: 0.25
+  anchor_checkpoint_path: runs/anchors/v9_chain_u424.pt   # anchor on v9 -> every promotion is real progress PAST v9
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63          # the working bar — do not raise (0.85 froze the v7 anchor)
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 25
+  auto_reanchor_min_games: 150                   # windowed gate: N_eff = 150 (not the old EMA's ~19)
+  auto_reanchor_cooldown_updates: 75             # short cooldown so promotions CHAIN within the run
+
+# Warm-start the learner from v9 itself (fresh optimizer; the league snapshot pool rebuilds from here).
+init_policy_checkpoint: runs/anchors/v9_chain_u424.pt
+
+total_steps: 29491200            # 900 rollouts x 128 x 256 (~29.5M); ~1.5x the last run so several more
+                                 # promotions can chain (~34h at ~2.3 min/update). Kill early per KILL RULE.
+seed: 9
+device: auto
+torch_compile: false
+run_name: selfplay_v10
+output_dir: runs/train
