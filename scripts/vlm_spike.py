@@ -408,6 +408,7 @@ def snap_and_validate(
     setup_events: Sequence[LogEvent] | None = None,
     openings_desert_hex: int | None = None,
     ts: int = 0,
+    dice_values_readable: bool = True,
 ) -> SpikeResult:
     """End-to-end: SNAP the localized adjacency -> ORDER from the log -> VALIDATE
     through the existing fail-closed gate. The VLM supplied ONLY the perception; the
@@ -428,6 +429,7 @@ def snap_and_validate(
         opening_result=opening_result,
         draft_order=draft_order,
         dice_log=dice_log,
+        dice_values_readable=dice_values_readable,
         winner=winner,
         resolution=resolution,
         residual_px=board.residual_px,
@@ -642,6 +644,13 @@ def prepare_frames_from_video(
             "player_colors": dict(ctx.player_colors),
             "draft_order": list(harvest._draft_order(segment.events, ctx.handles)),
             "dice_log": list(harvest._dice_log(segment.events)),
+            # Colonist renders the rolled dice as FACE GLYPHS, so on real footage the
+            # roll VALUES never OCR and dice_log is empty even though rolls happened.
+            # Record that honestly (an empty log + this False is an "unread", not a
+            # fabricated luck series, and is what lets a completed game still validate).
+            "dice_values_readable": harvest._dice_values_readable(
+                segment.events, harvest._dice_log(segment.events)
+            ),
             "granted_resources": granted_resources,
             "winner": segment.winner,
             "log_setup_sequence": [
@@ -712,6 +721,7 @@ def _rejected_spike(
         opening_result=OpeningResult(None, reason),
         draft_order=tuple(meta["draft_order"]),
         dice_log=tuple(int(d) for d in meta.get("dice_log", [])),
+        dice_values_readable=bool(meta.get("dice_values_readable", True)),
         winner=meta.get("winner") if meta.get("winner") in players.values() else None,
         resolution=int(meta["resolution"]),
         residual_px=board.residual_px,
@@ -770,6 +780,7 @@ def localize_game(
         opponent_strength=strength,
         draft_order=tuple(meta["draft_order"]),
         dice_log=dice_log,
+        dice_values_readable=bool(meta.get("dice_values_readable", True)),
         winner=winner if winner in players.values() else None,
         granted_by_player=granted,
         resolution=int(meta["resolution"]),

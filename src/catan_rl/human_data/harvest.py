@@ -210,6 +210,11 @@ class GameInputs:
     dice_log: tuple[int, ...]
     resolution: int
     ts: int
+    #: False when the game HAS roll events but none of their values OCR'd (Colonist
+    #: renders the dice as face glyphs) — an honest "unread", never a fabricated luck
+    #: series. See :func:`_dice_values_readable`. Defaults True so fixture/test paths
+    #: (whose logs carry textual roll values) keep the strict parse-failure guard.
+    dice_values_readable: bool = True
 
 
 # --- run-level telemetry -----------------------------------------------------
@@ -331,6 +336,26 @@ def _dice_log(events: Sequence[LogEvent]) -> tuple[int, ...]:
     return tuple(rolls)
 
 
+def _dice_values_readable(events: Sequence[LogEvent], dice_log: tuple[int, ...]) -> bool:
+    """Whether this game's roll VALUES were readable at all (§5.4 luck covariate).
+
+    Colonist renders the rolled dice as FACE GLYPHS: the line OCRs as
+    ``"ThePhantom rolled"`` with no number, so :func:`_dice_log` recovers nothing on
+    real footage even though the ``roll`` EVENTS parse fine. Distinguishing the two
+    cases matters, because :meth:`GameRecord.validate` rejects an empty ``dice_log``
+    on a completed game as a parse failure:
+
+    * roll events exist but NO value parsed ⇒ the values are icon-rendered and simply
+      unread — an honest ``False`` (empty ``dice_log`` permitted, luck covariate
+      unavailable), NOT a fabricated luck series;
+    * no roll events at all ⇒ nothing was there to read, so this stays ``True`` and a
+      winner-set game with an empty log still trips the parse-failure guard.
+    """
+    if dice_log:
+        return True
+    return not any(event.kind == "roll" for event in events)
+
+
 def _placeholder_board() -> BoardRead:
     """A legal placeholder :class:`BoardRead` for a board-less Stage-2 reject."""
     import numpy as np
@@ -353,13 +378,15 @@ def _reject_inputs(events: Sequence[LogEvent], handles: tuple[str, str], reason:
     ``cross_check`` check-4 carries ``reason`` through from the ``openings=None``
     :class:`OpeningResult` — a loadable §5.6 audit row with the true CV cause.
     """
+    dice_log = _dice_log(events)
     return GameInputs(
         board=_placeholder_board(),
         openings_desert_hex=_PLACEHOLDER_DESERT_HEX,
         opening_result=OpeningResult(openings=None, rejection_reason=reason),
         granted_by_player={},
         draft_order=_draft_order(events, handles),
-        dice_log=_dice_log(events),
+        dice_log=dice_log,
+        dice_values_readable=_dice_values_readable(events, dice_log),
         resolution=MIN_RESOLUTION,
         ts=0,
     )
@@ -484,13 +511,15 @@ def _read_game_inputs(
     granted: dict[str, Counter[str] | None] = {}
     for handle in ctx.handles:
         granted[handle] = _consensus_grant(handle, gf.grant_frames)
+    dice_log = _dice_log(segment_events)
     return GameInputs(
         board=board,
         openings_desert_hex=board.desert_hex,
         opening_result=opening_result,
         granted_by_player=granted,
         draft_order=_draft_order(segment_events, ctx.handles),
-        dice_log=_dice_log(segment_events),
+        dice_log=dice_log,
+        dice_values_readable=_dice_values_readable(segment_events, dice_log),
         resolution=gf.post_setup_frame.native_resolution,
         ts=int(gf.post_setup_frame.ts),
     )
@@ -561,6 +590,7 @@ def parse_video(
             opening_result=gi.opening_result,
             draft_order=gi.draft_order,
             dice_log=gi.dice_log,
+            dice_values_readable=gi.dice_values_readable,
             winner=segment.winner,
             resolution=gi.resolution,
             residual_px=gi.board.residual_px,

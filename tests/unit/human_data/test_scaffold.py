@@ -800,6 +800,32 @@ def test_validate_allows_empty_dice_log_on_cutoff_game() -> None:
     assert GameRecord.from_dict(payload).dice_log == ()
 
 
+def test_validate_allows_empty_dice_log_when_dice_values_unreadable() -> None:
+    # Colonist renders the rolled dice as FACE GLYPHS, so "ThePhantom rolled" OCRs
+    # with no number and the roll VALUES are unrecoverable from text on EVERY real
+    # video game. Such a record carries dice_values_readable=False + an empty
+    # dice_log: an honest "unread", not a fabricated luck series. Without this the
+    # contract rejected every completed real-video game outright.
+    payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
+    payload["dice_log"] = []
+    payload["provenance"] = {**payload["provenance"], "dice_values_readable": False}
+    rec = GameRecord.from_dict(payload)
+    assert rec.dice_log == ()
+    assert rec.winner == "ThePhantom"
+
+
+def test_validate_still_rejects_empty_dice_log_when_values_were_readable() -> None:
+    # The parse-failure guard must SURVIVE the relaxation: a completed game whose dice
+    # were readable (flag True / absent) but whose log is empty is still a parse bug.
+    payload = _sample_record().to_dict()
+    payload["winner"] = "ThePhantom"
+    payload["dice_log"] = []
+    payload["provenance"] = {**payload["provenance"], "dice_values_readable": True}
+    with pytest.raises(ValueError, match="dice_log is empty"):
+        GameRecord.from_dict(payload)
+
+
 # --- free anchor: board provenance must match the board's own desert --------
 
 

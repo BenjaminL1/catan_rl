@@ -209,6 +209,18 @@ PROVENANCE_OPENINGS_DESERT = "openings_desert_hex"
 #: record), so pre-contract records stay loadable and default to seed-only.
 PROVENANCE_PLACEMENT_ORDER_ESTABLISHED = "placement_order_established"
 
+#: Provenance flag: whether the per-roll DICE VALUES were readable for this game.
+#: Colonist renders the rolled dice as FACE GLYPHS, not text — the log line OCRs as
+#: ``"ThePhantom rolled"`` with no number — so on real video footage the roll VALUES
+#: are unreadable even though the roll EVENTS parse fine. A game whose ``roll`` events
+#: exist but whose values never OCR'd carries ``False`` here and an empty ``dice_log``.
+#: This is an honest "unread", NOT a fabricated luck series, and it is the ONLY case in
+#: which :meth:`GameRecord.validate` permits an empty ``dice_log`` on a completed
+#: (winner-set) game — a completed game with NO roll events at all is still a parse
+#: failure. Consequence: the §5.4 dice-luck covariate is unavailable for such games
+#: (reading it back needs dice-face glyph classification, not OCR).
+PROVENANCE_DICE_VALUES_READABLE = "dice_values_readable"
+
 #: ``episode_source`` values. ``"natural"`` = a real parsed game (scoreboard
 #: + eval/anchor eligible). ``"human_seed"`` = an opening used to seed exploration
 #: (never re-imports the human cap; eval/anchor must filter these out).
@@ -707,13 +719,19 @@ class GameRecord:
                     f"dice_log[{i}] {roll!r} not a legal 2d6 roll in "
                     f"{sorted(VALID_DICE_VALUES)} (2..12 inclusive; the 7 is legal)"
                 )
-        # An empty dice_log is permitted ONLY for a non-finished game (resign /
-        # video cutoff, winner is None): a completed game (winner set) must have
-        # rolled, so a zero-length log there is a parse failure, not a short game.
-        if not self.dice_log and self.winner is not None:
+        # An empty dice_log is permitted for a non-finished game (resign / video
+        # cutoff, winner is None), OR when the roll VALUES were provably unreadable
+        # (:data:`PROVENANCE_DICE_VALUES_READABLE` is False — Colonist renders the
+        # dice as FACE GLYPHS, so "ThePhantom rolled" OCRs with no number and the
+        # values cannot be recovered from text on ANY real-video game). Otherwise a
+        # completed game (winner set) must have rolled, so a zero-length log there is
+        # a parse failure, not a short game.
+        dice_unreadable = self.provenance.get(PROVENANCE_DICE_VALUES_READABLE) is False
+        if not self.dice_log and self.winner is not None and not dice_unreadable:
             raise ValueError(
                 "dice_log is empty but winner is set — a completed game must carry its rolls "
-                "(an empty log is only permitted on a resign / cutoff game, winner=None)"
+                "(an empty log is only permitted on a resign / cutoff game, winner=None, or "
+                f"when {PROVENANCE_DICE_VALUES_READABLE!r} is False — icon-rendered dice)"
             )
 
         # --- cross-field truth table (brief §5.6 / §5.7) ---------------------

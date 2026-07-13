@@ -54,6 +54,7 @@ from catan_rl.human_data.orientation import (
 )
 from catan_rl.human_data.record import (
     PROVENANCE_BOARD_DESERT,
+    PROVENANCE_DICE_VALUES_READABLE,
     PROVENANCE_OPENINGS_DESERT,
     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED,
     VALID_DICE_VALUES,
@@ -218,6 +219,7 @@ def cross_check(
     topology: Topology,
     granted_by_player: dict[str, Counter[str] | None] | None = None,
     ts: int = 0,
+    dice_values_readable: bool = True,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
     min_resolution: int = MIN_RESOLUTION,
 ) -> CrossCheckResult:
@@ -351,6 +353,7 @@ def cross_check(
                     PROVENANCE_BOARD_DESERT: board.desert_hex,
                     PROVENANCE_OPENINGS_DESERT: openings_desert_hex,
                     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: order_established,
+                    PROVENANCE_DICE_VALUES_READABLE: dice_values_readable,
                 },
                 rejection_reason=None,
             )
@@ -431,6 +434,7 @@ def cross_check(
                 # A rejected record is never scoreboard/seed-eligible; its openings
                 # are frame-order (or a placeholder), so order is not established.
                 PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False,
+                PROVENANCE_DICE_VALUES_READABLE: dice_values_readable,
             },
             rejection_reason=reason,
         )
