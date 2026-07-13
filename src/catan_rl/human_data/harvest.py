@@ -629,6 +629,49 @@ def _extract_context(
     )
 
 
+#: How many of a game's own in-window frames to feed the FALLBACK board read. Each
+#: `read_board` costs a token detect + RANSAC + 18 number OCRs, and the dense pass can
+#: leave ~100 grant frames, so the pool is capped: >=2 agreeing reads is all the
+#: stability rule needs, and a handful gives it room to find them.
+_BOARD_FALLBACK_POOL = 5
+
+
+def _stable_board_for_game(gf: GameFrames) -> BoardRead | None:
+    """The cross-frame-stable board for ONE game, with an in-window fallback pool.
+
+    The board is normally read from ``setup_frames`` (= ``bucket[:len//2]``). For any game
+    after a video's FIRST, those earliest frames are routinely the PREVIOUS game's end
+    screen / lobby, so the read fails even though the game's own frames are perfectly
+    readable — MEASURED: ``0EtcbG16kHA g1`` and ``9Sm86ml04aI g3`` both had their
+    post-setup AND baseline frames reading cleanly, yet both were thrown away as
+    ``board_unreadable``. That was 2 of the 6 board losses in the 8-video sweep.
+
+    So: try ``setup_frames`` first (today's behaviour, byte-identical when it works), and
+    only on failure retry over frames GUARANTEED to be inside this game's window — the
+    post-setup frame (bounded by this game's own first build) and the grant frames (they
+    carry this game's grant lines).
+
+    ``empty_baseline`` is deliberately NOT in the pool: it is ``bucket[0]``, which can be
+    the previous game's frame, and two agreeing frames from the WRONG game would be a
+    silent cross-game board weld — the one failure no downstream firewall can catch.
+
+    :func:`read_board_stable`'s rule is untouched (>= 2 accepted frames, ALL byte-identical
+    or reject), so the fail-closed §5.2 stability guarantee is fully preserved; this only
+    changes WHICH frames it is offered.
+    """
+    board = read_board_stable([f.frame for f in gf.setup_frames])
+    if board is not None:
+        return board
+
+    pool: list[Any] = []
+    if gf.post_setup_frame is not None:
+        pool.append(gf.post_setup_frame.frame)
+    pool.extend(f.frame for f in gf.grant_frames[:_BOARD_FALLBACK_POOL])
+    if len(pool) < 2:
+        return None
+    return read_board_stable(pool[:_BOARD_FALLBACK_POOL])
+
+
 def _read_game_inputs(
     video_id: str,
     segment_index: int,
@@ -653,7 +696,7 @@ def _read_game_inputs(
         return _reject_inputs(segment_events, ctx.handles, FRAMES_UNROUTED_REASON)
     if gf.post_setup_frame is None:  # no honest 8-pieces-down frame exists in the window
         return _reject_inputs(segment_events, ctx.handles, POST_SETUP_UNRESOLVED_REASON)
-    board = read_board_stable([f.frame for f in gf.setup_frames])
+    board = _stable_board_for_game(gf)
     if board is None:
         return _reject_inputs(segment_events, ctx.handles, BOARD_UNREADABLE_REASON)
     opening_result = detect_openings_result(

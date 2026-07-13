@@ -753,3 +753,67 @@ def test_extract_context_uses_precomputed_lines_and_does_not_reocr(monkeypatch) 
     lines = [["a placed a"], ["a received starting resources"]]
     harvest._extract_context("vid", frames, per_frame_lines=lines)
     assert called["n"] == 0, "re-OCR'd frames whose lines were already computed"
+
+
+# --- board read falls back to the game's OWN in-window frames -------------------
+#
+# The board is read from `setup_frames` = bucket[:len//2]. For any game after a video's
+# first, those earliest frames are routinely the PREVIOUS game's end screen / lobby, so
+# `read_board_stable` never sees a board even though the game's own frames read fine
+# (MEASURED: 0EtcbG16kHA g1 and 9Sm86ml04aI g3 both had post_setup AND baseline reading
+# cleanly, yet the game still failed `board_unreadable`).
+#
+# The fallback pool deliberately EXCLUDES empty_baseline (= bucket[0], which can be the
+# previous game's frame — a cross-game contamination risk) and uses only frames
+# guaranteed inside THIS game's window: the post-setup frame (bounded by this game's own
+# first build) and the grant frames (carry this game's grant lines). The >=2-agreeing
+# byte-identical stability rule is UNCHANGED, so fail-closed §5.2 semantics hold.
+
+
+def test_stable_board_falls_back_to_in_window_frames(monkeypatch) -> None:
+    calls: list[int] = []
+    good = _board_read()
+
+    def fake_stable(frames, **kw):
+        calls.append(len(frames))
+        return None if len(calls) == 1 else good  # setup_frames fail, fallback succeeds
+
+    monkeypatch.setattr(harvest, "read_board_stable", fake_stable)
+    gf = harvest.GameFrames(
+        setup_frames=(_decoded_frame(0.0), _decoded_frame(4.0)),
+        post_setup_frame=_decoded_frame(60.0),
+        empty_baseline=np.zeros((1080, 1920, 3), dtype=np.uint8),
+        grant_frames=(_decoded_frame(50.0), _decoded_frame(51.0)),
+    )
+    assert harvest._stable_board_for_game(gf) is good
+    assert len(calls) == 2, "the fallback pool was never tried"
+
+
+def test_stable_board_prefers_setup_frames_and_does_not_fall_back(monkeypatch) -> None:
+    good = _board_read()
+    calls: list[int] = []
+
+    def fake_stable(frames, **kw):
+        calls.append(len(frames))
+        return good
+
+    monkeypatch.setattr(harvest, "read_board_stable", fake_stable)
+    gf = harvest.GameFrames(
+        setup_frames=(_decoded_frame(0.0), _decoded_frame(4.0)),
+        post_setup_frame=_decoded_frame(60.0),
+        empty_baseline=np.zeros((1080, 1920, 3), dtype=np.uint8),
+        grant_frames=(_decoded_frame(50.0),),
+    )
+    assert harvest._stable_board_for_game(gf) is good
+    assert calls == [2], "setup_frames must stay the first (and only) try when they work"
+
+
+def test_stable_board_returns_none_when_every_pool_fails(monkeypatch) -> None:
+    monkeypatch.setattr(harvest, "read_board_stable", lambda frames, **kw: None)
+    gf = harvest.GameFrames(
+        setup_frames=(_decoded_frame(0.0), _decoded_frame(4.0)),
+        post_setup_frame=_decoded_frame(60.0),
+        empty_baseline=np.zeros((1080, 1920, 3), dtype=np.uint8),
+        grant_frames=(_decoded_frame(50.0),),
+    )
+    assert harvest._stable_board_for_game(gf) is None  # still board_unreadable, fail closed

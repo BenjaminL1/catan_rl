@@ -409,3 +409,56 @@ def test_read_board_stable_diag_list_records_one_entry_per_frame() -> None:
     assert read_board_stable([blank, blank.copy()], diag_list=diags) is None
     assert len(diags) == 2
     assert all(d["fail"] == "token_count" for d in diags)
+
+
+# --- off-board token outlier trim (the `board_unreadable` root cause) ------------
+#
+# MEASURED over all 34 saved frames of the 8-video sweep: EVERY real board token sits
+# at <= 5.40 token-diameters from the median token centroid (range 5.30-5.40), while
+# the false disks — the on-screen score display's "0" digit in the top-left HUD, which
+# the disk detector mistakes for a number token — sit at 10.16-12.96 diameters. Total
+# separation, so a cut at 8.0 diameters cannot touch a real token.
+#
+# The false disk broke boards TWO ways, and both were counted as `board_unreadable`:
+#   * 19 tokens -> trips the 16-18 count gate outright (9Sm86ml04aI g2/g5/g6);
+#   * 17-18 tokens (the false one replacing an occluded real one) -> PASSES the count
+#     gate and then POISONS the RANSAC lattice fit -> residual 33-67px (g4).
+# Scale-invariant by construction: the board's own median token diameter sets the unit,
+# so it holds at any resolution. Additive-accepting: a no-op on every frame that reads
+# today (none has a token beyond 5.40 diameters).
+
+
+def test_trim_token_outliers_drops_the_off_board_score_digit() -> None:
+    from catan_rl.human_data.board_cv import _trim_token_outliers
+
+    # 18 real tokens on a tight cloud (~5 diameters) + 1 far HUD digit (~12 diameters)
+    diam = 60.0
+    real = [(700.0 + 80 * (i % 5), 500.0 + 80 * (i // 5), diam) for i in range(18)]
+    false_disk = (137.0, 133.0, 66.0)  # the "0" of the 0-0 score, top-left
+    kept, dropped = _trim_token_outliers([*real, false_disk])
+    assert dropped == 1
+    assert len(kept) == 18
+    assert false_disk not in kept
+
+
+def test_trim_token_outliers_is_a_noop_on_a_clean_board() -> None:
+    from catan_rl.human_data.board_cv import _trim_token_outliers
+
+    diam = 60.0
+    real = [(700.0 + 80 * (i % 5), 500.0 + 80 * (i // 5), diam) for i in range(18)]
+    kept, dropped = _trim_token_outliers(real)
+    assert dropped == 0
+    assert kept == real  # byte-identical: every currently-accepted frame is unchanged
+
+
+def test_trim_token_outliers_refuses_to_drop_too_many() -> None:
+    from catan_rl.human_data.board_cv import MAX_TOKEN_OUTLIERS, _trim_token_outliers
+
+    diam = 60.0
+    real = [(700.0 + 80 * (i % 5), 500.0 + 80 * (i // 5), diam) for i in range(18)]
+    far = [(100.0 + 10 * i, 100.0, diam) for i in range(MAX_TOKEN_OUTLIERS + 2)]
+    kept, dropped = _trim_token_outliers([*real, *far])
+    # more outliers than the cap means the frame is genuinely wrong — trim NOTHING and
+    # let the unchanged count gate reject it (fail closed, never salvage a bad frame)
+    assert dropped == 0
+    assert len(kept) == len(real) + len(far)

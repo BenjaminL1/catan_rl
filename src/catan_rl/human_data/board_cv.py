@@ -556,6 +556,56 @@ def derive_screen_anchors(
 # ------------------------------------------------------------------- the reader
 
 
+#: Max distance (in TOKEN DIAMETERS, from the median token centroid) at which a detected
+#: disk can still be a real board number-token. MEASURED over all 34 saved frames of the
+#: 8-video sweep: every real token sits at 5.30-5.40 diameters; the false disks — the
+#: on-screen score display's "0" digit in the top-left HUD, which the disk detector reads
+#: as a token — sit at 10.16-12.96. The cut at 8.0 lies in that empty gap with ~48%
+#: margin above the real max, so it can never drop a real token. Scale-invariant: the
+#: board's own median token diameter is the unit, so it holds at any resolution.
+MAX_TOKEN_RADIUS_DIAM = 8.0
+
+#: At most this many outliers may be trimmed. More than a couple of off-board disks means
+#: the frame is genuinely wrong (a menu, an overlay, a different screen) — trim NOTHING
+#: and let the unchanged 16-18 count gate reject it. Fail closed; never salvage a bad frame.
+MAX_TOKEN_OUTLIERS = 3
+
+
+def _trim_token_outliers(
+    tokens: list[tuple[float, float, float]],
+) -> tuple[list[tuple[float, float, float]], int]:
+    """Drop detected disks that are too far from the token cloud to be board tokens.
+
+    The number-token detector also fires on the HUD's score digits (the "0" of a ``0-0``
+    scoreboard is a white-on-dark rounded blob). That single false disk broke boards TWO
+    ways, both surfacing as ``board_unreadable``:
+
+    * **19 tokens** -> trips :func:`read_board`'s 16-18 count gate outright;
+    * **17-18 tokens** (the false disk standing in for an occluded real one) -> PASSES the
+      count gate and then POISONS the RANSAC lattice fit, blowing the affine residual to
+      33-67 px against a 5 px budget.
+
+    Both are instrument artifacts, not unreadable boards. The centroid is the coordinate
+    MEDIAN (robust to the very outliers we are removing) and the scale is the median token
+    diameter, so the rule is resolution-independent. Returns ``(kept, n_dropped)``; a clean
+    frame is returned byte-identically with ``n_dropped == 0``, so every frame that reads
+    today is completely unaffected.
+    """
+    if len(tokens) < 4:
+        return tokens, 0
+    xy = np.array([[x, y] for x, y, _ in tokens], float)
+    diam = float(np.median([d for _, _, d in tokens]))
+    if diam <= 0:
+        return tokens, 0
+    centre = np.median(xy, axis=0)
+    dist = np.linalg.norm(xy - centre, axis=1) / diam
+    keep_mask = dist <= MAX_TOKEN_RADIUS_DIAM
+    n_dropped = int((~keep_mask).sum())
+    if n_dropped == 0 or n_dropped > MAX_TOKEN_OUTLIERS:
+        return tokens, 0  # nothing to do, or too many -> fail closed on the count gate
+    return [t for t, k in zip(tokens, keep_mask, strict=True) if k], n_dropped
+
+
 def _rb_fail(diag: dict[str, Any] | None, reason: str) -> BoardRead | None:
     """Record WHICH fail-closed gate rejected a frame, then reject it (return ``None``).
 
@@ -613,8 +663,13 @@ def read_board(
     # desert (18), tolerating up to two occluded/animating tokens. Fewer than 16
     # (or more than 18) means the board is mid-animation — skip the frame.
     tokens = _detect_tokens(frame_rgb)
+    # Remove off-board false disks (the HUD score digits) BEFORE the count gate — they
+    # both trip that gate at 19 tokens AND poison the lattice fit at 17-18. A clean frame
+    # is untouched (see :func:`_trim_token_outliers`).
+    tokens, n_outliers = _trim_token_outliers(tokens)
     if diag is not None:
         diag["n_tokens"] = len(tokens)
+        diag["outliers_dropped"] = n_outliers
         diag["tokens"] = [(float(x), float(y), float(d)) for x, y, d in tokens]
     if not NUM_HEXES - 3 <= len(tokens) <= NUM_HEXES - 1:
         return _rb_fail(diag, "token_count")

@@ -597,7 +597,6 @@ def prepare_frames_from_video(
     import imageio.v3 as iio
 
     from catan_rl.human_data import harvest
-    from catan_rl.human_data.board_cv import read_board_stable
     from catan_rl.human_data.segment import segment_games
 
     topology = load_topology()
@@ -623,7 +622,9 @@ def prepare_frames_from_video(
             # is exactly the fail-open this pipeline no longer does: skip the game.
             print(f"  {video} g{game_index}: post-setup frame unresolved — skipped")
             continue
-        board = read_board_stable([f.frame for f in gf.setup_frames])
+        # SAME helper the harvest driver uses (setup_frames, then this game's own
+        # in-window frames) so the two paths cannot diverge.
+        board = harvest._stable_board_for_game(gf)
         game_dir = out_root / _game_key(video, game_index)
         game_dir.mkdir(parents=True, exist_ok=True)
         post = game_dir / "post_setup.png"
