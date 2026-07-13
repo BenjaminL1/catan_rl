@@ -1256,10 +1256,15 @@ def _consensus_grant(
             if (r := classify_granted_glyphs(crop, boxes)) is not None
         ]
         diag["classified"] = len(reads)
-        diag["distinct_reads"] = [
-            dict(r) for r in {tuple(sorted(x.items())): x for x in reads}.values()
-        ]
-        diag["fail"] = "reads_disagree" if len(diag["distinct_reads"]) > 1 else "too_few_classified"
+        # COUNTS, not just the distinct set. 45-vs-3 is OCR noise around ONE true
+        # multiset; 25-vs-23 is genuine bimodality that MUST keep failing closed. The
+        # consensus rule cannot be chosen without knowing which — and the current
+        # STRICT-UNANIMITY rule is incoherent at scale: it accepts a 2-of-2 read while
+        # rejecting 45-of-48, which is far stronger evidence. (The dense pass raised the
+        # frame count and exposed this.)
+        tally = Counter(tuple(sorted(r.items())) for r in reads)
+        diag["read_counts"] = [{"read": dict(k), "frames": n} for k, n in tally.most_common()]
+        diag["fail"] = "reads_disagree" if len(tally) > 1 else "too_few_classified"
     return result
 
 
