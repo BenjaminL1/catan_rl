@@ -1239,6 +1239,62 @@ def _dominant_segment(lo: int, hi: int, ranges: list[tuple[int, int]]) -> int | 
     return best
 
 
+#: A DOMINANT grant read may carry the consensus when strict unanimity is not reached but
+#: the dissent is plainly OCR NOISE rather than genuine ambiguity.
+#:
+#: :func:`~catan_rl.human_data.glyph_anchor.consensus_granted_glyphs` requires FULL
+#: agreement. That is incoherent once many frames are sampled: it accepts a 2-of-2 read yet
+#: rejects 47-of-48, which is far stronger evidence. Wiring the dense sampling pass raised
+#: the per-grant frame count from ~2-7 to ~48-99 and turned it into a real yield killer
+#: (5 of 14 games in the 8-video sweep died on disagreeing reads).
+#:
+#: MEASURED (``0EtcbG16kHA`` g1, from the grant diagnostics):
+#:   * ``LevyChevy``  48 reads -> 47 x {BRICK:2,SHEEP:1} vs 1 x (+ORE)  = 47-vs-1 -> NOISE
+#:   * ``ThePhantom``  9 reads ->  6 x {BRICK,WHEAT,WOOD} vs 3 x (+ORE) =  6-vs-3 -> AMBIGUOUS
+#:
+#: A dominant read therefore needs BOTH a real sample AND overwhelming agreement: 47/48 =
+#: 0.979 accepts; 6/9 = 0.667 keeps failing closed (a one-card WHEAT/ORE confusion at that
+#: rate is not evidence). This lives HERE, not in ``glyph_anchor``, on purpose: that module
+#: is SHA-256 fingerprinted and hard-gated on a committed validation artifact
+#: (:func:`~catan_rl.human_data.glyph_anchor.glyph_classifier_fingerprint`), and this rule
+#: does not change a single pixel decision — it only decides how many agreeing
+#: CLASSIFICATIONS are enough. The classifier, and its validation, stay untouched. The
+#: winning multiset still flows through the UNCHANGED settlement-matching anchor, so the
+#: joint-flip firewall is never bypassed.
+DOMINANT_READ_MIN_READS = 5
+DOMINANT_READ_MIN_FRAC = 0.9
+
+
+def _dominant_grant_read(
+    frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]],
+    palette: Any = None,
+) -> Counter[str] | None:
+    """The modal grant multiset when it overwhelmingly dominates; else ``None``.
+
+    The fallback for the (correct, but scale-blind) unanimity rule — see
+    :data:`DOMINANT_READ_MIN_READS`. Fails closed on genuine bimodality.
+    """
+    reads = [
+        r
+        for crop, boxes in frames_boxes
+        if (
+            r := (
+                classify_granted_glyphs(crop, boxes)
+                if palette is None
+                else classify_granted_glyphs(crop, boxes, palette)
+            )
+        )
+        is not None
+    ]
+    if len(reads) < DOMINANT_READ_MIN_READS:
+        return None
+    tally = Counter(tuple(sorted(r.items())) for r in reads)
+    top, top_n = tally.most_common(1)[0]
+    if top_n / len(reads) < DOMINANT_READ_MIN_FRAC:
+        return None  # genuine bimodality — never tie-break a coin flip
+    return Counter(dict(top))
+
+
 def _consensus_grant(
     handle: str,
     grant_frames: tuple[DecodedFrame, ...],
@@ -1290,6 +1346,12 @@ def _consensus_grant(
         return None
 
     result = consensus_granted_glyphs(frames_boxes)
+    if result is None:
+        # Unanimity failed. Accept only an OVERWHELMINGLY dominant read (OCR noise);
+        # genuine bimodality still fails closed. See DOMINANT_READ_MIN_READS.
+        result = _dominant_grant_read(frames_boxes)
+        if result is not None and diag is not None:
+            diag["accepted_by"] = "dominant_read"
     if diag is not None and result is None:
         # >=2 frames had boxes yet consensus still refused: the reads DISAGREED (the
         # unanimity rule, fail-closed by design) or too few classified.

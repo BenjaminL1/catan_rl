@@ -872,3 +872,75 @@ def test_committed_validation_artifact_is_hardened_and_current() -> None:
         assert margins[key]["n"] > 0
         assert margins[key]["min"] is not None
         assert margins[key]["median"] is not None
+
+
+# --- DOMINANT-READ consensus (the dense pass exposed a rule that broke at scale) ---
+#
+# STRICT UNANIMITY over >= 2 reads is incoherent once there are many frames: it ACCEPTS a
+# 2-of-2 read while REJECTING 47-of-48, which is far stronger evidence. Wiring the dense
+# sampling pass raised the frame count from ~2-7 to ~48-99 and turned that into a real
+# yield killer (5 of 14 games in the 8-video sweep died on `reads_disagree`).
+#
+# MEASURED (0EtcbG16kHA g1, from the committed grant diagnostics):
+#   LevyChevy : 48 reads -> {BRICK:2,SHEEP:1} x47  vs  +ORE x1     = 47-vs-1  -> OCR NOISE
+#   ThePhantom:  9 reads -> {BRICK,WHEAT,WOOD} x6  vs  {..,ORE} x3 =  6-vs-3  -> AMBIGUOUS
+#
+# So: keep today's unanimity clause verbatim (additive-accepting) and ADD a dominance
+# clause needing BOTH a real sample (>= DOMINANT_READ_MIN_READS) and overwhelming
+# agreement (>= DOMINANT_READ_MIN_FRAC). 47/48 = 0.979 accepts; 6/9 = 0.667 must still
+# fail closed — a one-card WHEAT/ORE confusion at 67% is not evidence. The accepted
+# multiset still flows through the UNCHANGED settlement-matching anchor, so the joint-flip
+# firewall is never bypassed; this only decides WHICH multiset gets tested.
+
+
+def _reads(spec: dict[str, int]) -> list[tuple[Any, list[tuple[int, int, int, int]]]]:
+    """Frames whose reads follow `spec` = {"BRICK:2,SHEEP:1": n_frames, ...}."""
+    out = []
+    for key, n in spec.items():
+        c = Counter()
+        for part in key.split(","):
+            res, cnt = part.split(":")
+            c[res] = int(cnt)
+        out.extend(_grant_crop(c) for _ in range(n))
+    return out
+
+
+def test_dominant_read_accepts_the_measured_47_vs_1() -> None:
+    from catan_rl.human_data.harvest import _dominant_grant_read
+
+    # The measured LevyChevy case: 47 agree, 1 stray. Unanimity REJECTED this game.
+    frames = _reads({"BRICK:2,SHEEP:1": 47, "BRICK:2,SHEEP:1,ORE:1": 1})
+    assert consensus_granted_glyphs(frames) is None  # unanimity still says no...
+    assert _dominant_grant_read(frames) == Counter({"BRICK": 2, "SHEEP": 1})  # ...noise
+
+
+def test_dominant_read_still_rejects_the_measured_6_vs_3() -> None:
+    from catan_rl.human_data.harvest import _dominant_grant_read
+
+    # The measured ThePhantom case: 6-vs-3 = 67%. A one-card WHEAT/ORE confusion at that
+    # rate is NOT evidence — this MUST keep failing closed.
+    frames = _reads({"BRICK:1,WHEAT:1,WOOD:1": 6, "BRICK:1,ORE:1,WOOD:1": 3})
+    assert _dominant_grant_read(frames) is None
+
+
+def test_unanimity_clause_is_untouched() -> None:
+    # Additive-accepting: everything accepted today is still accepted by unanimity alone.
+    frames = _reads({"SHEEP:1,ORE:1": 2})  # 2-of-2 unanimous
+    assert consensus_granted_glyphs(frames) == Counter({"SHEEP": 1, "ORE": 1})
+
+
+def test_dominant_read_rejects_below_the_fraction() -> None:
+    from catan_rl.human_data.harvest import DOMINANT_READ_MIN_FRAC, _dominant_grant_read
+
+    frames = _reads({"WOOD:1": 4, "BRICK:1": 1})  # 4/5 = 0.80 < 0.90
+    assert DOMINANT_READ_MIN_FRAC > 0.8
+    assert _dominant_grant_read(frames) is None
+
+
+def test_dominant_read_rejects_on_too_few_samples() -> None:
+    from catan_rl.human_data.harvest import DOMINANT_READ_MIN_READS, _dominant_grant_read
+
+    # 3-vs-1 = 0.75 and n=4 < the min sample: not unanimous, not enough to dominate.
+    frames = _reads({"WOOD:1": 3, "BRICK:1": 1})
+    assert DOMINANT_READ_MIN_READS >= 5
+    assert _dominant_grant_read(frames) is None
