@@ -1,6 +1,27 @@
 {
   "video_id": "33KR75rhTgo",
   "game_index": 1,
-  "unlocalizable": "endgame_stats_overlay_no_opening_frame",
-  "vlm_note": "Routed post_setup frame is the 'Well Played!' end-of-game stats overlay (dimmed final board, full buildout of cities/roads); empty_baseline is a channel-intro splash (masked avatar art). No clean 8-piece opening is present in either frame; opening is unlocalizable by any perception system. Root cause: setup log had no 'placed a Settlement/Road' events -> game window mis-bounded -> _post_setup_frame defaulted to a late/end-game frame."
+  "vlm_note": "Localized from the REPAIRED post-setup frame. The fail-closed router now bounds the opening window on the noun-less built_any event, so the frame is a clean 8-piece opening board (4 settlements + 4 roads, no cities/buildout, both players 0 dev cards) instead of the 'Well Played!' end-game overlay. Hex ids read against the board CV's own layout (row1 h7=WOOD5 h8=SHEEP2 h9=WOOD6; row2 h18=WHEAT8 h1=SHEEP10 h2=ORE9 h10=WHEAT3; row3 h17=BRICK4 h6=WHEAT3 h0=WOOD11 h3=ORE4 h11=BRICK8; row4 h16=WHEAT11 h5=SHEEP6 h4=ORE5 h12=SHEEP10; row5 h15=WOOD12 h14=BRICK9 h13=DESERT). Colours per meta: ThePhantom=BLACK, pokeball=RED. Independent check: ThePhantom's grant multiset {ORE,SHEEP,WOOD} equals exactly the adjacent resources of settlement {8,9,2} (SHEEP2+WOOD6+ORE9) and of no other of its settlements — the glyph anchor corroborates this localization.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [8, 9, 2]},
+        {"hexes": [18, 17, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[8, 9, 2], [9, 2, 10]]},
+        {"endpoints": [[18, 17, 6], [17, 6, 16]]}
+      ]
+    },
+    "pokeball": {
+      "settlements": [
+        {"hexes": [7, 18, 1]},
+        {"hexes": [5, 4, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[7, 18, 1], [18, 1, 6]]},
+        {"endpoints": [[5, 4, 14], [0, 5, 4]]}
+      ]
+    }
+  }
 }

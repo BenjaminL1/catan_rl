@@ -1,0 +1,27 @@
+{
+  "video_id": "AoOXWyxaTkA",
+  "game_index": 1,
+  "vlm_note": "Localized from the REPAIRED post-setup frame (clean 8-piece opening board; both players 0 dev cards, 1 road each). Colours per meta: ThePhantom=BLACK, bumbleee=RED. Vertices: ThePhantom settlements v1, v18 with roads v1-v2 and v18-v16; bumbleee settlements v14, v5 with roads v14-v10 and v5-v17. Independent glyph cross-check: ThePhantom's grant {BRICK,SHEEP,WHEAT} equals exactly v1's hexes (WHEAT11+BRICK5+SHEEP4) and NOT v18's (WOOD9+ORE5+WOOD10); bumbleee's grant {BRICK,SHEEP,WHEAT} equals exactly v14's hexes (SHEEP4+BRICK3+WHEAT6) and NOT v5's (WHEAT11+WOOD9+WHEAT3). Each grant matches ONE settlement uniquely, so the glyph anchor corroborates this localization and pins the granting (2nd) settlement for both players. NOTE: this video's log DOES render the piece noun ('ThePhantom placed a Road'), unlike 33KR75rhTgo — the grammar handles both (noun-bearing patterns first, noun-less fallback after).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [0, 1, 2]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    },
+    "bumbleee": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]}
+      ]
+    }
+  }
+}

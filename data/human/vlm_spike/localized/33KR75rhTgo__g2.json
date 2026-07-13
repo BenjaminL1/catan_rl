@@ -1,6 +1,27 @@
 {
   "video_id": "33KR75rhTgo",
   "game_index": 2,
-  "unlocalizable": "endgame_stats_overlay_no_opening_frame",
-  "vlm_note": "Routed post_setup frame is again the 'Well Played!' end-of-game stats overlay (dimmed final board, full buildout). No clean 8-piece opening present. Same frame-router failure as g1."
+  "vlm_note": "Localized from the REPAIRED post-setup frame (clean 8-piece opening board: 4 settlements + 4 roads, both players 0 dev cards). Board fitted from empty_baseline (desert=9, residual 0.86px); pieces read against the CV's own vertex geometry. Colours per meta: ThePhantom=BLACK, pokeball=RED. Vertices: ThePhantom settlements v8, v23 with roads v8-v7 and v23-v19; pokeball settlements v14, v5 with roads v14-v33 and v5-v4. Independent glyph cross-check: ThePhantom's grant {BRICK,SHEEP,WOOD} equals exactly v8's hexes (WOOD9+BRICK6+SHEEP2) and pokeball's grant {BRICK,WHEAT x2} equals exactly v5's hexes (WHEAT11+BRICK6+WHEAT3) — each matches ONE settlement, so the glyph anchor corroborates this localization and pins the granting (2nd) settlement for both players.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "pokeball": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [10, 11]]},
+        {"endpoints": [[0, 4, 5], [0, 5, 6]]}
+      ]
+    }
+  }
 }
