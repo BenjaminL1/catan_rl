@@ -457,3 +457,33 @@ def test_file_localizer_round_trips(tmp_path: Path) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_categorize_rejection_buckets() -> None:
+    assert vlm.categorize_rejection("ambiguous_snap:settlement:foo") == "ambiguous_snap"
+    assert vlm.categorize_rejection("unlocalizable:endgame_stats_overlay") == "board"
+    assert vlm.categorize_rejection("glyph_unreadable") == "unreadable"
+    assert vlm.categorize_rejection("orientation_joint_flip_glyph_mismatch") == "flip"
+    assert vlm.categorize_rejection("affine_residual_exceeded") == "board"
+    assert vlm.categorize_rejection("resolution_below_1080p") == "board"
+    assert vlm.categorize_rejection("record_contract_violation:x") == "hud"
+    assert vlm.categorize_rejection(None) == "hud"
+
+
+def test_wilson_ci_bounds() -> None:
+    assert vlm.wilson_ci(0, 0) == (0.0, 0.0)
+    lo, hi = vlm.wilson_ci(0, 2)
+    assert lo == 0.0 and 0.0 < hi < 1.0
+    lo, hi = vlm.wilson_ci(5, 10)
+    assert lo < 0.5 < hi
+
+
+def test_unlocalizable_reason_absent_and_marker(tmp_path: Path) -> None:
+    missing = tmp_path / "nope.json"
+    assert vlm._unlocalizable_reason(missing) == "unlocalizable:no_frame"
+    marked = tmp_path / "marked.json"
+    marked.write_text(json.dumps({"unlocalizable": "endgame_overlay"}), encoding="utf-8")
+    assert vlm._unlocalizable_reason(marked) == "unlocalizable:endgame_overlay"
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps({"players": {}}), encoding="utf-8")
+    assert vlm._unlocalizable_reason(real) is None

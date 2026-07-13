@@ -1,0 +1,22 @@
+{
+  "rayman147": {
+    "settlements": [
+      11,
+      3
+    ],
+    "roads": [
+      19,
+      8
+    ]
+  },
+  "ThePhantom": {
+    "settlements": [
+      1,
+      19
+    ],
+    "roads": [
+      0,
+      35
+    ]
+  }
+}

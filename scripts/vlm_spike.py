@@ -670,6 +670,51 @@ def _board_from_meta(meta: Mapping[str, Any]) -> BoardRead:
     )
 
 
+def _unlocalizable_reason(loc_path: Path) -> str | None:
+    """The typed fail-closed reason for a game the VLM did NOT localize: ``None`` when
+    a real localization JSON is present. An ABSENT file -> ``unlocalizable:no_frame``
+    (the VLM produced nothing); a file with ``{"unlocalizable": "<why>"}`` ->
+    ``unlocalizable:<why>`` (the VLM inspected the frame and declined — e.g. the router
+    handed back an end-game / non-setup frame)."""
+    if not loc_path.exists():
+        return "unlocalizable:no_frame"
+    payload = json.loads(loc_path.read_text(encoding="utf-8"))
+    if "unlocalizable" in payload:
+        return f"unlocalizable:{payload['unlocalizable']}"
+    return None
+
+
+def _rejected_spike(
+    meta: Mapping[str, Any],
+    board: BoardRead,
+    players: dict[str, str],
+    topology: Topology,
+    reason: str,
+) -> SpikeResult:
+    """Build a fail-closed rejected :class:`SpikeResult` for a game with no localizable
+    opening, routing an ``OpeningResult(None, reason)`` through the EXISTING gate so the
+    reject is a real :class:`CrossCheckResult` (identical machinery to the CV path)."""
+    strength = OpponentStrength(tier="high", source="tournament", confidence=0.8)
+    result = cross_check(
+        video_id="vlm_spike",
+        game_index=1,
+        players=dict(players),
+        opponent_strength=strength,
+        board=board,
+        openings_desert_hex=int(meta["board_desert_hex"]),
+        opening_result=OpeningResult(None, reason),
+        draft_order=tuple(meta["draft_order"]),
+        dice_log=tuple(int(d) for d in meta.get("dice_log", [])),
+        winner=meta.get("winner") if meta.get("winner") in players.values() else None,
+        resolution=int(meta["resolution"]),
+        residual_px=board.residual_px,
+        topology=topology,
+        granted_by_player={h: None for h in players.values()},
+        ts=0,
+    )
+    return SpikeResult(cross_check_result=result, record=result.record)
+
+
 def localize_game(
     game_dir: Path,
     *,
@@ -685,7 +730,15 @@ def localize_game(
     players = dict(meta["players"])
     handles = tuple(players.values())
     if localizer is None:
-        localizer = FileLocalizer(_LOCALIZED_ROOT / f"{game_dir.name}.json")
+        loc_path = _LOCALIZED_ROOT / f"{game_dir.name}.json"
+        # A game the VLM DECLINED to localize (frame carries no clean opening — e.g.
+        # the frame-router handed back an end-game / non-setup frame) is a fail-closed
+        # TYPED reject, never a guess. Two forms both reject: the localized JSON is
+        # absent, or it carries an explicit ``{"unlocalizable": "<reason>"}`` marker.
+        reason = _unlocalizable_reason(loc_path)
+        if reason is not None:
+            return _rejected_spike(meta, board, players, topology, reason)
+        localizer = FileLocalizer(loc_path)
     localized = localizer.localize(
         Path(meta["post_setup_png"]), Path(meta["empty_baseline_png"]), board
     )
@@ -753,6 +806,128 @@ def _cmd_localize(args: argparse.Namespace) -> int:
     return 0
 
 
+_REJECT_CATEGORIES = ("ambiguous_snap", "unreadable", "flip", "hud", "board")
+
+
+def categorize_rejection(reason: str | None) -> str:
+    """Fold a typed ``rejection_reason`` into one of the five spike buckets
+    (``ambiguous_snap`` / ``unreadable`` / ``flip`` / ``hud`` / ``board``). The VLM
+    perception failure is ``ambiguous_snap`` (a piece that snapped to 0 / >1 vertex);
+    everything else is a downstream deterministic-gate reject the classical pipeline
+    would raise identically."""
+    r = reason or ""
+    if r.startswith("ambiguous_snap"):
+        return "ambiguous_snap"
+    if r.startswith("unlocalizable"):
+        # The frame-router handed back a frame with no clean opening (end-game / splash
+        # / non-setup) — a board/frame-level failure UPSTREAM of piece perception, which
+        # a VLM front-end cannot recover. Bucketed with the board failures.
+        return "board"
+    if "glyph_unreadable" in r:
+        return "unreadable"
+    if "orientation_joint_flip_glyph_mismatch" in r:
+        return "flip"
+    if any(
+        tok in r
+        for tok in (
+            "resolution_below",
+            "affine_residual",
+            "orientation_mismatch_desert",
+            "dice",
+            "pip",
+        )
+    ):
+        return "board"
+    # record-contract / winner-handle / provenance-binding / anything else -> the HUD
+    # / record-binding bucket (the fail-closed invariant gate, not the VLM's job).
+    return "hud"
+
+
+def wilson_ci(accepted: int, total: int, z: float = 1.959963984540054) -> tuple[float, float]:
+    """Wilson 95% score interval for ``accepted / total`` (``z`` = 1.96). Returns
+    ``(0.0, 0.0)`` for an empty sample."""
+    if total == 0:
+        return (0.0, 0.0)
+    phat = accepted / total
+    denom = 1.0 + z * z / total
+    centre = (phat + z * z / (2 * total)) / denom
+    half = (z * ((phat * (1 - phat) + z * z / (4 * total)) / total) ** 0.5) / denom
+    return (max(0.0, centre - half), min(1.0, centre + half))
+
+
+def _cmd_batch_score(args: argparse.Namespace) -> int:
+    """Snap + validate EVERY localized game and report the yield: accepted / seen,
+    Wilson-95 CI, and the typed-rejection breakdown. Accepted non-ground-truth games
+    (no ``truth/<key>.json``) are appended to ``provisional_openings.jsonl`` FLAGGED
+    for user hand-verification — never treated as verified."""
+    localized_dir = _LOCALIZED_ROOT
+    keys = sorted(
+        {p.stem.removesuffix("") for p in localized_dir.glob("*.json")}
+        | {p.name for p in _FRAMES_ROOT.iterdir() if (p / "meta.json").exists()}
+    )
+    # YIELD is measured over the REAL-VIDEO population only; the hand-verified fixture
+    # anchor (game1, the only game with a committed ``truth/*.json``) is the accuracy
+    # anchor, NOT a yield sample, so it is excluded from accepted/seen.
+    seen = 0
+    accepted = 0
+    breakdown: Counter[str] = Counter()
+    provisional_lines: list[str] = []
+    per_game: list[dict[str, Any]] = []
+    for key in keys:
+        game_dir = _FRAMES_ROOT / key
+        if not (game_dir / "meta.json").exists():
+            continue
+        result = localize_game(game_dir)
+        has_truth = (_TRUTH_ROOT / f"{key}.json").exists()
+        if not has_truth:
+            seen += 1
+        row: dict[str, Any] = {
+            "game": key,
+            "accepted": result.accepted,
+            "rejection_reason": result.rejection_reason,
+            "category": None if result.accepted else categorize_rejection(result.rejection_reason),
+            "ground_truth": has_truth,
+        }
+        per_game.append(row)
+        if has_truth:
+            continue  # the accuracy anchor — scored by `score`, not part of the yield
+        if result.accepted:
+            accepted += 1
+            provisional_lines.append(
+                json.dumps(
+                    {
+                        "game": key,
+                        "flagged": "PROVISIONAL — NOT hand-verified",
+                        "openings": {
+                            h: {"settlements": list(o.settlements), "roads": list(o.roads)}
+                            for h, o in result.record.openings.items()
+                        },
+                        "placement_order_established": result.record.provenance.get(
+                            "placement_order_established"
+                        ),
+                        "winner": result.record.winner,
+                    }
+                )
+            )
+        else:
+            breakdown[categorize_rejection(result.rejection_reason)] += 1
+
+    lo, hi = wilson_ci(accepted, seen)
+    prov_path = REPO / "data" / "human" / "vlm_spike" / "provisional_openings.jsonl"
+    prov_body = "\n".join(provisional_lines) + ("\n" if provisional_lines else "")
+    prov_path.write_text(prov_body, encoding="utf-8")
+    summary = {
+        "seen": seen,
+        "accepted": accepted,
+        "yield": (accepted / seen) if seen else 0.0,
+        "wilson95": [lo, hi],
+        "rejection_breakdown": {c: breakdown.get(c, 0) for c in _REJECT_CATEGORIES},
+        "per_game": per_game,
+    }
+    print(json.dumps(summary, indent=2))
+    return 0
+
+
 def _cmd_score(args: argparse.Namespace) -> int:
     game_dir = _FRAMES_ROOT / args.game
     truth_path = _TRUTH_ROOT / f"{args.game}.json"
@@ -793,6 +968,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     p_score = sub.add_parser("score", help="exact vertex/edge match vs ground truth")
     p_score.add_argument("game", help="prepared game key, e.g. game1__g1")
     p_score.set_defaults(func=_cmd_score)
+
+    p_batch = sub.add_parser(
+        "batch-score", help="yield over every localized game (accepted/seen + Wilson CI)"
+    )
+    p_batch.set_defaults(func=_cmd_batch_score)
 
     args = parser.parse_args(argv)
     result: int = args.func(args)

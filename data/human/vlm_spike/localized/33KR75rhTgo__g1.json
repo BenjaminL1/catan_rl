@@ -1,0 +1,6 @@
+{
+  "video_id": "33KR75rhTgo",
+  "game_index": 1,
+  "unlocalizable": "endgame_stats_overlay_no_opening_frame",
+  "vlm_note": "Routed post_setup frame is the 'Well Played!' end-of-game stats overlay (dimmed final board, full buildout of cities/roads); empty_baseline is a channel-intro splash (masked avatar art). No clean 8-piece opening is present in either frame; opening is unlocalizable by any perception system. Root cause: setup log had no 'placed a Settlement/Road' events -> game window mis-bounded -> _post_setup_frame defaulted to a late/end-game frame."
+}
