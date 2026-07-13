@@ -635,11 +635,19 @@ def prepare_frames_from_video(
         # establish_placement_order need the granting player's card multiset). Only
         # the readable (non-None) grants are serialised; an unreadable grant is simply
         # absent, and localize_game treats an absent handle as an unread grant.
-        granted_resources = {
-            handle: dict(grant)
-            for handle in ctx.handles
-            if (grant := harvest._consensus_grant(handle, gf.grant_frames, ctx.handles)) is not None
-        }
+        # Record WHY a grant failed, not just that it did — a `glyph_unreadable` reject
+        # then explains itself (which gate starved: no line found / line but no glyph
+        # boxes / only 1 readable / the reads DISAGREED) instead of needing a bespoke
+        # probe per video. The opponent's grant is the one that keeps failing.
+        granted_resources: dict[str, Any] = {}
+        grant_diag: dict[str, Any] = {}
+        for handle in ctx.handles:
+            d: dict[str, Any] = {}
+            grant = harvest._consensus_grant(handle, gf.grant_frames, ctx.handles, diag=d)
+            if grant is not None:
+                granted_resources[handle] = dict(grant)
+            else:
+                grant_diag[handle] = d
         meta: dict[str, Any] = {
             "video": video,
             "game_index": game_index,
@@ -656,6 +664,7 @@ def prepare_frames_from_video(
                 segment.events, harvest._dice_log(segment.events)
             ),
             "granted_resources": granted_resources,
+            "grant_diag": grant_diag,
             "winner": segment.winner,
             "log_setup_sequence": [
                 f"{e.actor} {_SETUP_PHRASE[e.kind]}"

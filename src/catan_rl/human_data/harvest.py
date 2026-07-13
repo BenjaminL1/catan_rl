@@ -80,6 +80,7 @@ from catan_rl.human_data.batch import (
 from catan_rl.human_data.board_cv import BoardRead, read_board_stable
 from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from catan_rl.human_data.glyph_anchor import (
+    classify_granted_glyphs,
     consensus_granted_glyphs,
     detect_glyph_boxes,
 )
@@ -1199,6 +1200,7 @@ def _consensus_grant(
     handle: str,
     grant_frames: tuple[DecodedFrame, ...],
     handles: Sequence[str] = (),
+    diag: dict[str, Any] | None = None,
 ) -> Counter[str] | None:  # pragma: no cover - real-run path
     """Multi-frame CONSENSUS grant read for one player across the grant-line frames.
 
@@ -1214,17 +1216,51 @@ def _consensus_grant(
     matches no line and silently kills every game of the video (see that function).
     """
     frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]] = []
+    n_line_found = 0
     for frame in grant_frames:
         crop = crop_log(frame.frame)
         line_box, text_boxes = _grant_line_boxes(crop, handle, handles)
         if line_box is None:
             continue
+        n_line_found += 1
         boxes = detect_glyph_boxes(crop, line_box, text_boxes)
         if boxes:
             frames_boxes.append((crop, boxes))
+
+    if diag is not None:
+        # Which of the three gates starved, so a `glyph_unreadable` reject explains
+        # ITSELF instead of needing a bespoke probe. (Two mis-diagnoses this session
+        # came from theorising about this path instead of measuring it.)
+        diag.update(
+            grant_frames=len(grant_frames),
+            line_found=n_line_found,
+            with_glyph_boxes=len(frames_boxes),
+        )
+
     if len(frames_boxes) < 2:
+        if diag is not None:
+            diag["fail"] = (
+                "no_grant_line_in_any_frame"
+                if n_line_found == 0
+                else ("line_found_but_no_glyph_boxes" if not frames_boxes else "only_1_readable")
+            )
         return None
-    return consensus_granted_glyphs(frames_boxes)
+
+    result = consensus_granted_glyphs(frames_boxes)
+    if diag is not None and result is None:
+        # >=2 frames had boxes yet consensus still refused: the reads DISAGREED (the
+        # unanimity rule, fail-closed by design) or too few classified.
+        reads = [
+            r
+            for crop, boxes in frames_boxes
+            if (r := classify_granted_glyphs(crop, boxes)) is not None
+        ]
+        diag["classified"] = len(reads)
+        diag["distinct_reads"] = [
+            dict(r) for r in {tuple(sorted(x.items())): x for x in reads}.values()
+        ]
+        diag["fail"] = "reads_disagree" if len(diag["distinct_reads"]) > 1 else "too_few_classified"
+    return result
 
 
 #: Cached easyocr reader for the box-returning grant-line OCR (built once — a fresh
