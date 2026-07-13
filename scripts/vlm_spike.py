@@ -599,8 +599,10 @@ def prepare_frames_from_video(
     from catan_rl.human_data.segment import segment_games
 
     topology = load_topology()
-    frames = harvest._ingest(video, download_gate=None, work_dir=None)
-    ctx = harvest._extract_context(video, frames)
+    # Two-pass ingest: the sparse pass finds the grant lines, a 1 s dense pass
+    # re-samples those windows so the >=2-frame grant consensus is not starved.
+    frames, per_frame_lines = harvest._ingest_two_pass(video, download_gate=None, work_dir=None)
+    ctx = harvest._extract_context(video, frames, per_frame_lines)
     segments = segment_games(ctx.events, list(ctx.handles))
     game_dirs: list[Path] = []
     game_index = 0

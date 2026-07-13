@@ -23,9 +23,17 @@ unit-testable with mocked stages (they are looked up on this module at call time
 so a test monkeypatches ``harvest._ingest`` / ``harvest._extract_context`` /
 ``harvest._read_game_inputs``):
 
-- :func:`_ingest` — download → two-pass sample → in-memory frames (delete on exit).
+- :func:`_ingest_two_pass` — download → SPARSE sample → OCR → DENSE re-sample around
+  the grant lines → in-memory frames + their log lines (video deleted on exit). This is
+  the seam :func:`parse_video` uses. The dense pass is what keeps the fail-closed grant
+  consensus (>= 2 agreeing readable frames) from starving: at the 4 s sparse cadence a
+  player's grant line can be caught in as few as 2 frames, and one unreadable frame there
+  threw away 6/6 games of a video whose opening frames were all clean. (:func:`_ingest`
+  — the single-pass original — is kept for callers that only need frames.)
 - :func:`_extract_context` — Stage-1 tail: player handles, per-game player→colour
-  binding + seat order, the parsed event stream, and per-game frame routing.
+  binding + seat order, the parsed event stream, and per-game frame routing. Accepts the
+  already-OCR'd log lines from the two-pass ingest (the log-crop OCR is the dominant cost
+  of the harvest, so it is never paid twice).
 - :func:`_read_game_inputs` — Stage-2 CV: the cross-frame-stable board, the HUD-keyed
   openings, the multi-frame CONSENSUS grant read, and the per-game draft order +
   dice log. Every CV failure is surfaced as a typed reject
@@ -54,6 +62,7 @@ from __future__ import annotations
 import functools
 import json
 import re
+import tempfile
 import threading
 import time
 from collections import Counter
@@ -69,11 +78,19 @@ from catan_rl.human_data.batch import (
     run_batch,
 )
 from catan_rl.human_data.board_cv import BoardRead, read_board_stable
+from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from catan_rl.human_data.glyph_anchor import (
     consensus_granted_glyphs,
     detect_glyph_boxes,
 )
-from catan_rl.human_data.ingest import DecodedFrame, ingest_video
+from catan_rl.human_data.ingest import (
+    DecodedFrame,
+    TimeWindow,
+    build_sampling_schedule,
+    decode_frames_at,
+    download_video,
+    ingest_video,
+)
 from catan_rl.human_data.logparse import (
     LogEvent,
     _resolve_actor,
@@ -424,6 +441,127 @@ def _ingest(
     return frames
 
 
+#: The grant line's phrase — the ONLY log text whose sampling density gates the glyph
+#: anchor (and therefore whether a game is usable at all).
+_GRANT_PHRASE = "received starting resources"
+
+#: Seconds of dense (1 s) sampling to add on EACH side of a sparse frame that showed a
+#: grant line. The line lives ~30 s on screen but the sparse pass can clip it to as few
+#: as 2 frames (measured), and one unreadable frame there starves the >=2-frame
+#: consensus. +/-10 s brackets the whole line lifetime for ~10-15% more OCR per video.
+_GRANT_DENSE_PAD_S = 10.0
+
+
+def _grant_dense_windows(
+    grant_ts: Sequence[float],
+    duration_s: float,
+    pad_s: float = _GRANT_DENSE_PAD_S,
+) -> list[TimeWindow]:
+    """Dense-sampling windows bracketing every sparse frame that showed a grant line.
+
+    **Why this exists.** The glyph anchor (the ONLY joint-flip defence) needs each
+    player's starting-resource multiset, and :func:`consensus_granted_glyphs` requires
+    **>= 2 readable frames that agree** — deliberately fail-closed. At the deployed 4 s
+    sparse cadence a player's grant line can be caught in as few as **2** frames, so a
+    single unreadable one (glyph boxes not localisable in that instant) leaves 1 < 2 and
+    the consensus returns ``None`` -> ``glyph_unreadable`` -> the game is thrown away
+    even though its opening frame is perfect. Measured on ``9Sm86ml04aI``: 6/6 games had
+    a clean opening frame and 0/6 survived, because the opponent's grant landed on
+    exactly 2 sparse frames and one of them read 0 glyph boxes. Re-sampling that same
+    window at 1 s gives 5 readable frames, unanimous.
+
+    The two-pass schedule already supports this
+    (:func:`~catan_rl.human_data.ingest.build_sampling_schedule` takes ``dense_windows``);
+    harvest simply never supplied any, so the dense pass had never run. The fix is MORE
+    FRAMES, never a looser gate.
+
+    Windows are padded by ``pad_s`` on each side, clamped to ``[0, duration_s]``, and
+    OVERLAPPING windows are merged (a game's grant burst spans several sparse frames a
+    few seconds apart, and re-decoding the same range twice is wasted OCR). Returns ``[]``
+    when no grant was seen — nothing to rescue, so no dense pass and no wasted work.
+    """
+    if not grant_ts:
+        return []
+    spans = sorted(
+        (max(0.0, ts - pad_s), min(duration_s, ts + pad_s)) for ts in grant_ts if ts >= 0.0
+    )
+    merged: list[list[float]] = []
+    for lo, hi in spans:
+        if merged and lo <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], hi)
+        else:
+            merged.append([lo, hi])
+    return [TimeWindow(start_s=lo, end_s=hi) for lo, hi in merged if hi > lo]
+
+
+def _ingest_two_pass(
+    video_id: str,
+    *,
+    download_gate: threading.BoundedSemaphore | None = None,
+    work_dir: Path | None = None,
+) -> tuple[list[DecodedFrame], list[list[str]]]:
+    """Download once -> sparse pass -> OCR -> dense pass around the grants -> delete.
+
+    The real two-pass ingest the brief specifies (§5.10) and :func:`_ingest` never ran:
+    the sparse pass DISCOVERS where the grant lines are, then the dense (1 s) pass
+    re-samples only those bounded windows (:func:`_grant_dense_windows`) so the
+    fail-closed grant consensus has frames to work with.
+
+    Returns the frames **and their log lines**, ts-sorted and index-aligned. Each frame
+    is OCR'd EXACTLY ONCE here and the lines are threaded onward
+    (:func:`_extract_context` accepts them), because the log-crop OCR is the dominant
+    cost of the whole harvest and re-reading it would more than pay back the dense pass.
+
+    The downloaded video is deleted on EVERY path (``finally``), matching
+    :func:`~catan_rl.human_data.ingest.ingest_video`'s download-then-delete contract; the
+    ``download_gate`` is held around the NETWORK phase only, so the CPU/OCR phase still
+    fans out to the full worker width (§5.11).
+    """  # pragma: no cover - real-run path (network + easyocr; unit-tested via its parts)
+    duration_s = _probe_duration_s(video_id)
+    ffmpeg_bin = resolve_ffmpeg()
+    ffprobe_bin = resolve_ffprobe()
+    gate = download_gate if download_gate is not None else _NULL_GATE
+
+    tmp = tempfile.mkdtemp(prefix=f"phantom_{video_id}_", dir=str(work_dir) if work_dir else None)
+    tmp_path = Path(tmp)
+    try:
+        with gate:
+            video_path = download_video(video_id, tmp_path)
+
+        sparse = build_sampling_schedule(duration_s)
+        frames = list(decode_frames_at(video_path, sparse, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin))
+        lines = [ocr_log_crop(crop_log(f.frame)) for f in frames]
+
+        grant_ts = [
+            f.ts
+            for f, ls in zip(frames, lines, strict=True)
+            if any(_GRANT_PHRASE in ln.lower() for ln in ls)
+        ]
+        windows = _grant_dense_windows(grant_ts, duration_s)
+        if windows:
+            seen = {round(f.ts, 3) for f in frames}
+            dense = [
+                s
+                for s in build_sampling_schedule(duration_s, windows)
+                if s.pass_name == "dense" and round(s.ts, 3) not in seen
+            ]
+            if dense:
+                extra = list(
+                    decode_frames_at(video_path, dense, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin)
+                )
+                frames.extend(extra)
+                lines.extend(ocr_log_crop(crop_log(f.frame)) for f in extra)
+    finally:
+        for child in tmp_path.glob("*"):
+            child.unlink(missing_ok=True)
+        tmp_path.rmdir()
+
+    if not frames:
+        raise VideoParseError(f"ingest produced no frames for {video_id!r}")
+    order = sorted(range(len(frames)), key=lambda i: frames[i].ts)
+    return [frames[i] for i in order], [lines[i] for i in order]
+
+
 def _probe_duration_s(video_id: str) -> float:
     """Video duration in seconds from yt-dlp metadata (no full download).
 
@@ -450,7 +588,11 @@ def _probe_duration_s(video_id: str) -> float:
         raise VideoParseError(f"duration probe returned {token!r} for {video_id!r}") from exc
 
 
-def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
+def _extract_context(
+    video_id: str,
+    frames: list[DecodedFrame],
+    per_frame_lines: list[list[str]] | None = None,
+) -> VideoContext:
     """Stage-1 tail: player handles, HUD colour binding, event stream, frame routing.
 
     BEST-EFFORT and SAFE under a wrong guess: every downstream firewall
@@ -460,8 +602,15 @@ def _extract_context(video_id: str, frames: list[DecodedFrame]) -> VideoContext:
     of event-shaped OCR lines; the per-game player→colour binding is read from the
     HUD seat rings; frames are routed to games by the ``game_reset`` markers in
     source order (index-aligned with :func:`~catan_rl.human_data.segment.segment_games`).
+
+    ``per_frame_lines`` (index-aligned with ``frames``) lets the caller supply log lines
+    it has ALREADY OCR'd — :func:`_ingest_two_pass` must OCR the sparse frames to find
+    the grant lines its dense pass brackets, and the log-crop OCR is the dominant cost of
+    the whole harvest, so re-reading it here would more than cancel out the dense pass.
+    ``None`` keeps the standalone behaviour (OCR the frames here).
     """  # pragma: no cover - real-run CV path (exercised on hardware, mocked in CI)
-    per_frame_lines = [ocr_log_crop(crop_log(f.frame)) for f in frames]
+    if per_frame_lines is None:
+        per_frame_lines = [ocr_log_crop(crop_log(f.frame)) for f in frames]
     all_lines = [line for lines in per_frame_lines for line in lines]
     handles = _discover_handles(all_lines)
     players = _agent_binding(handles)
@@ -569,8 +718,14 @@ def parse_video(
             f"{video_id!r} has no manifest opponent strength (should be harvest-gated out)"
         )
 
-    frames = _ingest(video_id, download_gate=download_gate, work_dir=work_dir)
-    ctx = _extract_context(video_id, frames)
+    # Two-pass: the sparse pass discovers the grant lines, then a 1 s dense pass
+    # re-samples ONLY those windows so the fail-closed grant consensus (>= 2 agreeing
+    # readable frames) is not starved — the defect that threw away 6/6 games of
+    # 9Sm86ml04aI despite every one having a clean opening frame.
+    frames, per_frame_lines = _ingest_two_pass(
+        video_id, download_gate=download_gate, work_dir=work_dir
+    )
+    ctx = _extract_context(video_id, frames, per_frame_lines)
     segments = segment_games(ctx.events, list(ctx.handles))
 
     records: list[GameRecord] = []

@@ -198,8 +198,10 @@ def _mock_stages(
     events: tuple[LogEvent, ...],
     game_inputs: GameInputs,
 ) -> None:
-    monkeypatch.setattr(harvest, "_ingest", lambda vid, **kw: [object()])
-    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames: _context(events))
+    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
+    monkeypatch.setattr(
+        harvest, "_extract_context", lambda vid, frames, lines=None: _context(events)
+    )
     monkeypatch.setattr(harvest, "_read_game_inputs", lambda *a, **kw: game_inputs)
 
 
@@ -288,8 +290,8 @@ def test_ruleset_filter_drops_single_actor_window(monkeypatch: pytest.MonkeyPatc
         called.append(1)
         return _game_inputs("accept")
 
-    monkeypatch.setattr(harvest, "_ingest", lambda vid, **kw: [object()])
-    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames: _context(solo))
+    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
+    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames, lines=None: _context(solo))
     monkeypatch.setattr(harvest, "_read_game_inputs", _guard)
     records = parse_video("vidHIGH00000", manifest=_MANIFEST_OBJ, topology=_TOPO)
     assert records == []
@@ -322,8 +324,10 @@ def test_frame_lookup_uses_segment_index_not_ruleset_ordinal(
         seen_index.append(segment_index)
         return _game_inputs("accept")
 
-    monkeypatch.setattr(harvest, "_ingest", lambda vid, **kw: [object()])
-    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames: _context(events))
+    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
+    monkeypatch.setattr(
+        harvest, "_extract_context", lambda vid, frames, lines=None: _context(events)
+    )
     monkeypatch.setattr(harvest, "_read_game_inputs", _capture)
 
     records = parse_video("vidHIGH00000", manifest=_MANIFEST_OBJ, topology=_TOPO)
@@ -669,3 +673,83 @@ def test_run_harvest_resume_is_idempotent(monkeypatch: pytest.MonkeyPatch, tmp_p
     assert len(corpus) == 2  # no duplicate on resume
     assert telem.accepted == 2
     assert telem.games_seen == 2
+
+
+# --- DENSE SAMPLING PASS around the grant lines --------------------------------
+#
+# The grant consensus needs >= 2 readable frames that AGREE. At the deployed 4 s
+# sparse cadence a player's grant line can be sampled in EXACTLY 2 frames, and one
+# unreadable frame there (glyph_boxes=0) drops it to 1 -> consensus None ->
+# `glyph_unreadable` -> the game is lost even though its opening frame is clean.
+# MEASURED on 9Sm86ml04aI (6 games, clean_opening 6/6, localizable 0/6): rayman147's
+# grant was sampled at t=246 (0 glyph boxes) and t=250 (readable) => 1 readable < 2.
+# At 1 s over the same window: 5 readable frames, unanimous {BRICK, SHEEP, ORE}.
+# The two-pass design already existed (ingest.build_sampling_schedule(dense_windows));
+# harvest just never passed any. These windows are what it now passes.
+
+
+def _decoded_frame(ts: float) -> Any:
+    from catan_rl.human_data.ingest import DecodedFrame
+
+    return DecodedFrame(
+        ts=ts,
+        pass_name="sparse",
+        frame=np.zeros((1080, 1920, 3), dtype=np.uint8),
+        native_resolution=1080,
+    )
+
+
+def test_grant_dense_windows_pads_and_clamps() -> None:
+    from catan_rl.human_data.ingest import TimeWindow
+
+    got = harvest._grant_dense_windows([5.0], duration_s=100.0, pad_s=10.0)
+    # clamped at 0, not negative
+    assert got == [TimeWindow(start_s=0.0, end_s=15.0)]
+
+    got = harvest._grant_dense_windows([95.0], duration_s=100.0, pad_s=10.0)
+    assert got == [TimeWindow(start_s=85.0, end_s=100.0)]  # clamped at duration
+
+
+def test_grant_dense_windows_merges_overlapping() -> None:
+    from catan_rl.human_data.ingest import TimeWindow
+
+    # 246 and 250 are 4 s apart (the real sparse cadence) — with pad 10 they overlap
+    # heavily and must merge into ONE window, not two decode ranges.
+    got = harvest._grant_dense_windows([246.0, 250.0], duration_s=600.0, pad_s=10.0)
+    assert got == [TimeWindow(start_s=236.0, end_s=260.0)]
+
+
+def test_grant_dense_windows_keeps_disjoint_games_separate() -> None:
+    # Two different games' grant bursts, far apart, stay as two windows.
+    got = harvest._grant_dense_windows([100.0, 500.0], duration_s=600.0, pad_s=10.0)
+    assert len(got) == 2
+    assert (got[0].start_s, got[0].end_s) == (90.0, 110.0)
+    assert (got[1].start_s, got[1].end_s) == (490.0, 510.0)
+
+
+def test_grant_dense_windows_empty_when_no_grant_seen() -> None:
+    # No grant line anywhere => nothing to rescue => no dense pass (no wasted OCR).
+    assert harvest._grant_dense_windows([], duration_s=600.0) == []
+
+
+def test_extract_context_uses_precomputed_lines_and_does_not_reocr(monkeypatch) -> None:
+    # The two-pass ingest OCRs each frame ONCE and threads the lines through;
+    # _extract_context must NOT run its own OCR when they are supplied (that would
+    # double the dominant cost of the whole harvest).
+    called = {"n": 0}
+
+    def _boom(_crop: Any) -> list[str]:
+        called["n"] += 1
+        return []
+
+    monkeypatch.setattr(harvest, "ocr_log_crop", _boom)
+    monkeypatch.setattr(harvest, "_discover_handles", lambda _lines: ("a", "b"))
+    monkeypatch.setattr(harvest, "_agent_binding", lambda _h: {"agent": "a", "opponent": "b"})
+    monkeypatch.setattr(harvest, "_video_seat_colours", lambda _f: {})
+    monkeypatch.setattr(harvest, "_bind_colours", lambda _p, _s: ({}, ()))
+    monkeypatch.setattr(harvest, "_route_frames_to_games", lambda _f, _l, _h: ())
+
+    frames = [_decoded_frame(ts=0.0), _decoded_frame(ts=4.0)]
+    lines = [["a placed a"], ["a received starting resources"]]
+    harvest._extract_context("vid", frames, per_frame_lines=lines)
+    assert called["n"] == 0, "re-OCR'd frames whose lines were already computed"
