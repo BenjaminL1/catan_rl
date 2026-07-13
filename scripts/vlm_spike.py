@@ -409,6 +409,8 @@ def snap_and_validate(
     openings_desert_hex: int | None = None,
     ts: int = 0,
     dice_values_readable: bool = True,
+    video_id: str = "vlm_spike",
+    game_index: int = 1,
 ) -> SpikeResult:
     """End-to-end: SNAP the localized adjacency -> ORDER from the log -> VALIDATE
     through the existing fail-closed gate. The VLM supplied ONLY the perception; the
@@ -420,8 +422,8 @@ def snap_and_validate(
     opening_result = snap_localized_openings(localized, topology)
     desert = openings_desert_hex if openings_desert_hex is not None else board.desert_hex
     result = cross_check(
-        video_id="vlm_spike",
-        game_index=1,
+        video_id=video_id,
+        game_index=game_index,
         players=dict(players),
         opponent_strength=opponent_strength,
         board=board,
@@ -714,8 +716,8 @@ def _rejected_spike(
     reject is a real :class:`CrossCheckResult` (identical machinery to the CV path)."""
     strength = OpponentStrength(tier="high", source="tournament", confidence=0.8)
     result = cross_check(
-        video_id="vlm_spike",
-        game_index=1,
+        video_id=str(meta.get("video", "vlm_spike")),
+        game_index=int(meta.get("game_index", 1)),
         players=dict(players),
         opponent_strength=strength,
         board=board,
@@ -789,6 +791,8 @@ def localize_game(
         topology=topology,
         setup_events=setup_events,
         openings_desert_hex=int(meta["board_desert_hex"]),
+        video_id=str(meta.get("video", "vlm_spike")),
+        game_index=int(meta.get("game_index", 1)),
     )
 
 
