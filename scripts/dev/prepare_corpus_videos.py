@@ -45,7 +45,18 @@ def high_tier_videos() -> list[str]:
 
 
 def tally(video: str) -> dict:
-    """Per-game tally from the frame dirs prepare-frames persisted for this video."""
+    """Per-game tally from the frame dirs prepare-frames persisted for this video.
+
+    A game is LOCALIZABLE only when ALL THREE independent gates pass:
+      * the fail-closed router produced a clean 8-pieces-down frame (the dir exists);
+      * the board CV produced a cross-frame-stable board read (``board_hexes``) — a
+        game can have a perfect opening frame and STILL fail here (``board_unreadable``),
+        and the snap has no hex layout to snap to without it;
+      * BOTH players' grant glyphs were read — the glyph anchor is the only joint-flip
+        defence, so a game missing either grant is rejected however good the frame is.
+    Counting grants alone OVERCOUNTS (measured: 9Sm86ml04aI had 3 games with both grants
+    but only 1 with a readable board).
+    """
     games = []
     for d in sorted(FRAMES.glob(f"{video}__g*")):
         meta_path = d / "meta.json"
@@ -55,12 +66,14 @@ def tally(video: str) -> dict:
         grants = meta.get("granted_resources", {})
         players = list(meta.get("players", {}).values())
         both = len(players) == 2 and all(p in grants for p in players)
+        board_ok = bool(meta.get("board_hexes"))
         games.append(
             {
                 "game": d.name,
                 "winner": meta.get("winner"),
+                "board_readable": board_ok,
                 "grants_readable": both,
-                "localizable": both,  # the dir exists => the router gave a clean frame
+                "localizable": bool(board_ok and both),
                 "players": players,
             }
         )

@@ -1,0 +1,27 @@
+{
+  "video_id": "9Sm86ml04aI",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening board (score 0-0). Colours per meta: ThePhantom=BLACK, rayman147=GREEN. Read against the CV's own vertex overlay (board fitted from empty_baseline, residual 1.02px). ThePhantom settlements v1, v19 (roads v1-v0, v19-v23); rayman147 settlements v11, v3 (roads v11-v10, v3-v9). GRANT SELF-CHECK PASSES: ThePhantom's grant {ORE:2, SHEEP:1} equals exactly v19's hexes (SHEEP5+ORE4+ORE10) and NOT v1's (SHEEP11+WHEAT10+WHEAT3); rayman147's grant {BRICK:1, ORE:1, SHEEP:1} equals exactly v3's hexes (SHEEP11+BRICK9+ORE4) and NOT v11's (WHEAT10+WOOD5+BRICK8). Each grant matches EXACTLY ONE settlement, so the glyph anchor independently corroborates this localization and pins the granting (2nd) settlement for both players. This video is one the dense sampling pass rescued (grants were unreadable at the 4 s cadence).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [0, 3, 4]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    },
+    "rayman147": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [0, 1, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[0, 1, 6], [1, 6, 18]]}
+      ]
+    }
+  }
+}
