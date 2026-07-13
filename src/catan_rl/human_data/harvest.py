@@ -106,6 +106,14 @@ BOARD_UNREADABLE_REASON = "board_unreadable"
 #: event stream produced windows). A loadable audit row, never a silent drop.
 FRAMES_UNROUTED_REASON = "frames_unrouted"
 
+#: Typed reject reason for a game whose stable 8-pieces-down opening frame cannot be
+#: identified: the window logs NO build (so no opening/main-game boundary exists) yet
+#: demonstrably progressed past setup (it carries rolls and/or a victory). Returning
+#: the window's LAST frame there would hand the openings CV an END-GAME board (the
+#: "Well Played!" stats overlay) — a fail-OPEN that silently produced garbage. Reject
+#: typed instead.
+POST_SETUP_UNRESOLVED_REASON = "post_setup_frame_unresolved"
+
 #: Roll-value extractor: ``"ThePhantom rolled a 8"`` → ``8``. The rolled total is
 #: the only per-game dice-luck covariate (brief §5.4); a roll line whose number
 #: does not OCR is skipped rather than fabricated.
@@ -149,13 +157,15 @@ class GameFrames:
 
     ``setup_frames`` are the ≥2 setup-window frames the board-stability gate agrees
     across; ``post_setup_frame`` is the order-blind 8-pieces-down frame the openings
-    CV reads; ``empty_baseline`` the no-pieces board (the green-tile-subtraction
-    source, §5.13); ``grant_frames`` every frame the ``"received starting
-    resources"`` line is visible on (the multi-frame CONSENSUS grant read).
+    CV reads, or ``None`` when no such frame exists in the window (a typed
+    :data:`POST_SETUP_UNRESOLVED_REASON` reject — NEVER an end-game fallback);
+    ``empty_baseline`` the no-pieces board (the green-tile-subtraction source,
+    §5.13); ``grant_frames`` every frame the ``"received starting resources"`` line
+    is visible on (the multi-frame CONSENSUS grant read).
     """
 
     setup_frames: tuple[DecodedFrame, ...]
-    post_setup_frame: DecodedFrame
+    post_setup_frame: DecodedFrame | None
     empty_baseline: npt.NDArray[np.uint8]
     grant_frames: tuple[DecodedFrame, ...]
 
@@ -277,16 +287,22 @@ class HarvestTelemetry:
 def _draft_order(events: Sequence[LogEvent], handles: tuple[str, str]) -> tuple[str, ...]:
     """The length-4 snake draft order ``(a, b, b, a)`` for the two handles.
 
-    ``a`` is the FIRST player to place a setup settlement (snake 1→2→2→1 places
-    ``a`` first and last); ``b`` is the other handle. When no setup-settlement line
+    ``a`` is the FIRST player to place a setup piece (snake 1→2→2→1 places ``a``
+    first and last); ``b`` is the other handle. When no setup-placement line
     resolved (a missing / unsampled draft), falls back to sorted handles — the
     resulting record is order-unestablished (the log-side ordinal cannot fire) and
     so EVAL-excluded regardless, and this only keeps the record CONTRACT-valid
     (``draft_order`` must be a snake) so the §5.6 audit row still loads.
+
+    ``setup_placed_any`` (the noun-less kind real footage actually produces — the
+    piece is an ICON) counts as a setup placement here: the FIRST placement of a
+    snake draft is a settlement either way, so the first-placer identity is the same
+    signal. This is robust to the log panel's re-OCR duplication, which repeats lines
+    but never reorders the FIRST occurrence.
     """
     first: str | None = None
     for event in events:
-        if event.kind == "setup_settlement" and event.actor in handles:
+        if event.kind in ("setup_settlement", "setup_placed_any") and event.actor in handles:
             first = event.actor
             break
     if first is None:
@@ -452,6 +468,8 @@ def _read_game_inputs(
     gf = ctx.game_frames[segment_index]
     if gf is None:  # segment gathered < 2 frames — too few to gate board stability
         return _reject_inputs(segment_events, ctx.handles, FRAMES_UNROUTED_REASON)
+    if gf.post_setup_frame is None:  # no honest 8-pieces-down frame exists in the window
+        return _reject_inputs(segment_events, ctx.handles, POST_SETUP_UNRESOLVED_REASON)
     board = read_board_stable([f.frame for f in gf.setup_frames])
     if board is None:
         return _reject_inputs(segment_events, ctx.handles, BOARD_UNREADABLE_REASON)
@@ -907,7 +925,21 @@ def _route_frames_to_games(
 #: The main-game piece-placing events. The FIRST of these inside a game window marks
 #: the end of the stable 8-pieces-down opening board — after it the board no longer
 #: shows exactly the setup pieces the openings CV demands.
-_MAIN_GAME_BUILD_KINDS = frozenset({"built_settlement", "built_city", "built_road"})
+_MAIN_GAME_BUILD_KINDS = frozenset(
+    # ``built_any`` is the noun-less kind real footage actually produces (Colonist
+    # renders the built piece as an ICON, so "built a Settlement" never OCRs as text).
+    # Without it NO build is ever seen on video, the boundary below is always None,
+    # and the old ``bucket[-1]`` fallback handed the openings CV the END-GAME frame.
+    {"built_settlement", "built_city", "built_road", "built_any"}
+)
+
+#: Events proving a game's board CANNOT still be 8-pieces-down at the window's end.
+#: A game that reached a 15-VP victory (or a resign after a real game) necessarily
+#: built — so a window carrying one of these but logging NO build did not "never leave
+#: setup"; its builds were simply never sampled, and its last frame is an END-GAME
+#: board. A bare ``roll`` is deliberately NOT here: a game can roll and then be cut off
+#: without ever building, and that window IS still a legitimate 8-pieces-down read.
+_PAST_SETUP_KINDS = frozenset({"victory", "resign"})
 
 
 def _post_setup_frame(
@@ -915,18 +947,31 @@ def _post_setup_frame(
     seg_range: tuple[int, int],
     all_events: tuple[LogEvent, ...],
     global_hi_by_frame: dict[int, int],
-) -> DecodedFrame:
+) -> DecodedFrame | None:
     """The 8-pieces-down post-setup frame for a game — NOT the game's last frame.
 
     The openings detector demands exactly the opening 8 setup pieces (4 settlements +
     4 roads). ``bucket[-1]`` is the game's LAST (end-game) frame — a board cluttered
     with every main-game piece — which the detector cannot read. The opening board is
     stable from the final setup placement until the game's FIRST main-game build
-    (``built_settlement`` / ``built_city`` / ``built_road``), so the latest frame whose
-    whole OCR window precedes that first build still shows exactly the 8 setup pieces.
-    Falls back to the first bucket frame when the first build already lands inside the
-    opening frame's window, and to the last frame when the game logs no build at all (a
-    cutoff that never left the setup board — the whole window is still 8-pieces-down).
+    (:data:`_MAIN_GAME_BUILD_KINDS`), so the latest frame whose whole OCR window
+    precedes that first build still shows exactly the 8 setup pieces.
+
+    When the window logs **no build at all** there are two very different cases, and
+    conflating them is a fail-OPEN bug (it is what made every real-video game read out
+    as the "Well Played!" end-game stats overlay):
+
+    * the game never left setup (a cutoff mid-draft) — no roll, no victory — so the
+      whole window IS still 8-pieces-down and ``bucket[-1]`` is correct; or
+    * the game demonstrably played on (it carries rolls and/or a victory) but its
+      builds were invisible to the log — the board is NOT 8-pieces-down at the end,
+      and there is no frame we can honestly nominate. Return ``None`` → the game reads
+      out as a typed :data:`POST_SETUP_UNRESOLVED_REASON` reject.
+
+    When a build exists but no sampled frame's OCR window fully precedes it, falls back
+    to the window's FIRST frame (the earliest, least-built board) — a best-effort the
+    openings CV independently validates (it demands exactly 8 pieces and typed-rejects
+    otherwise), so this cannot fail open.
     """
     rlo, rhi = seg_range
     boundary: int | None = None
@@ -935,7 +980,10 @@ def _post_setup_frame(
             boundary = i
             break
     if boundary is None:
-        return bucket[-1]
+        played_on = any(all_events[i].kind in _PAST_SETUP_KINDS for i in range(rlo, rhi))
+        if played_on:
+            return None  # builds unreadable — the last frame is NOT the opening board
+        return bucket[-1]  # true setup-only cutoff: the window never left the draft
     pre_build = [f for f in bucket if global_hi_by_frame[id(f)] <= boundary]
     return pre_build[-1] if pre_build else bucket[0]
 

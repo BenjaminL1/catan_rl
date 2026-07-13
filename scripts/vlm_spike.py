@@ -610,6 +610,13 @@ def prepare_frames_from_video(
             continue
         gf = ctx.game_frames[seg_idx]
         assert gf is not None
+        if gf.post_setup_frame is None:
+            # No honest 8-pieces-down frame exists in this window (the game reached a
+            # victory but its builds were never sampled — harvest's typed
+            # POST_SETUP_UNRESOLVED reject). Emitting the window's END-GAME frame here
+            # is exactly the fail-open this pipeline no longer does: skip the game.
+            print(f"  {video} g{game_index}: post-setup frame unresolved — skipped")
+            continue
         board = read_board_stable([f.frame for f in gf.setup_frames])
         game_dir = out_root / _game_key(video, game_index)
         game_dir.mkdir(parents=True, exist_ok=True)

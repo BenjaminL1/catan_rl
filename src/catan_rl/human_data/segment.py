@@ -82,12 +82,18 @@ _GAMEPLAY_KINDS: frozenset[str] = frozenset(
     {
         "setup_settlement",
         "setup_road",
+        # Real footage renders the placed piece as an ICON, so the noun-bearing
+        # kinds above NEVER fire on video — only these noun-less kinds do. Omitting
+        # them left segmentation blind to every placement and build on real video
+        # (reset hygiene and the stale-victory gate saw setup/build bursts as empty).
+        "setup_placed_any",
         "starting_resources",
         "roll",
         "got_resources",
         "built_settlement",
         "built_city",
         "built_road",
+        "built_any",
         "bought_dev",
         "used_dev",
         "moved_robber",
@@ -106,7 +112,9 @@ _TERMINAL_KINDS: frozenset[str] = frozenset({"victory", "resign"})
 #: Setup-phase event kinds (the snake-draft placement burst). A fresh burst of
 #: these AFTER an own-game victory is a structural weld signal (a new game welded
 #: into the window without an intervening reset — see :func:`_has_post_victory_setup`).
-_SETUP_KINDS: frozenset[str] = frozenset({"setup_settlement", "setup_road", "starting_resources"})
+_SETUP_KINDS: frozenset[str] = frozenset(
+    {"setup_settlement", "setup_road", "setup_placed_any", "starting_resources"}
+)
 
 
 @dataclass(frozen=True, slots=True)

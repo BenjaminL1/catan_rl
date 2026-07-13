@@ -379,6 +379,79 @@ def test_post_setup_frame_build_in_opening_window_falls_back_to_first() -> None:
     assert harvest._post_setup_frame(frames, (0, 2), all_events, hi) is frames[0]
 
 
+# --- NOUN-LESS (icon) footage: the real-video frame-routing path ---------------
+#
+# Colonist renders placed/built pieces as ICONS, so real footage only ever yields
+# the noun-less kinds. Before this was handled, NO build was ever seen on video, the
+# boundary was always None, and _post_setup_frame returned bucket[-1] — the END-GAME
+# "Well Played!" stats overlay. That fail-OPEN is what drove real-video yield to 0.
+
+
+def test_post_setup_frame_bounds_on_noun_less_built_any() -> None:
+    # The real-footage shape: setup_placed_any x8 then built_any (the icon-rendered
+    # build). built_any MUST bound the opening window exactly like built_settlement.
+    all_events = (
+        LogEvent("setup_placed_any", "a", ""),  # 0
+        LogEvent("setup_placed_any", "a", ""),  # 1
+        LogEvent("starting_resources", "a", ""),  # 2  (8 pieces down)
+        LogEvent("roll", "a", ""),  # 3
+        LogEvent("built_any", "a", ""),  # 4  <- first build (boundary)
+        LogEvent("victory", "a", ""),  # 5
+    )
+    frames = [object() for _ in range(4)]
+    hi = {id(frames[0]): 2, id(frames[1]): 4, id(frames[2]): 5, id(frames[3]): 6}
+    got = harvest._post_setup_frame(frames, (0, 6), all_events, hi)
+    assert got is frames[1]  # the pre-build opening frame, NOT the end-game frames[-1]
+
+
+def test_post_setup_frame_victory_without_build_rejects_instead_of_end_game_frame() -> None:
+    # THE BUG THIS FIXES: a game that reached VICTORY but whose build lines were never
+    # sampled. It cannot still be 8-pieces-down (you cannot reach 15 VP without
+    # building), so the last frame is an END-GAME board. Return None (typed reject),
+    # never bucket[-1].
+    all_events = (
+        LogEvent("setup_placed_any", "a", ""),
+        LogEvent("starting_resources", "a", ""),
+        LogEvent("roll", "a", ""),
+        LogEvent("victory", "a", ""),
+    )
+    frames = [object(), object()]
+    hi = {id(frames[0]): 2, id(frames[1]): 4}
+    assert harvest._post_setup_frame(frames, (0, 4), all_events, hi) is None
+
+
+def test_post_setup_frame_roll_without_build_still_reads_last_frame() -> None:
+    # A bare roll does NOT prove the board left setup (a game can roll then be cut off
+    # without building), so this window is still a legitimate 8-pieces-down read.
+    all_events = (
+        LogEvent("setup_placed_any", "a", ""),
+        LogEvent("starting_resources", "a", ""),
+        LogEvent("roll", "a", ""),
+    )
+    frames = [object(), object()]
+    hi = {id(frames[0]): 2, id(frames[1]): 3}
+    assert harvest._post_setup_frame(frames, (0, 3), all_events, hi) is frames[-1]
+
+
+def test_draft_order_first_placer_from_noun_less_setup_events() -> None:
+    # Real footage yields only setup_placed_any; the FIRST placement of a snake draft
+    # is a settlement either way, so the first-placer identity still resolves. Robust
+    # to the log panel's re-OCR duplication (which repeats lines, never reorders the
+    # first occurrence).
+    events = [
+        LogEvent("roll", "b", ""),
+        LogEvent("setup_placed_any", "b", ""),  # b places first
+        LogEvent("setup_placed_any", "b", ""),  # duplicate re-OCR / the road
+        LogEvent("setup_placed_any", "a", ""),
+    ]
+    assert harvest._draft_order(events, ("a", "b")) == ("b", "a", "a", "b")
+
+
+def test_draft_order_falls_back_to_sorted_handles_with_no_placements() -> None:
+    events = [LogEvent("roll", "a", ""), LogEvent("got_resources", "b", "")]
+    assert harvest._draft_order(events, ("a", "b")) == ("a", "b", "b", "a")
+
+
 def test_dominant_segment_assigns_by_max_overlap_ties_to_later() -> None:
     # segment_games windows are contiguous; a frame is routed to the segment its
     # events overlap most (ties -> the later segment), so the router agrees with the
