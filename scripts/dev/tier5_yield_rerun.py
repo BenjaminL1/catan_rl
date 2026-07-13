@@ -70,7 +70,9 @@ def probe_video(video: str) -> dict:
             gf = ctx.game_frames[seg_idx]
             assert gf is not None
             clean_opening = gf.post_setup_frame is not None
-            grants = {h: harvest._consensus_grant(h, gf.grant_frames) for h in ctx.handles}
+            grants = {
+                h: harvest._consensus_grant(h, gf.grant_frames, ctx.handles) for h in ctx.handles
+            }
             grants_readable = all(g is not None for g in grants.values())
         games.append(
             {

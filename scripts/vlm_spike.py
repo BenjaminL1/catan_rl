@@ -634,7 +634,7 @@ def prepare_frames_from_video(
         granted_resources = {
             handle: dict(grant)
             for handle in ctx.handles
-            if (grant := harvest._consensus_grant(handle, gf.grant_frames)) is not None
+            if (grant := harvest._consensus_grant(handle, gf.grant_frames, ctx.handles)) is not None
         }
         meta: dict[str, Any] = {
             "video": video,

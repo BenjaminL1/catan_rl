@@ -74,7 +74,13 @@ from catan_rl.human_data.glyph_anchor import (
     detect_glyph_boxes,
 )
 from catan_rl.human_data.ingest import DecodedFrame, ingest_video
-from catan_rl.human_data.logparse import LogEvent, crop_log, ocr_log_crop, parse_log
+from catan_rl.human_data.logparse import (
+    LogEvent,
+    _resolve_actor,
+    crop_log,
+    ocr_log_crop,
+    parse_log,
+)
 from catan_rl.human_data.openings import OpeningResult, detect_openings_result, read_hud_seat_colors
 from catan_rl.human_data.orientation import MIN_RESOLUTION, establish_placement_order
 from catan_rl.human_data.record import (
@@ -510,7 +516,7 @@ def _read_game_inputs(
     )
     granted: dict[str, Counter[str] | None] = {}
     for handle in ctx.handles:
-        granted[handle] = _consensus_grant(handle, gf.grant_frames)
+        granted[handle] = _consensus_grant(handle, gf.grant_frames, ctx.handles)
     dice_log = _dice_log(segment_events)
     return GameInputs(
         board=board,
@@ -1035,7 +1041,9 @@ def _dominant_segment(lo: int, hi: int, ranges: list[tuple[int, int]]) -> int | 
 
 
 def _consensus_grant(
-    handle: str, grant_frames: tuple[DecodedFrame, ...]
+    handle: str,
+    grant_frames: tuple[DecodedFrame, ...],
+    handles: Sequence[str] = (),
 ) -> Counter[str] | None:  # pragma: no cover - real-run path
     """Multi-frame CONSENSUS grant read for one player across the grant-line frames.
 
@@ -1045,11 +1053,15 @@ def _consensus_grant(
     requires ≥2 frames to agree byte-identical (fail-closed, brief §5.2). ``None``
     when the boxes cannot be localised or the reads disagree — the game then falls
     out as glyph-unreadable rather than feeding the firewall a fabricated multiset.
+
+    ``handles`` (both of the game's handles) is forwarded to :func:`_grant_line_boxes`
+    so the grant line's actor is resolved FUZZILY — an OCR-mangled handle otherwise
+    matches no line and silently kills every game of the video (see that function).
     """
     frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]] = []
     for frame in grant_frames:
         crop = crop_log(frame.frame)
-        line_box, text_boxes = _grant_line_boxes(crop, handle)
+        line_box, text_boxes = _grant_line_boxes(crop, handle, handles)
         if line_box is None:
             continue
         boxes = detect_glyph_boxes(crop, line_box, text_boxes)
@@ -1076,7 +1088,9 @@ def _boxes_reader() -> Any:  # pragma: no cover - real-run path (easyocr, mocked
 
 
 def _grant_line_boxes(
-    crop_rgb: npt.NDArray[np.uint8], handle: str
+    crop_rgb: npt.NDArray[np.uint8],
+    handle: str,
+    handles: Sequence[str] = (),
 ) -> tuple[tuple[int, int, int, int] | None, list[tuple[int, int, int, int]]]:  # pragma: no cover
     """OCR the log crop with bounding boxes; return the grant line's box + all text boxes.
 
@@ -1086,7 +1100,22 @@ def _grant_line_boxes(
     (:func:`_boxes_reader`) — the model load is ~seconds, and this runs once per
     grant frame per player, so a fresh reader per call dominated the harvest wall
     clock.
+
+    **The handle is matched FUZZILY, not by substring.** OCR mangles handles mid-word
+    (``"rayman147"`` reads as ``"raymani47"`` / ``"rayman|47"`` — the exact case
+    :mod:`~catan_rl.human_data.logparse` documents), and an ``in``-substring test on
+    the OCR text then MISSES the line entirely: no line box ⇒ no glyph boxes ⇒ the
+    grant consensus returns ``None`` ⇒ the game rejects ``glyph_unreadable``. Because
+    the glyph anchor needs BOTH players' grants, one mangled handle silently killed
+    EVERY game of a video (measured: 6/6 games of ``9Sm86ml04aI``, whose opponent is
+    ``rayman147``, had clean opening frames yet zero readable grants). So the actor is
+    resolved with the module's existing fuzzy leading-token resolver
+    (:func:`~catan_rl.human_data.logparse._resolve_actor`, bigram argmax over the two
+    KNOWN handles — order-independent, and it will not mis-bind one player onto the
+    other). ``handles`` should carry both of the game's handles so the argmax can
+    discriminate; it falls back to ``(handle,)`` for callers that pass only one.
     """
+    known = tuple(handles) or (handle,)
     results: list[tuple[list[list[int]], str, float]] = _boxes_reader().readtext(crop_rgb)
     text_boxes: list[tuple[int, int, int, int]] = []
     line_box: tuple[int, int, int, int] | None = None
@@ -1095,7 +1124,6 @@ def _grant_line_boxes(
         ys = [int(p[1]) for p in poly]
         box = (min(xs), min(ys), max(xs), max(ys))
         text_boxes.append(box)
-        low = text.lower()
-        if "received starting resources" in low and handle.lower() in low:
+        if "received starting resources" in text.lower() and _resolve_actor(text, known) == handle:
             line_box = box
     return line_box, text_boxes

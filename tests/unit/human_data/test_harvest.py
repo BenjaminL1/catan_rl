@@ -452,6 +452,42 @@ def test_draft_order_falls_back_to_sorted_handles_with_no_placements() -> None:
     assert harvest._draft_order(events, ("a", "b")) == ("a", "b", "b", "a")
 
 
+# --- grant-line handle matching must be FUZZY (OCR mangles handles) -----------
+#
+# The grant line is located by OCR text. OCR mangles handles mid-word
+# ("rayman147" -> "raymani47" / "rayman|47"), so an exact `handle in text` test MISSES
+# the line: no line box -> no glyph boxes -> the grant consensus returns None -> the
+# game rejects `glyph_unreadable`. The glyph anchor needs BOTH players' grants, so ONE
+# mangled handle silently killed EVERY game of a video (measured: 6/6 games of
+# 9Sm86ml04aI, opponent `rayman147`, had clean opening frames yet zero readable grants).
+
+
+@pytest.mark.parametrize(
+    "ocr_text",
+    [
+        "rayman147 received starting resources",  # clean
+        "raymani47 received starting resources",  # OCR mangles the digit boundary
+        "rayman|47 received starting resources",  # OCR mangles it differently
+    ],
+)
+def test_grant_line_actor_resolves_through_ocr_mangling(ocr_text: str) -> None:
+    from catan_rl.human_data.logparse import _resolve_actor
+
+    handles = ("ThePhantom", "rayman147")
+    # The line must bind to rayman147 even when the handle is mangled — this is the
+    # resolution _grant_line_boxes now uses in place of a brittle substring test.
+    assert _resolve_actor(ocr_text, handles) == "rayman147"
+
+
+def test_grant_line_actor_does_not_misbind_the_other_player() -> None:
+    from catan_rl.human_data.logparse import _resolve_actor
+
+    handles = ("ThePhantom", "rayman147")
+    # Fuzziness must not bleed one player's grant onto the other: the argmax over the
+    # two KNOWN handles keeps ThePhantom's line bound to ThePhantom.
+    assert _resolve_actor("ThePhantom received starting resources", handles) == "ThePhantom"
+
+
 def test_dominant_segment_assigns_by_max_overlap_ties_to_later() -> None:
     # segment_games windows are contiguous; a frame is routed to the segment its
     # events overlap most (ties -> the later segment), so the router agrees with the
