@@ -556,12 +556,27 @@ def derive_screen_anchors(
 # ------------------------------------------------------------------- the reader
 
 
+def _rb_fail(diag: dict[str, Any] | None, reason: str) -> BoardRead | None:
+    """Record WHICH fail-closed gate rejected a frame, then reject it (return ``None``).
+
+    :func:`read_board` has ~10 independent reject gates and used to return a bare
+    ``None`` from all of them, so a ``board_unreadable`` game could not say WHY — the
+    same observability hole the grant path had. Every gate now names itself, so a reject
+    explains itself instead of needing a bespoke probe per video. Purely diagnostic: the
+    reject behaviour is byte-identical (``None`` either way).
+    """
+    if diag is not None:
+        diag["fail"] = reason
+    return None
+
+
 def read_board(
     frame_rgb: npt.NDArray[np.uint8],
     *,
     content_anchors: tuple[ContentAnchor, ...] | None = None,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
     min_screen_rule_gap: float = MIN_SCREEN_RULE_GAP,
+    diag: dict[str, Any] | None = None,
 ) -> BoardRead | None:
     """Parse the orientation-locked 19-hex board from a native-geometry **RGB**
     frame, or ``None`` if the frame is rejected (build brief §4 / §5.2).
@@ -598,21 +613,27 @@ def read_board(
     # desert (18), tolerating up to two occluded/animating tokens. Fewer than 16
     # (or more than 18) means the board is mid-animation — skip the frame.
     tokens = _detect_tokens(frame_rgb)
+    if diag is not None:
+        diag["n_tokens"] = len(tokens)
+        diag["tokens"] = [(float(x), float(y), float(d)) for x, y, d in tokens]
     if not NUM_HEXES - 3 <= len(tokens) <= NUM_HEXES - 1:
-        return None
+        return _rb_fail(diag, "token_count")
 
     token_xy = np.array([[x, y] for x, y, _ in tokens], float)
     candidates = _candidate_affines(token_xy, template.hex_centers)
     if not candidates:
-        return None  # RANSAC failed on every D6 candidate
+        return _rb_fail(diag, "no_affine")  # RANSAC failed on every D6 candidate
     scored = _score_screen_rule(candidates, token_xy, template.hex_centers)
     best_penalty, _refl, _rot, affine, residual = scored[0]
     second_penalty = scored[1][0] if len(scored) > 1 else float("inf")
     screen_rule_gap = float(second_penalty / best_penalty) if best_penalty > 0 else float("inf")
+    if diag is not None:
+        diag["screen_rule_gap"] = screen_rule_gap
+        diag["residual_px"] = float(residual)
     if screen_rule_gap < min_screen_rule_gap:
-        return None  # ambiguous / near-tied orientation — reject, do not coin-flip
+        return _rb_fail(diag, "screen_rule_gap")  # near-tied orientation — never coin-flip
     if residual > max_residual_px:
-        return None
+        return _rb_fail(diag, "residual")
 
     import cv2
 
@@ -632,17 +653,20 @@ def read_board(
 
     desert = _desert_hex(coverages)
     if desert is None:
-        return None  # desert white-coverage split not bimodal — ambiguous
+        return _rb_fail(diag, "desert_not_bimodal")
     desert_hex = desert
 
     # Resource firewall (a): reject a rank-sliced assignment whose adjacent hue
     # clusters are not clearly separated (a near-boundary WHEAT/SHEEP swap risk).
-    if hue_cluster_margin(samples, desert_hex) < MIN_HUE_CLUSTER_MARGIN:
-        return None
+    margin = hue_cluster_margin(samples, desert_hex)
+    if diag is not None:
+        diag["hue_margin"] = float(margin)
+    if margin < MIN_HUE_CLUSTER_MARGIN:
+        return _rb_fail(diag, "hue_margin")
 
     resources = classify_resources(samples, desert_hex)
     if dict(Counter(r for r in resources if r != "DESERT")) != _NONDESERT_COUNTS:
-        return None
+        return _rb_fail(diag, "nonstandard_resources")
 
     hexes: list[dict[str, Any]] = []
     numbers: list[int] = []
@@ -659,8 +683,10 @@ def read_board(
             numbers.append(number)
         hexes.append({"hex_id": e, "resource": resources[e], "number": number})
 
-    if not pip_ok or Counter(numbers) != Counter(_STANDARD_NUMBER_BAG_EXPANDED):
-        return None
+    if not pip_ok:
+        return _rb_fail(diag, "ocr_pip_mismatch")
+    if Counter(numbers) != Counter(_STANDARD_NUMBER_BAG_EXPANDED):
+        return _rb_fail(diag, "nonstandard_number_bag")
 
     # Content-anchor cross-check (§5.2): resource firewall (b) + the independent
     # orientation corroboration. When the caller passes no anchors, derive them
@@ -673,15 +699,17 @@ def read_board(
         else derive_screen_anchors(hexes, hex_px, frame_rgb, diam)
     )
     if len(anchors) < 2:
-        return None
+        return _rb_fail(diag, "too_few_anchors")
     by_id = {int(h["hex_id"]): h for h in hexes}
     for anchor in anchors:
         if anchor.resource == "DESERT":
             raise ValueError("content anchor must not be the desert (it moves per game)")
         got = by_id[anchor.engine_id]
         if got["resource"] != anchor.resource or got["number"] != anchor.number:
-            return None
+            return _rb_fail(diag, "anchor_disagrees")
 
+    if diag is not None:
+        diag["fail"] = None
     return BoardRead(
         hexes=tuple(hexes),
         affine=affine,
@@ -726,6 +754,7 @@ def read_board_stable(
     *,
     max_residual_px: float = MAX_AFFINE_RESIDUAL_PX,
     min_screen_rule_gap: float = MIN_SCREEN_RULE_GAP,
+    diag_list: list[dict[str, Any]] | None = None,
 ) -> BoardRead | None:
     """Cross-frame board-stability gate (build brief §5.2, mandatory).
 
@@ -741,9 +770,15 @@ def read_board_stable(
         raise ValueError("read_board_stable requires >= 2 frames of the same game")
     reads: list[BoardRead] = []
     for frame in frames_rgb:
+        d: dict[str, Any] = {}
         result = read_board(
-            frame, max_residual_px=max_residual_px, min_screen_rule_gap=min_screen_rule_gap
+            frame,
+            max_residual_px=max_residual_px,
+            min_screen_rule_gap=min_screen_rule_gap,
+            diag=d if diag_list is not None else None,
         )
+        if diag_list is not None:
+            diag_list.append(d)
         if result is not None:
             reads.append(result)
     if len(reads) < 2:
@@ -751,6 +786,8 @@ def read_board_stable(
     first = reads[0]
     for other in reads[1:]:
         if list(other.hexes) != list(first.hexes) or other.desert_hex != first.desert_hex:
+            if diag_list is not None:
+                diag_list.append({"fail": "cross_frame_disagreement"})
             return None  # cross-frame disagreement — an orientation flip; reject
     return first
 

@@ -359,3 +359,53 @@ def test_read_board_stable_requires_two_frames() -> None:
 
     with pytest.raises(ValueError, match=">= 2 frames"):
         read_board_stable([np.zeros((4, 4, 3), np.uint8)])
+
+
+# --- rejection DIAGNOSTICS (why a board_unreadable game failed) -----------------
+#
+# read_board has ~10 independent fail-closed gates and used to return a bare None from
+# every one, so a `board_unreadable` game could not say WHICH gate rejected it — the
+# same observability hole the grant path had (fixed in 7151308). 6 of 14 games in the
+# 8-video sweep died here, so naming the gate is the prerequisite for fixing it.
+# Purely diagnostic: the reject behaviour is byte-identical (None either way).
+
+
+def test_read_board_diag_names_the_token_count_gate() -> None:
+    pytest.importorskip("cv2")
+    from catan_rl.human_data.board_cv import read_board
+
+    blank = np.zeros((1080, 1920, 3), dtype=np.uint8)  # no number-token disks at all
+    diag: dict[str, Any] = {}
+    assert read_board(blank, diag=diag) is None
+    assert diag["fail"] == "token_count"
+    assert diag["n_tokens"] == 0  # and it records HOW MANY it found
+
+
+@pytest.mark.slow
+def test_read_board_diag_is_none_on_success_and_reject_is_unchanged() -> None:
+    cv2 = pytest.importorskip("cv2")
+    pytest.importorskip("easyocr")
+    from catan_rl.human_data.board_cv import read_board
+
+    bgr = cv2.imread(str(_FIXTURES / "game1_postsetup_t247.png"))
+    assert bgr is not None
+    frame = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    diag: dict[str, Any] = {}
+    board = read_board(frame, diag=diag)
+    assert board is not None
+    assert diag["fail"] is None
+    # the diag out-param must not change the RESULT — identical hexes without it
+    plain = read_board(frame)
+    assert plain is not None
+    assert list(plain.hexes) == list(board.hexes)
+
+
+def test_read_board_stable_diag_list_records_one_entry_per_frame() -> None:
+    pytest.importorskip("cv2")
+    from catan_rl.human_data.board_cv import read_board_stable
+
+    blank = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    diags: list[dict[str, Any]] = []
+    assert read_board_stable([blank, blank.copy()], diag_list=diags) is None
+    assert len(diags) == 2
+    assert all(d["fail"] == "token_count" for d in diags)
