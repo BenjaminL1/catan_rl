@@ -1,0 +1,27 @@
+{
+  "video_id": "l-3s-xPwyIs",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening board. Colours per meta: ThePhantom=BLACK, hakutamu=RED. Read against the CV's own vertex overlay (board fitted from empty_baseline, residual 0.85px). ThePhantom settlements v6, v21 (roads v6-v2, v21-v20); hakutamu settlements v8, v18 (roads v8-v7, v18-v16). GRANT SELF-CHECK PASSES: ThePhantom's grant {SHEEP:2, WOOD:1} equals exactly v6's hexes (WOOD5+SHEEP6+SHEEP10) and NOT v21's (BRICK9+WHEAT10+WHEAT5); hakutamu's grant {BRICK:1, ORE:1, WOOD:1} equals exactly v8's hexes (WOOD5+ORE8+BRICK3) and NOT v18's (DESERT+SHEEP8+WHEAT10). Each grant matches EXACTLY ONE settlement, so the glyph anchor independently corroborates this localization.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [0, 1, 2]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    },
+    "hakutamu": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    }
+  }
+}
