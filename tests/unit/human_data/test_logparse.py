@@ -440,3 +440,87 @@ def test_crop_log_extracts_top_right_panel() -> None:
     assert crop.shape == (exp_h, exp_w, 3)
     # It is the top-right sub-image (x starts at 0.645·W, y at the top).
     assert LOG_CROP_FRAC == (0.645, 0.0, 1.0, 0.3)
+
+
+# --- NOUN-LESS placed/built lines (Colonist renders the piece as an ICON) -----
+#
+# Verified on real footage (33KR75rhTgo): every setup/build line OCRs as
+# "<handle> placed a" / "<handle> built a (+1 VP)" with NO piece noun — the piece
+# is a coloured glyph. The noun-bearing patterns can therefore never fire on real
+# video; these fallbacks are what make real-footage setup parsing possible at all.
+
+
+def test_noun_less_placed_line_classifies_as_setup_placed_any() -> None:
+    parsed = parse_log(["ThePhantom placed a"], _HANDLES)
+    assert [e.kind for e in parsed.events] == ["setup_placed_any"]
+    assert parsed.events[0].actor == "ThePhantom"
+
+
+def test_noun_less_built_line_classifies_as_built_any() -> None:
+    parsed = parse_log(["ThePhantom built a (+1 VP)"], _HANDLES)
+    assert [e.kind for e in parsed.events] == ["built_any"]
+    assert parsed.events[0].actor == "ThePhantom"
+
+
+def test_noun_bearing_setup_lines_keep_their_specific_kinds() -> None:
+    # REGRESSION LOCK: the grammar table is first-hit-wins, so the noun-less
+    # fallbacks must sit AFTER the specific patterns. A fixture line that DOES
+    # carry the noun must still classify specifically, never as *_any.
+    parsed = parse_log(
+        [
+            "ThePhantom placed a Settlement",
+            "ThePhantom placed a Road",
+            "ThePhantom built a Settlement",
+            "ThePhantom built a City",
+            "ThePhantom built a Road",
+        ],
+        _HANDLES,
+    )
+    assert [e.kind for e in parsed.events] == [
+        "setup_settlement",
+        "setup_road",
+        "built_settlement",
+        "built_city",
+        "built_road",
+    ]
+
+
+def test_noun_less_pov_you_line_attributes_to_pov_handle() -> None:
+    parsed = parse_log(["You placed a"], _HANDLES, pov_handle="ThePhantom")
+    assert [e.kind for e in parsed.events] == ["setup_placed_any"]
+    assert parsed.events[0].actor == "ThePhantom"
+
+
+def test_icon_stripped_1v1_setup_transcript_parses_to_full_event_stream() -> None:
+    # The real shape: 8 noun-less "placed a" lines in snake order (A,A,B,B,B,B,A,A)
+    # with the two grant lines interleaved after each player's 2nd settlement.
+    a, b = _HANDLES
+    lines = [
+        f"{a} placed a",  # A settlement 1
+        f"{a} placed a",  # A road 1
+        f"{b} placed a",  # B settlement 1
+        f"{b} placed a",  # B road 1
+        f"{b} placed a",  # B settlement 2
+        f"{b} placed a",  # B road 2
+        f"{b} received starting resources",
+        f"{a} placed a",  # A settlement 2
+        f"{a} placed a",  # A road 2
+        f"{a} received starting resources",
+    ]
+    parsed = parse_log(lines, _HANDLES)
+    kinds = [e.kind for e in parsed.events]
+    assert kinds == [
+        "setup_placed_any",
+        "setup_placed_any",
+        "setup_placed_any",
+        "setup_placed_any",
+        "setup_placed_any",
+        "setup_placed_any",
+        "starting_resources",
+        "setup_placed_any",
+        "setup_placed_any",
+        "starting_resources",
+    ]
+    placed = [e for e in parsed.events if e.kind == "setup_placed_any"]
+    assert len(placed) == 8
+    assert [e.actor for e in placed] == [a, a, b, b, b, b, a, a]

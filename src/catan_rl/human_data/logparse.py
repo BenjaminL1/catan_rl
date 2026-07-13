@@ -59,12 +59,14 @@ LogEventKind = Literal[
     "game_reset",
     "setup_settlement",
     "setup_road",
+    "setup_placed_any",
     "starting_resources",
     "roll",
     "got_resources",
     "built_settlement",
     "built_city",
     "built_road",
+    "built_any",
     "bought_dev",
     "used_dev",
     "moved_robber",
@@ -295,10 +297,21 @@ _RESIGN = re.compile(r"has left the game|left the game|forfeit|resign")
 _GRAMMAR: tuple[tuple[re.Pattern[str], LogEventKind], ...] = (
     (re.compile(r"placed a settlement"), "setup_settlement"),
     (re.compile(r"placed a road"), "setup_road"),
+    # NOUN-LESS fallback — MUST stay after the two noun-bearing setup patterns
+    # (first-hit-wins). Colonist renders the placed piece as a coloured ICON, so
+    # real footage OCRs as "<handle> placed a" with no noun at all (verified on
+    # 33KR75rhTgo); the noun-bearing patterns above only ever fire on the
+    # hand-written fixtures. The piece TYPE is recovered downstream by setup
+    # parity (settlement, road, settlement, road, ...), not from the text.
+    (re.compile(r"placed a"), "setup_placed_any"),
     (re.compile(r"received starting resources"), "starting_resources"),
     (re.compile(r"built a city"), "built_city"),
     (re.compile(r"built a settlement"), "built_settlement"),
     (re.compile(r"built a road"), "built_road"),
+    # NOUN-LESS fallback — MUST stay after the three noun-bearing build patterns.
+    # Only "a build happened" is needed downstream (it bounds the stable
+    # 8-pieces-down opening window); the subtype is never used.
+    (re.compile(r"built a"), "built_any"),
     (re.compile(r"\brolled\b"), "roll"),
     (re.compile(r"moved robber"), "moved_robber"),
     (re.compile(r"used (knight|monopoly|year of plenty|road building)"), "used_dev"),
