@@ -92,6 +92,32 @@ the scoreboard-eligibility discount.
 
 <!-- GATING -->
 
+**Point estimate AND Wilson-LB, both propagated** (panel-mandated framing — the cell must
+never be quoted from the point estimate alone). games/video = 17/8 = 2.125 from the pilot.
+
+| yield (accepted / seen) | accept fraction | cell |
+|---|---|---|
+| 11/17 — point estimate | 0.647 | **168** (≥ 147) |
+| 11/17 — Wilson-95%-LB | 0.413 | **107** (< 147) |
+| 10/17 — point estimate | 0.588 | 153 (≥ 147) |
+| 10/17 — Wilson-95%-LB | 0.360 | 94 (< 147) |
+
+The 10–11/17 yield is the post-grant-fix projection (guarded subset-collapse +
+OCR-tolerant grant-line matcher); the newly grant-eligible games still need VLM
+localization + validator acceptance before they are corpus rows, so treat 11/17 as an
+upper bound until then.
+
+**Honesty caveats (all three bind the reading of the table):**
+
+1. **Single-video concentration.** The grant-fix rescues land on ONE video
+   (`9Sm86ml04aI`); the yield gain is not yet evidence of cross-video generalization.
+2. **Double-use of the 8-video pilot.** The SAME 8 videos supply BOTH the games/video
+   factor (2.125) and the yield fraction — the two multiplied terms are not independent
+   estimates, so the cell's true uncertainty is wider than the yield CI alone.
+3. **The 0.6 order-established factor is ASSUMED, not measured.** No pilot measurement
+   backs it; if the true scoreboard-eligibility fraction is lower, every cell above
+   shrinks proportionally.
+
 ### Pre-registered decision rule (verbatim)
 
 ```
@@ -104,6 +130,13 @@ cell < 100              -> ARCHIVE the corpus program
 ```
 
 <!-- DECISION -->
+
+**The point estimate clears CONTINUE; the CI does not — the decisive lever is MORE
+VIDEOS, not more fixes.** At n=17 the Wilson lower bound cannot clear 147 even at
+perfect yield propagation of the current fixes; the honest next compute spend is a wider
+pilot (e.g. **+10 videos**), which tightens the yield CI and independently re-measures
+games/video, rather than further per-game rescues. **The CONTINUE/ARCHIVE decision stays
+the user's** — this report presents both readings and does not presume either.
 
 ---
 
