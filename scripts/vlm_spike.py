@@ -647,6 +647,11 @@ def prepare_frames_from_video(
             grant = harvest._consensus_grant(handle, gf.grant_frames, ctx.handles, diag=d)
             if grant is not None:
                 granted_resources[handle] = dict(grant)
+                # Record HOW a non-unanimous grant was accepted (dominant_read /
+                # subset_collapse + the collapse events) so a rescue is verifiable
+                # from the meta alone; plain-unanimity accepts stay diag-less.
+                if "accepted_by" in d:
+                    grant_diag[handle] = d
             else:
                 grant_diag[handle] = d
         meta: dict[str, Any] = {
