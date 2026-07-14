@@ -732,6 +732,61 @@ def test_grant_dense_windows_empty_when_no_grant_seen() -> None:
     assert harvest._grant_dense_windows([], duration_s=600.0) == []
 
 
+# --- FIX B: the grant-line matcher now uses the anchor's OCR-tolerant GRANT_RE ---------
+# harvest used to match the grant line by EXACT substring "received starting resources"
+# at three sites; the anchor's own detector uses GRANT_RE = r"rece\w{0,4} starting
+# resources" (OCR mangles "received"). A mangled line therefore routed ZERO grant frames
+# (the grant_frames=0 signature of KvH76fJI4f0 g2). All three sites now alias GRANT_RE.
+
+
+def test_grant_re_is_ocr_tolerant_where_the_exact_substring_missed() -> None:
+    from catan_rl.human_data.glyph_anchor import GRANT_RE
+
+    # Manglings GRANT_RE accepts (rece + <=4 word chars + " starting resources")...
+    for ok in (
+        "thephantom received starting resources",
+        "thephantom recelved starting resources",  # 'i'->'l' OCR confusion
+        "thephantom recei starting resources",  # truncated
+    ):
+        assert GRANT_RE.search(ok), ok
+    # ...exactly the line the OLD exact-substring test dropped:
+    assert harvest._GRANT_PHRASE not in "thephantom recelved starting resources"
+    # non-grant lines still do not match at any site:
+    assert not GRANT_RE.search("thephantom rolled a 7")
+    assert not GRANT_RE.search("thephantom built a")
+
+
+def test_route_frames_to_games_routes_a_mangled_grant_line() -> None:
+    # Site 2 (frame routing): a frame whose grant line OCR'd as "recelved" is now selected
+    # as a grant frame. With the old exact substring this bucket had grant_frames=0 and the
+    # game died glyph_unreadable — the KvH76fJI4f0 g2 signature.
+    handles = ("phantom", "vale")
+    frames = [_decoded_frame(0.0), _decoded_frame(4.0), _decoded_frame(8.0)]
+    per_frame_lines = [
+        ["happy settling! list of commands: /help", "phantom placed a"],
+        ["vale placed a", "phantom recelved starting resources"],  # mangled 'received'
+        ["vale placed a", "phantom placed a"],
+    ]
+    routed = harvest._route_frames_to_games(list(frames), per_frame_lines, handles)
+    assert len(routed) == 1
+    assert routed[0] is not None
+    assert len(routed[0].grant_frames) == 1, "mangled grant line must still route a grant frame"
+
+
+def test_route_frames_to_games_no_grant_line_routes_zero() -> None:
+    # Control: a bucket with NO grant line (mangled or otherwise) yields grant_frames=0.
+    handles = ("phantom", "vale")
+    frames = [_decoded_frame(0.0), _decoded_frame(4.0), _decoded_frame(8.0)]
+    per_frame_lines = [
+        ["happy settling! list of commands: /help", "phantom placed a"],
+        ["vale placed a", "phantom rolled a 7"],
+        ["vale placed a", "phantom placed a"],
+    ]
+    routed = harvest._route_frames_to_games(list(frames), per_frame_lines, handles)
+    assert len(routed) == 1 and routed[0] is not None
+    assert len(routed[0].grant_frames) == 0
+
+
 def test_extract_context_uses_precomputed_lines_and_does_not_reocr(monkeypatch) -> None:
     # The two-pass ingest OCRs each frame ONCE and threads the lines through;
     # _extract_context must NOT run its own OCR when they are supplied (that would

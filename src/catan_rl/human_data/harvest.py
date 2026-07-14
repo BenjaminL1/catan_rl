@@ -80,6 +80,7 @@ from catan_rl.human_data.batch import (
 from catan_rl.human_data.board_cv import BoardRead, read_board_stable
 from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from catan_rl.human_data.glyph_anchor import (
+    GRANT_RE,
     MIN_GRANT_CONSENSUS_FRAMES,
     classify_granted_glyphs,
     consensus_granted_glyphs,
@@ -443,8 +444,12 @@ def _ingest(
     return frames
 
 
-#: The grant line's phrase — the ONLY log text whose sampling density gates the glyph
-#: anchor (and therefore whether a game is usable at all).
+#: The grant line's human-readable phrase — the ONLY log text whose sampling density gates
+#: the glyph anchor (and therefore whether a game is usable at all). Kept for documentation;
+#: all MATCHING goes through :data:`~catan_rl.human_data.glyph_anchor.GRANT_RE` (FIX B), the
+#: OCR-tolerant pattern the anchor's own detector uses, so a mangled "received" (which
+#: logparse still parses as a ``starting_resources`` event) can no longer produce a game
+#: with zero grant frames — the ``grant_frames=0`` signature of ``KvH76fJI4f0 g2``.
 _GRANT_PHRASE = "received starting resources"
 
 #: Seconds of dense (1 s) sampling to add on EACH side of a sparse frame that showed a
@@ -537,7 +542,7 @@ def _ingest_two_pass(
         grant_ts = [
             f.ts
             for f, ls in zip(frames, lines, strict=True)
-            if any(_GRANT_PHRASE in ln.lower() for ln in ls)
+            if any(GRANT_RE.search(ln.lower()) for ln in ls)
         ]
         windows = _grant_dense_windows(grant_ts, duration_s)
         if windows:
@@ -1135,7 +1140,6 @@ def _route_frames_to_games(
         buckets[seg].append(frame)
         global_hi_by_frame[id(frame)] = hi  # last all_events index this frame's OCR covers
 
-    grant = re.compile(r"received starting resources")
     line_by_frame = dict(zip((id(f) for f in frames), per_frame_lines, strict=True))
     routed: list[GameFrames | None] = []
     for seg_idx, bucket in enumerate(buckets):
@@ -1143,7 +1147,7 @@ def _route_frames_to_games(
             routed.append(None)  # too few frames to gate board stability (frames_unrouted)
             continue
         grant_frames = tuple(
-            f for f in bucket if any(grant.search(line.lower()) for line in line_by_frame[id(f)])
+            f for f in bucket if any(GRANT_RE.search(line.lower()) for line in line_by_frame[id(f)])
         )
         routed.append(
             GameFrames(
@@ -1568,6 +1572,6 @@ def _grant_line_boxes(
         ys = [int(p[1]) for p in poly]
         box = (min(xs), min(ys), max(xs), max(ys))
         text_boxes.append(box)
-        if "received starting resources" in text.lower() and _resolve_actor(text, known) == handle:
+        if GRANT_RE.search(text.lower()) and _resolve_actor(text, known) == handle:
             line_box = box
     return line_box, text_boxes
