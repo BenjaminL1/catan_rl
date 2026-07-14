@@ -944,3 +944,85 @@ def test_dominant_read_rejects_on_too_few_samples() -> None:
     frames = _reads({"WOOD:1": 3, "BRICK:1": 1})
     assert DOMINANT_READ_MIN_READS >= 5
     assert _dominant_grant_read(frames) is None
+
+
+# --- FIX A: guarded subset-collapse of dropped-icon partial reads ---------------------
+# When the minority frames read a strict SUBSET of the modal multiset (a card icon missed
+# in that frame), collapse them into the modal superset and re-test. Three fail-closed
+# guards keep this from ever fabricating a grant. Measured basis: 9Sm86ml04aI g5.
+
+
+def test_subset_collapse_accepts_g5_dropped_icon() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # MEASURED 9Sm86ml04aI g5: 13x{ORE,SHEEP,WOOD} vs 2x{ORE,SHEEP} (a dropped WOOD icon).
+    # The subset (n=2) collapses into the superset (n=13 >= 5 floor, >= 2x ratio, unique).
+    frames = _reads({"ORE:1,SHEEP:1,WOOD:1": 13, "ORE:1,SHEEP:1": 2})
+    assert consensus_granted_glyphs(frames) is None  # unanimity still refuses (bimodal)
+    diag: dict[str, Any] = {}
+    assert _collapse_grant_read(frames, diag=diag) == Counter({"ORE": 1, "SHEEP": 1, "WOOD": 1})
+    assert diag["accepted_by"] == "subset_collapse"
+    assert diag["collapsed"] == [
+        {"subset": {"ORE": 1, "SHEEP": 1}, "into": {"ORE": 1, "SHEEP": 1, "WOOD": 1}, "n": 2}
+    ]
+
+
+def test_subset_collapse_rejects_g3_below_superset_floor() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # MEASURED 9Sm86ml04aI g3: only 3 reads total. The superset support (2) is below the
+    # floor of 5 -> guard 1 blocks the collapse -> fail closed. The panel accepts this loss.
+    frames = _reads({"BRICK:1,WHEAT:1,WOOD:1": 2, "WOOD:1": 1})
+    assert _collapse_grant_read(frames) is None
+
+
+def test_subset_collapse_leaves_the_0Etc_swap_lost() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # 0EtcbG16kHA-style 6-vs-3 WHEAT<->ORE swap: neither read is a subset of the other
+    # (a competing hypothesis, not a dropped icon) -> no collapse -> stays lost (correct).
+    frames = _reads({"BRICK:1,WHEAT:1,WOOD:1": 6, "BRICK:1,ORE:1,WOOD:1": 3})
+    assert _collapse_grant_read(frames) is None
+
+
+def test_subset_collapse_dominant_path_unchanged_and_labelled() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # 47-vs-1 with a <=3-card stray: no subset relation, but the overwhelming-dominance
+    # rule (on the collapsed==raw tally) still accepts the modal read -> byte-identical
+    # modal accept, labelled dominant_read (precedence: no collapse happened).
+    frames = _reads({"BRICK:2,SHEEP:1": 47, "WOOD:1": 1})
+    diag: dict[str, Any] = {}
+    assert _collapse_grant_read(frames, diag=diag) == Counter({"BRICK": 2, "SHEEP": 1})
+    assert diag["accepted_by"] == "dominant_read"
+    assert "collapsed" not in diag
+
+
+def test_subset_collapse_tie_break_skips_two_maximal_supersets() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # Guard 2: the {ORE} subset (n=2) has TWO equal-support (n=6) strict supersets
+    # {ORE,WHEAT} and {BRICK,ORE,WHEAT} -> ambiguous target -> collapse SKIPPED -> the
+    # tally stays 3-way -> None. (Neither superset collapses either: 6 < 2x6 ratio.)
+    frames = _reads({"ORE:1,WHEAT:1": 6, "BRICK:1,ORE:1,WHEAT:1": 6, "ORE:1": 2})
+    assert _collapse_grant_read(frames) is None
+
+
+def test_subset_collapse_guard3_drops_4card_read_before_tally() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # Guard 3: the 9x 4-card read is a detector error (a setup grant is <=3 hexes) and is
+    # dropped BEFORE tallying -> the remaining 2x{BRICK,ORE,SHEEP} is unanimous -> accepts
+    # the 3-card read, and NEVER the 4-card superset.
+    frames = _reads({"BRICK:1,ORE:1,SHEEP:1,WOOD:1": 9, "BRICK:1,ORE:1,SHEEP:1": 2})
+    assert _collapse_grant_read(frames) == Counter({"BRICK": 1, "ORE": 1, "SHEEP": 1})
+
+
+def test_subset_collapse_is_additive_byte_identical_on_current_accepts() -> None:
+    from catan_rl.human_data.harvest import _collapse_grant_read
+
+    # Everything the CURRENT rules accept is returned byte-identical by the fallback.
+    # 47-vs-1 with the measured 4-card stray: guard 3 drops the stray -> the 47 unanimous
+    # 3-card reads still yield the identical multiset (via the unanimity-after-guard3 leg).
+    frames = _reads({"BRICK:2,SHEEP:1": 47, "BRICK:2,SHEEP:1,ORE:1": 1})
+    assert _collapse_grant_read(frames) == Counter({"BRICK": 2, "SHEEP": 1})

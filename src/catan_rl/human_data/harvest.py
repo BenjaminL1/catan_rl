@@ -80,6 +80,7 @@ from catan_rl.human_data.batch import (
 from catan_rl.human_data.board_cv import BoardRead, read_board_stable
 from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from catan_rl.human_data.glyph_anchor import (
+    MIN_GRANT_CONSENSUS_FRAMES,
     classify_granted_glyphs,
     consensus_granted_glyphs,
     detect_glyph_boxes,
@@ -1295,6 +1296,146 @@ def _dominant_grant_read(
     return Counter(dict(top))
 
 
+# --- FIX A: guarded subset-collapse of grant reads (dropped-icon partials) ------------
+# When the minority frames read a strict SUBSET of the modal multiset (one card-icon
+# missed in that instant), that is NOT a competing hypothesis — it is the same grant with
+# a dropped box. Collapse those subset frames into the modal SUPERSET, then re-test the
+# collapsed tally with the same fail-closed rules. Three MANDATORY guards keep this from
+# ever fabricating a grant (measured basis: 9Sm86ml04aI g5 = 13x{ORE,SHEEP,WOOD} vs
+# 2x{ORE,SHEEP}). The accepted multiset still flows through the UNCHANGED settlement-
+# matching anchor (orientation.assert_glyph_anchor), so the joint-D6-flip firewall is
+# never bypassed — this only decides WHICH multiset the anchor tests.
+#: A setup grant is the 2nd settlement's adjacent resources (<=3 hexes), so a read with
+#: >3 cards is definitionally a detector error (guard 3) — never a vote or collapse target.
+MAX_GRANT_CARDS = 3
+#: Guard 1: a subset collapses into a superset only if the superset has BOTH >= this many
+#: supporting frames AND >= SUBSET_COLLAPSE_MIN_RATIO x the subset's support. A bare 2-vs-1
+#: (n=3) never collapses — this deliberately drops 9Sm86ml04aI g3 (only 3 reads).
+SUBSET_COLLAPSE_MIN_SUPERSET = 5
+SUBSET_COLLAPSE_MIN_RATIO = 2
+
+
+def _is_strict_superset(sup: dict[str, int], sub: dict[str, int]) -> bool:
+    """True iff multiset ``sup`` strictly contains multiset ``sub`` (``sub`` is a proper
+    subset: every card count in ``sub`` is <= ``sup`` and the two are not equal)."""
+    return sup != sub and all(cnt <= sup.get(res, 0) for res, cnt in sub.items())
+
+
+def _grant_reads_tally(
+    frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]],
+    palette: Any = None,
+) -> Counter[tuple[tuple[str, int], ...]]:
+    """Tally the readable grant multisets across frames, AFTER guard 3 (drop any read with
+    > :data:`MAX_GRANT_CARDS` cards — a 4+-box read is a detector error and must never be a
+    consensus vote or a collapse target). Keyed by the sorted (res, count) tuple."""
+    reads = [
+        r
+        for crop, boxes in frames_boxes
+        if (
+            r := (
+                classify_granted_glyphs(crop, boxes)
+                if palette is None
+                else classify_granted_glyphs(crop, boxes, palette)
+            )
+        )
+        is not None
+        and sum(r.values()) <= MAX_GRANT_CARDS
+    ]
+    return Counter(tuple(sorted(r.items())) for r in reads)
+
+
+def _subset_collapse_tally(
+    tally: Counter[tuple[tuple[str, int], ...]],
+) -> tuple[Counter[tuple[tuple[str, int], ...]], list[dict[str, Any]]]:
+    """Collapse each strict-subset read into its UNIQUE maximal-support strict superset.
+
+    Guards 1 (:data:`SUBSET_COLLAPSE_MIN_SUPERSET` floor AND
+    :data:`SUBSET_COLLAPSE_MIN_RATIO` ratio) and 2 (a subset with two equal-support
+    maximal supersets does NOT collapse — fail closed on the tie). Single pass over the
+    tally sorted by descending support; a read acts as a collapse TARGET only with its
+    ORIGINAL (pre-collapse) support, so no chains/cascades form and the pass terminates in
+    one sweep. Returns ``(collapsed_tally, events)`` where each event is
+    ``{"subset", "into", "n"}``; total support is preserved (every read is counted once).
+    """
+    orig = dict(tally)
+    keys = [k for k, _ in tally.most_common()]  # descending original support
+    collapsed: Counter[tuple[tuple[str, int], ...]] = Counter()
+    events: list[dict[str, Any]] = []
+    for sub_key in keys:
+        sub = dict(sub_key)
+        sub_n = orig[sub_key]
+        supersets = [
+            (k, orig[k]) for k in keys if k != sub_key and _is_strict_superset(dict(k), sub)
+        ]
+        if supersets:
+            max_n = max(n for _, n in supersets)
+            top = [k for k, n in supersets if n == max_n]
+            if (
+                len(top) == 1
+                and max_n >= SUBSET_COLLAPSE_MIN_SUPERSET
+                and max_n >= SUBSET_COLLAPSE_MIN_RATIO * sub_n
+            ):
+                collapsed[top[0]] += sub_n
+                events.append({"subset": dict(sub_key), "into": dict(top[0]), "n": sub_n})
+                continue
+        collapsed[sub_key] += sub_n
+    return collapsed, events
+
+
+def _collapse_grant_read(
+    frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]],
+    palette: Any = None,
+    diag: dict[str, Any] | None = None,
+) -> Counter[str] | None:
+    """Guarded subset-collapse fallback: rescue a modal grant whose minority frames are a
+    dropped-icon SUBSET of it. Runs ONLY after the unchanged unanimity clause returned
+    ``None``. Precedence: guard 3 (drop >3-card reads) -> subset-collapse (guards 1+2) ->
+    re-test the collapsed tally with unanimity (>= :data:`MIN_GRANT_CONSENSUS_FRAMES`) OR
+    the existing overwhelming-dominance rule (>= :data:`DOMINANT_READ_MIN_READS` and
+    >= :data:`DOMINANT_READ_MIN_FRAC`). Genuine bimodality (no subset relation) still fails
+    closed. Records ``diag["accepted_by"]`` / ``diag["collapsed"]`` on accept."""
+    tally = _grant_reads_tally(frames_boxes, palette)
+    if not tally:
+        return None
+    collapsed, events = _subset_collapse_tally(tally)
+    total = sum(collapsed.values())
+    distinct = list(collapsed)
+    accepted: Counter[str] | None = None
+    accepted_by: str | None = None
+    if len(distinct) == 1 and collapsed[distinct[0]] >= MIN_GRANT_CONSENSUS_FRAMES:
+        accepted = Counter(dict(distinct[0]))
+        accepted_by = "subset_collapse" if events else "consensus"
+    else:
+        top, top_n = collapsed.most_common(1)[0]
+        if total >= DOMINANT_READ_MIN_READS and top_n / total >= DOMINANT_READ_MIN_FRAC:
+            accepted = Counter(dict(top))
+            accepted_by = "subset_collapse" if events else "dominant_read"
+    if accepted is not None and diag is not None:
+        diag["accepted_by"] = accepted_by
+        if events:
+            diag["collapsed"] = events
+    return accepted
+
+
+def _drop_oversize_reads(
+    frames_boxes: list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]],
+    palette: Any = None,
+) -> list[tuple[npt.NDArray[np.uint8], list[tuple[int, int, int, int]]]]:
+    """Guard 3 at the frame level: drop frames whose grant read exceeds
+    :data:`MAX_GRANT_CARDS` cards (a 4+-box detector error must never be a consensus vote).
+    Unreadable (``None``) frames are kept — :func:`consensus_granted_glyphs` drops them."""
+    out = []
+    for crop, boxes in frames_boxes:
+        r = (
+            classify_granted_glyphs(crop, boxes)
+            if palette is None
+            else classify_granted_glyphs(crop, boxes, palette)
+        )
+        if r is None or sum(r.values()) <= MAX_GRANT_CARDS:
+            out.append((crop, boxes))
+    return out
+
+
 def _consensus_grant(
     handle: str,
     grant_frames: tuple[DecodedFrame, ...],
@@ -1345,13 +1486,15 @@ def _consensus_grant(
             )
         return None
 
-    result = consensus_granted_glyphs(frames_boxes)
+    # Guard 3 (FIX A): a 4+-box read is a detector error — never a consensus vote.
+    frames_g3 = _drop_oversize_reads(frames_boxes)
+    result = consensus_granted_glyphs(frames_g3)
     if result is None:
-        # Unanimity failed. Accept only an OVERWHELMINGLY dominant read (OCR noise);
-        # genuine bimodality still fails closed. See DOMINANT_READ_MIN_READS.
-        result = _dominant_grant_read(frames_boxes)
-        if result is not None and diag is not None:
-            diag["accepted_by"] = "dominant_read"
+        # Unanimity failed. Fall to the guarded subset-collapse rescue (dropped-icon
+        # partials) which, on its collapsed tally, also applies the overwhelming-dominance
+        # rule. Genuine bimodality (no subset relation) still fails closed. See
+        # _collapse_grant_read + DOMINANT_READ_MIN_READS.
+        result = _collapse_grant_read(frames_g3, diag=diag)
     if diag is not None and result is None:
         # >=2 frames had boxes yet consensus still refused: the reads DISAGREED (the
         # unanimity rule, fail-closed by design) or too few classified.
