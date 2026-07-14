@@ -42,12 +42,15 @@ BOOT = "runs/train/bootstrap_v1_20260607_233931/checkpoints"
 V7_FINAL = "runs/anchors/v7_final_u399.pt"
 V8 = "runs/anchors/v8_promobar_u243.pt"
 V8CONT = "runs/train/selfplay_v8_cont_20260618_014258/checkpoints/ckpt_000000524.pt"
+V9 = "runs/anchors/v9_chain_u424.pt"
 
 # (name, kind, path)  — kind: "policy" | "heuristic" | "random"
 # Frontier (v7/v8/ckpt_524) on top so the transitive ruler covers where the
 # intransitivity lives. ckpt_524 is the intransitive v8-counter — a CORRECT ruler
 # must rank it ~= v8 (NOT above) and fail its promotion check (the built-in validity test).
 RUNGS: list[tuple[str, str, str | None]] = [
+    # v9 = the crowned champion (selfplay_v10 is gated AGAINST it, so it must be a rung).
+    ("v9_chain_u424", "policy", V9),
     ("ckpt_524", "policy", V8CONT),
     ("v8_u243", "policy", V8),
     ("v7_u399", "policy", V7_FINAL),
