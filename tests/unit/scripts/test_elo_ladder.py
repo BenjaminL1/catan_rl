@@ -19,6 +19,13 @@ elo = importlib.util.module_from_spec(_spec)
 sys.modules["elo_ladder_module"] = elo
 _spec.loader.exec_module(elo)
 
+_GATE = Path(__file__).resolve().parents[3] / "scripts" / "ladder_gate.py"
+_gspec = importlib.util.spec_from_file_location("ladder_gate_module", _GATE)
+assert _gspec is not None and _gspec.loader is not None
+gate_mod = importlib.util.module_from_spec(_gspec)
+sys.modules["ladder_gate_module"] = gate_mod
+_gspec.loader.exec_module(gate_mod)
+
 
 def test_bt_prob_symmetry() -> None:
     assert abs(elo.bt_prob(600.0, 600.0) - 0.5) < 1e-9
@@ -99,6 +106,33 @@ def test_promotion_check_rejects_lateral_counter() -> None:
         "hardened clause-1 must reject a counter that's flat vs the un-gamed anchors"
     )
     assert gate["passed"] is False, "a lateral v8-counter must NOT pass the global promotion gate"
+
+
+def test_fit_name_universe_covers_matches_absent_from_cached_ladder() -> None:
+    # Regression (the v10-vs-v9 crash): the cached ladder predates a rung the candidate
+    # is gated against — v9_chain_u424 was added to RUNGS AFTER elo_ladder_transitive.json
+    # was last built, so it is not in the cached ratings keys. Deriving the fit's name
+    # universe from the cached file ALONE KeyErrors in fit_elo the moment a merged matchup
+    # references v9 (or the candidate). The universe must be the UNION of cached names +
+    # every participant in every matchup being fit.
+    cached_names = ["heuristic", "v6_u1399", "v7_u399"]
+    merged = [
+        ("v6_u1399", "heuristic", 900, 1000),
+        ("v7_u399", "heuristic", 920, 1000),
+        ("v7_u399", "v6_u1399", 600, 1000),
+        ("v9_chain_u424", "v6_u1399", 451, 600),  # baseline absent from the cached ladder
+        ("v9_chain_u424", "v7_u399", 397, 600),
+        ("v10_cand", "v9_chain_u424", 335, 600),  # candidate matchup references the absent name
+        ("v10_cand", "v6_u1399", 452, 600),
+        ("v10_cand", "v7_u399", 432, 600),
+        ("v10_cand", "heuristic", 578, 600),
+    ]
+    names = gate_mod.fit_name_universe(cached_names, merged)
+    assert "v9_chain_u424" in names and "v10_cand" in names
+    # Would raise KeyError('v9_chain_u424') before the fix; must fit cleanly now.
+    ratings = elo.fit_elo(merged, names)
+    assert set(ratings) == set(names)
+    assert ratings["heuristic"] == 500.0  # pin held
 
 
 def test_promotion_check_accepts_global_gain() -> None:

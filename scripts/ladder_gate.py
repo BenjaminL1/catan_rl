@@ -101,6 +101,22 @@ def build_merged_matches(
     return merged
 
 
+def fit_name_universe(
+    cached_names: list[str], matches: list[tuple[str, str, int, int]]
+) -> list[str]:
+    """Name universe for the Bradley-Terry fit = cached ladder names UNION every
+    participant appearing in ``matches`` (order-preserving). Deriving it from the cached
+    ratings ALONE KeyErrors in ``fit_elo`` whenever a matchup references a rung added to
+    RUNGS after the cached ladder was last rebuilt — e.g. the v9 baseline (or the
+    candidate) absent from a pre-v9 ``elo_ladder_transitive.json``."""
+    names = list(cached_names)
+    for a, b, _w, _n in matches:
+        for nm in (a, b):
+            if nm not in names:
+                names.append(nm)
+    return names
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--candidate-ckpt", required=True, help="path to the candidate checkpoint")
@@ -139,15 +155,54 @@ def main() -> None:
     print(f"[gate] baseline={base}  anchors={anchors}  opponents={opponents}", flush=True)
     print(f"[gate] n={2 * args.nps}/pair, seed base {args.seed_base}", flush=True)
 
-    tasks = [
+    led = json.loads(Path(args.ladder_json).read_text())
+    cached_pairs = {frozenset((m["a"], m["b"])) for m in led["matches"]}
+
+    cand_tasks = [
         _task(cand, args.candidate_ckpt, opp, args.nps, args.seed_base + i)
         for i, opp in enumerate(opponents)
     ]
+    # clause-1 (MIN-over-anchors pairwise-Elo delta) needs the BASELINE's WR vs each
+    # un-gamed anchor. When the cached ladder predates the baseline rung — e.g. v9 is
+    # gated against v10 BEFORE v9 was itself added to the transitive ladder — those
+    # baseline-vs-anchor pairs are absent from the cache, so PLAY them here (else clause-1
+    # has no baseline leg and spuriously fails). Chosen over reading a specific prior gate
+    # JSON: no coupling to a run filename, fully general, and with >=len(tasks) workers the
+    # extra pairs finish in the same wave (~no wall-clock cost).
+    base_kind, base_path = _kind_and_path(base)
+    baseline_anchor_tasks: list[dict[str, Any]] = []
+    if base not in _ENGINE_KINDS:
+        for j, anc in enumerate(anchors):
+            if frozenset((base, anc)) in cached_pairs:
+                continue
+            bk, bp = _kind_and_path(anc)
+            baseline_anchor_tasks.append(
+                {
+                    "a_name": base,
+                    "a_kind": base_kind,
+                    "a_path": base_path,
+                    "a_sims": 0,
+                    "b_name": anc,
+                    "b_kind": bk,
+                    "b_path": bp,
+                    "nps": args.nps,
+                    "seed": args.seed_base + len(cand_tasks) + j,
+                }
+            )
+    tasks = [*cand_tasks, *baseline_anchor_tasks]
+    if baseline_anchor_tasks:
+        played = [t["b_name"] for t in baseline_anchor_tasks]
+        print(
+            f"[gate] baseline {base} absent from cached ladder — also playing "
+            f"baseline-vs-anchor pair(s) {played} for clause-1",
+            flush=True,
+        )
+
     t0 = time.time()
-    cand_matches: list[tuple[str, str, int, int]] = []
+    all_matches: list[tuple[str, str, int, int]] = []
     with Pool(min(args.workers, len(tasks))) as pool:
         for i, m in enumerate(pool.imap_unordered(elo.run_match, tasks), 1):
-            cand_matches.append(m)
+            all_matches.append(m)
             print(
                 f"[gate] {i}/{len(tasks)} {m[0]} vs {m[1]}: {m[2]}/{m[3]} (WR {m[2] / m[3]:.4f})",
                 flush=True,
@@ -155,13 +210,12 @@ def main() -> None:
     dt = time.time() - t0
     # Belt-and-suspenders: a SIGKILL'd worker is the one path imap_unordered handles less
     # crisply than its re-raise of ordinary exceptions; never gate on partial matchups.
-    if len(cand_matches) != len(tasks):
-        raise SystemExit(f"expected {len(tasks)} matchups, got {len(cand_matches)} — a worker died")
+    if len(all_matches) != len(tasks):
+        raise SystemExit(f"expected {len(tasks)} matchups, got {len(all_matches)} — a worker died")
 
-    led = json.loads(Path(args.ladder_json).read_text())
-    names = list(led["ratings"].keys())
-    if cand not in names:
-        names = [*names, cand]
+    # run_match never swaps a/b, so m[0] is always the acting champion of its task.
+    cand_matches = [m for m in all_matches if m[0] == cand]
+    baseline_anchor_matches = [m for m in all_matches if m[0] == base]
 
     # Optional high-n upgrade of baseline-vs-anchor pairs from a reverify run.
     overrides: dict[frozenset[str], tuple[str, str, int, int]] = {}
@@ -177,7 +231,12 @@ def main() -> None:
             flush=True,
         )
 
-    merged = build_merged_matches(led["matches"], cand_matches, overrides=overrides)
+    merged = build_merged_matches(
+        led["matches"], [*cand_matches, *baseline_anchor_matches], overrides=overrides
+    )
+    # Fit universe = cached names UNION every merged participant (covers the candidate AND a
+    # baseline rung absent from a stale cached ladder — otherwise fit_elo KeyErrors).
+    names = fit_name_universe(list(led["ratings"].keys()), merged)
     ratings = elo.fit_elo(merged, names)
     ranked = sorted(ratings.items(), key=lambda kv: -kv[1])
     resid, _detail, ev = elo.nontransitivity_residual(merged, ratings)
@@ -216,6 +275,10 @@ def main() -> None:
                 "candidate_matchups": [
                     {"a": m[0], "b": m[1], "wins_a": m[2], "n": m[3], "wr_a": m[2] / m[3]}
                     for m in cand_matches
+                ],
+                "baseline_anchor_matchups": [
+                    {"a": m[0], "b": m[1], "wins_a": m[2], "n": m[3], "wr_a": m[2] / m[3]}
+                    for m in baseline_anchor_matches
                 ],
                 "n_per_pair": 2 * args.nps,
                 "seed_base": args.seed_base,
