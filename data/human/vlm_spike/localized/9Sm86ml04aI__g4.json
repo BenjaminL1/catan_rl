@@ -1,0 +1,27 @@
+{
+  "video_id": "9Sm86ml04aI",
+  "game_index": 4,
+  "vlm_note": "Board CV auto-fit failed from baseline; refitted from 3 manual hex-centre refs (h7 WOO5 (603,242), h9 SHE6 (936,242), h14 WHE9 (765,815)), residual OK, overlay vertices align to pieces. Colours per meta: ThePhantom=BLACK, rayman147=GREEN. ThePhantom settlements v22 (WHE3/BRI4/ORE8) and v11 (WOO9/SHE6/SHE3), roads v22-v23 (straight down) and v11-v12 (up-left). rayman147 settlements v6 (WOO10/WOO9/BRI2) and v17 (WOO5/ORE6/WHE9), roads v6-v7 (up-left) and v17-v5 (straight up). GRANT SELF-CHECK PASSES: ThePhantom grant {BRICK:1, ORE:1, WHEAT:1} equals EXACTLY v22's hexes and NOT v11's ({WOOD,SHEEP,SHEEP}); rayman147 grant {BRICK:1, WOOD:2} equals EXACTLY v6's hexes and NOT v17's ({WOOD,ORE,WHEAT}). Note: rayman147's grant {WOOD:2,BRICK:1} is also satisfiable at v7, but the visible green settlement sits at v6 (grant corroborates, not disambiguates that pair) - the piece read is by the CV overlay, unambiguous. Each grant matches exactly one of the read settlements; all four roads resolve to real edges.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]},
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]}
+      ]
+    },
+    "rayman147": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [1, 7, 8]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    }
+  }
+}

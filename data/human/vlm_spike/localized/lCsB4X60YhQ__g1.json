@@ -1,0 +1,27 @@
+{
+  "video_id": "lCsB4X60YhQ",
+  "game_index": 1,
+  "vlm_note": "The empty_baseline overlay was ~25px vertically off for this frame, so I re-fit directly from post_setup (read_board_stable) and read every piece against post_setup coordinates. Colour note: meta.player_colors labels DaanDaanDaan 'RED', but their pieces render BLUE on screen; with only two players and ThePhantom clearly BLACK, the blue pieces are unambiguously DaanDaanDaan's. ThePhantom (BLACK) settlements v6 (WOO5/ORE6/ORE9) and v23 (WHE4/SHE3/WHE8), roads v6-v2 and v23-v22. DaanDaanDaan (BLUE) settlements v1 (BRI11/ORE6/WOO3) and v19 (WHE9/WHE4/SHE3), roads v1-v10 (up-right) and v19-v20. GRANT SELF-CHECK PASSES: ThePhantom grant {SHEEP:1, WHEAT:2} equals EXACTLY v23's hexes and NOT v6's ({WOOD,ORE,ORE}); DaanDaanDaan grant {BRICK:1, ORE:1, WOOD:1} equals EXACTLY v1's hexes and NOT v19's ({WHEAT,WHEAT,SHEEP}). Each grant matches exactly one settlement; all four roads resolve to real edges.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [0, 1, 2]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    },
+    "DaanDaanDaan": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[5, 6, 16], [5, 15, 16]]}
+      ]
+    }
+  }
+}

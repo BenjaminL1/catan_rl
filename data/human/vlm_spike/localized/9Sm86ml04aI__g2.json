@@ -1,0 +1,27 @@
+{
+  "video_id": "9Sm86ml04aI",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening board (score 0-1). Colours per meta: ThePhantom=BLACK, rayman147=GREEN. Read against the CV vertex overlay (board fitted from empty_baseline, residual 0.80px). ThePhantom settlements v8 (hexes WHE3/BRI4/WHE8) and v16 (SHE4/WOO10/ORE8), roads v8-v7 and v16-v18. rayman147 settlements v22 (WOO10/SHE5/WHE8) and v21 (ORE9/ORE3/WHE6), roads v22-v23 (straight down) and v21-v17 (up-right). GRANT SELF-CHECK PASSES: ThePhantom grant {BRICK:1, WHEAT:2} equals EXACTLY v8's hexes (WHE3+BRI4+WHE8) and NOT v16's ({SHEEP,WOOD,ORE}); rayman147 grant {ORE:2, WHEAT:1} equals EXACTLY v21's hexes (ORE9+ORE3+WHE6) and NOT v22's ({WOOD,SHEEP,WHEAT}). Each grant matches exactly one settlement, corroborating the read and pinning the 2nd (granting) settlement for both. All four roads resolve to real edges.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[4, 12, 13], [4, 13, 14]]}
+      ]
+    },
+    "rayman147": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    }
+  }
+}

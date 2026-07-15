@@ -1,0 +1,27 @@
+{
+  "video_id": "nmk59XWFRBU",
+  "game_index": 1,
+  "vlm_note": "The empty_baseline overlay was ~73px horizontally off for this frame (the video panned between empty_baseline and post_setup), so I re-fit directly from post_setup (read_board_stable) and read every piece against post_setup coordinates. Colours per meta: Dashed=RED, ThePhantom=BLACK (both match on screen). ThePhantom (BLACK) settlements v6 (WOO5/ORE6/WOO10) and v4 (WHE11/SHE9/BRI4), roads v6-v12 (up-right) and v4-v19 (down-left). Dashed (RED) settlements v11 (ORE6/ORE9/BRI12) and v22 (BRI4/WHE6/WOO3), roads v11-v10 (straight down) and v22-v9 (up-right). GRANT SELF-CHECK PASSES: ThePhantom grant {BRICK:1, SHEEP:1, WHEAT:1} equals EXACTLY v4's hexes and NOT v6's ({WOOD,WOOD,ORE}); Dashed grant {BRICK:1, WHEAT:1, WOOD:1} equals EXACTLY v22's hexes and NOT v11's ({ORE,ORE,BRICK}). Each grant matches exactly one settlement; all four roads resolve to real edges.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [0, 5, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]},
+        {"endpoints": [[0, 5, 6], [5, 6, 16]]}
+      ]
+    },
+    "Dashed": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

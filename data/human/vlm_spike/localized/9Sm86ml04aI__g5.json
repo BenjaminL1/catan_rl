@@ -1,0 +1,27 @@
+{
+  "video_id": "9Sm86ml04aI",
+  "game_index": 5,
+  "vlm_note": "Score 2-2 frame with a grey robber on the board. IMPORTANT: the baseline-fitted overlay (empty_baseline) was mis-registered for this frame (the video panned between empty_baseline and post_setup); it placed vertex circles ~one vertex off. Re-fit directly from post_setup (read_board_stable, residual 0.82px) and re-read every piece against post_setup coordinates. Colours per meta: ThePhantom=BLACK (dark charcoal ~77), rayman147=GREEN (bright lime); the grey pawn (~153) is the robber, not a piece. ThePhantom settlements v3 (WHE11/BRI10/WOO3) and v13 (SHE4/ORE8/WHE10), roads v3-v4 and v13-v14 (both confirmed as black-road pixels on those edges). rayman147 settlements v11 (BRI9/WHE6/BRI3) and v17 (WOO6/SHE5/ORE12), roads v11-v30 (up-right toward the NE port) and v17-v18 (along the SHE5/ORE12 boundary); the bright-green rectangle by v5 is a UI hover-highlight, not a road. GRANT SELF-CHECK PASSES: ThePhantom grant {BRICK:1, WHEAT:1, WOOD:1} equals EXACTLY v3's hexes and NOT v13's ({SHEEP,ORE,WHEAT}); rayman147 grant {ORE:1, SHEEP:1, WOOD:1} equals EXACTLY v17's hexes and NOT v11's ({BRICK,BRICK,WHEAT}). Each grant matches exactly one settlement; all four roads resolve to real edges.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 5, 6]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    },
+    "rayman147": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [9, 10]]},
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]}
+      ]
+    }
+  }
+}
