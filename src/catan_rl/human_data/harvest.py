@@ -60,6 +60,7 @@ CPU-only; never imports ``gui/`` or the training path.
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import re
 import tempfile
@@ -501,6 +502,37 @@ def _grant_dense_windows(
     return [TimeWindow(start_s=lo, end_s=hi) for lo, hi in merged if hi > lo]
 
 
+def _cached_ocr_log(
+    frame: npt.NDArray[np.uint8],
+    cache: dict[bytes, list[str]],
+    stats: Counter[str],
+) -> list[str]:
+    """OCR one frame's log crop, memoised on the CROP's pixel bytes (per video).
+
+    The HUD / dice areas OUTSIDE the log crop change on essentially every frame, so
+    the crop is taken FIRST and only ITS bytes are hashed — hashing the whole frame
+    would defeat the cache. easyocr on identical pixels is deterministic, so returning
+    the cached lines is behaviour-preserving by construction; a COPY is returned (never
+    the cached list itself) so a caller mutating the result cannot corrupt the cache.
+
+    ``cache`` is a dict LOCAL to one video's ingest (never shared across videos, or two
+    videos' identical opening frames would cross-contaminate). ``stats`` accumulates
+    ``hits`` / ``misses`` for the per-video ``[ocr-cache]`` telemetry line. The dense
+    pass re-decodes bounded windows the sparse pass already touched, so identical crops
+    recur within a single video and the hit rate is real, not incidental.
+    """
+    crop = crop_log(frame)
+    key = hashlib.sha1(crop.tobytes()).digest()
+    cached = cache.get(key)
+    if cached is not None:
+        stats["hits"] += 1
+        return list(cached)
+    lines = ocr_log_crop(crop)
+    cache[key] = lines
+    stats["misses"] += 1
+    return list(lines)
+
+
 def _ingest_two_pass(
     video_id: str,
     *,
@@ -535,9 +567,15 @@ def _ingest_two_pass(
         with gate:
             video_path = download_video(video_id, tmp_path)
 
+        # Per-video crop-hash OCR cache: the dense pass re-decodes windows the sparse
+        # pass already touched, so identical log crops recur; OCR of identical pixels is
+        # deterministic (behaviour-preserving). Cache is LOCAL to this call — never
+        # crosses videos.
+        ocr_cache: dict[bytes, list[str]] = {}
+        ocr_stats: Counter[str] = Counter()
         sparse = build_sampling_schedule(duration_s)
         frames = list(decode_frames_at(video_path, sparse, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin))
-        lines = [ocr_log_crop(crop_log(f.frame)) for f in frames]
+        lines = [_cached_ocr_log(f.frame, ocr_cache, ocr_stats) for f in frames]
 
         grant_ts = [
             f.ts
@@ -557,7 +595,14 @@ def _ingest_two_pass(
                     decode_frames_at(video_path, dense, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin)
                 )
                 frames.extend(extra)
-                lines.extend(ocr_log_crop(crop_log(f.frame)) for f in extra)
+                lines.extend(_cached_ocr_log(f.frame, ocr_cache, ocr_stats) for f in extra)
+        _hits, _misses = ocr_stats["hits"], ocr_stats["misses"]
+        _total = _hits + _misses
+        _rate = (100.0 * _hits / _total) if _total else 0.0
+        print(
+            f"[ocr-cache] video={video_id} hits={_hits} misses={_misses} rate={_rate:.1f}%",
+            flush=True,
+        )
     finally:
         for child in tmp_path.glob("*"):
             child.unlink(missing_ok=True)

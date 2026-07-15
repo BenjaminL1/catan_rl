@@ -872,3 +872,95 @@ def test_stable_board_returns_none_when_every_pool_fails(monkeypatch) -> None:
         grant_frames=(_decoded_frame(50.0),),
     )
     assert harvest._stable_board_for_game(gf) is None  # still board_unreadable, fail closed
+
+
+# --- crop-hash OCR cache (per-video) -----------------------------------------
+# The dense pass re-decodes windows the sparse pass already touched, so identical
+# log crops recur within one video; caching OCR on the crop's pixel bytes turns the
+# repeats free. OCR of identical pixels is deterministic, so the cache is
+# behaviour-preserving by construction — the identical-output test pins that.
+
+
+def _frame_with_crop_fill(crop_val: int, outside_val: int = 0) -> Any:
+    """A 1080p frame whose LOG-CROP region is filled with ``crop_val`` and whose
+    area OUTSIDE the crop is ``outside_val`` (to prove the hash is crop-first)."""
+    from catan_rl.human_data.logparse import LOG_CROP_FRAC
+
+    frame = np.full((1080, 1920, 3), outside_val, dtype=np.uint8)
+    x0f, _y0f, x1f, y1f = LOG_CROP_FRAC
+    h, w = 1080, 1920
+    x0, x1 = int(x0f * w), int(x1f * w)
+    y1 = int(y1f * h)
+    frame[0:y1, x0:x1] = crop_val
+    return frame
+
+
+def test_ocr_cache_identical_crops_ocr_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Counter[str] = Counter()
+
+    def counting_ocr(crop: Any) -> list[str]:
+        calls["n"] += 1
+        return ["line"]
+
+    monkeypatch.setattr(harvest, "ocr_log_crop", counting_ocr)
+    cache: dict[bytes, list[str]] = {}
+    stats: Counter[str] = Counter()
+    f = _frame_with_crop_fill(5)
+    a = harvest._cached_ocr_log(f, cache, stats)
+    b = harvest._cached_ocr_log(f, cache, stats)
+    assert calls["n"] == 1, "identical crop pixels must OCR exactly once"
+    assert a == b == ["line"]
+    assert stats["hits"] == 1 and stats["misses"] == 1
+    # returned lists are COPIES (mutating one must not corrupt the cache/other)
+    a.append("mutated")
+    assert b == ["line"]
+    assert harvest._cached_ocr_log(f, cache, stats) == ["line"]
+
+
+def test_ocr_cache_hashes_crop_not_whole_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Counter[str] = Counter()
+    monkeypatch.setattr(harvest, "ocr_log_crop", lambda crop: [str(calls.update(n=1))])
+    cache: dict[bytes, list[str]] = {}
+    stats: Counter[str] = Counter()
+    # Same crop region, DIFFERENT pixels outside it — must still hit the cache.
+    harvest._cached_ocr_log(_frame_with_crop_fill(9, outside_val=0), cache, stats)
+    harvest._cached_ocr_log(_frame_with_crop_fill(9, outside_val=200), cache, stats)
+    assert calls["n"] == 1, "changing pixels OUTSIDE the crop must not miss the cache"
+    assert stats["hits"] == 1 and stats["misses"] == 1
+
+
+def test_ocr_cache_differing_crops_both_ocr(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Counter[str] = Counter()
+    monkeypatch.setattr(harvest, "ocr_log_crop", lambda crop: [str(calls.update(n=1))])
+    cache: dict[bytes, list[str]] = {}
+    stats: Counter[str] = Counter()
+    harvest._cached_ocr_log(_frame_with_crop_fill(1), cache, stats)
+    harvest._cached_ocr_log(_frame_with_crop_fill(2), cache, stats)
+    assert calls["n"] == 2, "distinct crop pixels must each OCR"
+    assert stats["hits"] == 0 and stats["misses"] == 2
+
+
+def test_ocr_cache_does_not_leak_across_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: Counter[str] = Counter()
+    monkeypatch.setattr(harvest, "ocr_log_crop", lambda crop: [str(calls.update(n=1))])
+    f = _frame_with_crop_fill(7)
+    # Two separate caches == two videos: the identical opening frame must OCR in each.
+    harvest._cached_ocr_log(f, {}, Counter())
+    harvest._cached_ocr_log(f, {}, Counter())
+    assert calls["n"] == 2, "a fresh (per-video) cache must not reuse another video's OCR"
+
+
+def test_ocr_cache_output_identical_to_uncached_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The behaviour-preserving pin: lines from the cached path == lines from a
+    # cache-disabled direct OCR, over a mix of repeated + distinct crops.
+    def deterministic_ocr(crop: Any) -> list[str]:
+        return [f"crop:{int(crop.reshape(-1)[0])}"]
+
+    monkeypatch.setattr(harvest, "ocr_log_crop", deterministic_ocr)
+    frames = [_frame_with_crop_fill(v) for v in (3, 3, 8, 3, 8, 1)]
+    cache: dict[bytes, list[str]] = {}
+    stats: Counter[str] = Counter()
+    cached = [harvest._cached_ocr_log(f, cache, stats) for f in frames]
+    uncached = [deterministic_ocr(harvest.crop_log(f)) for f in frames]
+    assert cached == uncached
+    assert stats["hits"] == 3 and stats["misses"] == 3  # 6 frames, 3 distinct crops
