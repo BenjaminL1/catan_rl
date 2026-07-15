@@ -62,7 +62,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -583,6 +585,100 @@ def prepare_frames_from_fixture(out_root: Path = _FRAMES_ROOT) -> Path:
     return game_dir
 
 
+def _pin_ocr_threads() -> None:
+    """Pin torch (easyocr's backend) to ONE intra-op thread when the parallel sweep
+    driver requests it via ``CATAN_OCR_THREADS=1`` (measured: 6 threads buys only
+    1.33x, so N single-thread worker PROCESSES scale far better). Prints a startup
+    line so the sweep log can VERIFY the pin took effect inside this OCR process.
+
+    No-op (and no heavy torch import) unless the env flag is set, so the normal
+    single-process path is byte-identical.
+    """
+    if os.environ.get("CATAN_OCR_THREADS") != "1":
+        return
+    import torch
+
+    torch.set_num_threads(1)
+    print(
+        f"[ocr-threads] CATAN_OCR_THREADS=1 -> torch.set_num_threads(1); "
+        f"torch.get_num_threads()={torch.get_num_threads()}",
+        flush=True,
+    )
+
+
+class _FileSemaphore:
+    """Cross-PROCESS counting semaphore over a lock directory (N slot files).
+
+    A :class:`threading.Semaphore` cannot cap concurrency across the sweep's worker
+    SUBPROCESSES — each video is its own ``python vlm_spike.py`` process. This gate is
+    passed to :func:`harvest._ingest_two_pass` as its ``download_gate``, which holds it
+    ONLY around ``download_video`` (the network phase), so the CPU/OCR phase still fans
+    out to full worker width while at most ``n`` yt-dlp downloads run at once (YouTube
+    throttling defence, mirroring ``batch.py``'s ``download_gate`` idea).
+
+    A slot leaked by a worker that crashed mid-download is reclaimed via a pid-liveness
+    check, so the sweep can never deadlock on a stale lock.
+    """
+
+    def __init__(self, lock_dir: Path, n: int, poll_s: float = 0.25) -> None:
+        self._dir = lock_dir
+        self._n = max(1, n)
+        self._poll = poll_s
+        self._held: Path | None = None
+        lock_dir.mkdir(parents=True, exist_ok=True)
+
+    def __enter__(self) -> _FileSemaphore:
+        while True:
+            for i in range(self._n):
+                slot = self._dir / f"slot{i}.lock"
+                try:
+                    fd = os.open(slot, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError:
+                    self._reclaim_if_stale(slot)
+                    continue
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                self._held = slot
+                return self
+            time.sleep(self._poll)
+
+    def _reclaim_if_stale(self, slot: Path) -> None:
+        try:
+            pid = int(slot.read_text().strip() or "0")
+        except (OSError, ValueError):
+            return
+        if pid <= 0 or not _pid_alive(pid):
+            slot.unlink(missing_ok=True)
+
+    def __exit__(self, *exc: object) -> None:
+        if self._held is not None:
+            self._held.unlink(missing_ok=True)
+            self._held = None
+
+
+def _pid_alive(pid: int) -> bool:
+    """Whether ``pid`` is a live process (``os.kill(pid, 0)`` liveness probe)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    return True
+
+
+def _download_gate_from_env() -> _FileSemaphore | None:
+    """Build the cross-process download gate from the sweep driver's env, or ``None``.
+
+    ``None`` (env unset) keeps the standalone single-process behaviour unchanged.
+    """
+    lock_dir = os.environ.get("CATAN_DOWNLOAD_LOCK_DIR")
+    if not lock_dir:
+        return None
+    n = int(os.environ.get("CATAN_NET_CONCURRENCY", "2"))
+    return _FileSemaphore(Path(lock_dir), n)
+
+
 def prepare_frames_from_video(
     video: str, out_root: Path = _FRAMES_ROOT
 ) -> list[Path]:  # pragma: no cover - real-run network path (yt-dlp/ffmpeg)
@@ -602,7 +698,9 @@ def prepare_frames_from_video(
     topology = load_topology()
     # Two-pass ingest: the sparse pass finds the grant lines, a 1 s dense pass
     # re-samples those windows so the >=2-frame grant consensus is not starved.
-    frames, per_frame_lines = harvest._ingest_two_pass(video, download_gate=None, work_dir=None)
+    frames, per_frame_lines = harvest._ingest_two_pass(
+        video, download_gate=_download_gate_from_env(), work_dir=None
+    )
     ctx = harvest._extract_context(video, frames, per_frame_lines)
     segments = segment_games(ctx.events, list(ctx.handles))
     game_dirs: list[Path] = []
@@ -992,6 +1090,7 @@ def _cmd_score(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    _pin_ocr_threads()  # pin torch to 1 thread INSIDE this OCR process when asked
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 

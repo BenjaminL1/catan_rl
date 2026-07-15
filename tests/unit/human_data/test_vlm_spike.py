@@ -19,7 +19,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
+import threading
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -487,3 +490,74 @@ def test_unlocalizable_reason_absent_and_marker(tmp_path: Path) -> None:
     real = tmp_path / "real.json"
     real.write_text(json.dumps({"players": {}}), encoding="utf-8")
     assert vlm._unlocalizable_reason(real) is None
+
+
+# --- parallel-sweep primitives (TASK 2) --------------------------------------
+# The sweep fans videos across N single-thread-pinned OCR SUBPROCESSES and caps
+# concurrent yt-dlp downloads with a cross-process file semaphore. These pin the
+# pieces that are unit-testable without the network / heavy torch.
+
+
+def test_download_gate_from_env_none_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CATAN_DOWNLOAD_LOCK_DIR", raising=False)
+    assert vlm._download_gate_from_env() is None  # standalone path unchanged
+
+
+def test_download_gate_from_env_builds_semaphore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("CATAN_DOWNLOAD_LOCK_DIR", str(tmp_path / "dl"))
+    monkeypatch.setenv("CATAN_NET_CONCURRENCY", "3")
+    gate = vlm._download_gate_from_env()
+    assert isinstance(gate, vlm._FileSemaphore)
+    assert gate._n == 3
+
+
+def test_pin_ocr_threads_noop_when_unset(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.delenv("CATAN_OCR_THREADS", raising=False)
+    vlm._pin_ocr_threads()  # must not import torch or print anything
+    assert capsys.readouterr().out == ""
+
+
+def test_file_semaphore_caps_concurrency(tmp_path: Path) -> None:
+    # One _FileSemaphore INSTANCE per thread sharing a lock dir models the real
+    # per-subprocess gate: at most n may hold the download slot at once.
+    lock_dir = tmp_path / "dl"
+    n = 2
+    lk = threading.Lock()
+    active = {"now": 0, "max": 0}
+    start = threading.Barrier(4)
+
+    def run() -> None:
+        sem = vlm._FileSemaphore(lock_dir, n, poll_s=0.01)
+        start.wait()
+        with sem:
+            with lk:
+                active["now"] += 1
+                active["max"] = max(active["max"], active["now"])
+            time.sleep(0.05)
+            with lk:
+                active["now"] -= 1
+
+    threads = [threading.Thread(target=run) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert 1 <= active["max"] <= n, "download concurrency must never exceed n"
+
+
+def test_file_semaphore_reclaims_stale_slot(tmp_path: Path) -> None:
+    lock_dir = tmp_path / "dl"
+    lock_dir.mkdir()
+    dead = subprocess.Popen([sys.executable, "-c", "pass"])
+    dead.wait()  # pid is now a dead (reaped) process
+    # Both slots look taken, but by a DEAD pid — the gate must reclaim, not hang.
+    (lock_dir / "slot0.lock").write_text(str(dead.pid))
+    (lock_dir / "slot1.lock").write_text(str(dead.pid))
+    sem = vlm._FileSemaphore(lock_dir, 2, poll_s=0.01)
+    with sem:
+        assert sem._held is not None
+    assert sem._held is None  # released on exit
