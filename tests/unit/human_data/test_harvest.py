@@ -1073,6 +1073,7 @@ def _stub_streaming(monkeypatch: pytest.MonkeyPatch, metas: list[Any]) -> None:
     monkeypatch.setattr(harvest, "resolve_ffmpeg", lambda: "ffmpeg")
     monkeypatch.setattr(harvest, "resolve_ffprobe", lambda: "ffprobe")
     monkeypatch.setattr(harvest, "_stream_ingest_meta", lambda *a, **kw: metas)
+    monkeypatch.setattr(harvest, "_resolve_stable_board", lambda *a, **kw: None)
     monkeypatch.setattr(harvest, "_discover_handles", lambda _l: ("phantom", "vale"))
     monkeypatch.setattr(
         harvest, "_agent_binding", lambda _h: {"agent": "phantom", "opponent": "vale"}
@@ -1146,3 +1147,95 @@ def test_ingest_route_deletes_video_on_phase_c_exception(
         harvest._ingest_route_and_materialize("vidBoom", work_dir=tmp_path)
     assert not created["file"].exists()  # deletion survives an exception in any phase
     assert not created["dir"].exists()
+
+
+# --- streaming board resolution: full setup pool + exact fallback pool ------------------
+#
+# MEASURED (9Sm86ml04aI g3): truncating the stability POOL to the bucket's first 8 frames
+# silently welded the PREVIOUS game's board on — the earliest frames unanimously showed the
+# stale board and the cap removed the later frames whose disagreement the fail-closed rule
+# needed. So the plan carries the FULL setup pool (streamed in Phase C) + the EXACT old
+# fallback pool (post-setup + first-5 UNCAPPED grant frames), and the materialised
+# GameFrames carries the resolved board, which _stable_board_for_game returns verbatim.
+
+
+def test_route_meta_setup_pool_is_full_first_half_uncapped() -> None:
+    handles = ("phantom", "vale")
+    items: list[tuple[float, list[str]]] = [
+        (0.0, ["happy settling! list of commands: /help", "phantom placed a"])
+    ]
+    # 40 in-game frames -> bucket ~41 -> first half ~20 > SETUP_FRAME_CAP
+    items += [(float(i), ["phantom rolled a 8"]) for i in range(1, 41)]
+    routed = harvest._route_meta_to_games(_meta_frames(items), handles)
+    plans = [p for p in routed if p is not None]
+    assert len(plans) == 1
+    assert len(plans[0].setup_ts) > harvest.SETUP_FRAME_CAP  # NOT truncated
+
+
+def test_route_meta_board_fallback_is_first_five_uncapped_grants() -> None:
+    handles = ("phantom", "vale")
+    items: list[tuple[float, list[str]]] = [
+        (0.0, ["happy settling! list of commands: /help", "phantom placed a"])
+    ]
+    items += [(float(i), ["phantom received starting resources"]) for i in range(1, 81)]
+    routed = harvest._route_meta_to_games(_meta_frames(items), handles)
+    plans = [p for p in routed if p is not None and p.grant_ts]
+    assert len(plans) == 1
+    p = plans[0]
+    assert len(p.grant_ts) == harvest.GRANT_FRAME_CAP  # capped for the consensus
+    # fallback pool: post_setup first, then the first UNCAPPED grants, truncated to 5 —
+    # NOT the evenly-sampled subset (2.0/3.0/4.0 are dropped by the 80->60 sampling).
+    expected_grants = (1.0, 2.0, 3.0, 4.0)
+    assert p.post_setup_ts is not None
+    assert p.board_fallback_ts == (p.post_setup_ts, *expected_grants)
+    assert len(p.board_fallback_ts) == harvest._BOARD_FALLBACK_POOL
+    assert not set(expected_grants[1:]).issubset(set(p.grant_ts))  # cap really dropped them
+
+
+def test_plan_selected_ts_retains_capped_setup_and_includes_fallback() -> None:
+    p = harvest.GameFramePlan(
+        setup_ts=tuple(float(i) for i in range(20)),  # full pool, 20 frames
+        post_setup_ts=100.0,
+        baseline_ts=0.0,
+        grant_ts=(200.0,),
+        board_fallback_ts=(100.0, 300.0),  # 300.0 NOT in grant_ts (cap-dropped)
+    )
+    got = harvest._plan_selected_ts([p], hud_ts=[])
+    assert 300.0 in got  # fallback frame is materialised even though cap dropped it
+    assert float(harvest.SETUP_FRAME_CAP) not in got  # setup ts beyond the cap not RETAINED
+    assert all(float(i) in got for i in range(harvest.SETUP_FRAME_CAP))
+
+
+def test_stable_board_for_game_returns_resolved_board_verbatim() -> None:
+    board = harvest._placeholder_board()
+    gf = harvest.GameFrames(
+        setup_frames=(),  # would crash read_board_stable — proves no pixel re-read happens
+        post_setup_frame=None,
+        empty_baseline=np.zeros((2, 2, 3), dtype=np.uint8),
+        grant_frames=(),
+        stable_board=board,
+        stable_board_resolved=True,
+    )
+    assert harvest._stable_board_for_game(gf) is board
+    gf_none = harvest.GameFrames(
+        setup_frames=(),
+        post_setup_frame=None,
+        empty_baseline=np.zeros((2, 2, 3), dtype=np.uint8),
+        grant_frames=(),
+        stable_board=None,
+        stable_board_resolved=True,
+    )
+    assert harvest._stable_board_for_game(gf_none) is None  # resolved-None stays None
+
+
+def test_stable_board_from_reads_applies_the_agreement_rule() -> None:
+    from catan_rl.human_data.board_cv import stable_board_from_reads
+
+    a = harvest._placeholder_board()
+    assert stable_board_from_reads([]) is None
+    assert stable_board_from_reads([a]) is None  # <2 accepted reads
+    assert stable_board_from_reads([a, a]) is a  # agreement -> first
+    import dataclasses
+
+    b = dataclasses.replace(a, desert_hex=5)
+    assert stable_board_from_reads([a, b]) is None  # disagreement fails closed

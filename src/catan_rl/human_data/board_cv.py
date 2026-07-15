@@ -836,6 +836,21 @@ def read_board_stable(
             diag_list.append(d)
         if result is not None:
             reads.append(result)
+    return stable_board_from_reads(reads, diag_list=diag_list)
+
+
+def stable_board_from_reads(
+    reads: list[BoardRead],
+    *,
+    diag_list: list[dict[str, Any]] | None = None,
+) -> BoardRead | None:
+    """The §5.2 cross-frame agreement rule over ALREADY-COMPUTED per-frame reads.
+
+    Factored out of :func:`read_board_stable` (which remains the frames-in API) so a
+    STREAMING caller — one that runs :func:`read_board` per frame and drops the pixels
+    (``harvest``'s Phase-C board resolution) — applies the byte-identical rule: ``>= 2``
+    accepted reads, ALL agreeing on hexes + desert, else ``None``. Pure — no I/O.
+    """
     if len(reads) < 2:
         return None  # not enough accepted frames to corroborate stability
     first = reads[0]

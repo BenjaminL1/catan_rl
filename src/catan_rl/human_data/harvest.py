@@ -79,7 +79,12 @@ from catan_rl.human_data.batch import (
     _anchor_telemetry,
     run_batch,
 )
-from catan_rl.human_data.board_cv import BoardRead, read_board_stable
+from catan_rl.human_data.board_cv import (
+    BoardRead,
+    read_board,
+    read_board_stable,
+    stable_board_from_reads,
+)
 from catan_rl.human_data.ffmpeg import resolve_ffmpeg, resolve_ffprobe
 from catan_rl.human_data.glyph_anchor import (
     GRANT_RE,
@@ -203,6 +208,14 @@ class GameFrames:
     post_setup_frame: DecodedFrame | None
     empty_baseline: npt.NDArray[np.uint8]
     grant_frames: tuple[DecodedFrame, ...]
+    #: Streaming-path board resolution (Phase C). When ``stable_board_resolved`` is True,
+    #: ``stable_board`` is the board :func:`_resolve_stable_board` computed over the FULL
+    #: (uncapped) setup pool + the exact old fallback pool, and
+    #: :func:`_stable_board_for_game` returns it verbatim — the retained ``setup_frames``
+    #: pixels (capped for RAM) are then NOT re-read for the board. The old pixel router
+    #: never sets these, so its behaviour (and its tests) are untouched.
+    stable_board: BoardRead | None = None
+    stable_board_resolved: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,11 +236,16 @@ class FrameMeta:
     lines: tuple[str, ...]
 
 
-#: Phase-C per-game frame caps. They bound peak RAM (materialised frames x ~6 MB) while
-#: preserving every consensus/board DECISION — the pin-#1 equivalence fields are robust to
-#: the frame COUNT (they assert the accepted multiset / board / accepted-by, not how many
-#: frames were read). Setup: board stability needs ≥2 agreeing frames, 8 is generous.
-#: Grants: consensus measured 5-readable-of-6 at 1 s density, 60 evenly-sampled is generous.
+#: Phase-C per-game frame caps on RETAINED pixels. They bound peak RAM (materialised
+#: frames x ~6 MB) while preserving every DECISION: the board is resolved by STREAMING the
+#: FULL uncapped setup pool (:func:`_resolve_stable_board` — pixels dropped per frame), so
+#: these caps only limit what stays in memory afterwards, never what the stability gate
+#: sees. Measured (9Sm86ml04aI g3): capping the stability POOL itself to the first 8
+#: bucket frames silently welded the PREVIOUS game's board on — the early frames
+#: unanimously showed the stale board and the cap removed the later frames whose
+#: disagreement the fail-closed rule needed. Grants: consensus measured 5-readable-of-6 at
+#: 1 s density, 60 evenly-sampled is generous (the fallback board pool takes the FIRST 5
+#: UNCAPPED grant frames via ``board_fallback_ts``, so the cap cannot perturb it).
 SETUP_FRAME_CAP = 8
 GRANT_FRAME_CAP = 60
 
@@ -236,18 +254,25 @@ GRANT_FRAME_CAP = 60
 class GameFramePlan:
     """Phase-B routing output for ONE game: the SELECTED timestamps Phase C re-decodes.
 
-    Metadata-only (no pixels). ``setup_ts`` (≤ :data:`SETUP_FRAME_CAP`) is the
-    board-stability source; ``post_setup_ts`` the order-blind 8-pieces-down openings frame
-    (``None`` ⇒ a typed :data:`POST_SETUP_UNRESOLVED_REASON` reject downstream);
-    ``baseline_ts`` the empty-board baseline; ``grant_ts`` (≤ :data:`GRANT_FRAME_CAP`,
-    evenly sampled) the consensus grant frames. A segment with < 2 routed frames is a
-    ``None`` slot (index-aligned with ``segment_games``), exactly like the pixel router.
+    Metadata-only (no pixels). ``setup_ts`` is the FULL (uncapped) board-stability pool —
+    ``bucket[:max(2, len//2)]`` exactly like the pixel router — which Phase C STREAMS
+    through :func:`read_board` one frame at a time (only its first
+    :data:`SETUP_FRAME_CAP` frames are RETAINED as pixels); ``post_setup_ts`` the
+    order-blind 8-pieces-down openings frame (``None`` ⇒ a typed
+    :data:`POST_SETUP_UNRESOLVED_REASON` reject downstream); ``baseline_ts`` the
+    empty-board baseline; ``grant_ts`` (≤ :data:`GRANT_FRAME_CAP`, evenly sampled) the
+    consensus grant frames; ``board_fallback_ts`` the EXACT old fallback board pool —
+    (post-setup + first :data:`_BOARD_FALLBACK_POOL` UNCAPPED grant frames), truncated to
+    :data:`_BOARD_FALLBACK_POOL` — kept explicit so the grant cap cannot change which
+    frames the fallback board read sees. A segment with < 2 routed frames is a ``None``
+    slot (index-aligned with ``segment_games``), exactly like the pixel router.
     """
 
     setup_ts: tuple[float, ...]
     post_setup_ts: float | None
     baseline_ts: float
     grant_ts: tuple[float, ...]
+    board_fallback_ts: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -762,7 +787,16 @@ def _stable_board_for_game(gf: GameFrames) -> BoardRead | None:
     :func:`read_board_stable`'s rule is untouched (>= 2 accepted frames, ALL byte-identical
     or reject), so the fail-closed §5.2 stability guarantee is fully preserved; this only
     changes WHICH frames it is offered.
+
+    On the STREAMING ingest path the board was already resolved in Phase C over the FULL
+    uncapped setup pool + this exact fallback pool (:func:`_resolve_stable_board`, pixels
+    dropped per frame) and carried on ``gf.stable_board`` — returned verbatim, because the
+    retained ``setup_frames`` are RAM-capped and re-reading them here would hand the
+    stability gate a truncated pool (measured on ``9Sm86ml04aI g3``: the first-8 truncation
+    silently welded the PREVIOUS game's board on).
     """
+    if gf.stable_board_resolved:
+        return gf.stable_board
     board = read_board_stable([f.frame for f in gf.setup_frames])
     if board is not None:
         return board
@@ -982,18 +1016,24 @@ def _route_meta_to_games(
         if len(bucket) < 2:
             routed.append(None)  # too few frames to gate board stability (frames_unrouted)
             continue
-        setup = bucket[: max(2, len(bucket) // 2)][:SETUP_FRAME_CAP]
-        grant = [
+        setup = bucket[: max(2, len(bucket) // 2)]  # FULL pool — streamed, never truncated
+        grant_all = [
             m for m in bucket if any(GRANT_RE.search(ln.lower()) for ln in line_by_frame[id(m)])
         ]
-        grant = _evenly_sample(grant, GRANT_FRAME_CAP)
+        grant = _evenly_sample(grant_all, GRANT_FRAME_CAP)
         post = _post_setup_frame(bucket, ranges[seg_idx], all_events, global_hi_by_frame)
+        # The EXACT old fallback board pool: post-setup first, then the first
+        # _BOARD_FALLBACK_POOL UNCAPPED grant frames, truncated to the pool size —
+        # explicit so the grant cap cannot change which frames the fallback read sees.
+        fallback: list[float] = [] if post is None else [post.ts]
+        fallback.extend(m.ts for m in grant_all[:_BOARD_FALLBACK_POOL])
         routed.append(
             GameFramePlan(
                 setup_ts=tuple(m.ts for m in setup),
                 post_setup_ts=None if post is None else post.ts,
                 baseline_ts=bucket[0].ts,
                 grant_ts=tuple(m.ts for m in grant),
+                board_fallback_ts=tuple(fallback[:_BOARD_FALLBACK_POOL]),
             )
         )
     return tuple(routed)
@@ -1002,17 +1042,22 @@ def _route_meta_to_games(
 def _plan_selected_ts(
     plans: Sequence[GameFramePlan | None], hud_ts: Sequence[float]
 ) -> list[float]:
-    """The sorted UNION of every plan's selected timestamps plus the HUD-vote samples.
+    """The sorted UNION of every plan's RETAINED timestamps plus the HUD-vote samples.
 
-    This is exactly the set Phase C re-decodes — bounded by the per-game caps, so ~a few
-    dozen frames/game rather than the whole video. Pure (no I/O), so it is unit-testable.
+    This is exactly the set Phase C re-decodes AND HOLDS — bounded by the per-game caps
+    (only the first :data:`SETUP_FRAME_CAP` of the full ``setup_ts`` pool are retained;
+    the rest are STREAMED by :func:`_resolve_stable_board`, never held), so ~a few dozen
+    frames/game rather than the whole video. ``board_fallback_ts`` is included explicitly:
+    when a game has more grant frames than :data:`GRANT_FRAME_CAP`, the fallback pool's
+    first-5-uncapped frames may not be in the capped ``grant_ts``. Pure (no I/O).
     """
     wanted: set[float] = set()
     for plan in plans:
         if plan is None:
             continue
-        wanted.update(plan.setup_ts)
+        wanted.update(plan.setup_ts[:SETUP_FRAME_CAP])
         wanted.update(plan.grant_ts)
+        wanted.update(plan.board_fallback_ts)
         wanted.add(plan.baseline_ts)
         if plan.post_setup_ts is not None:
             wanted.add(plan.post_setup_ts)
@@ -1044,20 +1089,25 @@ def _decode_selected(
 
 
 def _plan_to_game_frames(
-    plan: GameFramePlan, decoded: dict[float, DecodedFrame]
+    plan: GameFramePlan,
+    decoded: dict[float, DecodedFrame],
+    stable_board: BoardRead | None = None,
+    stable_board_resolved: bool = False,
 ) -> GameFrames | None:
     """Materialise ONE game's :class:`GameFrames` from its plan + the re-decoded frame map.
 
-    Looks each selected ts up in ``decoded`` (keyed ``round(ts, 6)``). Returns ``None``
-    (⇒ ``frames_unrouted``) only if the baseline or fewer than 2 setup frames failed to
-    re-decode — which cannot happen given deterministic decode, but is handled fail-closed
-    rather than fabricating a frame.
+    Looks each retained ts up in ``decoded`` (keyed ``round(ts, 6)``); only the first
+    :data:`SETUP_FRAME_CAP` of the full ``setup_ts`` pool are retained as pixels (the
+    BOARD decision came from streaming the whole pool — ``stable_board`` /
+    ``stable_board_resolved`` carry it). Returns ``None`` (⇒ ``frames_unrouted``) only if
+    the baseline or fewer than 2 setup frames failed to re-decode — which cannot happen
+    given deterministic decode, but is handled fail-closed rather than fabricating a frame.
     """
 
     def get(ts: float) -> DecodedFrame | None:
         return decoded.get(round(ts, 6))
 
-    setup = tuple(f for ts in plan.setup_ts if (f := get(ts)) is not None)
+    setup = tuple(f for ts in plan.setup_ts[:SETUP_FRAME_CAP] if (f := get(ts)) is not None)
     grant = tuple(f for ts in plan.grant_ts if (f := get(ts)) is not None)
     baseline = get(plan.baseline_ts)
     post = None if plan.post_setup_ts is None else get(plan.post_setup_ts)
@@ -1068,7 +1118,51 @@ def _plan_to_game_frames(
         post_setup_frame=post,
         empty_baseline=baseline.frame,
         grant_frames=grant,
+        stable_board=stable_board,
+        stable_board_resolved=stable_board_resolved,
     )
+
+
+def _resolve_stable_board(
+    video_path: Path,
+    plan: GameFramePlan,
+    decoded: dict[float, DecodedFrame],
+    *,
+    ffmpeg: str,
+    ffprobe: str,
+) -> BoardRead | None:  # pragma: no cover - real-run path (ffmpeg + easyocr, mocked in CI)
+    """Phase-C board resolution: the EXACT :func:`_stable_board_for_game` decision, streamed.
+
+    Stage 1 — the FULL uncapped setup pool (``plan.setup_ts`` = ``bucket[:max(2, len//2)]``,
+    identical to the old path's ``gf.setup_frames``) is STREAMED through
+    :func:`read_board` one frame at a time (pixels dropped immediately), then the §5.2
+    agreement rule (:func:`~catan_rl.human_data.board_cv.stable_board_from_reads` — the
+    same rule ``read_board_stable`` applies) decides. Truncating this pool instead was
+    MEASURED to weld the previous game's board on (``9Sm86ml04aI g3``): the earliest
+    bucket frames unanimously showed the stale board, and the cap removed the later
+    frames whose disagreement the fail-closed rule needed.
+
+    Stage 2 — on failure, the EXACT old in-window fallback pool (``plan.board_fallback_ts``
+    = post-setup + first :data:`_BOARD_FALLBACK_POOL` UNCAPPED grant frames, truncated to
+    the pool size), looked up from the already-materialised ``decoded`` map; ``< 2``
+    available frames fails closed to ``None``, exactly like the old path.
+    """
+    reads: list[BoardRead] = []
+    if len(plan.setup_ts) >= 2:
+        schedule = [ScheduledFrame(ts=ts, pass_name="dense") for ts in plan.setup_ts]
+        for f in decode_frames_at(video_path, schedule, ffmpeg=ffmpeg, ffprobe=ffprobe):
+            result = read_board(f.frame)
+            if result is not None:
+                reads.append(result)
+    board = stable_board_from_reads(reads)
+    if board is not None:
+        return board
+
+    pool = [df for ts in plan.board_fallback_ts if (df := decoded.get(round(ts, 6))) is not None]
+    if len(pool) < 2:
+        return None
+    fallback_reads = [r for df in pool if (r := read_board(df.frame)) is not None]
+    return stable_board_from_reads(fallback_reads)
 
 
 def _log_peak_rss(video_id: str) -> None:
@@ -1138,9 +1232,20 @@ def _ingest_route_and_materialize(
         decoded = _decode_selected(
             video_path, _plan_selected_ts(plans, hud_ts), ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin
         )
-        game_frames = tuple(
-            None if plan is None else _plan_to_game_frames(plan, decoded) for plan in plans
-        )
+        # Board resolution over the FULL setup pool, STREAMED (pixels dropped per frame) —
+        # the video must still exist here, hence inside the try block.
+        game_frames_list: list[GameFrames | None] = []
+        for plan in plans:
+            if plan is None:
+                game_frames_list.append(None)
+                continue
+            board = _resolve_stable_board(
+                video_path, plan, decoded, ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin
+            )
+            game_frames_list.append(
+                _plan_to_game_frames(plan, decoded, stable_board=board, stable_board_resolved=True)
+            )
+        game_frames = tuple(game_frames_list)
         hud_reads = [
             read_hud_seat_colors(f.frame)
             for ts in hud_ts
