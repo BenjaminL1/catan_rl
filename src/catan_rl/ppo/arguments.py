@@ -537,6 +537,54 @@ class LeagueConfig:
 
 
 @dataclass(frozen=True)
+class AutoStopConfig:
+    """Automated plateau-termination gate for unbounded runs (default OFF).
+
+    When ``enabled`` (default ``False`` — the training loop is byte-identical to
+    before this block existed, and every existing config keeps working unchanged),
+    the loop evaluates a HARD and a SOFT stop at the reanchor-check cadence, right
+    after :meth:`League.maybe_promote_anchor`, and exits cleanly (terminal save +
+    TB/league flush, the same exit path as budget exhaustion).
+
+    * HARD: ``updates_since_promotion >= hard_updates_since_promotion`` — a
+      hard-but-slow learner is not cut early (the observed v10 promotion gap was
+      ~250 updates; 400 = 1.6x that, so a near-bar hover KEEPS training).
+    * SOFT: ``updates_since_promotion >= soft_updates_since_promotion`` AND at
+      least ``soft_window_checks`` anchor-window means have been recorded AND the
+      median of the last ``soft_window_checks`` is ``< soft_window_bar`` — a
+      clearly-dead run (median below the bar, ~v9's terminal falling pattern) is
+      killed ~150 updates sooner than the hard cap.
+
+    Requires ``league.auto_reanchor_enabled`` (the promotion signal drives the
+    counter reset); validated in :meth:`TrainConfig.__post_init__`.
+    """
+
+    enabled: bool = False
+    hard_updates_since_promotion: int = 400
+    soft_updates_since_promotion: int = 250
+    soft_window_bar: float = 0.55
+    soft_window_checks: int = 8
+
+    def __post_init__(self) -> None:
+        # Only validate an ENABLED block — a disabled block must never reject so the
+        # byte-identical default holds regardless of any stray override values.
+        if not self.enabled:
+            return
+        _check_positive("hard_updates_since_promotion", self.hard_updates_since_promotion)
+        _check_positive("soft_updates_since_promotion", self.soft_updates_since_promotion)
+        _check_positive("soft_window_checks", self.soft_window_checks)
+        if not (0.0 < self.soft_window_bar < 1.0):
+            raise ValueError(f"soft_window_bar must be in (0, 1); got {self.soft_window_bar}")
+        if self.soft_updates_since_promotion > self.hard_updates_since_promotion:
+            raise ValueError(
+                "soft_updates_since_promotion "
+                f"({self.soft_updates_since_promotion}) must be <= "
+                f"hard_updates_since_promotion ({self.hard_updates_since_promotion}) "
+                "for the soft clause to fire earlier than the hard cap"
+            )
+
+
+@dataclass(frozen=True)
 class TrainConfig:
     """Top-level training configuration. The full set of knobs needed to
     reproduce a training run from scratch.
@@ -555,6 +603,7 @@ class TrainConfig:
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     eval: EvalConfig = field(default_factory=EvalConfig)
     league: LeagueConfig = field(default_factory=LeagueConfig)
+    auto_stop: AutoStopConfig = field(default_factory=AutoStopConfig)
 
     total_steps: int = 50_003_968
     """Total env steps to train for. Must be a multiple of
@@ -592,6 +641,16 @@ class TrainConfig:
     def __post_init__(self) -> None:
         _check_positive("total_steps", self.total_steps)
         _check_in("device", self.device, _DEVICE_VALUES)
+        # auto_stop's counter is reset by anchor promotions — without the ratchet
+        # it can never reset, so an enabled auto_stop with a disabled ratchet would
+        # always hard-stop at exactly `hard_updates_since_promotion` regardless of
+        # progress. Fail closed rather than silently mis-terminate.
+        if self.auto_stop.enabled and not self.league.auto_reanchor_enabled:
+            raise ValueError(
+                "auto_stop.enabled requires league.auto_reanchor_enabled=True "
+                "(promotions drive the updates_since_promotion reset; without the "
+                "ratchet the run would always hard-stop at the cap)"
+            )
         # Cross-section coherence: batch_size must divide n_envs * n_steps.
         transitions_per_rollout = self.rollout.n_envs * self.rollout.n_steps
         if transitions_per_rollout % self.ppo.batch_size != 0:
@@ -736,6 +795,7 @@ class TrainConfig:
             "checkpoint": CheckpointConfig,
             "eval": EvalConfig,
             "league": LeagueConfig,
+            "auto_stop": AutoStopConfig,
         }
         kwargs: dict[str, Any] = {}
         for section_name, section_cls in sections.items():

@@ -43,8 +43,10 @@ import io
 import json
 import logging
 import math
+import statistics
 import time
-from collections.abc import Iterable
+from collections import deque
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,7 +64,7 @@ from catan_rl.eval.harness import EvalHarness
 from catan_rl.policy.board_geometry import build_geometry
 from catan_rl.policy.network import CatanPolicy
 from catan_rl.policy.obs_schema import N_DEV_TYPES
-from catan_rl.ppo.arguments import TrainConfig
+from catan_rl.ppo.arguments import AutoStopConfig, TrainConfig
 from catan_rl.ppo.buffer import CompositeRolloutBuffer
 from catan_rl.ppo.game_manager import RolloutCollector
 from catan_rl.ppo.trainer import PPOTrainer
@@ -135,6 +137,85 @@ class TrainingState:
     # Resume-attribution metadata.
     resumed_from: Path | None = None
     metadata_extras: dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Automated plateau stop (auto_stop)
+# ---------------------------------------------------------------------------
+
+
+def evaluate_auto_stop(
+    cfg: AutoStopConfig,
+    *,
+    updates_since_promotion: int,
+    window_means: Sequence[float],
+) -> str | None:
+    """Pure decision function for :class:`AutoStopConfig`. Returns ``"hard"``,
+    ``"soft"``, or ``None`` (no stop). No side effects — the loop's stop machinery
+    (:class:`AutoStopTracker`) owns the state; this is the isolated, unit-testable
+    threshold logic.
+
+    * ``"hard"``: ``updates_since_promotion >= hard_updates_since_promotion``.
+    * ``"soft"``: ``updates_since_promotion >= soft_updates_since_promotion`` AND
+      at least ``soft_window_checks`` window means have been recorded AND the
+      median over the last ``soft_window_checks`` recorded means is
+      ``< soft_window_bar``.
+    """
+    if not cfg.enabled:
+        return None
+    if updates_since_promotion >= cfg.hard_updates_since_promotion:
+        return "hard"
+    if (
+        updates_since_promotion >= cfg.soft_updates_since_promotion
+        and len(window_means) >= cfg.soft_window_checks
+    ):
+        recent = list(window_means)[-cfg.soft_window_checks :]
+        if statistics.median(recent) < cfg.soft_window_bar:
+            return "soft"
+    return None
+
+
+class AutoStopTracker:
+    """Stateful helper that maintains the auto_stop signals across PPO updates.
+
+    Owns ``updates_since_promotion`` (ticked once per completed update, reset on
+    every anchor promotion) and a bounded record of the anchor-window mean WR
+    (appended only at reanchor-check cadence when the window is FULL). The loop
+    constructs one only when ``cfg.auto_stop.enabled`` — a disabled run allocates
+    nothing and never calls :func:`evaluate_auto_stop` (byte-identical).
+    """
+
+    def __init__(self, cfg: AutoStopConfig, *, min_games: int) -> None:
+        self.cfg = cfg
+        self._min_games = min_games
+        self.updates_since_promotion = 0
+        # Only the last soft_window_checks recorded means matter for the median.
+        self.window_means: deque[float] = deque(maxlen=max(1, cfg.soft_window_checks))
+
+    def tick(self) -> None:
+        """Count one completed PPO update."""
+        self.updates_since_promotion += 1
+
+    def on_promotion(self) -> None:
+        """Reset the clock + clear recorded means (a promotion mid-hover restarts
+        the plateau count and discards the pre-promotion window history)."""
+        self.updates_since_promotion = 0
+        self.window_means.clear()
+
+    def record_check(self, *, window_wr: float, window_n: int) -> None:
+        """At a reanchor-check, record the anchor-window mean — but ONLY when the
+        window is full (``window_n >= min_games``), matching the ratchet's own
+        window-full gate."""
+        if window_n >= self._min_games:
+            self.window_means.append(window_wr)
+
+    def evaluate(self) -> str | None:
+        """Return the stop reason (``"hard"``/``"soft"``) or ``None``."""
+        return evaluate_auto_stop(
+            self.cfg,
+            updates_since_promotion=self.updates_since_promotion,
+            window_means=self.window_means,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +784,17 @@ def run_training_loop(
     if max_updates is not None:
         end_update = min(end_update, state.update_idx + max_updates)
 
+    # Automated plateau stop (auto_stop). Constructed ONLY when enabled so a
+    # disabled run allocates nothing and never touches evaluate_auto_stop — the
+    # loop stays byte-identical. Fresh per call: after a resume the clock restarts
+    # at 0, giving the warm-started learner a full grace period (the plan's intent).
+    auto_stop: AutoStopTracker | None = (
+        AutoStopTracker(cfg.auto_stop, min_games=cfg.league.auto_reanchor_min_games)
+        if cfg.auto_stop.enabled
+        else None
+    )
+    stop_reason: str | None = None
+
     # Self-play opponent resolver (US3). Cache the heavy CatanPolicy per
     # snapshot id (D6), pruned to the live pool — but hand back a SEPARATE
     # RNG-bearing wrapper per (snapshot id, env) so envs sharing an id never
@@ -735,7 +827,7 @@ def run_training_loop(
         return FrozenSnapshotOpponent(policy, device=torch.device("cpu"), seed=seed)
 
     try:
-        while state.update_idx < end_update:
+        while state.update_idx < end_update and stop_reason is None:
             update_idx = state.update_idx
 
             # ---- self-play opponent refresh (US3) -------------------
@@ -812,6 +904,13 @@ def run_training_loop(
                 update_idx=update_idx,
                 global_step=state.global_step,
             )
+            # auto_stop plateau counter (NEW additive scalar; never renames existing).
+            if auto_stop is not None and state.tb_writer is not None:
+                state.tb_writer.add_scalar(
+                    "selfplay/updates_since_promotion",
+                    float(auto_stop.updates_since_promotion),
+                    state.global_step,
+                )
 
             # ---- league snapshot ------------------------------------
             if state.league.should_snapshot_this_update(update_idx):
@@ -870,6 +969,50 @@ def run_training_loop(
                         },
                     )
 
+                # ---- automated plateau stop (auto_stop) --------------
+                # Same cadence as the reanchor check, immediately AFTER
+                # maybe_promote_anchor: a promotion this check resets the clock
+                # (so a mid-hover promotion can never trigger a stale stop). The
+                # window mean is the SAME statistic the ratchet uses, recorded
+                # only when the window is full. On a stop we set stop_reason and
+                # let the iteration finish; the while-condition then exits into
+                # the existing terminal-save path (identical to budget exhaustion).
+                if auto_stop is not None:
+                    if new_anchor_id is not None:
+                        auto_stop.on_promotion()
+                    window_wr, window_n = state.league.anchor_window_stats()
+                    auto_stop.record_check(window_wr=window_wr, window_n=window_n)
+                    reason = auto_stop.evaluate()
+                    if reason is not None:
+                        recent = list(auto_stop.window_means)[-cfg.auto_stop.soft_window_checks :]
+                        median_str = f"{statistics.median(recent):.4f}" if recent else "n/a"
+                        log.info(
+                            "AUTO-STOP (%s) at update %d: updates_since_promotion=%d "
+                            "window_means_recorded=%d recent_median=%s bar=%.2f",
+                            reason,
+                            update_idx,
+                            auto_stop.updates_since_promotion,
+                            len(auto_stop.window_means),
+                            median_str,
+                            cfg.auto_stop.soft_window_bar,
+                        )
+                        if state.tb_writer is not None:
+                            state.tb_writer.add_scalar(
+                                "selfplay/auto_stop_event", 1.0, state.global_step
+                            )
+                        _write_jsonl(
+                            state.metrics_fh,
+                            {
+                                "kind": "auto_stop",
+                                "wall_time": _wall_time_iso(),
+                                "reason": reason,
+                                "update_idx": int(update_idx),
+                                "global_step": int(state.global_step),
+                                "updates_since_promotion": int(auto_stop.updates_since_promotion),
+                            },
+                        )
+                        stop_reason = reason
+
             # ---- eval -----------------------------------------------
             if (
                 cfg.eval.eval_every_updates > 0
@@ -908,6 +1051,13 @@ def run_training_loop(
                     vec_env=state.vec_env,
                 )
                 log.info("checkpoint saved: %s", path)
+
+            # Count this completed update toward the plateau clock (reset happens
+            # in the reanchor block above on a promotion). Ticking at the END makes
+            # updates_since_promotion at a reanchor-check read as "updates since the
+            # last promotion" exactly (0 at run start, N at the check N updates on).
+            if auto_stop is not None:
+                auto_stop.tick()
 
             state.update_idx += 1
 

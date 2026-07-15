@@ -545,6 +545,84 @@ class TestMetricsJSONL:
         assert rec["value_loss"] == pytest.approx(0.5, abs=1e-12)
 
 
+class TestAutoStop:
+    def _autostop_cfg(self, total_updates: int = 4) -> TrainConfig:
+        # auto_reanchor ON (auto_stop requires it) + an anchor installed manually
+        # before the loop. High winrate threshold so no accidental REAL promotion;
+        # the stop itself is forced via monkeypatch in the test.
+        cfg = _tiny_cfg(total_updates=total_updates)
+        return replace(
+            cfg,
+            checkpoint=replace(cfg.checkpoint, save_every_updates=5, keep_last_n=8),
+            league=replace(
+                cfg.league,
+                heuristic_weight=1.0,
+                snapshot_weight=0.0,
+                anchor_weight=0.25,
+                pfsp_enabled=True,
+                auto_reanchor_enabled=True,
+                auto_reanchor_check_every_updates=1,
+                auto_reanchor_min_games=1,
+                auto_reanchor_sustained_checks=1,
+                auto_reanchor_cooldown_updates=0,
+                auto_reanchor_winrate_threshold=0.9,
+            ),
+            auto_stop=replace(cfg.auto_stop, enabled=True),
+        )
+
+    def test_evaluate_not_invoked_when_disabled(
+        self, tmp_path: Path, silent_logger: logging.Logger, monkeypatch
+    ) -> None:
+        # Default _tiny_cfg has auto_stop disabled → the evaluation function must
+        # never be called (byte-identical loop; assert via a wrapping counter).
+        from catan_rl.ppo import training_loop as tl
+
+        calls = {"n": 0}
+        real = tl.evaluate_auto_stop
+
+        def _counting(*args, **kwargs):
+            calls["n"] += 1
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(tl, "evaluate_auto_stop", _counting)
+        run_training(
+            _tiny_cfg(total_updates=2),
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=2,
+            open_tb=False,
+        )
+        assert calls["n"] == 0
+
+    def test_stop_uses_terminal_save_path(
+        self, tmp_path: Path, silent_logger: logging.Logger, monkeypatch
+    ) -> None:
+        # A forced HARD stop at the first reanchor check (update 0) must exit via
+        # the SAME terminal-save path as budget exhaustion — the stop update's
+        # checkpoint must exist even though update 0 is not on save cadence (5).
+        from catan_rl.ppo import training_loop as tl
+
+        cfg = self._autostop_cfg(total_updates=4)
+        state = build_training_state(
+            cfg, run_dir=tmp_path, device_label="cpu", logger=silent_logger
+        )
+        # Install the anchor manually (no anchor_checkpoint_path) so the run-start
+        # guard passes, then force the stop.
+        state.league.set_anchor(state.policy.state_dict(), update_idx=0)
+        monkeypatch.setattr(tl, "evaluate_auto_stop", lambda *a, **k: "hard")
+        try:
+            run_training_loop(state, run_dir=tmp_path, logger=silent_logger, open_tb=False)
+        finally:
+            state.vec_env.close()
+        # The stop iteration completed and incremented once, then the loop exited
+        # (well before the total_updates=4 budget).
+        assert state.update_idx == 1
+        assert (tmp_path / "checkpoints" / "ckpt_000000000.pt").exists(), (
+            "auto-stop did not write the terminal checkpoint via the clean exit path"
+        )
+
+
 class TestResumeConfigDiff:
     def test_diff_emitted_on_critical_field_mismatch(
         self, tmp_path: Path, silent_logger: logging.Logger, caplog
