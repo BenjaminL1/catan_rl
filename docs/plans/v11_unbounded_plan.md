@@ -135,3 +135,34 @@ the pruner cannot exempt promo files cleanly, or preflight disk < 10 GB even aft
 - No ratchet-constant tuning (bar/cooldown/window are validated across 3 generations).
 - No n=2000 v6 re-verify launch (open gate debt, separately decided).
 - No grant/corpus work (a different executor owns it).
+
+## Implementation notes (2026-07-14, shipped)
+
+Executed as planned; commits `39f0bb7` (STEP 0), `185522b` (STEP 1), `5247eed` (STEP 2),
+`98311bb` (STEP 3 config). No divergences from the design; a few concretions worth recording:
+
+- **LR-hold: no code change needed.** `linear_lr_schedule` already clamps
+  `progress = min(1.0, update_idx/(total_updates-1))`, so it HOLDS at `lr_end` past the
+  horizon (verified: updates 900/901/2000/5999 all resolve to exactly 1.5e-4 with
+  `lr_anneal_total_updates=900`). No clamp added; the plan's "if it extrapolates" branch
+  did not fire.
+- **Pruner exemption by construction.** The rolling pruner's glob is `^ckpt_(\d{9})\.pt$`;
+  promotion checkpoints are written as `promo_ckpt_NNNNNNNNN.pt` (new
+  `CheckpointManager.save_promotion` / `promotion_checkpoint_filename`), so they never match
+  `list_checkpoints` / `prune_checkpoints` and survive `keep_last_n` with no exemption
+  bookkeeping. Pinned by `test_promotion_checkpoint_survives_prune`.
+- **auto_stop = additive `AutoStopConfig` block on `TrainConfig`** (`enabled: false` default =
+  byte-identical). Evaluated at the reanchor-check cadence immediately after
+  `maybe_promote_anchor` via `AutoStopTracker` (counter ticked per completed update, reset on
+  promotion; window mean recorded only when the ratchet window is full). A stop sets a
+  `stop_reason` that the while-condition honours, exiting into the SAME terminal-save path as
+  budget exhaustion. Added a coherence guard: `auto_stop.enabled` requires
+  `league.auto_reanchor_enabled` (else the counter could never reset).
+- **Disk guard = top-level `min_free_disk_gb` field** (default `0.0` = disabled), checked
+  before every save (rolling/promo/terminal) via `shutil.disk_usage`; a trip logs CRITICAL,
+  SKIPS the write, and requests the same clean auto-stop exit.
+- **New additive TB scalars** (existing names untouched): `selfplay/updates_since_promotion`
+  (every update) and `selfplay/auto_stop_event` (on a stop).
+- **v11 launched** from `configs/selfplay_v11.yaml` (6000-update runaway ceiling, warm+anchor
+  on `v10_chain_u899`, seed 10) under `nohup caffeinate -is`; disk after reclaim = 14–15 GB
+  free (target ≥14, abort <10 both satisfied). auto_stop is the real terminator.
