@@ -623,6 +623,60 @@ class TestAutoStop:
         )
 
 
+class TestDiskGuard:
+    def test_guard_stops_and_skips_save_when_low(
+        self, tmp_path: Path, silent_logger: logging.Logger, monkeypatch
+    ) -> None:
+        from collections import namedtuple
+
+        from catan_rl.ppo import training_loop as tl
+
+        usage = namedtuple("usage", ["total", "used", "free"])
+        # 1 GB free, below the 5 GB guard → every save is skipped + the run stops
+        # cleanly (never risk a torch.save truncation on a full disk).
+        monkeypatch.setattr(
+            tl.shutil,
+            "disk_usage",
+            lambda p: usage(100 * 2**30, 99 * 2**30, 1 * 2**30),
+        )
+        cfg = replace(_tiny_cfg(total_updates=4), min_free_disk_gb=5.0)
+        state = build_training_state(
+            cfg, run_dir=tmp_path, device_label="cpu", logger=silent_logger
+        )
+        try:
+            run_training_loop(state, run_dir=tmp_path, logger=silent_logger, open_tb=False)
+        finally:
+            state.vec_env.close()
+        files = [p.name for p in (tmp_path / "checkpoints").iterdir() if p.name.endswith(".pt")]
+        assert files == [], f"disk guard should skip all saves; found {files}"
+        # Stopped at the first rolling-save attempt (update 0), incremented once.
+        assert state.update_idx == 1
+
+    def test_guard_disabled_by_default_does_not_probe_disk(
+        self, tmp_path: Path, silent_logger: logging.Logger, monkeypatch
+    ) -> None:
+        from catan_rl.ppo import training_loop as tl
+
+        calls = {"n": 0}
+        real = tl.shutil.disk_usage
+
+        def _counting(p):
+            calls["n"] += 1
+            return real(p)
+
+        monkeypatch.setattr(tl.shutil, "disk_usage", _counting)
+        # min_free_disk_gb defaults to 0 → guard disabled → disk is never probed.
+        run_training(
+            _tiny_cfg(total_updates=2),
+            run_dir=tmp_path,
+            device_label="cpu",
+            logger=silent_logger,
+            max_updates=2,
+            open_tb=False,
+        )
+        assert calls["n"] == 0
+
+
 class TestResumeConfigDiff:
     def test_diff_emitted_on_critical_field_mismatch(
         self, tmp_path: Path, silent_logger: logging.Logger, caplog

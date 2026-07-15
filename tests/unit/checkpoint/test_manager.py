@@ -749,3 +749,24 @@ class TestCheckpointManager:
     def test_keep_last_n_negative_rejected(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="keep_last_n"):
             CheckpointManager(tmp_path, keep_last_n=-1)
+
+    def test_promotion_checkpoint_survives_prune(self, tmp_path: Path) -> None:
+        # promo_ckpt_* files are EXEMPT from keep_last_n pruning: they do not match
+        # the rolling ``ckpt_`` glob (_FILE_PATTERN), so a rolling save that evicts
+        # old rolling ckpts leaves any promotion checkpoint untouched — the
+        # candidate-selection insurance for an unbounded-length run.
+        mgr = CheckpointManager(tmp_path, keep_last_n=2)
+        policy, opt = _fresh_policy_and_optimizer(seed=0)
+        promo = mgr.save_promotion(
+            config={}, policy=policy, optimizer=opt, update_idx=5, global_step=500
+        )
+        assert promo.name == "promo_ckpt_000000005.pt"
+        # Roll several rolling ckpts well past keep_last_n=2.
+        for u in (10, 20, 30, 40):
+            mgr.save(config={}, policy=policy, optimizer=opt, update_idx=u, global_step=u * 100)
+        # Rolling pruning kept only the last 2 rolling ckpts...
+        assert [p.name for p in mgr.list()] == ["ckpt_000000030.pt", "ckpt_000000040.pt"]
+        # ...but the promotion checkpoint survived (not matched by the rolling glob).
+        assert promo.exists(), "promotion checkpoint was pruned — the exemption glob is broken"
+        payload = load_checkpoint(promo)
+        assert payload.update_idx == 5

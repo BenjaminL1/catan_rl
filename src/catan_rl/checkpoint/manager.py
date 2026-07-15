@@ -111,6 +111,18 @@ def checkpoint_filename(update_idx: int) -> str:
     return f"ckpt_{update_idx:09d}.pt"
 
 
+def promotion_checkpoint_filename(update_idx: int) -> str:
+    """Return the filename for a PERMANENT promotion-era checkpoint.
+
+    Uses the ``promo_ckpt_`` prefix so it does NOT match :data:`_FILE_PATTERN`
+    (``^ckpt_...``) — :func:`list_checkpoints` and :func:`prune_checkpoints`
+    therefore never see it, making it exempt from the rolling ``keep_last_n``
+    window by construction (no separate exemption bookkeeping needed)."""
+    if update_idx < 0:
+        raise ValueError(f"update_idx must be >= 0, got {update_idx}")
+    return f"promo_ckpt_{update_idx:09d}.pt"
+
+
 # ---------------------------------------------------------------------------
 # Save
 # ---------------------------------------------------------------------------
@@ -739,6 +751,42 @@ class CheckpointManager:
             metadata=metadata,
         )
         prune_checkpoints(self.directory, keep_last_n=self.keep_last_n)
+        return path
+
+    def save_promotion(
+        self,
+        *,
+        config: dict[str, Any],
+        policy: torch.nn.Module,
+        optimizer: torch.optim.Optimizer | None,
+        update_idx: int,
+        global_step: int,
+        league: Any | None = None,
+        vec_env: Any | None = None,
+        capture_rng: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> Path:
+        """Save a PERMANENT promotion-era checkpoint (``promo_ckpt_NNNNNNNNN.pt``).
+
+        Same payload + atomic-write machinery as :meth:`save`, but written under
+        the ``promo_ckpt_`` prefix and deliberately NOT pruned: these are the
+        candidate-selection insurance for a run whose length nobody knows in
+        advance (v9's crowned candidate was a promotion-era ckpt, not the final
+        one). The rolling pruner never touches them because they don't match the
+        ``ckpt_`` glob, so no exemption call is needed here."""
+        path = self.directory / promotion_checkpoint_filename(update_idx)
+        save_checkpoint(
+            path,
+            config=config,
+            policy=policy,
+            optimizer=optimizer if self.save_optimizer_state else None,
+            update_idx=update_idx,
+            global_step=global_step,
+            league=league,
+            vec_env=vec_env,
+            capture_rng=capture_rng,
+            metadata=metadata,
+        )
         return path
 
     def latest(self) -> Path | None:

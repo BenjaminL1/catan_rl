@@ -638,8 +638,17 @@ class TrainConfig:
     ``train_bc(init_ckpt=)``. The anchor OPPONENT is wired separately via
     ``league.anchor_checkpoint_path``; this field is the *learner* seed."""
 
+    min_free_disk_gb: float = 0.0
+    """Free-disk floor (GiB) checked immediately BEFORE every checkpoint save
+    (rolling, promotion, terminal). When free space on the run dir's filesystem
+    drops below this, the loop logs CRITICAL, SKIPS the risky write (never risk a
+    ``torch.save`` mid-write truncation on a full disk — a real June precedent),
+    and triggers the clean auto-stop exit. ``0.0`` (default) disables the guard →
+    byte-identical to before this field existed."""
+
     def __post_init__(self) -> None:
         _check_positive("total_steps", self.total_steps)
+        _check_non_negative("min_free_disk_gb", self.min_free_disk_gb)
         _check_in("device", self.device, _DEVICE_VALUES)
         # auto_stop's counter is reset by anchor promotions — without the ratchet
         # it can never reset, so an enabled auto_stop with a disabled ratchet would

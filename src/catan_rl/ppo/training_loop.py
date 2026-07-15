@@ -43,6 +43,7 @@ import io
 import json
 import logging
 import math
+import shutil
 import statistics
 import time
 from collections import deque
@@ -173,6 +174,12 @@ def evaluate_auto_stop(
         if statistics.median(recent) < cfg.soft_window_bar:
             return "soft"
     return None
+
+
+def _free_disk_gb(path: Path) -> float:
+    """Free space (GiB) on the filesystem holding ``path``. Isolated so the disk
+    guard is monkeypatchable in tests (``shutil.disk_usage``)."""
+    return shutil.disk_usage(path).free / (1024.0**3)
 
 
 class AutoStopTracker:
@@ -795,6 +802,27 @@ def run_training_loop(
     )
     stop_reason: str | None = None
 
+    # Free-disk guard: probed immediately BEFORE every checkpoint save (rolling,
+    # promo, terminal). Disabled (default 0.0) → never probes disk → byte-identical.
+    # On a low-disk trip it SKIPS the write (never risk a torch.save truncation)
+    # and requests the same clean auto-stop exit as a plateau stop.
+    def _disk_guard_ok(label: str) -> bool:
+        nonlocal stop_reason
+        if cfg.min_free_disk_gb <= 0:
+            return True
+        free_gb = _free_disk_gb(run_dir)
+        if free_gb < cfg.min_free_disk_gb:
+            log.critical(
+                "DISK GUARD (%s): free %.2f GB < min_free_disk_gb %.2f GB — skipping "
+                "this save and stopping cleanly (never risk a torch.save truncation)",
+                label,
+                free_gb,
+                cfg.min_free_disk_gb,
+            )
+            stop_reason = stop_reason or "disk"
+            return False
+        return True
+
     # Self-play opponent resolver (US3). Cache the heavy CatanPolicy per
     # snapshot id (D6), pruned to the live pool — but hand back a SEPARATE
     # RNG-bearing wrapper per (snapshot id, env) so envs sharing an id never
@@ -968,6 +996,20 @@ def run_training_loop(
                             "n_promotions": int(state.league._n_promotions),
                         },
                     )
+                    # Permanent promotion checkpoint (exempt from rolling pruning) —
+                    # the candidate-selection insurance for a run of unknown length.
+                    # Disk-guarded like every other save.
+                    if _disk_guard_ok("promotion"):
+                        promo_path = state.ckpt_mgr.save_promotion(
+                            config=cfg.to_dict(),
+                            policy=state.policy,
+                            optimizer=state.optimizer,
+                            update_idx=update_idx,
+                            global_step=state.global_step,
+                            league=state.league,
+                            vec_env=state.vec_env,
+                        )
+                        log.info("promotion checkpoint saved: %s", promo_path)
 
                 # ---- automated plateau stop (auto_stop) --------------
                 # Same cadence as the reanchor check, immediately AFTER
@@ -1040,6 +1082,7 @@ def run_training_loop(
             if (
                 cfg.checkpoint.save_every_updates > 0
                 and (update_idx + 1) % cfg.checkpoint.save_every_updates == 0
+                and _disk_guard_ok("rolling")
             ):
                 path = state.ckpt_mgr.save(
                     config=cfg.to_dict(),
@@ -1071,6 +1114,7 @@ def run_training_loop(
             cfg.checkpoint.save_every_updates > 0
             and last_idx >= 0
             and (last_idx + 1) % cfg.checkpoint.save_every_updates != 0
+            and _disk_guard_ok("terminal")
         ):
             path = state.ckpt_mgr.save(
                 config=cfg.to_dict(),
