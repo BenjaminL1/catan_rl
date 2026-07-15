@@ -78,3 +78,36 @@ report instead of improvising if: the routing path turns out to touch pixels som
 missed, the identical-output pin cannot be satisfied, or Phase C's re-decode diverges on ts
 alignment (decode_frames_at must return the same frame for the same ts — if it is not exactly
 deterministic, quantify the drift before proceeding).
+
+## Implementation notes (2026-07-15, as shipped)
+
+Shipped on main as `161335f` (streaming ingest) + `4b083e9` (board-pool fix). Final design
+matches the plan with two verification-driven amendments:
+
+- **Pixel-consumer coupling the audit missed:** `_stable_board_for_game`'s board read is fed
+  by the SAME frame lists the caps truncate. Capping the stability pool to the bucket's first
+  8 frames was MEASURED (pin #1, `9Sm86ml04aI` g3) to silently weld the PREVIOUS game's board
+  on: the earliest frames unanimously showed the stale board and the cap removed the later
+  frames whose disagreement the fail-closed §5.2 rule needed. Fix: `GameFramePlan.setup_ts`
+  carries the FULL `bucket[:max(2, len//2)]` pool, which Phase C STREAMS through
+  `read_board` one frame at a time (`_resolve_stable_board`, pixels dropped per frame;
+  agreement via the factored `board_cv.stable_board_from_reads`), and the resolved board is
+  carried on `GameFrames.stable_board`. The fallback pool is likewise pinned exactly
+  (`board_fallback_ts` = post-setup + first-5 UNCAPPED grant frames), so the grant cap
+  cannot perturb it. Caps now bound only RETAINED pixels, never what the stability gate sees.
+- **HUD-vote frames** (`_video_seat_colours`) were also a pixel consumer outside the plan's
+  audit list; their ts are simply added to the Phase-C re-decode union (identical frames,
+  no decision change).
+
+Pin results on the cached `9Sm86ml04aI.mp4`: pin #1 — 6/6 games equivalent on
+board_hexes / granted_resources / grant_diag(fail, accepted_by) / winner / draft_order /
+log_setup_sequence / dice_values_readable, with byte-identical post_setup + empty_baseline
+PNGs (⇒ identical ts); identical `[ocr-cache] hits=7 misses=1471` on both paths. Pin #2 —
+new-path peak RSS **1.44 GB** (`ru_maxrss`; old path holds ~7.5 GB and was OOM-killed
+attempting the same capture beside v11). Phase-C determinism spot-checked: re-decoding the
+same ts twice is byte-identical.
+
+The old `_ingest_two_pass` / `_extract_context` / `_route_frames_to_games` remain live for
+`scripts/gold_gate.py` + `scripts/dev/tier5_yield_rerun.py` and their tests; `parse_video`
+and `vlm_spike prepare-frames` both route through the ONE new
+`_ingest_route_and_materialize` path.
