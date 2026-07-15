@@ -1,0 +1,115 @@
+# v11 — chain the promotion ratchet on from v10, trained UNBOUNDED-until-plateau.
+#
+# LINEAGE: v10 warm+anchored on v9 and chained 3 promotions (updates 275/525/775), producing
+# ckpt_899 = v10_chain_u899 (crowned by the user on point evidence). v10 ended by BUDGET, not
+# plateau — the final anchor_wr_window still hovered 0.61-0.68 — which is exactly why this run
+# exists: remove the fixed budget and let the audited plateau check decide when the lever is spent.
+#
+# RECIPE: identical to v10 (bar 0.63 / sustained 2 / check every 25 / min_games 150 / cooldown 75;
+# same ppo/gae/loss/optimizer). The ONLY deliberate changes vs v10 are (a) warm+anchor on v10,
+# (b) a RUNAWAY-CEILING budget with auto_stop as the real terminator, (c) the validated LR schedule
+# PINNED to the first 900 updates (not stretched over the near-infinite horizon), (d) a smaller
+# rolling-retention window + promotion checkpoints so a promotion-era best is never pruned, and
+# (e) the free-disk guard. Do NOT retune the ratchet — it is validated across v8->v9->v10.
+#
+# TERMINATION: auto_stop (below) replaces the prose kill rule. HARD stop after 400 updates with no
+# promotion (1.6x the ~250 observed v10 gap → a healthy-but-slow learner is NOT cut early). SOFT
+# stop after 250+ updates with no promotion AND the anchor-window median over the last 8 checks
+# clearly below 0.55 (kills a clearly-dead run ~150 updates sooner). Either fires a clean terminal
+# save + exit. GATE at completion (gate-first — do NOT bank a v12 before this returns):
+#   scripts/ladder_gate.py --candidate-ckpt <best promo_ckpt> --baseline v10_chain_u899 --nps 300
+#   Promote only if clause-1 (min over un-gamed anchors {v6_u1399, v7_u399} bootstrap CI LB > 0).
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic
+  engine_backend: python
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.03
+
+optimizer:
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 900   # PIN v10's validated schedule: 2.0e-4 -> 1.5e-4 over the first 900
+                                 # updates, then HOLD at lr_end (linear_lr_schedule clamps progress
+                                 # at 1.0, so LR stays 1.5e-4 for the rest of the unbounded run).
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 6           # 6 x ~577MB ~= 3.5GB rolling + promotion ckpts; fits the disk budget.
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 40
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 0.25
+  snapshot_weight: 0.5
+  anchor_weight: 0.25
+  anchor_checkpoint_path: runs/anchors/v10_chain_u899.pt   # anchor on v10 -> every promotion is real progress PAST v10
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63          # the working bar — do not raise (0.85 froze the v7 anchor)
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 25
+  auto_reanchor_min_games: 150                   # windowed gate: N_eff = 150 (not the old EMA's ~19)
+  auto_reanchor_cooldown_updates: 75             # short cooldown so promotions CHAIN within the run
+
+# Automated plateau termination (STEP 1) — the real terminator for this unbounded run.
+auto_stop:
+  enabled: true
+  hard_updates_since_promotion: 400   # promotions came every ~250 in v10; 400 = 1.6x that
+  soft_updates_since_promotion: 250   # earlier stop needs BOTH: no promotion for 250+ updates...
+  soft_window_bar: 0.55               # ...AND the anchor-window median clearly below the bar
+  soft_window_checks: 8               # median over the last 8 promotion-cadence checks
+
+# Warm-start the learner from v10 itself (fresh optimizer; the league snapshot pool rebuilds from here).
+init_policy_checkpoint: runs/anchors/v10_chain_u899.pt
+
+total_steps: 196608000           # 6000 rollouts x 128 x 256 — a RUNAWAY CEILING (~2 weeks), NOT a
+                                 # budget; auto_stop is the real terminator (KILL per plateau, not budget).
+min_free_disk_gb: 5.0            # stop cleanly BEFORE a full disk truncates a torch.save mid-write (June precedent)
+seed: 10
+device: auto
+torch_compile: false
+run_name: selfplay_v11
+output_dir: runs/train
