@@ -696,12 +696,14 @@ def prepare_frames_from_video(
     from catan_rl.human_data.segment import segment_games
 
     topology = load_topology()
-    # Two-pass ingest: the sparse pass finds the grant lines, a 1 s dense pass
-    # re-samples those windows so the >=2-frame grant consensus is not starved.
-    frames, per_frame_lines = harvest._ingest_two_pass(
+    # Streaming ingest (Phase A OCR w/o pixel retention → Phase B metadata routing →
+    # Phase C targeted re-decode): the sparse pass finds the grant lines, a 1 s dense pass
+    # re-samples those windows so the >=2-frame grant consensus is not starved. Holds
+    # < 1.5 GB/video (was ~7.5 GB) so the corpus sweep runs beside v11 training. SAME path
+    # as the harvest driver (`parse_video`), so the two cannot diverge.
+    ctx = harvest._ingest_route_and_materialize(
         video, download_gate=_download_gate_from_env(), work_dir=None
     )
-    ctx = harvest._extract_context(video, frames, per_frame_lines)
     segments = segment_games(ctx.events, list(ctx.handles))
     game_dirs: list[Path] = []
     game_index = 0

@@ -198,9 +198,8 @@ def _mock_stages(
     events: tuple[LogEvent, ...],
     game_inputs: GameInputs,
 ) -> None:
-    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
     monkeypatch.setattr(
-        harvest, "_extract_context", lambda vid, frames, lines=None: _context(events)
+        harvest, "_ingest_route_and_materialize", lambda vid, **kw: _context(events)
     )
     monkeypatch.setattr(harvest, "_read_game_inputs", lambda *a, **kw: game_inputs)
 
@@ -290,8 +289,7 @@ def test_ruleset_filter_drops_single_actor_window(monkeypatch: pytest.MonkeyPatc
         called.append(1)
         return _game_inputs("accept")
 
-    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
-    monkeypatch.setattr(harvest, "_extract_context", lambda vid, frames, lines=None: _context(solo))
+    monkeypatch.setattr(harvest, "_ingest_route_and_materialize", lambda vid, **kw: _context(solo))
     monkeypatch.setattr(harvest, "_read_game_inputs", _guard)
     records = parse_video("vidHIGH00000", manifest=_MANIFEST_OBJ, topology=_TOPO)
     assert records == []
@@ -324,9 +322,8 @@ def test_frame_lookup_uses_segment_index_not_ruleset_ordinal(
         seen_index.append(segment_index)
         return _game_inputs("accept")
 
-    monkeypatch.setattr(harvest, "_ingest_two_pass", lambda vid, **kw: ([object()], [[]]))
     monkeypatch.setattr(
-        harvest, "_extract_context", lambda vid, frames, lines=None: _context(events)
+        harvest, "_ingest_route_and_materialize", lambda vid, **kw: _context(events)
     )
     monkeypatch.setattr(harvest, "_read_game_inputs", _capture)
 
@@ -964,3 +961,188 @@ def test_ocr_cache_output_identical_to_uncached_path(monkeypatch: pytest.MonkeyP
     uncached = [deterministic_ocr(harvest.crop_log(f)) for f in frames]
     assert cached == uncached
     assert stats["hits"] == 3 and stats["misses"] == 3  # 6 frames, 3 distinct crops
+
+
+# --- streaming ingest: metadata routing == pixel routing; Phase-C caps; delete-on-exit -
+#
+# The streaming path (`_ingest_route_and_materialize`) OCRs each frame and drops its
+# pixels (Phase A), routes on the pixel-free `FrameMeta` (Phase B), then re-decodes ONLY
+# the selected timestamps (Phase C) — cutting per-video RAM ~7.5 GB -> <1.5 GB. These
+# tests pin: (1) the metadata router selects byte-for-byte what the pixel router does;
+# (2) the Phase-C caps sub-sample evenly + deterministically; (3) the downloaded video is
+# deleted on the happy path AND on an injected Phase-C exception.
+
+
+def _meta_frames(items: list[tuple[float, list[str]]]) -> list[Any]:
+    return [
+        harvest.FrameMeta(ts=ts, pass_name="sparse", native_resolution=1080, lines=tuple(lines))
+        for ts, lines in items
+    ]
+
+
+def test_route_meta_matches_pixel_router_buckets_and_selection() -> None:
+    handles = ("phantom", "vale")
+    items: list[tuple[float, list[str]]] = [
+        (0.0, ["happy settling! list of commands: /help", "phantom placed a"]),
+        (4.0, ["phantom placed a", "vale placed a"]),
+        (8.0, ["vale placed a", "phantom received starting resources"]),
+        (12.0, ["vale received starting resources", "phantom rolled a 7"]),
+        (16.0, ["phantom built a", "vale rolled a 8"]),
+        (20.0, ["phantom rolled a 9", "vale won the game"]),
+    ]
+    frames = [_decoded_frame(t) for t, _ in items]
+    per_frame_lines = [ls for _, ls in items]
+    pixel = harvest._route_frames_to_games(list(frames), per_frame_lines, handles)
+    meta = harvest._route_meta_to_games(_meta_frames(items), handles)
+    assert len(meta) == len(pixel) >= 1
+    for gm, gp in zip(meta, pixel, strict=True):
+        if gp is None:
+            assert gm is None
+            continue
+        assert gm is not None
+        assert gm.setup_ts == tuple(f.ts for f in gp.setup_frames)
+        assert gm.grant_ts == tuple(f.ts for f in gp.grant_frames)
+        assert gm.baseline_ts == gp.setup_frames[0].ts  # both = bucket[0]
+        assert (gm.post_setup_ts is None) == (gp.post_setup_frame is None)
+        if gp.post_setup_frame is not None:
+            assert gm.post_setup_ts == gp.post_setup_frame.ts
+    # a grant line routes a grant ts on the metadata path too
+    assert any(g is not None and g.grant_ts for g in meta)
+
+
+def test_evenly_sample_spreads_endpoints_and_is_deterministic() -> None:
+    xs = list(range(100))
+    got = harvest._evenly_sample(xs, 10)
+    assert len(got) == 10
+    assert got[0] == 0 and got[-1] == 99  # endpoints always retained
+    diffs = [got[i + 1] - got[i] for i in range(len(got) - 1)]
+    assert max(diffs) - min(diffs) <= 1  # spread evenly
+    assert harvest._evenly_sample(xs, 10) == got  # deterministic
+    assert harvest._evenly_sample(xs, 200) == xs  # no-op at/above the ceiling
+    assert harvest._evenly_sample([5], 60) == [5]
+    assert harvest._evenly_sample([], 60) == []
+
+
+def test_route_meta_caps_grants_evenly_and_deterministically() -> None:
+    handles = ("phantom", "vale")
+    items: list[tuple[float, list[str]]] = [
+        (0.0, ["happy settling! list of commands: /help", "phantom placed a"])
+    ]
+    items += [(float(i), ["phantom received starting resources"]) for i in range(1, 81)]
+    routed = harvest._route_meta_to_games(_meta_frames(items), handles)
+    plans = [p for p in routed if p is not None and p.grant_ts]
+    assert len(plans) == 1
+    grant = plans[0].grant_ts
+    assert len(grant) == harvest.GRANT_FRAME_CAP  # 80 grant frames capped to 60
+    assert grant[0] == 1.0 and grant[-1] == 80.0  # window endpoints retained
+    assert list(grant) == sorted(grant)
+    assert set(grant).issubset({float(i) for i in range(1, 81)})
+    again = harvest._route_meta_to_games(_meta_frames(items), handles)
+    again_grant = [p.grant_ts for p in again if p is not None and p.grant_ts]
+    assert again_grant == [grant]  # deterministic across runs
+
+
+def test_plan_selected_ts_unions_dedups_and_sorts() -> None:
+    p = harvest.GameFramePlan(
+        setup_ts=(0.0, 4.0), post_setup_ts=8.0, baseline_ts=0.0, grant_ts=(12.0, 16.0)
+    )
+    got = harvest._plan_selected_ts([p, None], hud_ts=[100.0, 4.0])
+    assert got == [0.0, 4.0, 8.0, 12.0, 16.0, 100.0]  # 0.0 & 4.0 de-duplicated
+
+
+def test_plan_to_game_frames_materializes_and_fails_closed_on_missing() -> None:
+    p = harvest.GameFramePlan(
+        setup_ts=(0.0, 4.0), post_setup_ts=8.0, baseline_ts=0.0, grant_ts=(4.0,)
+    )
+    decoded = {round(t, 6): _decoded_frame(t) for t in (0.0, 4.0, 8.0)}
+    gf = harvest._plan_to_game_frames(p, decoded)
+    assert gf is not None
+    assert tuple(f.ts for f in gf.setup_frames) == (0.0, 4.0)
+    assert gf.post_setup_frame is not None and gf.post_setup_frame.ts == 8.0
+    assert tuple(f.ts for f in gf.grant_frames) == (4.0,)
+    assert gf.empty_baseline is decoded[0.0].frame
+    # a missing baseline (deterministic decode should never drop it) fails closed to None
+    missing_baseline = harvest.GameFramePlan(
+        setup_ts=(0.0, 4.0), post_setup_ts=8.0, baseline_ts=999.0, grant_ts=(4.0,)
+    )
+    assert harvest._plan_to_game_frames(missing_baseline, decoded) is None
+
+
+def _stub_streaming(monkeypatch: pytest.MonkeyPatch, metas: list[Any]) -> None:
+    monkeypatch.setattr(harvest, "_probe_duration_s", lambda vid: 100.0)
+    monkeypatch.setattr(harvest, "resolve_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(harvest, "resolve_ffprobe", lambda: "ffprobe")
+    monkeypatch.setattr(harvest, "_stream_ingest_meta", lambda *a, **kw: metas)
+    monkeypatch.setattr(harvest, "_discover_handles", lambda _l: ("phantom", "vale"))
+    monkeypatch.setattr(
+        harvest, "_agent_binding", lambda _h: {"agent": "phantom", "opponent": "vale"}
+    )
+    monkeypatch.setattr(harvest, "read_hud_seat_colors", lambda _f: ("RED", "BLUE"))
+    monkeypatch.setattr(
+        harvest,
+        "_bind_colours",
+        lambda _p, _s: ({"phantom": "RED", "vale": "BLUE"}, ("vale", "phantom")),
+    )
+
+
+def test_ingest_route_deletes_video_on_happy_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    created: dict[str, Path] = {}
+
+    def fake_download(vid: str, dest_dir: Path, **kw: Any) -> Path:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        f = dest_dir / f"{vid}.mp4"
+        f.write_bytes(b"video-bytes")
+        created["dir"], created["file"] = dest_dir, f
+        return f
+
+    metas = _meta_frames(
+        [
+            (0.0, ["happy settling! list of commands: /help", "phantom placed a"]),
+            (4.0, ["vale placed a", "phantom received starting resources"]),
+            (8.0, ["vale placed a", "phantom placed a"]),
+        ]
+    )
+    _stub_streaming(monkeypatch, metas)
+    monkeypatch.setattr(harvest, "download_video", fake_download)
+    monkeypatch.setattr(
+        harvest,
+        "_decode_selected",
+        lambda vp, ts, **kw: {round(t, 6): _decoded_frame(t) for t in ts},
+    )
+    ctx = harvest._ingest_route_and_materialize("vidHappy", work_dir=tmp_path)
+    assert isinstance(ctx, VideoContext)
+    assert not created["file"].exists()  # download-then-delete contract
+    assert not created["dir"].exists()  # the whole tmp dir is removed
+
+
+def test_ingest_route_deletes_video_on_phase_c_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    created: dict[str, Path] = {}
+
+    def fake_download(vid: str, dest_dir: Path, **kw: Any) -> Path:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        f = dest_dir / f"{vid}.mp4"
+        f.write_bytes(b"video-bytes")
+        created["dir"], created["file"] = dest_dir, f
+        return f
+
+    def boom(*a: Any, **kw: Any) -> dict[float, Any]:
+        raise RuntimeError("phase-C decode failure")
+
+    metas = _meta_frames(
+        [
+            (0.0, ["happy settling! list of commands: /help", "phantom placed a"]),
+            (4.0, ["vale placed a", "phantom received starting resources"]),
+            (8.0, ["vale placed a", "phantom placed a"]),
+        ]
+    )
+    _stub_streaming(monkeypatch, metas)
+    monkeypatch.setattr(harvest, "download_video", fake_download)
+    monkeypatch.setattr(harvest, "_decode_selected", boom)
+    with pytest.raises(RuntimeError, match="phase-C decode failure"):
+        harvest._ingest_route_and_materialize("vidBoom", work_dir=tmp_path)
+    assert not created["file"].exists()  # deletion survives an exception in any phase
+    assert not created["dir"].exists()

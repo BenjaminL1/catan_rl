@@ -63,6 +63,7 @@ import functools
 import hashlib
 import json
 import re
+import resource
 import tempfile
 import threading
 import time
@@ -70,7 +71,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from catan_rl.human_data.batch import (
     BatchResult,
@@ -89,6 +90,8 @@ from catan_rl.human_data.glyph_anchor import (
 )
 from catan_rl.human_data.ingest import (
     DecodedFrame,
+    PassName,
+    ScheduledFrame,
     TimeWindow,
     build_sampling_schedule,
     decode_frames_at,
@@ -121,6 +124,11 @@ from catan_rl.human_data.validate import cross_check
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
+
+#: Frame-like TypeVar so the pure routing helpers (:func:`_post_setup_frame`) operate on
+#: EITHER a pixel-carrying :class:`DecodedFrame` (the old router / its tests) or a
+#: pixel-free :class:`FrameMeta` (the streaming router) — they only key on ``id(frame)``.
+_F = TypeVar("_F")
 
 
 #: Typed reject reason for a game whose Stage-2 board CV never produced a
@@ -195,6 +203,51 @@ class GameFrames:
     post_setup_frame: DecodedFrame | None
     empty_baseline: npt.NDArray[np.uint8]
     grant_frames: tuple[DecodedFrame, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FrameMeta:
+    """A frame's LIGHTWEIGHT metadata kept by Phase-A streaming OCR — carries NO pixels.
+
+    The streaming ingest (:func:`_ingest_route_and_materialize`) decodes each scheduled
+    frame, OCRs its log crop through the crop-hash cache, records this metadata, and then
+    DROPS the ~6 MB pixel buffer — so peak RAM is ~1 frame, not the whole video's ~1200
+    decoded frames (~7.5 GB). Routing (Phase B) needs only ``ts`` (frame identity +
+    ordering), ``lines`` (the per-frame OCR), and ``native_resolution``; the pixels for
+    the handful of SELECTED frames are re-decoded in Phase C.
+    """
+
+    ts: float
+    pass_name: PassName
+    native_resolution: int
+    lines: tuple[str, ...]
+
+
+#: Phase-C per-game frame caps. They bound peak RAM (materialised frames x ~6 MB) while
+#: preserving every consensus/board DECISION — the pin-#1 equivalence fields are robust to
+#: the frame COUNT (they assert the accepted multiset / board / accepted-by, not how many
+#: frames were read). Setup: board stability needs ≥2 agreeing frames, 8 is generous.
+#: Grants: consensus measured 5-readable-of-6 at 1 s density, 60 evenly-sampled is generous.
+SETUP_FRAME_CAP = 8
+GRANT_FRAME_CAP = 60
+
+
+@dataclass(frozen=True, slots=True)
+class GameFramePlan:
+    """Phase-B routing output for ONE game: the SELECTED timestamps Phase C re-decodes.
+
+    Metadata-only (no pixels). ``setup_ts`` (≤ :data:`SETUP_FRAME_CAP`) is the
+    board-stability source; ``post_setup_ts`` the order-blind 8-pieces-down openings frame
+    (``None`` ⇒ a typed :data:`POST_SETUP_UNRESOLVED_REASON` reject downstream);
+    ``baseline_ts`` the empty-board baseline; ``grant_ts`` (≤ :data:`GRANT_FRAME_CAP`,
+    evenly sampled) the consensus grant frames. A segment with < 2 routed frames is a
+    ``None`` slot (index-aligned with ``segment_games``), exactly like the pixel router.
+    """
+
+    setup_ts: tuple[float, ...]
+    post_setup_ts: float | None
+    baseline_ts: float
+    grant_ts: tuple[float, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -775,6 +828,341 @@ def _read_game_inputs(
     )
 
 
+# --- streaming ingest: OCR without pixel retention -> route on metadata -> --------
+# --- targeted Phase-C re-decode (cuts per-video RAM ~7.5 GB -> <1.5 GB) ------------
+#
+# The old `_ingest_two_pass` + `_extract_context` pair held ALL ~1200 decoded 1080p
+# frames' pixels in RAM (~7.5 GB) from decode until the end of Stage 2. Pixels are only
+# ever needed for a few dozen frames per game, so the streaming path decodes pixels
+# TWICE (cheap) and holds them NEVER: Phase A OCRs each frame and drops it; Phase B routes
+# on the pixel-free `FrameMeta`; Phase C re-decodes ONLY the selected timestamps. Both the
+# `parse_video` harvest and `vlm_spike.py prepare-frames` go through this one path.
+
+
+def _print_ocr_cache(video_id: str, ocr_stats: Counter[str]) -> None:
+    """Emit the per-video ``[ocr-cache]`` telemetry line (hits/misses/rate)."""
+    hits, misses = ocr_stats["hits"], ocr_stats["misses"]
+    total = hits + misses
+    rate = (100.0 * hits / total) if total else 0.0
+    print(
+        f"[ocr-cache] video={video_id} hits={hits} misses={misses} rate={rate:.1f}%",
+        flush=True,
+    )
+
+
+def _stream_ingest_meta(
+    video_path: Path,
+    duration_s: float,
+    *,
+    ffmpeg: str,
+    ffprobe: str,
+    ocr_cache: dict[bytes, list[str]],
+    ocr_stats: Counter[str],
+) -> list[FrameMeta]:  # pragma: no cover - real-run path (ffmpeg + easyocr, mocked in CI)
+    """Phase A: stream sparse+dense frames, OCR each, keep :class:`FrameMeta`, DROP pixels.
+
+    Iterates :func:`~catan_rl.human_data.ingest.decode_frames_at` as a GENERATOR (never
+    ``list()``-ed), so the pixel buffer of each frame is freed the moment its log crop has
+    been OCR'd — peak RAM is ~1 frame. The OCR goes through the crop-hash cache
+    (:func:`_cached_ocr_log`), the sparse pass discovers the grant lines, and the 1 s dense
+    pass (:func:`_grant_dense_windows`) re-samples those windows the same streaming way.
+    Byte-for-byte the same schedule + OCR + dedup as :func:`_ingest_two_pass`; it only
+    drops the pixels. Returns ts-sorted metadata (stable sort ⇒ identical order to the old
+    ``(frames, lines)``).
+    """
+    metas: list[FrameMeta] = []
+    grant_ts: list[float] = []
+    sparse = build_sampling_schedule(duration_s)
+    for f in decode_frames_at(video_path, sparse, ffmpeg=ffmpeg, ffprobe=ffprobe):
+        lines = _cached_ocr_log(f.frame, ocr_cache, ocr_stats)
+        metas.append(
+            FrameMeta(
+                ts=f.ts,
+                pass_name=f.pass_name,
+                native_resolution=f.native_resolution,
+                lines=tuple(lines),
+            )
+        )
+        if any(GRANT_RE.search(ln.lower()) for ln in lines):
+            grant_ts.append(f.ts)
+
+    windows = _grant_dense_windows(grant_ts, duration_s)
+    if windows:
+        seen = {round(m.ts, 3) for m in metas}
+        dense = [
+            s
+            for s in build_sampling_schedule(duration_s, windows)
+            if s.pass_name == "dense" and round(s.ts, 3) not in seen
+        ]
+        dense_stream = (
+            decode_frames_at(video_path, dense, ffmpeg=ffmpeg, ffprobe=ffprobe) if dense else ()
+        )
+        for f in dense_stream:
+            lines = _cached_ocr_log(f.frame, ocr_cache, ocr_stats)
+            metas.append(
+                FrameMeta(
+                    ts=f.ts,
+                    pass_name=f.pass_name,
+                    native_resolution=f.native_resolution,
+                    lines=tuple(lines),
+                )
+            )
+    metas.sort(key=lambda m: m.ts)
+    return metas
+
+
+def _evenly_sample(items: Sequence[_F], cap: int) -> list[_F]:
+    """Deterministically down-sample ``items`` to at most ``cap``, spread evenly.
+
+    Returns ALL items (order preserved) when ``len(items) <= cap`` — so the cap is a no-op
+    below the ceiling. Otherwise selects ``cap`` indices spread across ``[0, n-1]``
+    (both endpoints included), de-duplicated with order preserved. Pure + deterministic
+    (same input ⇒ same subset): the grant-window sub-sampling must not depend on run order.
+    """
+    n = len(items)
+    if cap <= 0:
+        return []
+    if n <= cap:
+        return list(items)
+    if cap == 1:
+        return [items[0]]
+    idxs = sorted({round(i * (n - 1) / (cap - 1)) for i in range(cap)})
+    return [items[i] for i in idxs]
+
+
+def _route_meta_to_games(
+    metas: list[FrameMeta], handles: tuple[str, str]
+) -> tuple[GameFramePlan | None, ...]:
+    """Phase B: route pixel-free :class:`FrameMeta` to games ⇒ per-game SELECTED timestamps.
+
+    The bucketing is byte-for-byte the pixel router (:func:`_route_frames_to_games`) — the
+    SAME ``segment_games`` boundaries, the SAME window-length range reconstruction, the SAME
+    :func:`_dominant_segment` assignment, the SAME setup(first half)/post-setup/baseline(first
+    frame)/grant(grant-line frames) selection — it merely carries ``ts`` instead of pixels
+    and applies the Phase-C caps (:data:`SETUP_FRAME_CAP`, :data:`GRANT_FRAME_CAP` via
+    :func:`_evenly_sample`). Kept as a sibling of the pixel router (rather than factoring the
+    shared loop out of a tested function) so the old router — still used by ``gold_gate`` /
+    ``tier5_yield_rerun`` — is untouched; the two MUST stay in lockstep.
+    """
+    per_frame_lines = [list(m.lines) for m in metas]
+    per_frame_events = [parse_log(lines, handles).events for lines in per_frame_lines]
+    all_events = tuple(e for evs in per_frame_events for e in evs)
+    segments = segment_games(all_events, list(handles))
+    n_seg = len(segments)
+    if n_seg == 0:
+        return ()
+
+    seg_lens = [len(s.events) for s in segments]
+    start0 = len(all_events) - sum(seg_lens)
+    ranges: list[tuple[int, int]] = []
+    cursor = start0
+    for length in seg_lens:
+        ranges.append((cursor, cursor + length))
+        cursor += length
+
+    buckets: list[list[FrameMeta]] = [[] for _ in range(n_seg)]
+    global_hi_by_frame: dict[int, int] = {}
+    offset = 0
+    last_seg = 0
+    for meta, evs in zip(metas, per_frame_events, strict=True):
+        lo, hi = offset, offset + len(evs)
+        offset = hi
+        seg = _dominant_segment(lo, hi, ranges)
+        if seg is None:
+            if lo < start0:
+                continue  # only pre-first-reset noise — dropped
+            seg = last_seg  # a zero-event frame inside the corpus — carry forward
+        last_seg = seg
+        buckets[seg].append(meta)
+        global_hi_by_frame[id(meta)] = hi
+
+    line_by_frame = dict(zip((id(m) for m in metas), per_frame_lines, strict=True))
+    routed: list[GameFramePlan | None] = []
+    for seg_idx, bucket in enumerate(buckets):
+        if len(bucket) < 2:
+            routed.append(None)  # too few frames to gate board stability (frames_unrouted)
+            continue
+        setup = bucket[: max(2, len(bucket) // 2)][:SETUP_FRAME_CAP]
+        grant = [
+            m for m in bucket if any(GRANT_RE.search(ln.lower()) for ln in line_by_frame[id(m)])
+        ]
+        grant = _evenly_sample(grant, GRANT_FRAME_CAP)
+        post = _post_setup_frame(bucket, ranges[seg_idx], all_events, global_hi_by_frame)
+        routed.append(
+            GameFramePlan(
+                setup_ts=tuple(m.ts for m in setup),
+                post_setup_ts=None if post is None else post.ts,
+                baseline_ts=bucket[0].ts,
+                grant_ts=tuple(m.ts for m in grant),
+            )
+        )
+    return tuple(routed)
+
+
+def _plan_selected_ts(
+    plans: Sequence[GameFramePlan | None], hud_ts: Sequence[float]
+) -> list[float]:
+    """The sorted UNION of every plan's selected timestamps plus the HUD-vote samples.
+
+    This is exactly the set Phase C re-decodes — bounded by the per-game caps, so ~a few
+    dozen frames/game rather than the whole video. Pure (no I/O), so it is unit-testable.
+    """
+    wanted: set[float] = set()
+    for plan in plans:
+        if plan is None:
+            continue
+        wanted.update(plan.setup_ts)
+        wanted.update(plan.grant_ts)
+        wanted.add(plan.baseline_ts)
+        if plan.post_setup_ts is not None:
+            wanted.add(plan.post_setup_ts)
+    wanted.update(hud_ts)
+    return sorted(wanted)
+
+
+def _decode_selected(
+    video_path: Path,
+    selected_ts: Sequence[float],
+    *,
+    ffmpeg: str,
+    ffprobe: str,
+) -> dict[float, DecodedFrame]:  # pragma: no cover - real-run path (ffmpeg, mocked in CI)
+    """Phase C: re-decode ONLY the selected timestamps, keyed by ``round(ts, 6)``.
+
+    :func:`~catan_rl.human_data.ingest.decode_frames_at` is deterministic on ts (the same
+    ``-ss`` seek returns the same frame), so the re-decoded pixels are byte-identical to the
+    frames Phase A dropped — this is what makes the end-to-end output identical to the old
+    all-in-RAM path. Peak RAM is the union size x ~6 MB (~0.1-1 GB/video), not ~7.5 GB.
+    """
+    if not selected_ts:
+        return {}
+    schedule = [ScheduledFrame(ts=ts, pass_name="dense") for ts in selected_ts]
+    return {
+        round(f.ts, 6): f
+        for f in decode_frames_at(video_path, schedule, ffmpeg=ffmpeg, ffprobe=ffprobe)
+    }
+
+
+def _plan_to_game_frames(
+    plan: GameFramePlan, decoded: dict[float, DecodedFrame]
+) -> GameFrames | None:
+    """Materialise ONE game's :class:`GameFrames` from its plan + the re-decoded frame map.
+
+    Looks each selected ts up in ``decoded`` (keyed ``round(ts, 6)``). Returns ``None``
+    (⇒ ``frames_unrouted``) only if the baseline or fewer than 2 setup frames failed to
+    re-decode — which cannot happen given deterministic decode, but is handled fail-closed
+    rather than fabricating a frame.
+    """
+
+    def get(ts: float) -> DecodedFrame | None:
+        return decoded.get(round(ts, 6))
+
+    setup = tuple(f for ts in plan.setup_ts if (f := get(ts)) is not None)
+    grant = tuple(f for ts in plan.grant_ts if (f := get(ts)) is not None)
+    baseline = get(plan.baseline_ts)
+    post = None if plan.post_setup_ts is None else get(plan.post_setup_ts)
+    if baseline is None or len(setup) < 2:
+        return None
+    return GameFrames(
+        setup_frames=setup,
+        post_setup_frame=post,
+        empty_baseline=baseline.frame,
+        grant_frames=grant,
+    )
+
+
+def _log_peak_rss(video_id: str) -> None:
+    """Log this process's peak RSS (pin #2 evidence). macOS ``ru_maxrss`` is BYTES."""
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    print(f"[peak-rss] video={video_id} peak_rss_gb={peak / (1024**3):.3f}", flush=True)
+
+
+def _ingest_route_and_materialize(
+    video_id: str,
+    *,
+    download_gate: threading.BoundedSemaphore | None = None,
+    work_dir: Path | None = None,
+) -> VideoContext:  # pragma: no cover - real-run path (network + easyocr; unit-tested by parts)
+    """Streaming ingest → metadata routing → targeted Phase-C re-decode → :class:`VideoContext`.
+
+    Replaces the old ``_ingest_two_pass`` + ``_extract_context`` pair for the corpus sweep:
+    it holds < 1.5 GB per video (Phase A drops pixels; Phase C re-decodes only the selected
+    frames) so the sweep runs beside the live v11 training. The downloaded video's lifetime
+    spans routing (Phase C re-reads it) and it is deleted on EVERY path (``finally`` — the
+    download-then-delete contract is sacred). Both :func:`parse_video` and
+    :func:`scripts.vlm_spike.prepare_frames_from_video` go through this ONE path, so they
+    cannot diverge.
+    """
+    duration_s = _probe_duration_s(video_id)
+    ffmpeg_bin = resolve_ffmpeg()
+    ffprobe_bin = resolve_ffprobe()
+    gate = download_gate if download_gate is not None else _NULL_GATE
+
+    tmp = tempfile.mkdtemp(prefix=f"phantom_{video_id}_", dir=str(work_dir) if work_dir else None)
+    tmp_path = Path(tmp)
+    try:
+        with gate:
+            video_path = download_video(video_id, tmp_path)
+
+        # Phase A — streaming OCR, no pixel retention. Cache is LOCAL to this video.
+        ocr_cache: dict[bytes, list[str]] = {}
+        ocr_stats: Counter[str] = Counter()
+        metas = _stream_ingest_meta(
+            video_path,
+            duration_s,
+            ffmpeg=ffmpeg_bin,
+            ffprobe=ffprobe_bin,
+            ocr_cache=ocr_cache,
+            ocr_stats=ocr_stats,
+        )
+        _print_ocr_cache(video_id, ocr_stats)
+        if not metas:
+            raise VideoParseError(f"ingest produced no frames for {video_id!r}")
+
+        # Phase B — route on metadata (identity: same handles/events/routing as old path).
+        all_lines = [line for m in metas for line in m.lines]
+        handles = _discover_handles(all_lines)
+        players = _agent_binding(handles)
+        events = parse_log(all_lines, handles).events
+        plans = _route_meta_to_games(metas, handles)
+
+        # HUD colour vote samples — the SAME frames the old `_video_seat_colours` picked
+        # (`metas` is ts-sorted like the old frame list, so `[::step]` selects identical ts).
+        # Re-decoded in Phase C too, so the HUD read is byte-identical and peak RAM is
+        # unaffected. (The plan's pixel audit omitted this consumer; it is handled entirely
+        # within the locked targeted-re-decode design — no pipeline decision changes.)
+        step = max(1, len(metas) // _HUD_VOTE_SAMPLES)
+        hud_ts = [metas[i].ts for i in range(0, len(metas), step)]
+
+        # Phase C — targeted re-decode; the video is deleted in `finally` after this.
+        decoded = _decode_selected(
+            video_path, _plan_selected_ts(plans, hud_ts), ffmpeg=ffmpeg_bin, ffprobe=ffprobe_bin
+        )
+        game_frames = tuple(
+            None if plan is None else _plan_to_game_frames(plan, decoded) for plan in plans
+        )
+        hud_reads = [
+            read_hud_seat_colors(f.frame)
+            for ts in hud_ts
+            if (f := decoded.get(round(ts, 6))) is not None
+        ]
+        player_colors, seat_order = _bind_colours(players, _majority_two_colour(hud_reads))
+    finally:
+        for child in tmp_path.glob("*"):
+            child.unlink(missing_ok=True)
+        tmp_path.rmdir()
+
+    _log_peak_rss(video_id)
+    return VideoContext(
+        players=players,
+        handles=handles,
+        player_colors=player_colors,
+        seat_order=seat_order,
+        events=events,
+        game_frames=game_frames,
+    )
+
+
 # --- game-loop glue (the tested core) ----------------------------------------
 
 
@@ -813,14 +1201,13 @@ def parse_video(
             f"{video_id!r} has no manifest opponent strength (should be harvest-gated out)"
         )
 
-    # Two-pass: the sparse pass discovers the grant lines, then a 1 s dense pass
-    # re-samples ONLY those windows so the fail-closed grant consensus (>= 2 agreeing
-    # readable frames) is not starved — the defect that threw away 6/6 games of
-    # 9Sm86ml04aI despite every one having a clean opening frame.
-    frames, per_frame_lines = _ingest_two_pass(
-        video_id, download_gate=download_gate, work_dir=work_dir
-    )
-    ctx = _extract_context(video_id, frames, per_frame_lines)
+    # Streaming ingest (Phase A OCR w/o pixel retention → Phase B metadata routing →
+    # Phase C targeted re-decode): the sparse pass discovers the grant lines, then a 1 s
+    # dense pass re-samples ONLY those windows so the fail-closed grant consensus (>= 2
+    # agreeing readable frames) is not starved — the defect that threw away 6/6 games of
+    # 9Sm86ml04aI despite every one having a clean opening frame. Holds < 1.5 GB/video so
+    # the sweep runs beside v11 (was ~7.5 GB when it held every frame's pixels).
+    ctx = _ingest_route_and_materialize(video_id, download_gate=download_gate, work_dir=work_dir)
     segments = segment_games(ctx.events, list(ctx.handles))
 
     records: list[GameRecord] = []
@@ -1228,11 +1615,11 @@ _PAST_SETUP_KINDS = frozenset({"victory", "resign"})
 
 
 def _post_setup_frame(
-    bucket: list[DecodedFrame],
+    bucket: list[_F],
     seg_range: tuple[int, int],
     all_events: tuple[LogEvent, ...],
     global_hi_by_frame: dict[int, int],
-) -> DecodedFrame | None:
+) -> _F | None:
     """The 8-pieces-down post-setup frame for a game — NOT the game's last frame.
 
     The openings detector demands exactly the opening 8 setup pieces (4 settlements +
