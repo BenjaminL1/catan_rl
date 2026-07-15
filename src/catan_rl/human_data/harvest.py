@@ -1397,7 +1397,15 @@ def _collapse_grant_read(
     re-test the collapsed tally with unanimity (>= :data:`MIN_GRANT_CONSENSUS_FRAMES`) OR
     the existing overwhelming-dominance rule (>= :data:`DOMINANT_READ_MIN_READS` and
     >= :data:`DOMINANT_READ_MIN_FRAC`). Genuine bimodality (no subset relation) still fails
-    closed. Records ``diag["accepted_by"]`` / ``diag["collapsed"]`` on accept."""
+    closed. Records ``diag["accepted_by"]`` / ``diag["collapsed"]`` on accept.
+
+    Residual risk (panel-acknowledged, unchanged from today's exposure — not new risk):
+    (a) a TRUE 2-card grant whose frames also produced a spurious 3-card superset read
+    could collapse the wrong way; it is backstopped by the UNCHANGED settlement-matching
+    anchor (``orientation.py`` checks BOTH settlements) at the pre-existing p~=2/28~=0.07
+    multiset-collision rate; (b) at that same collision rate a colliding wrong superset
+    could mis-pin the granting vertex (order-establishment corruption) — the same
+    exposure any accepted-but-colliding multiset already carries."""
     tally = _grant_reads_tally(frames_boxes, palette)
     if not tally:
         return None
