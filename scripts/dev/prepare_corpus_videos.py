@@ -45,6 +45,11 @@ OUT = REPO / "runs/human/corpus_prep.json"
 #: its own 5 GB guard; we halt well above it so a parallel sweep never crowds the run.
 _MIN_FREE_GB = 8.0
 
+#: Per-video ingest wall-clock cap (seconds). The default (~90 min) suits the M1's
+#: ~50-min videos; slower hardware (e.g. an Intel box at ~2-4 h/video single-threaded)
+#: is killed mid-OCR at that cap, so it is overridable via ``CATAN_PREP_TIMEOUT_S``.
+_VIDEO_TIMEOUT_S = float(os.environ.get("CATAN_PREP_TIMEOUT_S", "5400"))
+
 
 def high_tier_videos() -> list[str]:
     d = json.loads(MANIFEST.read_text(encoding="utf-8"))
@@ -115,7 +120,7 @@ def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dic
             check=True,
             capture_output=True,
             text=True,
-            timeout=5400,
+            timeout=_VIDEO_TIMEOUT_S,
         )
         for line in proc.stdout.splitlines():
             if line.startswith(("[ocr-cache]", "[ocr-threads]")):
