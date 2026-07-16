@@ -1,0 +1,27 @@
+{
+  "video_id": "MrvZ1OD_u_8",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.87px). meta player_colors CORRECT (Tagminn=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. ThePhantom (BLACK) settlements v18=[4,13,14] and v12=[2,8,9] (roads v18-v16, v12-v6). Tagminn (RED) settlements v23=[6,16,17] and v10=[2,3,10] (roads v23-v22, v10-v11). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,BRICK,WOOD} equals exactly v12 (BRI4+WOO3+BRI8) and NOT v18 (WHE6+ORE11+ORE4={WHEAT,ORE,ORE}); Tagminn {BRICK,WHEAT,WOOD} equals exactly v10 (BRI4+WHE5+WOO10) and NOT v23 (SHE10+WHE8+SHE5={SHEEP,SHEEP,WHEAT}). Read from 2x-upscaled overlay.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    },
+    "Tagminn": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    }
+  }
+}
