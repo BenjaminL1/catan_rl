@@ -1,0 +1,27 @@
+{
+  "video_id": "I4Xw7dYDXYc",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). TWO known gotchas handled: (1) empty_baseline board fit FAILED (camera pan), so the board was re-fit from post_setup.png (read_board_stable residual 0.98px) and the vertex overlay rendered from that; (2) meta player_colors are WRONG (it lists Aniz=RED, ThePhantom=BLACK, but the actual pieces are PURPLE and BLACK) - so players were assigned by the COLOUR-AGNOSTIC grant self-check, not by colour. PURPLE pieces -> ThePhantom (grant {SHEEP:1,WOOD:2} matches PURPLE's v23=[6,16,17]=WOO4+WOO10+SHE8). BLACK pieces -> Aniz (grant {SHEEP:2,WOOD:1} matches BLACK's v11=[2,9,10]=SHE10+WOO5+SHE8). ThePhantom settlements v8=[1,7,18] and v23=[6,16,17] (roads v8-v7, v23-v19). Aniz settlements v17=[4,5,14] and v11=[2,9,10] (roads v17-v5, v11-v10). GRANT SELF-CHECK PASSES per player: ThePhantom {SHEEP:1,WOOD:2}=v23 only (v8={WHEAT,BRICK,BRICK}); Aniz {SHEEP:2,WOOD:1}=v11 only (v17={WHEAT,ORE,BRICK}). Read from 2x/3x-upscaled crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "Aniz": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    }
+  }
+}
