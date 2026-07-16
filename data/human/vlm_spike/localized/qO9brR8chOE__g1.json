@@ -1,0 +1,27 @@
+{
+  "video_id": "qO9brR8chOE",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.79px). meta player_colors CORRECT (Ore6Hoarder=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. ThePhantom (BLACK) settlements v20=[5,15,16] and v6=[1,2,8] (roads v20-v19, v6-v2). Ore6Hoarder (RED) settlements v11=[2,9,10] and v15=[3,4,12] (roads v11-v10, v15-v0). GRANT SELF-CHECK PASSES per player: ThePhantom {ORE,SHEEP,WOOD} equals exactly v6 (SHE6+ORE5+WOO9) and NOT v20 (ORE10+WHE5+BRI8={ORE,WHEAT,BRICK}); Ore6Hoarder {BRICK,ORE,SHEEP} equals exactly v15 (BRI4+SHE9+ORE6) and NOT v11 (ORE5+WOO10+WHE8={ORE,WOOD,WHEAT}). Read from 2x-upscaled overlay.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[1, 2, 8], [0, 1, 2]]}
+      ]
+    },
+    "Ore6Hoarder": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]}
+      ]
+    }
+  }
+}
