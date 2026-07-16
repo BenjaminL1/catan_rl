@@ -1,0 +1,27 @@
+{
+  "video_id": "YK-AAv-Brn0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fitted from empty_baseline (residual 0.64px); robber has moved off the desert onto h18 but no extra pieces were built, so the opening is intact. Read against a 2x-upscaled vertex-id overlay. Colours per meta: ThePhantom=BLACK, Mala3662=RED. ThePhantom settlements v19=[5,6,16] and v0=[0,3,4] (roads v19-v23, v0-v1); Mala3662 settlements v14=[3,10,11] and v2=[0,1,2] (roads v14-v13, v2-v3). GRANT SELF-CHECK PASSES: ThePhantom's grant {ORE:1,WHEAT:2} equals exactly v0's hexes (ORE11+WHE3+WHE6) and NOT v19's (SHE5+ORE4+ORE8={SHEEP:1,ORE:2}); Mala3662's grant {BRICK:1,ORE:1,SHEEP:1} equals exactly v2's hexes (ORE11+BRI9+SHE10) and NOT v14's (WHE3+WOO8+WHE4={WHEAT:2,WOOD:1}). Each grant matches EXACTLY ONE settlement, pinning the 2nd (granting) settlement for both players.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]},
+        {"endpoints": [[0, 3, 4], [0, 2, 3]]}
+      ]
+    },
+    "Mala3662": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 1, 2]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]},
+        {"endpoints": [[0, 1, 2], [0, 1, 6]]}
+      ]
+    }
+  }
+}
