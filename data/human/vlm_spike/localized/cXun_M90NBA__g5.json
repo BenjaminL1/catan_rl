@@ -1,0 +1,27 @@
+{
+  "video_id": "cXun_M90NBA",
+  "game_index": 5,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.92px). meta player_colors WRONG again (lists ThePhantom=BLACK, Woo6817=RED; actual pieces are PURPLE and BLACK) - players assigned by COLOUR-AGNOSTIC grant self-check. PURPLE -> ThePhantom (grant {WHEAT:2,WOOD:1} matches PURPLE's v20=[5,15,16]=WHE4+WHE6+WOO3). BLACK -> Woo6817 (grant {ORE:1,WHEAT:1,WOOD:1} matches BLACK's v16=[4,12,13]=WHE9+ORE10+WOO5). ThePhantom settlements v22=[6,17,18] and v20=[5,15,16] (roads v22-v9, v20-v21). Woo6817 settlements v8=[1,7,18] and v16=[4,12,13] (roads v8-v27, v16-v15). GRANT SELF-CHECK PASSES per player: ThePhantom {WHEAT:2,WOOD:1}=v20 only (v22={BRICK,ORE,SHEEP}); Woo6817 {ORE:1,WHEAT:1,WOOD:1}=v16 only (v8={BRICK,SHEEP,SHEEP}). Read from 2x-upscaled overlay.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]},
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]}
+      ]
+    },
+    "Woo6817": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [7, 18]]},
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]}
+      ]
+    }
+  }
+}
