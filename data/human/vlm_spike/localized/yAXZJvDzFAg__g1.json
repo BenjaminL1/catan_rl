@@ -1,0 +1,27 @@
+{
+  "video_id": "yAXZJvDzFAg",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.88px). meta player_colors CORRECT (Athewww=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. Note both v11 and v14 have hex multiset {WOOD,BRICK,BRICK} matching ThePhantom's grant, but they belong to different players (v11=ThePhantom's grant settlement, v14=Athewww's NON-grant), so the per-player self-check disambiguates. ThePhantom (BLACK) settlements v11=[2,9,10] and v23=[6,16,17] (roads v11-v10, v23-v19). Athewww (RED) settlements v9=[1,6,18] and v14=[3,10,11] (roads v9-v3, v14-v13). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,BRICK,WOOD} equals exactly v11 (WOO4+BRI3+BRI8) and NOT v23 (WHE10+SHE8+ORE5={WHEAT,SHEEP,ORE}); Athewww {ORE,SHEEP,WHEAT} equals exactly v9 (ORE9+WHE10+SHE2) and NOT v14 (WOO5+BRI8+BRI10={WOOD,BRICK,BRICK}). All 4 settlements+roads verified via 3-3.5x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "Athewww": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]},
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "video_id": "yAXZJvDzFAg",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). read_board_stable FAILED on both baseline and post_setup (translucent UI hover-highlights confused the grid detector), so the vertex overlay was rendered via the manual 3-hex-centre-refs fallback; refs were taken from CV-detected white dice-tile centroids for accuracy (h7=[589,257], h10=[994,397], h15=[590,817]). Inner vertices (v0-v23, where all pieces sit) are accurate under the ref affine (centroid of 3 hex centres = true vertex); coastal vertices are only approximate but unused. meta colours CORRECT (Athewww=RED, ThePhantom=BLACK). Note v7 and v9 both have multiset {BRICK,BRICK,WHEAT} matching Athewww's grant, but belong to different players (v7=Athewww grant, v9=ThePhantom's non-grant), disambiguated by the per-player self-check. ThePhantom (BLACK) settlements v9=[1,6,18] and v12=[2,8,9] (roads v9-v3, v12-v11). Athewww (RED) settlements v10=[2,3,10] and v7=[1,7,8] (roads v10-v1, v7-v6). GRANT SELF-CHECK PASSES per player: ThePhantom {WHEAT,WOOD,WOOD} equals exactly v12 (WOO5+WHE8+WOO10) and NOT v9 (BRI4+WHE9+BRI6={BRICK,BRICK,WHEAT}); Athewww {BRICK,BRICK,WHEAT} equals exactly v7 (BRI4+BRI3+WHE8) and NOT v10 (WOO5+SHE6+ORE9={WOOD,SHEEP,ORE}). Roads verified via 2.2-2.6x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    },
+    "Athewww": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [0, 2, 3]]},
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]}
+      ]
+    }
+  }
+}
