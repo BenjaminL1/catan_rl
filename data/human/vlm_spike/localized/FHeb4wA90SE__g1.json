@@ -1,0 +1,27 @@
+{
+  "video_id": "FHeb4wA90SE",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.77px). meta player_colors partly WRONG (lists Ghajni=WHITE, but Ghajni's pieces are dark-red/brown; ThePhantom=BLACK is correct) - players assigned by colour-agnostic grant self-check. This game needed careful crops: the two NON-grant settlements sit one vertex off from the nearest circle label, resolved by road-validity: the black non-grant is v5 (road v5-v17 is the only valid vertical edge), NOT v0; the dark-red non-grant is v19 (road v19-v23 is valid; v4-v23 is not an edge), NOT v4. ThePhantom (BLACK) settlements v2=[0,1,2] and v5=[0,4,5] (roads v2-v3, v5-v17). Ghajni (dark-red) settlements v19=[5,6,16] and v16=[4,12,13] (roads v19-v23, v16-v15). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WOOD} equals exactly v2 (SHE11+WOO5+BRI6) and NOT v5 (SHE11+ORE10+WHE9={SHEEP,ORE,WHEAT}); Ghajni {BRICK,ORE,SHEEP} equals exactly v16 (ORE10+BRI8+SHE5) and NOT v19 (WHE9+ORE4+WOO6={WHEAT,ORE,WOOD}). Read from 2x/3-3.6x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [0, 1, 2]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]},
+        {"endpoints": [[0, 1, 2], [0, 1, 6]]}
+      ]
+    },
+    "Ghajni": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]},
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]}
+      ]
+    }
+  }
+}
