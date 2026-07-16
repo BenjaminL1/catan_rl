@@ -1,0 +1,27 @@
+{
+  "video_id": "lMCemfE1bDY",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.89px). meta player_colors CORRECT (Vee=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. ThePhantom (BLACK) settlements v9=[1,6,18] and v0=[0,3,4] (roads v9-v22, v0-v15). Vee (RED) settlements v10=[2,3,10] and v20=[5,15,16] (roads v10-v11, v20-v21). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WHEAT} equals exactly v0 (BRI11+WHE10+SHE9) and NOT v9 (ORE6+BRI5+WOO9={ORE,BRICK,WOOD}); Vee {BRICK,SHEEP,WOOD} equals exactly v20 (WOO4+SHE3+BRI8) and NOT v10 (SHE3+WHE10+WHE8={SHEEP,WHEAT,WHEAT}). Roads verified via 2.8x/3.2x crops (v9-v22 and v20-v21 confirmed).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]},
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]}
+      ]
+    },
+    "Vee": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]}
+      ]
+    }
+  }
+}
