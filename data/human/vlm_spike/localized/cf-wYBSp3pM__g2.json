@@ -1,0 +1,27 @@
+{
+  "video_id": "cf-wYBSp3pM",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). Board fit via post_setup FALLBACK (camera pan; residual 0.91px). meta player_colors CORRECT (Flinn8076=RED, ThePhantom=BLACK), cross-checked vs the colour-agnostic grant self-check. ThePhantom (BLACK) settlements v11=[2,9,10] and v19=[5,6,16] (roads v11-v10, v19-v23). Flinn8076 (RED) settlements v17=[4,5,14] and v22=[6,17,18] (roads v17-v18, v22-v9). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,WHEAT,WOOD} equals exactly v19 (BRI4+WHE9+WOO3) and NOT v11 (SHE3+SHE8+ORE4={SHEEP,SHEEP,ORE}); Flinn8076 {ORE,SHEEP,WHEAT} equals exactly v22 (WHE9+SHE6+ORE2) and NOT v17 (WOO5+BRI4+WHE10={WOOD,BRICK,WHEAT}). Note v17's hexes happen to match ThePhantom's grant multiset but v17 is Flinn's NON-granting settlement, so no conflict. Read from 2x-upscaled overlay.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    },
+    "Flinn8076": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}
