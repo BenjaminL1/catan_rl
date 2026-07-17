@@ -1195,8 +1195,10 @@ def _ingest_route_and_materialize(
     tmp = tempfile.mkdtemp(prefix=f"phantom_{video_id}_", dir=str(work_dir) if work_dir else None)
     tmp_path = Path(tmp)
     try:
-        with gate:
+        t0 = time.monotonic()
+        with gate:  # download below INCLUDES any wait for a download-gate slot
             video_path = download_video(video_id, tmp_path)
+        t_dl = time.monotonic()
 
         # Phase A — streaming OCR, no pixel retention. Cache is LOCAL to this video.
         ocr_cache: dict[bytes, list[str]] = {}
@@ -1209,6 +1211,7 @@ def _ingest_route_and_materialize(
             ocr_cache=ocr_cache,
             ocr_stats=ocr_stats,
         )
+        t_a = time.monotonic()
         _print_ocr_cache(video_id, ocr_stats)
         if not metas:
             raise VideoParseError(f"ingest produced no frames for {video_id!r}")
@@ -1219,6 +1222,7 @@ def _ingest_route_and_materialize(
         players = _agent_binding(handles)
         events = parse_log(all_lines, handles).events
         plans = _route_meta_to_games(metas, handles)
+        t_b = time.monotonic()
 
         # HUD colour vote samples — the SAME frames the old `_video_seat_colours` picked
         # (`metas` is ts-sorted like the old frame list, so `[::step]` selects identical ts).
@@ -1252,11 +1256,17 @@ def _ingest_route_and_materialize(
             if (f := decoded.get(round(ts, 6))) is not None
         ]
         player_colors, seat_order = _bind_colours(players, _majority_two_colour(hud_reads))
+        t_c = time.monotonic()
     finally:
         for child in tmp_path.glob("*"):
             child.unlink(missing_ok=True)
         tmp_path.rmdir()
 
+    print(
+        f"[phase-times] video={video_id} download={t_dl - t0:.1f}s "
+        f"phaseA={t_a - t_dl:.1f}s phaseB={t_b - t_a:.1f}s phaseC={t_c - t_b:.1f}s",
+        flush=True,
+    )
     _log_peak_rss(video_id)
     return VideoContext(
         players=players,

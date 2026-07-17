@@ -596,12 +596,24 @@ def _pin_ocr_threads() -> None:
     """
     if os.environ.get("CATAN_OCR_THREADS") != "1":
         return
+    import cv2
     import torch
 
     torch.set_num_threads(1)
+    try:
+        # Interop pin must run BEFORE any parallel torch work or it raises
+        # RuntimeError. Safe here: main() calls this first, and torch is first
+        # imported two lines up — but guard anyway so a future import shuffle
+        # degrades to a logged warning, never a crashed worker.
+        torch.set_num_interop_threads(1)
+    except RuntimeError as exc:
+        print(f"[ocr-threads] WARNING: set_num_interop_threads(1) rejected: {exc}", flush=True)
+    cv2.setNumThreads(1)
     print(
         f"[ocr-threads] CATAN_OCR_THREADS=1 -> torch.set_num_threads(1); "
-        f"torch.get_num_threads()={torch.get_num_threads()}",
+        f"torch.get_num_threads()={torch.get_num_threads()} "
+        f"torch.get_num_interop_threads()={torch.get_num_interop_threads()} "
+        f"cv2.getNumThreads()={cv2.getNumThreads()}",
         flush=True,
     )
 

@@ -31,8 +31,10 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "src"))
@@ -58,7 +60,19 @@ def high_tier_videos() -> list[str]:
     return [k for k, v in items if isinstance(v, dict) and v.get("strength") == "high"]
 
 
-def tally(video: str) -> dict:
+def _build_todo(results: dict[str, dict[str, Any]], skip: list[str], n_fresh: int) -> list[str]:
+    """Fresh videos (capped at ``n_fresh``) first; previously-ERRORED videos are ALWAYS
+    appended last for retry. A success is never re-run; retries sit behind the fresh
+    head so a pathological video cannot stall it, yet can never be starved out of the
+    slice (with ~160 fresh remaining, a plain sort+slice would NEVER schedule them)."""
+    done = {v for v, r in results.items() if "error" not in r}
+    high = high_tier_videos()
+    fresh = [v for v in high if v not in results and v not in skip]
+    retries = [v for v in high if v in results and v not in done and v not in skip]
+    return fresh[:n_fresh] + retries
+
+
+def tally(video: str) -> dict[str, Any]:
     """Per-game tally from the frame dirs prepare-frames persisted for this video.
 
     A game is LOCALIZABLE only when ALL THREE independent gates pass:
@@ -99,7 +113,17 @@ def _free_gb(path: Path = REPO) -> float:
     return shutil.disk_usage(str(path)).free / 1e9
 
 
-def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dict:
+def _stream_tail(stream: str | bytes | None, lines: int = 30) -> str:
+    """Last ``lines`` lines of a child stream. ``CalledProcessError`` carries str
+    (text=True); ``TimeoutExpired`` carries the partial output as BYTES even in
+    text mode (CPython quirk); either may be None."""
+    if stream is None:
+        return ""
+    text = stream.decode("utf-8", "replace") if isinstance(stream, bytes) else stream
+    return "\n".join(text.splitlines()[-lines:])
+
+
+def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dict[str, Any]:
     """Ingest ONE video via the ``prepare-frames`` subprocess and return its tally.
 
     ``env_extra`` carries the parallel-sweep pins (single-thread OCR + the download
@@ -110,6 +134,7 @@ def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dic
     """
     print(f"[prep] {i}/{n} {video}: ingesting…", flush=True)
     env = {**os.environ, "PYTHONPATH": str(REPO / "src"), **env_extra}
+    t0 = time.monotonic()
     try:
         spike = str(REPO / "scripts/vlm_spike.py")
         cmd = [sys.executable, spike, "prepare-frames", "--video", video]
@@ -123,26 +148,34 @@ def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dic
             timeout=_VIDEO_TIMEOUT_S,
         )
         for line in proc.stdout.splitlines():
-            if line.startswith(("[ocr-cache]", "[ocr-threads]")):
+            if line.startswith(("[ocr-cache]", "[ocr-threads]", "[phase-times]", "[peak-rss]")):
                 print(f"[prep] {i}/{n} {video} :: {line}", flush=True)
         r = tally(video)
+        r["elapsed_s"] = round(time.monotonic() - t0, 1)
         loc = sum(g["localizable"] for g in r["games"])
         print(f"[prep] {i}/{n} {video}: games={r['n_games']} localizable={loc}", flush=True)
         return r
     except Exception as exc:  # one bad video must not kill the night
+        elapsed = round(time.monotonic() - t0, 1)
         print(f"[prep] {i}/{n} {video}: FAILED {exc}", flush=True)
+        for name in ("stdout", "stderr"):
+            tail = _stream_tail(getattr(exc, name, None))
+            if tail:
+                print(f"[prep] {i}/{n} {video} :: child {name} tail:\n{tail}", flush=True)
         traceback.print_exc()
-        return {"video": video, "error": f"{type(exc).__name__}: {exc}"}
+        return {"video": video, "error": f"{type(exc).__name__}: {exc}", "elapsed_s": elapsed}
 
 
-def _run_sequential(todo: list[str], results: dict[str, dict]) -> None:
+def _run_sequential(todo: list[str], results: dict[str, dict[str, Any]]) -> None:
     """Today's exact one-at-a-time path (``--workers 1``): no thread pins, no gate."""
     for i, video in enumerate(todo, 1):
         results[video] = _process_video(video, i, len(todo), {})
         OUT.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
 
-def _run_parallel(todo: list[str], results: dict[str, dict], workers: int, net_conc: int) -> None:
+def _run_parallel(
+    todo: list[str], results: dict[str, dict[str, Any]], workers: int, net_conc: int
+) -> None:
     """Fan videos across ``workers`` single-thread-pinned OCR subprocesses.
 
     Downloads are capped at ``net_conc`` via a cross-process file semaphore (each
@@ -167,7 +200,7 @@ def _run_parallel(todo: list[str], results: dict[str, dict], workers: int, net_c
             OUT.write_text(json.dumps(results, indent=2), encoding="utf-8")
 
     todo_iter = iter(enumerate(todo, 1))
-    running: dict[concurrent.futures.Future, str] = {}
+    running: dict[concurrent.futures.Future[None], str] = {}
     stopped = False
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
@@ -204,7 +237,12 @@ def _run_parallel(todo: list[str], results: dict[str, dict], workers: int, net_c
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--videos", type=int, default=8)
+    ap.add_argument(
+        "--videos",
+        type=int,
+        default=8,
+        help="max FRESH videos; errored videos are always appended last for retry",
+    )
     ap.add_argument("--skip", nargs="*", default=[])
     ap.add_argument(
         "--workers",
@@ -218,13 +256,17 @@ def main() -> None:
     args = ap.parse_args()
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    results: dict[str, dict] = {}
+    results: dict[str, dict[str, Any]] = {}
     if OUT.exists():
         results = json.loads(OUT.read_text(encoding="utf-8"))
 
-    todo = [v for v in high_tier_videos() if v not in results and v not in args.skip]
-    todo = todo[: args.videos]
-    print(f"[prep] {len(todo)} videos (workers={args.workers}): {todo}", flush=True)
+    todo = _build_todo(results, args.skip, args.videos)
+    n_retry = sum(v in results for v in todo)
+    print(
+        f"[prep] {len(todo)} videos ({n_retry} retries appended last, "
+        f"workers={args.workers}): {todo}",
+        flush=True,
+    )
 
     if args.workers <= 1:
         _run_sequential(todo, results)
