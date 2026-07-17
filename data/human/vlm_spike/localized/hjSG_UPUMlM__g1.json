@@ -1,0 +1,27 @@
+{
+  "video_id": "hjSG_UPUMlM",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.72px, but with a noticeable offset in the lower-left/right). meta player_colors CORRECT (Vos1816=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. Two red settlements needed the grant/adjacency constraint to resolve the overlay offset: the left red GRANT settlement is v22=[6,17,18] (its base touches the grey ORE8 hex; the nearby 'v9' label is offset), and the right red NON-grant is the coastal v33=[10,11]={BRICK,WHEAT}. ThePhantom (BLACK) settlements v7=[1,7,8] and v20=[5,15,16] (roads v7-v6, v20-v19). Vos1816 (RED) settlements v22=[6,17,18] and v33=[10,11] (roads v22-v9, v33-v14). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WOOD} equals exactly v7 (SHE4+BRI6+WOO2) and NOT v20 (WOO6+ORE9+WHE10={WOOD,ORE,WHEAT}); Vos1816 {ORE,SHEEP,WOOD} equals exactly v22 (SHE5+ORE8+WOO3) and NOT v33 (BRI10+WHE8={BRICK,WHEAT}). Verified via 3-3.2x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]}
+      ]
+    },
+    "Vos1816": {
+      "settlements": [
+        {"hexes": [10, 11]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[10, 11], [3, 10, 11]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}
