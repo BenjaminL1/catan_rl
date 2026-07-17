@@ -1,0 +1,27 @@
+{
+  "video_id": "XgYPO0DFJts",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). read_board_stable FAILED on both frames (UI hover-highlights), so the vertex overlay was rendered via the manual 3-hex-refs fallback using CV-detected white dice-tile centroids (h7=[613,246], h11=[1106,531], h15=[613,815]); inner vertices v0-v23 (where all pieces sit) are accurate, coastal-vertex labels are approximate and were ignored (e.g. the black grant house sits at the inner vertex v12, near a misplaced coastal '28' label). meta colours CORRECT (Burgldentity=RED, ThePhantom=BLACK). ThePhantom (BLACK) settlements v12=[2,8,9] and v21=[5,14,15] (roads v12-v6, v21-v20). Burgldentity (RED) settlements v23=[6,16,17] and v10=[2,3,10] (roads v23-v19, v10-v11). GRANT SELF-CHECK PASSES per player: ThePhantom {SHEEP,WHEAT,WOOD} equals exactly v12 (WHE5+SHE8+WOO10) and NOT v21 (ORE10+BRI8+WHE5={ORE,BRICK,WHEAT}); Burgldentity {BRICK,SHEEP,WOOD} equals exactly v23 (SHE9+WOO2+BRI6) and NOT v10 (WHE5+ORE6+WOO9={WHEAT,ORE,WOOD}). All settlements+roads verified via 2.8-3x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    },
+    "Burgldentity": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    }
+  }
+}
