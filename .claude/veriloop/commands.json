@@ -1,0 +1,165 @@
+{
+  "veriloop_schema": 1,
+  "generated_by": "veriloop/scripts/detect.mjs (phase 1)",
+  "repo_root": ".",
+  "package_manager": "pip",
+  "stack": [
+    "python",
+    "rust"
+  ],
+  "polyglot": [
+    "rust (maturin extension crate — detectRust emits the cargo fmt/clippy/test/check surface alongside this build)"
+  ],
+  "has_ui": false,
+  "warnings": [],
+  "commands": {
+    "install": {
+      "cmd": "python -m pip install -e \".[dev]\"",
+      "cwd": ".",
+      "source": "pyproject.toml:30",
+      "from": "python",
+      "safety": "ask",
+      "verified_by_ci": true,
+      "verified": null,
+      "verify_skipped": "safety=ask — not included (re-run with --include install)"
+    },
+    "typecheck": {
+      "cmd": "make typecheck",
+      "cwd": ".",
+      "source": "Makefile:33",
+      "from": "makefile",
+      "safety": "safe",
+      "verified_by_ci": true,
+      "verified": true,
+      "verify_exit": 0,
+      "verify_ms": 2491
+    },
+    "lint": {
+      "cmd": "make lint",
+      "cwd": ".",
+      "source": "Makefile:26",
+      "from": "makefile",
+      "safety": "safe",
+      "verified_by_ci": true,
+      "verified": false,
+      "verify_exit": 2,
+      "verify_ms": 107,
+      "verify_tail": "ruff check src tests scripts\nB904 Within an `except` clause, raise exceptions with `raise ... from err` or `raise ... from None` to distinguish them from errors in exception handling\n  --> scripts/export_dice_vectors.py:64:5\n   |\n62 |         f\".so to PYTHONPATH before running. Underlying error: {exc}\\n\"\n63 |     )\n64 |     raise SystemExit(1)\n   |     ^^^^^^^^^^^^^^^^^^^\n65 |\n66 | # --- dice.rs / rng.rs constants -------------------------------------------\n   |\n\nFound 1 error.\nmake: *** [lint] Error 1\n"
+    },
+    "format": {
+      "cmd": "cargo fmt --all -- --check",
+      "cwd": ".",
+      "source": ".github/workflows/ci.yml:86 (CI)",
+      "from": "ci",
+      "safety": "safe",
+      "verified_by_ci": true,
+      "verified": true,
+      "note": "make format writes files (recipe: ruff format src tests scripts ; ruff check --fix src tests scripts); use as formatter, not gate",
+      "verify_exit": 0,
+      "verify_ms": 3586
+    },
+    "test": {
+      "cmd": "make test-unit",
+      "cwd": ".",
+      "source": ".github/workflows/ci.yml:55 (CI)",
+      "from": "ci",
+      "safety": "ask",
+      "verified_by_ci": true,
+      "verified": null,
+      "verify_skipped": "safety=ask — not included (re-run with --include test)"
+    },
+    "test_single": {
+      "cmd": "pytest <path>::<test>",
+      "cwd": ".",
+      "source": "pytest",
+      "from": "pyproject",
+      "safety": "ask",
+      "verified_by_ci": false,
+      "verified": null,
+      "verify_skipped": "placeholder command (needs a target file/test)"
+    },
+    "build": {
+      "cmd": "make rust-build",
+      "cwd": ".",
+      "source": "Makefile:88",
+      "from": "makefile",
+      "safety": "ask",
+      "verified_by_ci": false,
+      "verified": null,
+      "verify_skipped": "safety=ask — not included (re-run with --include build)"
+    },
+    "e2e": {
+      "cmd": "pytest tests/integration -v -m integration --tb=short",
+      "cwd": ".",
+      "source": ".github/workflows/ci.yml:61 (CI)",
+      "from": "ci",
+      "safety": "never",
+      "verified_by_ci": true,
+      "verified": null,
+      "verify_skipped": "safety=never (real side effects) — never auto-run"
+    }
+  },
+  "scopes": [],
+  "ci_commands": [
+    {
+      "cmd": "python -m pip install -e \".[dev]\"",
+      "source": ".github/workflows/ci.yml:29"
+    },
+    {
+      "cmd": "make lint",
+      "source": ".github/workflows/ci.yml:30"
+    },
+    {
+      "cmd": "make typecheck",
+      "source": ".github/workflows/ci.yml:31"
+    },
+    {
+      "cmd": "python -m pip install -e \".[dev,gui]\"",
+      "source": ".github/workflows/ci.yml:54"
+    },
+    {
+      "cmd": "make test-unit",
+      "source": ".github/workflows/ci.yml:55"
+    },
+    {
+      "cmd": "pytest tests/integration -v -m integration --tb=short",
+      "source": ".github/workflows/ci.yml:61"
+    },
+    {
+      "cmd": "cargo fmt --all -- --check",
+      "source": ".github/workflows/ci.yml:86"
+    },
+    {
+      "cmd": "cargo clippy --workspace --release -- -D warnings",
+      "source": ".github/workflows/ci.yml:88"
+    },
+    {
+      "cmd": "cargo test --workspace --release",
+      "source": ".github/workflows/ci.yml:90"
+    },
+    {
+      "cmd": "python -m pip install -e .",
+      "source": ".github/workflows/ci.yml:97"
+    },
+    {
+      "cmd": "python -c \"import catan_engine; assert catan_engine.hello() == 'hello from rust'\"",
+      "source": ".github/workflows/ci.yml:100"
+    },
+    {
+      "cmd": "python -c \"import catan_engine; print('catan_engine', catan_engine.version())\"",
+      "source": ".github/workflows/ci.yml:101"
+    },
+    {
+      "cmd": "python -c \"import catan_rl; print('catan_rl', catan_rl.__file__)\"",
+      "source": ".github/workflows/ci.yml:102"
+    },
+    {
+      "cmd": "catan-rl-train --help > /dev/null",
+      "source": ".github/workflows/ci.yml:103"
+    }
+  ],
+  "ci_files": [
+    ".github/workflows/ci.yml"
+  ],
+  "verified_at": "2026-07-17T07:51:45.995Z"
+}

@@ -101,3 +101,8 @@ data/human/pregate0_games.jsonl
 # `localized/*.json` adjacency inputs (the VLM's output the FileLocalizer reads).
 data/human/vlm_spike/frames/
 data/human/vlm_spike/records/
+
+# <<< veriloop:auto:start >>>
+.claude/veriloop/.backups/
+.claude/veriloop/history/dry-runs/
+# <<< veriloop:auto:end >>>

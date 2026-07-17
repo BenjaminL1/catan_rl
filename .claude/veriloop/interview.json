@@ -1,0 +1,6 @@
+{
+  "cross_model": true,
+  "budget_posture": "balanced",
+  "phase_models": { "plan": "fable", "implement": "opus" },
+  "high_risk_areas": ["engine", "conformance", "parity", "fixture", "maturin", "train", "checkpoint", "league", "gui", "device"]
+}
