@@ -1,0 +1,27 @@
+{
+  "video_id": "mx5e_Lf5KoA",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.93px). meta colours CORRECT (DeLemon=RED, ThePhantom=BLACK). ThePhantom (BLACK) settlements v11=[2,9,10] and v20=[5,15,16] (roads v11-v12, v20-v45). DeLemon (RED) settlements v9=[1,6,18] and v14=[3,10,11] (roads v9-v3, v14-v10). GRANT SELF-CHECK PASSES per player: ThePhantom {ORE:2,SHEEP:1} equals exactly v11 (SHE9+ORE5+ORE10) and NOT v20 (WOO6+WHE9+WHE10={WOOD,WHEAT,WHEAT}); DeLemon {ORE,WHEAT,WOOD} equals exactly v9 (WHE4+ORE5+WOO3) and NOT v14 (SHE3+ORE10+BRI8={SHEEP,ORE,BRICK}). v11 base + v11-v12 road confirmed via 3.2x crop.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [15, 16]]},
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]}
+      ]
+    },
+    "DeLemon": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]}
+      ]
+    }
+  }
+}
