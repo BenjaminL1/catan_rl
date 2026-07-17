@@ -1,9 +1,9 @@
 {
   "veriloop_version": "0.3.7",
-  "generated_at": "2026-07-17T07:56:18.657Z",
+  "generated_at": "2026-07-17T08:00:43.092Z",
   "repo_name": "catan-rl-v2",
   "repo_root": ".",
-  "repo_sha": "70ac79d68c9218af20d814742dac3e4b19f74212",
+  "repo_sha": "aad09c2b9f360a7ac704510d7b505888bdada6ed",
   "stack": [
     "python",
     "rust"
@@ -165,8 +165,13 @@
       }
     },
     "models": {
-      "plan": "fable",
-      "implement": "opus"
+      "plan": "opus",
+      "implement": "opus",
+      "review": "opus",
+      "checks": "opus",
+      "fix": "opus",
+      "land": "opus",
+      "report": "opus"
     },
     "effort": {}
   },
@@ -230,12 +235,12 @@
     {
       "path": ".claude/workflows/catan-rl-v2-dev-loop.js",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/commands/dev-loop.md",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/commands/advise.md",
@@ -250,7 +255,7 @@
     {
       "path": ".claude/commands/dev-plan.md",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/commands/posture.md",
@@ -297,8 +302,13 @@
     "cross_model": true,
     "budget_posture": "balanced",
     "phase_models": {
-      "plan": "fable",
-      "implement": "opus"
+      "plan": "opus",
+      "implement": "opus",
+      "review": "opus",
+      "checks": "opus",
+      "fix": "opus",
+      "land": "opus",
+      "report": "opus"
     },
     "high_risk_areas": [
       "engine",
