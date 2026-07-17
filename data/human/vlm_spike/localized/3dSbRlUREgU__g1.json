@@ -1,0 +1,27 @@
+{
+  "video_id": "3dSbRlUREgU",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.74px). meta player_colors CORRECT (DesertResrce=BLACK, ThePhantom=WHITE), cross-checked vs colour-agnostic grant self-check. Two settlement positions needed tight crops to resolve the icon-vs-label offset: the white grant settlement base is at v23 (not the nearby v22 label; both happen to have multiset {SHEEP,WOOD,WHEAT}), and the white non-grant is v15 with its road going down to v16. Note DesertResrce's non-grant v20 has multiset {SHEEP,WHEAT,WOOD} matching ThePhantom's grant, but per-player self-check disambiguates. ThePhantom (WHITE) settlements v23=[6,16,17] and v15=[3,4,12] (roads v23-v22, v15-v16). DesertResrce (BLACK) settlements v11=[2,9,10] and v20=[5,15,16] (roads v11-v12, v20-v45). GRANT SELF-CHECK PASSES per player: ThePhantom {SHEEP,WHEAT,WOOD} equals exactly v23 (SHE3+WOO8+WHE4) and NOT v15 (WOO4+SHE9+ORE6={WOOD,SHEEP,ORE}); DesertResrce {BRICK,BRICK,WOOD} equals exactly v11 (WOO5+BRI10+BRI8) and NOT v20 (SHE10+WHE5+WOO8={SHEEP,WHEAT,WOOD}). Roads verified via 3-4.2x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [4, 12, 13]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    },
+    "DesertResrce": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [15, 16]]},
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]}
+      ]
+    }
+  }
+}
