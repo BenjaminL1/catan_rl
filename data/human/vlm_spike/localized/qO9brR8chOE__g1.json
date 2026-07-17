@@ -1,0 +1,103 @@
+{
+  "video_id": "qO9brR8chOE",
+  "game_index": 1,
+  "vlm_note": "8-piece opening (ThePhantom 'Build Road', setup complete; RANK#3 top-left is a stream graphic, and the green ring glows are UI hover-highlights, neither are pieces). Board fit empty_baseline residual 0.83px. Colours per meta match on-screen pieces: ThePhantom=BLACK, Ore6Hoarder=RED. ThePhantom(BLACK): settlement v6=[1,2,8] (SHE6+ORE5+WOO9) road straight down to v2=[0,1,2]; settlement v19=[5,6,16] (ORE10+WHE3+BRI8) road straight down to v20=[5,15,16]. Ore6Hoarder(RED): settlement v15=[3,4,12] (BRI4+SHE9+ORE6) road up-left to v0=[0,3,4]; settlement v11=[2,9,10] (ORE5+WOO10+WHE8) road straight down to v10=[2,3,10]. GRANT SELF-CHECK: ThePhantom grant {ORE,SHEEP,WOOD} == v6 exactly (unique such vertex), NOT v19 (ORE+WHE+BRI). Ore6Hoarder grant {BRICK,ORE,SHEEP} == v15 exactly, NOT v11 (ORE+WOO+WHE). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            1,
+            2,
+            8
+          ]
+        },
+        {
+          "hexes": [
+            5,
+            6,
+            16
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              1,
+              2,
+              8
+            ],
+            [
+              0,
+              1,
+              2
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              5,
+              6,
+              16
+            ],
+            [
+              5,
+              15,
+              16
+            ]
+          ]
+        }
+      ]
+    },
+    "Ore6Hoarder": {
+      "settlements": [
+        {
+          "hexes": [
+            3,
+            4,
+            12
+          ]
+        },
+        {
+          "hexes": [
+            2,
+            9,
+            10
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              3,
+              4,
+              12
+            ],
+            [
+              0,
+              3,
+              4
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              2,
+              9,
+              10
+            ],
+            [
+              2,
+              3,
+              10
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

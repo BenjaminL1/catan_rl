@@ -1,0 +1,102 @@
+{
+  "video_id": "cf-wYBSp3pM",
+  "game_index": 2,
+  "vlm_note": "8-piece opening. Board baseline UNREADABLE; fitted 3-hex-centre affine from post_setup token centroids h7=(618,274), h13=(937,828), h17=(456,550); pieces sit on the CV vertex overlay. Colours per meta match on-screen pieces: ThePhantom=BLACK, Flinn8076=RED. ThePhantom(BLACK): settlement v19=[5,6,16] (BRI4+WHE9+WOO3) road up-left to v23=[6,16,17]; settlement v11=[2,9,10] (SHE3+SHE8+ORE4) road up (along the SHE8/ORE4 boundary) to coastal v30=[9,10]. Flinn8076(RED): settlement v22=[6,17,18] (WHE9+SHE6+ORE2) road up-right to v9=[1,6,18]; settlement v17=[4,5,14] (WOO5+BRI4+WHE10) road down-right to v18=[4,13,14]. GRANT SELF-CHECK: ThePhantom grant {BRICK,WHEAT,WOOD} == v19 exactly, NOT v11 (SHE+SHE+ORE); v17 is also {BRICK,WHEAT,WOOD} but belongs to Flinn, not ThePhantom, so no double-match on ThePhantom's own pair. Flinn8076 grant {ORE,SHEEP,WHEAT} == v22 exactly, NOT v17 (WOO+BRI+WHE). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge. (h8 and h14 tokens were occluded by pieces/hover, consistent.)",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            5,
+            6,
+            16
+          ]
+        },
+        {
+          "hexes": [
+            2,
+            9,
+            10
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              5,
+              6,
+              16
+            ],
+            [
+              6,
+              16,
+              17
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              2,
+              9,
+              10
+            ],
+            [
+              9,
+              10
+            ]
+          ]
+        }
+      ]
+    },
+    "Flinn8076": {
+      "settlements": [
+        {
+          "hexes": [
+            6,
+            17,
+            18
+          ]
+        },
+        {
+          "hexes": [
+            4,
+            5,
+            14
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              6,
+              17,
+              18
+            ],
+            [
+              1,
+              6,
+              18
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              4,
+              5,
+              14
+            ],
+            [
+              4,
+              13,
+              14
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

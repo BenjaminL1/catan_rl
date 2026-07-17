@@ -1,0 +1,103 @@
+{
+  "video_id": "YK-AAv-Brn0",
+  "game_index": 1,
+  "vlm_note": "8-piece opening (ThePhantom 'Build City' turn; a few rolls in but opening pieces intact). Colours per meta: ThePhantom=BLACK, Mala3662=RED; matches pieces. Board fit empty_baseline residual 0.65px. Excluded the grey ROBBER (silver pawn, luma~150, sitting near v19 on the ore hex) from piece detection; black pieces isolated at luma<80. ThePhantom(BLACK): settlement v0=[0,3,4] (ORE11+WHE3+WHE6) road down-left to v5=[0,4,5]; settlement v23=[6,16,17] (ORE4+ORE8+BRI3) road up-left to v22=[6,17,18] (along the ORE4/BRI3 boundary). Mala3662(RED): settlement v2=[0,1,2] (ORE11+BRI9+SHE10) road down-left to v3=[0,1,6]; settlement v14=[3,10,11] (WHE3+WOO8+WHE4) road straight down to v13=[3,11,12]. GRANT SELF-CHECK: ThePhantom grant {ORE,WHEAT:2} == v0 exactly (unique such vertex), NOT v23 (ORE+ORE+BRI). Mala3662 grant {BRICK,ORE,SHEEP} == v2 exactly (unique such vertex), NOT v14 (WHE+WOO+WHE). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            0,
+            3,
+            4
+          ]
+        },
+        {
+          "hexes": [
+            6,
+            16,
+            17
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              0,
+              3,
+              4
+            ],
+            [
+              0,
+              4,
+              5
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              6,
+              16,
+              17
+            ],
+            [
+              6,
+              17,
+              18
+            ]
+          ]
+        }
+      ]
+    },
+    "Mala3662": {
+      "settlements": [
+        {
+          "hexes": [
+            0,
+            1,
+            2
+          ]
+        },
+        {
+          "hexes": [
+            3,
+            10,
+            11
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              0,
+              1,
+              2
+            ],
+            [
+              0,
+              1,
+              6
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              3,
+              10,
+              11
+            ],
+            [
+              3,
+              11,
+              12
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

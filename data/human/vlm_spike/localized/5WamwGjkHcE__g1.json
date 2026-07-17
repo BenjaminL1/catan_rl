@@ -1,0 +1,102 @@
+{
+  "video_id": "5WamwGjkHcE",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (TwinTree's turn, score 2-2 setup complete). Colours per meta: ThePhantom=BLACK, TwinTree=GREEN. Board fit from empty_baseline residual 1.00px; pieces sit exactly on the CV vertex overlay. ThePhantom(BLACK): settlement v8=[1,7,18] (WHE3+WOO8+BRI10) road straight down to v9=[1,6,18]; settlement v10=[2,3,10] (SHE6+ORE5+WHE12) road down-right to v14=[3,10,11]. TwinTree(GREEN): settlement v4=[0,5,6] (BRI11+WOO4+WHE9) road down-left to v19=[5,6,16]; settlement v13=[3,11,12] (all-ore ORE5+ORE9+ORE10) road down-right to v37=[11,12]. GRANT SELF-CHECK: both grants are {BRICK,WHEAT,WOOD}. ThePhantom's grant == v8 (WHE+WOO+BRI) exactly, NOT v10 (SHE+ORE+WHE). TwinTree's grant == v4 (BRI+WOO+WHE) exactly, NOT v13 (ORE+ORE+ORE). Each grant matches EXACTLY ONE settlement -> pins the granting (2nd) settlement for both; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            1,
+            7,
+            18
+          ]
+        },
+        {
+          "hexes": [
+            2,
+            3,
+            10
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              1,
+              7,
+              18
+            ],
+            [
+              1,
+              6,
+              18
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              2,
+              3,
+              10
+            ],
+            [
+              3,
+              10,
+              11
+            ]
+          ]
+        }
+      ]
+    },
+    "TwinTree": {
+      "settlements": [
+        {
+          "hexes": [
+            0,
+            5,
+            6
+          ]
+        },
+        {
+          "hexes": [
+            3,
+            11,
+            12
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              0,
+              5,
+              6
+            ],
+            [
+              5,
+              6,
+              16
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              3,
+              11,
+              12
+            ],
+            [
+              11,
+              12
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

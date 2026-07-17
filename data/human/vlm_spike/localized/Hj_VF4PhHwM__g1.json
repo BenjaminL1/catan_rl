@@ -1,0 +1,103 @@
+{
+  "video_id": "Hj_VF4PhHwM",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (BigSlip's Build Road prompt, setup complete). Colours per meta: ThePhantom=BLACK, BigSlip=RED; matches on-screen pieces. Board fit empty_baseline residual 1.06px. ThePhantom(BLACK): settlement v18=[4,13,14] (WOO10+BRI5+WOO8) road up-left to v17=[4,5,14]; settlement v3=[0,1,6] (WHE11+WHE5+SHE6) road up-right to v2=[0,1,2]. BigSlip(RED): settlement v0=[0,3,4] (WHE11+ORE9+WOO10) road down-right to v15=[3,4,12]; settlement v6=[1,2,8] (WHE5+SHE4+BRI10) road up-right to v12=[2,8,9]. GRANT SELF-CHECK: ThePhantom grant {BRICK,WOOD:2} == v18 (WOO+BRI+WOO) exactly, NOT v3 (WHE+WHE+SHE). BigSlip grant {ORE,WHEAT,WOOD} == v0 (WHE+ORE+WOO) exactly, NOT v6 (WHE+SHE+BRI). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            4,
+            13,
+            14
+          ]
+        },
+        {
+          "hexes": [
+            0,
+            1,
+            6
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              4,
+              13,
+              14
+            ],
+            [
+              4,
+              5,
+              14
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              0,
+              1,
+              6
+            ],
+            [
+              0,
+              1,
+              2
+            ]
+          ]
+        }
+      ]
+    },
+    "BigSlip": {
+      "settlements": [
+        {
+          "hexes": [
+            0,
+            3,
+            4
+          ]
+        },
+        {
+          "hexes": [
+            1,
+            2,
+            8
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              0,
+              3,
+              4
+            ],
+            [
+              3,
+              4,
+              12
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              1,
+              2,
+              8
+            ],
+            [
+              2,
+              8,
+              9
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

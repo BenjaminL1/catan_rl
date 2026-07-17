@@ -1,0 +1,103 @@
+{
+  "video_id": "I4Xw7dYDXYc",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (Aniz's Turn, setup complete). Board baseline was UNREADABLE; fitted a 3-hex-centre affine from post_setup number-token centroids h7=(608,263), h11=(1101,548), h14=(773,833); pieces sit on the CV vertex overlay. COLOUR GOTCHA: meta player_colors says Aniz=RED, ThePhantom=BLACK, but the on-screen pieces are BLACK and PURPLE (no red). Assigned COLOUR-AGNOSTICALLY by the grant self-check: PURPLE=ThePhantom (owns the unique {SHEEP,WOOD:2} vertex v23), BLACK=Aniz (owns a {SHEEP:2,WOOD} vertex v11). ThePhantom(PURPLE): settlement v23=[6,16,17] (WOO4+WOO10+SHE8) road down-right to v19=[5,6,16]; settlement v8=[1,7,18] (WHE9+BRI6+BRI3) road up-right to v7=[1,7,8]. Aniz(BLACK): settlement v11=[2,9,10] (SHE10+WOO5+SHE8) road straight down to v10=[2,3,10]; settlement v17=[4,5,14] (WHE6+ORE5+BRI9) road straight up to v5=[0,4,5]. GRANT SELF-CHECK: ThePhantom grant {SHEEP,WOOD:2} == v23 exactly (unique such vertex), NOT v8 (WHE+BRI+BRI). Aniz grant {SHEEP:2,WOOD} == v11 exactly, NOT v17 (WHE+ORE+BRI); v12 also has that multiset but is not an Aniz settlement, so no double-match. Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            6,
+            16,
+            17
+          ]
+        },
+        {
+          "hexes": [
+            1,
+            7,
+            18
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              6,
+              16,
+              17
+            ],
+            [
+              5,
+              6,
+              16
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              1,
+              7,
+              18
+            ],
+            [
+              1,
+              7,
+              8
+            ]
+          ]
+        }
+      ]
+    },
+    "Aniz": {
+      "settlements": [
+        {
+          "hexes": [
+            2,
+            9,
+            10
+          ]
+        },
+        {
+          "hexes": [
+            4,
+            5,
+            14
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              2,
+              9,
+              10
+            ],
+            [
+              2,
+              3,
+              10
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              4,
+              5,
+              14
+            ],
+            [
+              0,
+              4,
+              5
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

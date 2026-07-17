@@ -1,0 +1,103 @@
+{
+  "video_id": "HT10Xj1mkkA",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening. Colours per meta: ThePhantom=BLACK, Gitlow1720=RED; matches on-screen pieces. Board fit empty_baseline residual 1.08px. ThePhantom(BLACK): settlement v13=[3,11,12] (WHE5+WOO9+BRI10) road straight up to v14=[3,10,11]; settlement v22=[6,17,18] (ORE10+WHE5+WHE8) road straight down to v23=[6,16,17]. Gitlow1720(RED): settlement v8=[1,7,18] (BRI3+ORE4+WHE8) road straight down to v9=[1,6,18]; settlement v16=[4,12,13] (WOO4+BRI10+SHE8) road left to v18=[4,13,14]. GRANT SELF-CHECK: ThePhantom grant {BRICK,WHEAT,WOOD} == v13 (WHE+WOO+BRI) exactly, NOT v22 (ORE+WHE+WHE). Gitlow grant {BRICK,ORE,WHEAT} == v8 (BRI+ORE+WHE) exactly, NOT v16 (WOO+BRI+SHE). Note v8 and v9 share the same {BRICK,ORE,WHEAT} multiset but only v8 is a settlement (v9 is a road endpoint), so no double-match. Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            3,
+            11,
+            12
+          ]
+        },
+        {
+          "hexes": [
+            6,
+            17,
+            18
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              3,
+              11,
+              12
+            ],
+            [
+              3,
+              10,
+              11
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              6,
+              17,
+              18
+            ],
+            [
+              6,
+              16,
+              17
+            ]
+          ]
+        }
+      ]
+    },
+    "Gitlow1720": {
+      "settlements": [
+        {
+          "hexes": [
+            1,
+            7,
+            18
+          ]
+        },
+        {
+          "hexes": [
+            4,
+            12,
+            13
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              1,
+              7,
+              18
+            ],
+            [
+              1,
+              6,
+              18
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              4,
+              12,
+              13
+            ],
+            [
+              4,
+              13,
+              14
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}
