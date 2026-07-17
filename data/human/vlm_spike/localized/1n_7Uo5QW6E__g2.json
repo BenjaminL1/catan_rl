@@ -1,0 +1,27 @@
+{
+  "video_id": "1n_7Uo5QW6E",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.79px). meta player_colors CORRECT (Sheat=RED, ThePhantom=BLACK). Note both v8 and v19 have multiset {ORE,WHEAT,WOOD} matching ThePhantom's grant, but v8=ThePhantom's grant and v19=Sheat's non-grant; per-player self-check disambiguates. ThePhantom (BLACK) settlements v8=[1,7,18] and v13=[3,11,12] (roads v8-v9, v13-v15). Sheat (RED) settlements v0=[0,3,4] and v19=[5,6,16] (roads v0-v5, v19-v23). GRANT SELF-CHECK PASSES per player: ThePhantom {ORE,WHEAT,WOOD} equals exactly v8 (ORE4+WHE3+WOO8) and NOT v13 (BRI10+BRI5+SHE8={BRICK,BRICK,SHEEP}); Sheat {BRICK,BRICK,SHEEP} equals exactly v0 (SHE11+BRI10+BRI3) and NOT v19 (ORE6+WOO5+WHE9={ORE,WOOD,WHEAT}). Roads verified via 2.8x crop (v0-v5 and v13-v15).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    },
+    "Sheat": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]},
+        {"endpoints": [[0, 3, 4], [0, 4, 5]]}
+      ]
+    }
+  }
+}
