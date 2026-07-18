@@ -1,0 +1,98 @@
+{
+  "ts": "2026-07-17T08-44-21Z",
+  "feature": "CATAN_SHAKEDOWN (M2 Step 4): fix the Makefile bench-target drift — Makefile:52-57 still guards `make bench` behind a stale 'not yet implemented' echo pointing at docs/plans/rust_engine_actual_state.md, but scripts/bench_engine.py has existed since June (18KB). Make `make bench` actually invoke the real script (headless, CPU-only), and truth-fix the stale pointer in the referenced plan doc if it repeats the claim. Small, headless, docs+Makefile scope — this drive is the proof the generated bundle drives on a second repo.",
+  "repo": "catan-rl-v2",
+  "tier": "standard",
+  "baseSha": "4014acea645b2843c6f23adf80bc530c4d489505",
+  "headSha": "6b89ab75a6c18ca7e3611eaa32a0df98ba3a16cc",
+  "verdict": "CONCERNS",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "exit": 0,
+      "tail": "mypy src\nSuccess: no issues found in 135 source files"
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "exit": 0,
+      "tail": "ruff check src tests scripts\nAll checks passed!"
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "tail": "(no output)"
+    },
+    {
+      "name": "test",
+      "command": "make test-unit",
+      "exit": 2,
+      "tail": "tests/unit/engine/test_backend_fixture.py::TestImportOrSkipPath::test_rust_parametrisation_skips_when_extension_unavailable - AssertionError\n\n=== short test summary info ===\nFAILED tests/unit/engine/test_backend_fixture.py::TestImportOrSkipPath::test_rust_parametrisation_skips_when_extension_unavailable\n\n====== 1 failed, 2752 passed, 6 skipped, 75 warnings in 485.29s (0:08:05) ======"
+    }
+  ],
+  "baselineProbe": [
+    {
+      "name": "test",
+      "baseResult": "fail",
+      "newFailures": [],
+      "evidence": "Test `tests/unit/engine/test_backend_fixture.py::TestImportOrSkipPath::test_rust_parametrisation_skips_when_extension_unavailable` fails identically on both base branch (main) and feature branch (veriloop/bench-target-dedrift). The failure is due to ANSI color codes in pytest subprocess output (\\x1b[32m...\\x1b[0m) around the word PASSED, which breaks the literal string match assertion `assert '[py_engine] PASSED' in stdout`. This is a pre-existing test issue, not introduced by the feature branch."
+    }
+  ],
+  "screenshots": [],
+  "screenshotVerdict": null,
+  "fixPasses": 0,
+  "blockers": [],
+  "concerns": [
+    "[pre-existing] check: test was already RED on the base tree — not caused by this change (`make test-unit`)"
+  ],
+  "waived": [],
+  "filesChanged": [
+    "Makefile"
+  ],
+  "implSummary": "Un-gated the `make bench` target. Deleted the 4 dead guard lines (the `@if [ ! -f scripts/bench_engine.py ]` block that echoed a stale \"not yet implemented\" message pointing at the deleted docs/plans/rust_engine_actual_state.md), leaving the bench recipe as its single real invocation `$(PYTHON) scripts/bench_engine.py --all --n-steps 1024`. bench_engine.py already exists (18,723 bytes) and its argparse accepts exactly --all + --n-steps; it is already headless (no gui/pygame imports) and CPU-only, so no script change was needed. The explanatory comment block (lines 45-51) was left untouched — it already cites the correct, existing docs/plans/rust_engine.md. Doc truth-fix was a verified no-op: repo-wide grep for \"not yet implemented\" hits no doc making the bench claim (only an unrelated ISMCTS row in docs/plans/v2/setup_strength_roadmap.md), and the successor doc rust_engine.md already records the deletion accurately. Zero doc edits. Set up isolated worktree with its own venv (`pip install -e .[dev]`) and built the Rust extension (`make rust-build`, after unsetting CONDA_PREFIX so maturin would run). NOT committed, not pushed, not reviewed — stopped before commit/merge per instructions; owner sign-off required.",
+  "lenses": [
+    {
+      "lens": "code-review (Baseline Reviewer, REVIEW mode)",
+      "summary": "No BLOCKERs, no SHOULD-FIX. The authored change is a single, surgical, correct Makefile edit that fully satisfies the owner's spec. The branch is one commit behind main (parent of the all-opus routing commit), so `git diff main` surfaces unrelated `.claude/veriloop/*` config deltas — these are NOT authored by this drive; the three-dot diff (main...HEAD) is empty and the merge-base equals HEAD, so nothing config-related will be reintroduced on merge. The only authored diff is `Makefile`: it deletes the stale `[ ! -f scripts/bench_engine.py ]` existence-guard + 'not yet implemented' echo (dead code — the 18KB script has existed since June) so `make bench` now invokes the real script (`make -n bench` expands to `python scripts/bench_engine.py --all --n-steps 1024`; target is in .PHONY). Spec invariants hold: the script imports no pygame/gui (headless) and builds its policy on CPU with no MPS/CUDA path (CPU-forced by design), and its behavior is untouched (spec: no rewrite). The referenced plan doc `docs/plans/rust_engine_actual_state.md` no longer exists, so the spec's conditional doc truth-fix ('if it repeats the claim') was correctly a no-op. Gate checks (lint/typecheck/cargo fmt/test-unit) scope over src/tests/scripts/crates and cannot be affected by a Makefile-only edit, so their exit codes are unchanged from base (lint pre-existing RED). No constitution invariant is touched: gate logic untouched, change lives uncommitted on a preview branch, no parity/golden/drift files affected. Ship it.",
+      "findings": [
+        {
+          "severity": "NIT",
+          "location": "Makefile:52 (context, not the diff)",
+          "issue": "The removed stale echo pointed at docs/plans/rust_engine_actual_state.md, which is deleted (see docs/plans/rust_engine.md:10 \"both deleted\") yet is still referenced ~30 times across the repo (crates/**, src/catan_rl/**, tests/**, benchmarks/README.md, configs/ppo_default.yaml, scripts/bench_engine.py:325). This is pre-existing drift and is OUT of this drive's binding scope (which touches only the Makefile bench target and any doc line repeating the 'not yet implemented' claim). No action required here — flagging only so the owner is aware a dangling-doc cleanup exists as separate follow-up work.",
+          "fix": "Leave as-is for this change. Track a separate de-drift pass to either restore rust_engine_actual_state.md or repoint the ~30 dangling references; do not expand this Makefile-scoped drive to cover it."
+        }
+      ]
+    },
+    {
+      "lens": "drift",
+      "summary": "GO. The uncommitted change is exactly one edit — Makefile:bench drops the stale \"not yet implemented\" guard/echo so `make bench` now invokes the real `scripts/bench_engine.py --all --n-steps 1024`. Verified via `make -n bench` (resolves clean, exit 0): the script exists (18KB), the flags are valid (`--all` makes `--n-envs` optional per argparse), the script is inherently CPU-only (no cuda/mps/device selection; policy lives on CPU) and headless (no pygame/gui imports) — so no extra device flag is needed to meet the CPU + headless requirement. Scope is clean: `git status --porcelain` shows only ` M Makefile`; the `.claude/veriloop/*` opus↔fable diffs surfaced by `git diff main` are branch-behind-main noise (branch HEAD aad09c2 is an ancestor of main), NOT this feature — do not attribute them to this change. The spec's conditional doc truth-fix is a no-op: the referenced doc doesn't exist and no doc repeats the stale claim, so nothing was silently dropped. No constitution invariant is touched; lands branch-only. Gate checks (typecheck/lint/cargo fmt/test-unit) are orthogonal to a Makefile recipe deletion and were not run in full — the diff has no Python/Rust source surface to affect them. One NIT: a pre-existing dangling reference to the non-existent docs/plans/rust_engine_actual_state.md persists in benchmarks/README.md and elsewhere — out of this change's binding scope, surfaced for owner awareness.",
+      "findings": [
+        {
+          "severity": "NIT",
+          "location": "benchmarks/README.md:9",
+          "issue": "benchmarks/README.md (lines 9 and 67) and ~18 other files still point readers to docs/plans/rust_engine_actual_state.md, which does not exist in the tree (find confirms zero matches). This is a pre-existing doc/schema-truth drift — the same dangling doc the removed Makefile echo pointed at. It is OUTSIDE this change's binding scope (only the Makefile bench target + any doc line repeating the stale 'not yet implemented' claim), and this diff neither introduces nor worsens it, so it is not a blocker on this change.",
+          "fix": "Out of scope here — do not expand this drive. Track separately: either restore docs/plans/rust_engine_actual_state.md or repoint the ~19 dangling references (benchmarks/README.md, docs/plans/rust_engine.md, several src/ and tests/ files) to the real plan doc."
+        }
+      ]
+    }
+  ],
+  "gateHistory": [
+    {
+      "verdict": "CONCERNS",
+      "blockers": 0,
+      "concerns": 1,
+      "waived": 0
+    }
+  ],
+  "crossModel": null,
+  "missingGateJobs": [],
+  "implPreflight": "lint exit 0; typecheck exit 2 (PRE-EXISTING/environmental, NOT caused by this change — mypy error inside .venv numpy/__init__.pyi: \"Type statement is only supported in Python 3.12 and greater\"; a Makefile-only edit cannot affect mypy, so left untouched per hard limits). Verify: `make -n bench` prints `python scripts/bench_engine.py --all --n-steps 1024`; `bench_engine.py --help` exit 0. Note: plan predicted typecheck-green/lint-red on base; this environment shows the inverse — regardless, the Makefile edit adds zero new findings to either check (ruff lints `src tests scripts`, not Makefile; mypy reads `src`).",
+  "dryRun": false,
+  "land": {
+    "sha": "6b89ab7",
+    "pushed": true,
+    "branch": "veriloop/bench-target-dedrift"
+  }
+}

@@ -50,10 +50,6 @@ smoke-train:
 # bottleneck per ``analysis/diag_*.log`` (SGD = ~80% of wall-time).
 # See ``docs/plans/rust_engine.md``.
 bench:
-	@if [ ! -f scripts/bench_engine.py ]; then \
-	    echo "scripts/bench_engine.py not yet implemented (Phase 1 of the Rust migration remediation plan). See docs/plans/rust_engine_actual_state.md."; \
-	    exit 1; \
-	fi
 	$(PYTHON) scripts/bench_engine.py --all --n-steps 1024
 
 clean:

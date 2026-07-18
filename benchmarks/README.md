@@ -5,8 +5,8 @@ throughput under conditions that approximate a real PPO training
 loop. It exists because the headline "43.9× engine speedup" claim
 in the migration plan was unfalsifiable until Phase 1 of the
 remediation plan landed — there were no scripts that produced the
-numbers. See
-[`../docs/plans/rust_engine_actual_state.md`](../docs/plans/rust_engine_actual_state.md).
+numbers. See [`../docs/plans/rust_engine.md`](../docs/plans/rust_engine.md),
+which condenses the now-deleted `rust_engine_actual_state.md` audit.
 
 ## Why a "policy in the loop" bench
 
@@ -64,7 +64,7 @@ include_policy, env_steps_per_sec, wall_s, repeat_idx
 
 Numbers in this directory are the ONLY benchmark figures any
 remediation-plan phase is allowed to quote. Adding a number to
-`docs/plans/rust_engine_actual_state.md` or any other doc without
+`docs/plans/rust_engine.md` or any other doc without
 a CSV-row citation is forbidden by the guard-rail at the bottom of
 that document.
 
