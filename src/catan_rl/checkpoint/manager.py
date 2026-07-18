@@ -25,7 +25,12 @@ deserialiser.
         "league": {
             "snapshots": [
                 {
-                    "state_dict": dict,
+                    # schema v2: content-addressed sidecar reference. The
+                    # snapshot's state_dict lives in <ckpt_dir>/league_store/
+                    # <ref>.pt (deduped across saves). Schema v1 (fat) files —
+                    # and the backward-compat load path — carry an inline
+                    # "state_dict" instead; load_checkpoint resolves either.
+                    "ref": str,             # sha256 of the state-dict tensors
                     "update_idx": int,
                     "snapshot_id": int,
                     "metadata": dict,
@@ -35,7 +40,7 @@ deserialiser.
             "next_snapshot_id": int,
             "opponent_stats": {snapshot_id: [p_hat, games]},  # optional (PFSP)
             "anchor": {                     # optional (frozen anchor); same shape
-                "state_dict": dict,         # as a snapshot, kept with its
+                "ref": str,                 # as a snapshot, kept with its
                 "update_idx": int,          # ORIGINAL id so it round-trips
                 "snapshot_id": int,         # without orphaning opponent_stats
                 "metadata": dict,
@@ -54,6 +59,25 @@ deserialiser.
         },
         "metadata": dict,               # free-form extra fields
     }
+
+League sidecar (schema v2): the ~560 MB league pool is NO LONGER embedded
+in the checkpoint. Each snapshot's ``state_dict`` is written once to a
+content-addressed sidecar store (``<ckpt_dir>/league_store/<hash>.pt``, see
+:mod:`catan_rl.checkpoint.league_store`) and the checkpoint holds only a
+small ``ref`` per snapshot. Because ~99/100 snapshots are byte-identical
+across consecutive saves, the store dedups them and a rolling checkpoint
+drops from ~577 MB to < 25 MB. Each checkpoint also writes a sibling
+``<ckpt>.refs.json`` manifest listing the store hashes it references;
+:class:`CheckpointManager` garbage-collects store entries no surviving
+manifest references (skipping GC entirely if any ``.pt`` in the dir lacks a
+manifest, e.g. a legacy fat file). Loading a v1 fat checkpoint (inline
+``state_dict``) still works unchanged — migration to v2 is one-way, on save.
+
+Slim / policy-only saves: :func:`save_policy_only` writes a ~5.6 MB
+policy-only checkpoint (``metadata["kind"]="policy_only"``, no optimizer /
+league / RNG). Used both as the free-disk-guard fallback (so a run whose
+save tripped the guard still writes its final weights) and by
+:func:`bank_anchor` to re-save ``runs/anchors/*`` slim.
 
 Atomic write: payload is serialised to ``<dest>.tmp`` and flushed +
 fsync'd before ``os.replace`` swaps it into place. A crash mid-write
@@ -76,6 +100,8 @@ device-dependent floating-point non-determinism).
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import random
 import re
@@ -87,16 +113,29 @@ from typing import Any
 import numpy as np
 import torch
 
+from catan_rl.checkpoint.league_store import STORE_DIRNAME, LeagueStore
 from catan_rl.checkpoint.migrations import apply_migrations
 
 #: Current on-disk schema version. Bumped whenever any of the keys
 #: above change shape; ship a v(N-1) -> v(N) migration in
 #: :mod:`catan_rl.checkpoint.migrations` at the same time.
-SCHEMA_VERSION = 1
+#: v2 (2026-07): league pool moved to the content-addressed sidecar store
+#: (snapshots carry a ``ref`` instead of an inline ``state_dict``).
+SCHEMA_VERSION = 2
 
 #: Naming convention for checkpoint files inside an output directory.
 #: ``update_idx`` is zero-padded so lexicographic sort matches numeric.
 _FILE_PATTERN = re.compile(r"^ckpt_(\d{9})\.pt$")
+
+#: Slim / policy-only checkpoint filename pattern. Deliberately OUTSIDE
+#: ``_FILE_PATTERN`` so slim files are never pruned by the rolling window AND
+#: never returned by ``latest()`` (a policy-only file must not be silently
+#: resumed as if it carried optimizer / league / RNG state).
+_SLIM_FILE_PATTERN = re.compile(r"^slim_ckpt_(\d{9})\.pt$")
+
+#: Suffix appended to a checkpoint filename to form its league-store ref
+#: manifest (a tiny JSON list of the store hashes the checkpoint references).
+_REFS_MANIFEST_SUFFIX = ".refs.json"
 
 
 class CheckpointError(RuntimeError):
@@ -121,6 +160,24 @@ def promotion_checkpoint_filename(update_idx: int) -> str:
     if update_idx < 0:
         raise ValueError(f"update_idx must be >= 0, got {update_idx}")
     return f"promo_ckpt_{update_idx:09d}.pt"
+
+
+def slim_checkpoint_filename(update_idx: int) -> str:
+    """Return the filename for a policy-only slim checkpoint.
+
+    Uses the ``slim_ckpt_`` prefix (matched by :data:`_SLIM_FILE_PATTERN`, not
+    :data:`_FILE_PATTERN`) so it is exempt from rolling pruning AND is never
+    returned by :meth:`CheckpointManager.latest` — a slim file lacks optimizer
+    / league / RNG state and must never be silently resumed as a full run."""
+    if update_idx < 0:
+        raise ValueError(f"update_idx must be >= 0, got {update_idx}")
+    return f"slim_ckpt_{update_idx:09d}.pt"
+
+
+def refs_manifest_path(ckpt_path: str | Path) -> Path:
+    """Return the league-store ref-manifest path for a checkpoint file."""
+    p = Path(ckpt_path)
+    return p.with_name(p.name + _REFS_MANIFEST_SUFFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -219,24 +276,31 @@ def _capture_vec_env_state(vec_env: Any) -> dict[str, Any]:
     return {"reset_rng_states": states}
 
 
-def _capture_league_state(league: Any) -> dict[str, Any]:
-    """Serialise a :class:`catan_rl.selfplay.league.League` instance.
+def _capture_league_state(league: Any, store: LeagueStore) -> tuple[dict[str, Any], list[str]]:
+    """Serialise a :class:`catan_rl.selfplay.league.League` instance (schema v2).
 
     The league holds a bounded deque of :class:`LeagueSnapshot`
-    instances. Each snapshot's ``state_dict`` is already CPU per the
-    league's invariant (see ``add_snapshot``); we still defensively
-    re-clone in case a caller bypassed the invariant. The
-    ``_next_snapshot_id`` cursor is preserved so resumed IDs stay
-    monotonic.
+    instances. Rather than embed each snapshot's ~5.6 MB ``state_dict`` in the
+    checkpoint (the ~560 MB bloat this feature removes), we write it to the
+    content-addressed sidecar ``store`` — deduped across saves — and keep only a
+    small ``ref`` (its content hash) per snapshot. Each snapshot's ``state_dict``
+    is already CPU per the league's invariant (see ``add_snapshot``); the store
+    re-derives CPU bytes defensively.
+
+    Returns ``(state, refs)`` where ``refs`` is the list of every store hash
+    referenced (snapshots + anchor) so the caller can write a GC manifest.
     """
+    refs: list[str] = []
     snapshots: list[dict[str, Any]] = []
     snapshot_deque = getattr(league, "_snapshots", None)
     if snapshot_deque is None:
-        return {"snapshots": [], "next_snapshot_id": 0}
+        return {"snapshots": [], "next_snapshot_id": 0}, refs
     for snap in snapshot_deque:
+        ref = store.put(snap.state_dict)
+        refs.append(ref)
         snapshots.append(
             {
-                "state_dict": _state_dict_to_cpu(snap.state_dict),
+                "ref": ref,
                 "update_idx": int(snap.update_idx),
                 "snapshot_id": int(snap.snapshot_id),
                 "metadata": dict(snap.metadata),
@@ -256,8 +320,10 @@ def _capture_league_state(league: Any) -> dict[str, Any]:
     # put on resume — the drift guard must survive a restart, not vanish.
     anchor = getattr(league, "_anchor", None)
     if anchor is not None:
+        anchor_ref = store.put(anchor.state_dict)
+        refs.append(anchor_ref)
         state["anchor"] = {
-            "state_dict": _state_dict_to_cpu(anchor.state_dict),
+            "ref": anchor_ref,
             "update_idx": int(anchor.update_idx),
             "snapshot_id": int(anchor.snapshot_id),
             "metadata": dict(anchor.metadata),
@@ -267,7 +333,7 @@ def _capture_league_state(league: Any) -> dict[str, Any]:
             "last_promote_update": int(getattr(league, "_last_promote_update", -1)),
             "n_promotions": int(getattr(league, "_n_promotions", 0)),
         }
-    return state
+    return state, refs
 
 
 def _fsync_dir(path: Path) -> None:
@@ -304,11 +370,15 @@ def save_checkpoint(
     vec_env: Any | None = None,
     capture_rng: bool = True,
     metadata: dict[str, Any] | None = None,
+    league_store: LeagueStore | None = None,
 ) -> Path:
     """Write a checkpoint atomically.
 
     ``policy`` and ``optimizer`` state dicts are CPU-cloned. ``league``,
-    if provided, is captured via :func:`_capture_league_state`.
+    if provided, is captured via :func:`_capture_league_state` — its snapshot
+    pool is written to the content-addressed sidecar ``league_store`` (defaults
+    to ``<dest.parent>/league_store``) rather than embedded, and a sibling
+    ``<dest>.refs.json`` manifest records the store hashes referenced (for GC).
     ``vec_env``, if provided, has its per-env auto-reset Generators
     captured via :func:`_capture_vec_env_state` — critical for the
     resumed rollout stream to match an un-interrupted run. Set
@@ -320,6 +390,11 @@ def save_checkpoint(
     """
     dest = Path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
+    league_state: dict[str, Any] | None = None
+    refs: list[str] = []
+    if league is not None:
+        store = league_store or LeagueStore(dest.parent / STORE_DIRNAME)
+        league_state, refs = _capture_league_state(league, store)
     payload: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "config": dict(config),
@@ -329,7 +404,7 @@ def save_checkpoint(
         "optimizer_state_dict": (
             _state_dict_to_cpu(optimizer.state_dict()) if optimizer is not None else None
         ),
-        "league": _capture_league_state(league) if league is not None else None,
+        "league": league_state,
         "rng": _capture_rng_state() if capture_rng else None,
         "vec_env": (_capture_vec_env_state(vec_env) if vec_env is not None else None),
         "metadata": dict(metadata or {}),
@@ -356,7 +431,121 @@ def save_checkpoint(
             tmp.unlink(missing_ok=True)
         raise
     _fsync_dir(dest.parent)
+    # League-store GC manifest: written only when a league was sidecar'd. Records
+    # exactly the store hashes this checkpoint depends on so CheckpointManager can
+    # later delete store entries referenced by no surviving manifest. Absence of a
+    # manifest for a .pt (e.g. a legacy fat file, or a league-less save) makes GC
+    # conservatively skip — see CheckpointManager._gc_league_store.
+    if league is not None:
+        _write_refs_manifest(dest, refs)
     return dest
+
+
+def _write_refs_manifest(ckpt_path: Path, refs: list[str]) -> None:
+    """Atomically write the ``<ckpt>.refs.json`` league-store GC manifest."""
+    manifest = refs_manifest_path(ckpt_path)
+    tmp = manifest.with_suffix(manifest.suffix + ".tmp")
+    import contextlib
+
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"refs": list(refs)}, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, manifest)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        raise
+    _fsync_dir(manifest.parent)
+
+
+def _read_refs_manifest(ckpt_path: Path) -> list[str] | None:
+    """Return the referenced store hashes for a checkpoint, or ``None`` if the
+    checkpoint has no manifest (legacy fat file / league-less save)."""
+    manifest = refs_manifest_path(ckpt_path)
+    if not manifest.is_file():
+        return None
+    try:
+        with open(manifest, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    refs = data.get("refs")
+    if not isinstance(refs, list):
+        return None
+    return [str(r) for r in refs]
+
+
+def save_policy_only(
+    path: str | Path,
+    *,
+    config: dict[str, Any],
+    policy: torch.nn.Module,
+    update_idx: int,
+    global_step: int,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Write a ~5.6 MB policy-only checkpoint (no optimizer / league / RNG).
+
+    Same atomic tmp + fsync + ``os.replace`` machinery as
+    :func:`save_checkpoint`, but every heavy section is ``None`` and
+    ``metadata["kind"]`` is stamped ``"policy_only"``. Two uses:
+
+    * the free-disk-guard fallback — a ~5.6 MB write fits under a GB-scale
+      threshold, so a run whose full save tripped the guard still persists its
+      final weights before exiting;
+    * :func:`bank_anchor`, which re-saves ``runs/anchors/*`` slim.
+
+    Writes NO league-store manifest (there is no league to reference)."""
+    meta = dict(metadata or {})
+    meta["kind"] = "policy_only"
+    return save_checkpoint(
+        path,
+        config=config,
+        policy=policy,
+        optimizer=None,
+        update_idx=update_idx,
+        global_step=global_step,
+        league=None,
+        vec_env=None,
+        capture_rng=False,
+        metadata=meta,
+    )
+
+
+def bank_anchor(src: str | Path, dest: str | Path | None = None) -> Path:
+    """Re-save a checkpoint as a policy-only slim file (for ``runs/anchors/*``).
+
+    Loads ``src`` (fat or slim, any schema), then writes just its policy weights
+    via :func:`save_policy_only`. ``dest`` defaults to ``src`` (in-place slim
+    rewrite). Optimizer / league / RNG are dropped — an anchor is only ever used
+    as a frozen reference opponent / eval baseline, never resumed. The original
+    ``config`` + ``update_idx`` + ``global_step`` are preserved so lineage
+    bookkeeping survives."""
+    src_path = Path(src)
+    dest_path = Path(dest) if dest is not None else src_path
+    payload = load_checkpoint(src_path)
+
+    # Reconstruct a bare nn.Module-like holder is unnecessary: save_policy_only
+    # calls policy.state_dict(), so wrap the loaded state dict in a shim.
+    class _StateDictShim(torch.nn.Module):
+        def __init__(self, sd: dict[str, Any]) -> None:
+            super().__init__()
+            self._sd = sd
+
+        def state_dict(self, *args: Any, **kwargs: Any) -> dict[str, Any]:  # type: ignore[override, unused-ignore]
+            return self._sd
+
+    shim = _StateDictShim(payload.policy_state_dict)
+    return save_policy_only(
+        dest_path,
+        config=payload.config,
+        policy=shim,
+        update_idx=payload.update_idx,
+        global_step=payload.global_step,
+        metadata={"banked_from": str(src_path)},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -581,10 +770,49 @@ class CheckpointPayload:
         self.apply_rng_state()
 
 
+def _resolve_league_refs(
+    league_dict: dict[str, Any],
+    store: LeagueStore,
+    *,
+    map_location: torch.device | str | None,
+) -> None:
+    """Materialise sidecar ``ref`` snapshots into inline ``state_dict`` entries.
+
+    Mutates ``league_dict`` in place: any snapshot / anchor entry that carries a
+    ``ref`` but no ``state_dict`` (a schema-v2 slim save) has its state-dict
+    loaded from ``store`` and inlined, so downstream :meth:`apply_to_league`
+    sees a uniform inline shape. Entries that already carry ``state_dict`` (a
+    migrated v1 fat file — the backward-compat path) are left untouched. A
+    missing store file raises :class:`CheckpointError`."""
+
+    def _inline(entry: dict[str, Any]) -> None:
+        if "state_dict" in entry and entry["state_dict"] is not None:
+            return
+        ref = entry.get("ref")
+        if ref is None:
+            raise CheckpointError(
+                "league snapshot entry has neither 'state_dict' nor 'ref' — "
+                "corrupt or truncated checkpoint"
+            )
+        from catan_rl.checkpoint.league_store import LeagueStoreError
+
+        try:
+            entry["state_dict"] = store.get(str(ref), map_location=map_location)
+        except LeagueStoreError as e:
+            raise CheckpointError(str(e)) from e
+
+    for snap in league_dict.get("snapshots", []):
+        _inline(snap)
+    anchor = league_dict.get("anchor")
+    if anchor is not None:
+        _inline(anchor)
+
+
 def load_checkpoint(
     path: str | Path,
     *,
     map_location: torch.device | str | None = "cpu",
+    league_store_dir: str | Path | None = None,
 ) -> CheckpointPayload:
     """Load a checkpoint and run any pending migrations to the current
     :data:`SCHEMA_VERSION`.
@@ -593,6 +821,10 @@ def load_checkpoint(
     matches the save-side CPU cloning; pass an explicit device only if
     you know what you're doing and want to skip a CPU->device copy on
     apply.
+
+    ``league_store_dir`` overrides where sidecar snapshot refs are resolved
+    from (defaults to ``<path.parent>/league_store``). Fat v1 checkpoints carry
+    inline snapshots and never touch the store.
     """
     src = Path(path)
     if not src.exists():
@@ -614,6 +846,16 @@ def load_checkpoint(
 
     # Upgrade in-memory if needed.
     upgraded = apply_migrations(raw, target_version=SCHEMA_VERSION)
+    # Resolve sidecar league refs (schema v2 slim saves) into inline state_dicts
+    # BEFORE constructing the payload, so apply_to_league is layout-agnostic.
+    league_dict = upgraded.get("league")
+    if league_dict is not None:
+        store = LeagueStore(
+            league_store_dir if league_store_dir is not None else src.parent / STORE_DIRNAME
+        )
+        # Mutates the nested snapshot/anchor dicts in place; the payload's
+        # shallow dict(upgraded["league"]) shares those same nested references.
+        _resolve_league_refs(league_dict, store, map_location=map_location)
     return CheckpointPayload(
         schema_version=int(upgraded["schema_version"]),
         config=dict(upgraded.get("config", {})),
@@ -676,6 +918,12 @@ def prune_checkpoints(directory: str | Path, *, keep_last_n: int) -> list[Path]:
             # Don't fail the training loop on a pruning failure; log
             # and continue. The next save will retry.
             raise CheckpointError(f"failed to prune {p}: {e}") from e
+        # Delete the checkpoint's league-store ref manifest alongside it so a
+        # pruned checkpoint stops pinning its store entries (GC then reclaims
+        # any snapshot no surviving checkpoint references).
+        manifest = refs_manifest_path(p)
+        with contextlib.suppress(OSError):
+            manifest.unlink(missing_ok=True)
     return to_delete
 
 
@@ -751,7 +999,77 @@ class CheckpointManager:
             metadata=metadata,
         )
         prune_checkpoints(self.directory, keep_last_n=self.keep_last_n)
+        self._gc_league_store()
         return path
+
+    def _gc_league_store(self) -> None:
+        """Delete league-store entries referenced by no surviving checkpoint.
+
+        Reads every ``<ckpt>.refs.json`` manifest in the directory, unions their
+        referenced hashes, and deletes any ``<hash>.pt`` in the sidecar store not
+        in that set. CONSERVATIVE: if ANY ``*.pt`` checkpoint in the directory
+        (rolling / promo) lacks a manifest — e.g. a legacy fat file, or a
+        checkpoint written before this feature — GC is skipped entirely, because
+        an un-manifested checkpoint may reference store entries we can't see.
+        Slim (disk-trip) checkpoints are exempt from this bail: they are
+        policy-only and reference nothing in the store, so their (expected)
+        missing manifest is ignored rather than disabling GC.
+        Promotion checkpoints keep permanent manifests, so their (deduped)
+        snapshots stay pinned for the life of the run."""
+        store_dir = self.directory / STORE_DIRNAME
+        if not store_dir.is_dir():
+            return
+        referenced: set[str] = set()
+        for entry in self.directory.iterdir():
+            if not entry.is_file() or entry.suffix != ".pt":
+                continue
+            if _SLIM_FILE_PATTERN.match(entry.name):
+                # Slim (disk-trip) checkpoints are policy-only (league=None) and
+                # by design reference NOTHING in the sidecar store, so they carry
+                # no manifest. Skip them rather than treating the absent manifest
+                # as unknown provenance — otherwise a single leftover slim file
+                # (e.g. from a prior disk-abort) would permanently disable GC and
+                # let the store grow unbounded.
+                continue
+            refs = _read_refs_manifest(entry)
+            if refs is None:
+                # An un-manifested checkpoint of unknown provenance — bail out
+                # rather than risk deleting a store entry it depends on.
+                return
+            referenced.update(refs)
+        from catan_rl.checkpoint.league_store import is_snapshot_hash
+
+        for entry in store_dir.iterdir():
+            if not entry.is_file() or not is_snapshot_hash(entry.name):
+                continue
+            if entry.name[:-3] not in referenced:  # strip ".pt"
+                with contextlib.suppress(OSError):
+                    entry.unlink()
+
+    def save_slim(
+        self,
+        *,
+        config: dict[str, Any],
+        policy: torch.nn.Module,
+        update_idx: int,
+        global_step: int,
+        metadata: dict[str, Any] | None = None,
+    ) -> Path:
+        """Write a policy-only ``slim_ckpt_NNNNNNNNN.pt`` (the disk-trip fallback).
+
+        Uses the ``slim_ckpt_`` prefix so the file is never pruned by the rolling
+        window and never returned by :meth:`latest` — it lacks optimizer / league
+        / RNG state and must not be silently resumed as a full run. Returns the
+        written path."""
+        path = self.directory / slim_checkpoint_filename(update_idx)
+        return save_policy_only(
+            path,
+            config=config,
+            policy=policy,
+            update_idx=update_idx,
+            global_step=global_step,
+            metadata=metadata,
+        )
 
     def save_promotion(
         self,

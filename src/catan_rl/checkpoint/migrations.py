@@ -10,13 +10,17 @@ hierarchy) so they're trivially serialisable + testable. Registering a
 migration that overwrites an existing key raises immediately — schema
 bumps should never silently shadow each other.
 
-The current schema is ``SCHEMA_VERSION = 1`` (see
-:mod:`catan_rl.checkpoint.manager`). There are no v0 checkpoints in
-the wild yet (the v2 codebase shipped Phase 1 *after* the design that
-required versioned checkpoints), so the registry is empty by design.
-The plumbing is in place for the first real migration when one is
-needed — see the test suite for a registered fake migration that
-exercises the chain.
+The current schema is ``SCHEMA_VERSION = 2`` (see
+:mod:`catan_rl.checkpoint.manager`). The one registered migration is
+``v1 -> v2`` (:func:`_migrate_v1_to_v2`): the league-pool sidecar cutover.
+It is intentionally *shape-preserving* — a v1 "fat" checkpoint keeps its
+inline ``league.snapshots[i].state_dict`` entries and only its
+``schema_version`` is bumped; :func:`~catan_rl.checkpoint.manager.load_checkpoint`
+then loads those inline snapshots directly (never touching the sidecar store),
+which is exactly the backward-compat path that keeps ``v11_cand_u724.pt`` and
+all ``runs/anchors/*`` loadable. The migration to the *slim* on-disk layout
+(refs instead of inline state-dicts) happens one-way on the next SAVE, not on
+load.
 """
 
 from __future__ import annotations
@@ -60,6 +64,23 @@ def unregister_migration(from_version: int) -> None:
 def registered_versions() -> tuple[int, ...]:
     """Return the sorted tuple of registered ``from_version`` keys."""
     return tuple(sorted(_MIGRATIONS.keys()))
+
+
+def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """v1 -> v2: league-pool sidecar cutover (shape-preserving on load).
+
+    A v1 checkpoint embeds each league snapshot's ``state_dict`` inline. v2
+    checkpoints written by :func:`~catan_rl.checkpoint.manager.save_checkpoint`
+    instead carry a content-addressed ``ref`` per snapshot. On LOAD we do NOT
+    rewrite the inline snapshots into refs — the loader handles inline
+    state-dicts directly — so this migration only bumps the version tag. The
+    physical slim layout is adopted the next time the checkpoint is saved."""
+    out = dict(payload)
+    out["schema_version"] = 2
+    return out
+
+
+register_migration(1, _migrate_v1_to_v2)
 
 
 def apply_migrations(payload: dict[str, Any], *, target_version: int) -> dict[str, Any]:
