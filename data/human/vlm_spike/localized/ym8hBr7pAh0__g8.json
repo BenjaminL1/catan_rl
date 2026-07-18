@@ -1,0 +1,27 @@
+{
+  "video_id": "ym8hBr7pAh0",
+  "game_index": 8,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.75px). meta colours CORRECT (PEEN=RED, ThePhantom=BLACK). Robber moved to h0 (WHE11, center) but opening intact. ThePhantom (BLACK) settlements v23=[6,16,17] and v10=[2,3,10] (roads v23-v19, v10-v11). PEEN (RED) settlements v12=[2,8,9] and v21=[5,14,15] (roads v12-v11, v21-v17). The red v12 road and black v10 road both terminate at the contested empty vertex v11. GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,ORE,WHEAT} equals exactly v23 (ORE9+WHE2+BRI6) and NOT v10 (WOO5+ORE6+SHE9={WOOD,ORE,SHEEP}); PEEN {ORE,WOOD,WOOD} equals exactly v12 (WOO5+WOO8+ORE10) and NOT v21 (SHE10+WHE8+BRI5={SHEEP,WHEAT,BRICK}). Verified via 2x/3.2x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "PEEN": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    }
+  }
+}

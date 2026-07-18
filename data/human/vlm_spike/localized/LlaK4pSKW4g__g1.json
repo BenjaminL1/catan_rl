@@ -1,0 +1,27 @@
+{
+  "video_id": "LlaK4pSKW4g",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.76px, but the fit is slightly offset in the top-right so the v11 house icon overlaps the coastal '30' label). meta player_colors WRONG for one player (lists DOOONGY=RED; actual pieces are ORANGE and BLACK) - assigned by colour-agnostic grant self-check. The top-right black settlement is the inner vertex v11 (=ThePhantom's grant multiset), NOT the coastal v30 (only 2 hexes {ORE,WOOD}, cannot be a granting settlement); the straight-down road matches the vertical v11-v10 edge. ThePhantom (BLACK) settlements v11=[2,9,10] and v20=[5,15,16] (roads v11-v10, v20-v19). DOOONGY (ORANGE) settlements v9=[1,6,18] and v18=[4,13,14] (roads v9-v22, v18-v17). GRANT SELF-CHECK PASSES per player: ThePhantom {ORE,WHEAT,WOOD} equals exactly v11 (WHE10+ORE5+WOO8) and NOT v20 (BRI5+SHE10+WHE8={BRICK,SHEEP,WHEAT}); DOOONGY {ORE,SHEEP,WOOD} equals exactly v9 (SHE9+ORE4+WOO6) and NOT v18 (WHE6+SHE12+BRI9={WHEAT,SHEEP,BRICK}). Verified via 2.5-4.5x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "DOOONGY": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]}
+      ]
+    }
+  }
+}

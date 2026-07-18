@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "post_setup_frame_past_first_build_5_settlements_visible",
+  "vlm_note": "The routed post_setup frame shows FIVE settlements (RED at v7=[1,7,8], v12=[2,8,9] and v0=[0,3,4]; BLACK at v14=[3,10,11] and v23=[6,16,17]) and five roads, with the robber moved to h14 - the game is past its first build (the first built_any log line was evidently missed by OCR, shifting the fail-closed boundary late). The grant anchors identify v0 (DeLemon {BRICK,ORE,SHEEP}) and v14 (ThePhantom {BRICK,SHEEP,WHEAT}) as the two granting settlements, but the opening's OTHER red settlement cannot be disambiguated between v7 and v12 from this frame (one is setup, one is a mid-game build; both roads converge on v6). Fail-closed: declined rather than guessed. Board was read via CV dice-tile-centroid refs (h7=[636,244], h11=[1140,536], h15=[636,828]) after read_board_stable failed on both frames."
+}

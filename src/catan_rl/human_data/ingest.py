@@ -479,6 +479,8 @@ def decode_frames_at(
     expected_nbytes = width * height * 3
 
     for scheduled in schedule:
+        # Decoder capped at 2 threads (input option — byte-proven identical output):
+        # without it each of N sweep workers spawns an ncpu-wide decode pool.
         cmd = [
             ffmpeg_bin,
             "-nostdin",
@@ -486,6 +488,8 @@ def decode_frames_at(
             "error",
             "-ss",
             f"{scheduled.ts:.3f}",
+            "-threads",
+            "2",
             "-i",
             str(video_path),
             "-frames:v",

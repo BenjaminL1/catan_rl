@@ -140,7 +140,11 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
   for keeping risky/in-progress work off main until it's green, then merge to
   main and push — but no PR review gate.
 - Conventional commits, lowercase, under 72 chars.
-- No `Co-Authored-By` AI trailers.
+- **Never add Claude (or any AI) as a contributor.** No `Co-Authored-By: Claude`
+  / `Co-Authored-By: <AI>` trailers, no "Generated with Claude" lines, no AI
+  attribution anywhere in commit messages, PR bodies, or authorship — even when
+  a tool's default template suggests one. Commits are authored solely by the
+  human account.
 - CI still runs on push to main (ruff + mypy + pytest, Python 3.11+); keep it
   green, but it's a safety net, not a merge gate.
 

@@ -1,0 +1,27 @@
+{
+  "video_id": "R-d63v4OmVg",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). Board fit via post_setup FALLBACK (camera pan; residual 0.89px). meta player_colors partly WRONG (lists Meowpoo=WHITE, but Meowpoo's pieces are RED; ThePhantom=BLACK is correct) - assigned by colour-agnostic grant self-check. ThePhantom (BLACK) settlements v14=[3,10,11] and v20=[5,15,16] (roads v14-v10, v20-v21). Meowpoo (RED) settlements v8=[1,7,18] and v15=[3,4,12] (roads v8-v9, v15-v0). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WHEAT} equals exactly v14 (BRI5+SHE8+WHE10) and NOT v20 (SHE3+ORE4+WOO8={SHEEP,ORE,WOOD}); Meowpoo {BRICK,SHEEP,WOOD} equals exactly v8 (BRI9+WOO6+SHE2) and NOT v15 (BRI5+WHE6+ORE9={BRICK,WHEAT,ORE}). Read from 2x-upscaled overlay.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [3, 10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]},
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]}
+      ]
+    },
+    "Meowpoo": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

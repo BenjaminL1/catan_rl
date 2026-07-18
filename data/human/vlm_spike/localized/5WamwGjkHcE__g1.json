@@ -1,101 +1,26 @@
 {
   "video_id": "5WamwGjkHcE",
   "game_index": 1,
-  "vlm_note": "Clean 8-piece opening (TwinTree's turn, score 2-2 setup complete). Colours per meta: ThePhantom=BLACK, TwinTree=GREEN. Board fit from empty_baseline residual 1.00px; pieces sit exactly on the CV vertex overlay. ThePhantom(BLACK): settlement v8=[1,7,18] (WHE3+WOO8+BRI10) road straight down to v9=[1,6,18]; settlement v10=[2,3,10] (SHE6+ORE5+WHE12) road down-right to v14=[3,10,11]. TwinTree(GREEN): settlement v4=[0,5,6] (BRI11+WOO4+WHE9) road down-left to v19=[5,6,16]; settlement v13=[3,11,12] (all-ore ORE5+ORE9+ORE10) road down-right to v37=[11,12]. GRANT SELF-CHECK: both grants are {BRICK,WHEAT,WOOD}. ThePhantom's grant == v8 (WHE+WOO+BRI) exactly, NOT v10 (SHE+ORE+WHE). TwinTree's grant == v4 (BRI+WOO+WHE) exactly, NOT v13 (ORE+ORE+ORE). Each grant matches EXACTLY ONE settlement -> pins the granting (2nd) settlement for both; every road resolves to a real edge.",
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fitted from empty_baseline (residual 0.99px); robber moved off desert onto h15 but no extra pieces built. Read from a 2x-upscaled vertex-id overlay. Colours per meta: ThePhantom=BLACK, TwinTree=GREEN. BOTH players' setup grant is {BRICK:1,WHEAT:1,WOOD:1}, so players are told apart by COLOUR, and the self-check is applied per-player. ThePhantom (BLACK): settlements v10=[2,3,10] and v8=[1,7,18] (roads v10-v14, v8-v9). TwinTree (GREEN): settlements v13=[3,11,12] and v4=[0,5,6] (roads v13-v37, v4-v19). GRANT SELF-CHECK PASSES per player: ThePhantom's grant {BRICK,WHEAT,WOOD} equals exactly v8 (WHE3+WOO8+BRI10) and NOT v10 (SHE6+ORE5+WHE12={SHEEP,ORE,WHEAT}); TwinTree's grant {BRICK,WHEAT,WOOD} equals exactly v4 (BRI11+WOO4+WHE9) and NOT v13 (ORE5+ORE9+ORE10={ORE:3}). Each grant matches EXACTLY ONE of that player's two settlements, pinning the 2nd (granting) settlement.",
   "players": {
     "ThePhantom": {
       "settlements": [
-        {
-          "hexes": [
-            1,
-            7,
-            18
-          ]
-        },
-        {
-          "hexes": [
-            2,
-            3,
-            10
-          ]
-        }
+        {"hexes": [2, 3, 10]},
+        {"hexes": [1, 7, 18]}
       ],
       "roads": [
-        {
-          "endpoints": [
-            [
-              1,
-              7,
-              18
-            ],
-            [
-              1,
-              6,
-              18
-            ]
-          ]
-        },
-        {
-          "endpoints": [
-            [
-              2,
-              3,
-              10
-            ],
-            [
-              3,
-              10,
-              11
-            ]
-          ]
-        }
+        {"endpoints": [[2, 3, 10], [3, 10, 11]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
       ]
     },
     "TwinTree": {
       "settlements": [
-        {
-          "hexes": [
-            0,
-            5,
-            6
-          ]
-        },
-        {
-          "hexes": [
-            3,
-            11,
-            12
-          ]
-        }
+        {"hexes": [3, 11, 12]},
+        {"hexes": [0, 5, 6]}
       ],
       "roads": [
-        {
-          "endpoints": [
-            [
-              0,
-              5,
-              6
-            ],
-            [
-              5,
-              6,
-              16
-            ]
-          ]
-        },
-        {
-          "endpoints": [
-            [
-              3,
-              11,
-              12
-            ],
-            [
-              11,
-              12
-            ]
-          ]
-        }
+        {"endpoints": [[3, 11, 12], [11, 12]]},
+        {"endpoints": [[0, 5, 6], [5, 6, 16]]}
       ]
     }
   }

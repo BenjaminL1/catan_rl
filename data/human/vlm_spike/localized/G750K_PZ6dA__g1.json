@@ -1,0 +1,27 @@
+{
+  "video_id": "G750K_PZ6dA",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.76px, well-aligned). meta player_colors CORRECT (FreeHugsGuy=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. Note v16 has multiset {WOOD,BRICK,ORE} matching FreeHugsGuy's grant but is ThePhantom's (BLACK) NON-grant settlement; per-player self-check disambiguates. ThePhantom (BLACK) settlements v5=[0,4,5] and v16=[4,12,13] (roads v5-v0, v16-v15). FreeHugsGuy (RED) settlements v6=[1,2,8] and v21=[5,14,15] (roads v6-v7, v21-v17). GRANT SELF-CHECK PASSES per player: ThePhantom {SHEEP,WHEAT,WOOD} equals exactly v5 (SHE11+WOO4+WHE9) and NOT v16 (WOO4+BRI10+ORE8={WOOD,BRICK,ORE}); FreeHugsGuy {BRICK,ORE,WOOD} equals exactly v6 (BRI3+WOO6+ORE4) and NOT v21 (WHE9+SHE3+WHE6={WHEAT,WHEAT,SHEEP}).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]}
+      ]
+    },
+    "FreeHugsGuy": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[1, 2, 8], [1, 7, 8]]}
+      ]
+    }
+  }
+}

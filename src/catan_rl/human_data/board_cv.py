@@ -62,7 +62,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from importlib.resources import files
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -488,18 +488,13 @@ class _EasyOcrReader:
         raise NotImplementedError
 
 
-_READER: _EasyOcrReader | None = None
-
-
 def _easyocr_reader() -> _EasyOcrReader:
-    """Lazily build + cache a CPU easyocr reader (English)."""
-    global _READER
-    if _READER is None:
-        import easyocr
+    """Return logparse's cached CPU easyocr reader — the constructor args are IDENTICAL
+    (``["en"], gpu=False, verbose=False``), so sharing changes nothing but RAM: ONE
+    detector+recognizer per worker process instead of two."""
+    from catan_rl.human_data.logparse import _easyocr_reader as _shared_reader
 
-        reader: _EasyOcrReader = easyocr.Reader(["en"], gpu=False, verbose=False)
-        _READER = reader
-    return _READER
+    return cast("_EasyOcrReader", _shared_reader())
 
 
 # ------------------------------------------------------------- screen anchors

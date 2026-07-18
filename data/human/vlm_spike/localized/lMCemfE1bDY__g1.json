@@ -1,102 +1,26 @@
 {
   "video_id": "lMCemfE1bDY",
   "game_index": 1,
-  "vlm_note": "8-piece opening (Vee's Turn, RANK#4 overlay top-left is a stream graphic, not a piece). Board fit empty_baseline residual 0.95px. Colours per meta match on-screen pieces: ThePhantom=BLACK, Vee=RED. ThePhantom(BLACK): settlement v0=[0,3,4] (BRI11+WHE10+SHE9) road down-right to v15=[3,4,12]; settlement v9=[1,6,18] (ORE6+BRI5+WOO9) road down-left to v22=[6,17,18] (along the BRI5/WOO9 boundary; the roof extends up so the road only looks up-left). Vee(RED): settlement v20=[5,15,16] (WOO4+SHE3+BRI8) road down-right to v21=[5,14,15]; settlement v10=[2,3,10] (SHE3+WHE10+WHE8) road straight up to v11=[2,9,10] (house bottom measured at y=419 pins the anchor to v10 not v11). Grey robber excluded (silver pawns sit on the ore hex near v17/v18). GRANT SELF-CHECK: ThePhantom grant {BRICK,SHEEP,WHEAT} == v0 exactly, NOT v9 (ORE+BRI+WOO). Vee grant {BRICK,SHEEP,WOOD} == v20 exactly, NOT v10 (SHE+WHE+WHE). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.89px). meta player_colors CORRECT (Vee=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. ThePhantom (BLACK) settlements v9=[1,6,18] and v0=[0,3,4] (roads v9-v22, v0-v15). Vee (RED) settlements v10=[2,3,10] and v20=[5,15,16] (roads v10-v11, v20-v21). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WHEAT} equals exactly v0 (BRI11+WHE10+SHE9) and NOT v9 (ORE6+BRI5+WOO9={ORE,BRICK,WOOD}); Vee {BRICK,SHEEP,WOOD} equals exactly v20 (WOO4+SHE3+BRI8) and NOT v10 (SHE3+WHE10+WHE8={SHEEP,WHEAT,WHEAT}). Roads verified via 2.8x/3.2x crops (v9-v22 and v20-v21 confirmed).",
   "players": {
     "ThePhantom": {
       "settlements": [
-        {
-          "hexes": [
-            0,
-            3,
-            4
-          ]
-        },
-        {
-          "hexes": [
-            1,
-            6,
-            18
-          ]
-        }
+        {"hexes": [1, 6, 18]},
+        {"hexes": [0, 3, 4]}
       ],
       "roads": [
-        {
-          "endpoints": [
-            [
-              0,
-              3,
-              4
-            ],
-            [
-              3,
-              4,
-              12
-            ]
-          ]
-        },
-        {
-          "endpoints": [
-            [
-              1,
-              6,
-              18
-            ],
-            [
-              6,
-              17,
-              18
-            ]
-          ]
-        }
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]},
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]}
       ]
     },
     "Vee": {
       "settlements": [
-        {
-          "hexes": [
-            5,
-            15,
-            16
-          ]
-        },
-        {
-          "hexes": [
-            2,
-            3,
-            10
-          ]
-        }
+        {"hexes": [2, 3, 10]},
+        {"hexes": [5, 15, 16]}
       ],
       "roads": [
-        {
-          "endpoints": [
-            [
-              5,
-              15,
-              16
-            ],
-            [
-              5,
-              14,
-              15
-            ]
-          ]
-        },
-        {
-          "endpoints": [
-            [
-              2,
-              3,
-              10
-            ],
-            [
-              2,
-              9,
-              10
-            ]
-          ]
-        }
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]}
       ]
     }
   }

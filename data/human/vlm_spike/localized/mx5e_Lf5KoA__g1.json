@@ -1,0 +1,27 @@
+{
+  "video_id": "mx5e_Lf5KoA",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). read_board_stable FAILED on both frames, so the vertex overlay was rendered via the manual 3-hex-refs fallback using CV-detected white dice-tile centroids (h7=[619,252], h11=[1118,540], h14=[785,829]); inner vertices are accurate, coastal labels approximate. Robber has moved to h18 (ORE8, top-left) but the opening is intact. meta colours CORRECT (DeLemon=RED, ThePhantom=BLACK). ThePhantom (BLACK) settlements v23=[6,16,17] and v15=[3,4,12] (roads v23-v22, v15-v13). DeLemon (RED) settlements v4=[0,5,6] and v11=[2,9,10] (roads v4-v5, v11-v12). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,SHEEP,WOOD} equals exactly v23 (BRI3+SHE11+WOO4) and NOT v15 (BRI4+WHE5+ORE10={BRICK,WHEAT,ORE}); DeLemon {BRICK,WHEAT,WOOD} equals exactly v4 (WHE11+WOO6+BRI3) and NOT v11 (ORE9+SHE6+SHE3={ORE,SHEEP,SHEEP}). Verified via 2x/3x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    },
+    "DeLemon": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [0, 5, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]},
+        {"endpoints": [[0, 5, 6], [0, 4, 5]]}
+      ]
+    }
+  }
+}

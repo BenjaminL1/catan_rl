@@ -1,0 +1,27 @@
+{
+  "video_id": "eJgnDPMFA24",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.75px). meta player_colors partly WRONG (lists nSpiro=WHITE, but nSpiro's pieces are ORANGE; ThePhantom=BLACK correct) - assigned by colour-agnostic grant self-check. ThePhantom's grant is only {ORE,WOOD} (2 resources) because its granting settlement v13=[3,11,12] is DESERT-adjacent (h3 desert yields nothing). The top-right black grant settlement is v13 (base at circle 13; road v13-v14 runs up through the '14' label), NOT the nearby v14 (={BRICK,ORE}). ThePhantom (BLACK) settlements v13=[3,11,12] and v20=[5,15,16] (roads v13-v14, v20-v19). nSpiro (ORANGE) settlements v23=[6,16,17] and v16=[4,12,13] (roads v23-v19, v16-v15). v20's black road and v23's orange road both terminate at the contested vertex v19. GRANT SELF-CHECK PASSES per player: ThePhantom {ORE,WOOD} equals exactly v13 (DES+ORE8+WOO10) and NOT v20 (WHE6+ORE11+BRI4={WHEAT,ORE,BRICK}); nSpiro {BRICK,BRICK,WOOD} equals exactly v23 (BRI3+BRI4+WOO8) and NOT v16 (SHE5+WOO10+WHE9={SHEEP,WOOD,WHEAT}). Verified via 2.9-3.2x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    },
+    "nSpiro": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    }
+  }
+}

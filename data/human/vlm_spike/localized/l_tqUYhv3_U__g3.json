@@ -1,0 +1,27 @@
+{
+  "video_id": "l_tqUYhv3_U",
+  "game_index": 3,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). read_board_stable FAILED on both frames, so the vertex overlay was rendered via the manual 3-hex-refs fallback using CV-detected white dice-tile centroids (h7=[562,246], h11=[1058,532], h15=[562,818]); inner vertices accurate. Robber sits on the desert h18 (top-left). Opponent handle in meta is '2' (an OCR-mangled handle; HUD shows 'RoDawg...') with colour GREEN; ThePhantom=BLACK — colours match the pieces and the self-check is colour-agnostic anyway. ThePhantom (BLACK) settlements v7=[1,7,8] and v16=[4,12,13] (roads v7-v6, v16-v15). '2' (GREEN) settlements v4=[0,5,6] and v13=[3,11,12] (roads v4-v19, v13-v15). Both non-grant roads converge on the contested empty vertex v15. GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,WHEAT,WOOD} equals exactly v7 (BRI3+WHE8+WOO4) and NOT v16 (WOO4+BRI10+SHE8={WOOD,BRICK,SHEEP}); '2' {BRICK,SHEEP,WOOD} equals exactly v4 (BRI11+WOO9+SHE10) and NOT v13 (ORE5+WHE9+BRI10={ORE,WHEAT,BRICK}). Verified via 3-3.2x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]}
+      ]
+    },
+    "2": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [0, 5, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]},
+        {"endpoints": [[0, 5, 6], [5, 6, 16]]}
+      ]
+    }
+  }
+}

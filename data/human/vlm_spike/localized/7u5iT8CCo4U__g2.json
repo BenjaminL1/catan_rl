@@ -1,0 +1,27 @@
+{
+  "video_id": "7u5iT8CCo4U",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads). Board fit via post_setup FALLBACK (camera pan; residual 0.63px). meta colours CORRECT (capjack=PURPLE, ThePhantom=BLACK). Robber on h4 (BRI6). ThePhantom (BLACK) settlements v23=[6,16,17] and v11=[2,9,10] (roads v23-v22, v11-v10). capjack (PURPLE) settlements v8=[1,7,18] and v20=[5,15,16] (roads v8-v27 coastal, v20-v19). GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,ORE,WOOD} equals exactly v23 (BRI4+ORE10+WOO8) and NOT v11 (ORE10+WHE5+SHE8={ORE,WHEAT,SHEEP}); capjack {ORE,SHEEP,WOOD} equals exactly v8 (ORE9+WOO6+SHE3) and NOT v20 (BRI5+WHE9+ORE10={BRICK,WHEAT,ORE}). Verified via 3x crops.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    },
+    "capjack": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[1, 7, 18], [7, 18]]}
+      ]
+    }
+  }
+}

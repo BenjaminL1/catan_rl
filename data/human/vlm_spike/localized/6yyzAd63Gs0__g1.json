@@ -1,0 +1,27 @@
+{
+  "video_id": "6yyzAd63Gs0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.91px). meta player_colors CORRECT (LFPS=RED, ThePhantom=BLACK), cross-checked vs colour-agnostic grant self-check. ThePhantom (BLACK) settlements v20=[5,15,16] and v13=[3,11,12] (roads v20-v19, v13-v15). LFPS (RED) settlements v6=[1,2,8] and v0=[0,3,4] (roads v6-v12, v0-v15). Note both v0's red road and v13's black road are adjacent to the same empty vertex v15 (a contested opening spot) - both are valid setup roads adjacent to their own settlement. GRANT SELF-CHECK PASSES per player: ThePhantom {ORE,SHEEP,WHEAT} equals exactly v13 (WHE4+SHE8+ORE3) and NOT v20 (WOO10+BRI5+BRI8={WOOD,BRICK,BRICK}); LFPS {WHEAT,WOOD,WOOD} equals exactly v0 (WOO11+WHE4+WOO9) and NOT v6 (ORE6+SHE5+SHE9={ORE,SHEEP,SHEEP}). Roads verified via 2.8x center crop.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]}
+      ]
+    },
+    "LFPS": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]},
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]}
+      ]
+    }
+  }
+}

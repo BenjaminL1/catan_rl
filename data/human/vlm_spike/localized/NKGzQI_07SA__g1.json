@@ -1,0 +1,27 @@
+{
+  "video_id": "NKGzQI_07SA",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (4 settlements + 4 roads), board fit from empty_baseline (residual 0.97px). meta player_colors CORRECT (ShiftyG=BLACK, ThePhantom=WHITE), cross-checked vs colour-agnostic grant self-check. ThePhantom (WHITE) settlements v22=[6,17,18] and v16=[4,12,13] (roads v22-v23, v16-v18). ShiftyG (BLACK) settlements v8=[1,7,18] and v17=[4,5,14] (roads v8-v9, v17-v18). Note v16's white road and v17's black road both terminate at the contested empty vertex v18 - both valid setup roads adjacent to their own settlement. GRANT SELF-CHECK PASSES per player: ThePhantom {BRICK,WHEAT,WOOD} equals exactly v22 (BRI3+WOO4+WHE8) and NOT v16 (ORE5+SHE8+WHE10={ORE,SHEEP,WHEAT}); ShiftyG {ORE,WHEAT,WOOD} equals exactly v17 (ORE5+WHE6+WOO9) and NOT v8 (SHE10+BRI5+WHE8={SHEEP,BRICK,WHEAT}). Roads verified via 3x crops (v22 road goes down to v23).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [4, 13, 14]]},
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]}
+      ]
+    },
+    "ShiftyG": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]},
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]}
+      ]
+    }
+  }
+}
