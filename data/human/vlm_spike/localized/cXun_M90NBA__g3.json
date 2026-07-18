@@ -1,0 +1,102 @@
+{
+  "video_id": "cXun_M90NBA",
+  "game_index": 3,
+  "vlm_note": "8-piece opening (Woo6817's Turn). Board baseline UNREADABLE; fitted 3-hex-centre affine from post_setup token centroids h7=(625,259), h11=(1121,547), h14=(789,832); pieces sit on the CV vertex overlay. COLOUR GOTCHA: meta player_colors says Woo6817=RED, ThePhantom=BLACK, but on-screen pieces are PURPLE and BLACK (no red). Assigned COLOUR-AGNOSTICALLY by grant: PURPLE=ThePhantom (owns {WHEAT:2,WOOD} vertex v20), BLACK=Woo6817 (owns {ORE,WHEAT,WOOD} vertex v16); neither colour maps to meta so both are trusted from the self-check. ThePhantom(PURPLE): settlement v20=[5,15,16] (WHE4+WHE6+WOO3) road down-right to v21=[5,14,15]; settlement v22=[6,17,18] (BRI5+ORE8+SHE10) road up-right to v9=[1,6,18]. Woo6817(BLACK): settlement v16=[4,12,13] (WHE9+ORE10+WOO5) road down-left to v18=[4,13,14]; settlement v8=[1,7,18] (BRI6+SHE9+SHE10) road up-left to coastal v27=[7,18]. GRANT SELF-CHECK: ThePhantom grant {WHEAT:2,WOOD} == v20 exactly, NOT v22 (BRI+ORE+SHE). Woo6817 grant {ORE,WHEAT,WOOD} == v16 exactly, NOT v8 (BRI+SHE+SHE). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge. (h18 number token was occluded by the v22 settlement, consistent.)",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {
+          "hexes": [
+            5,
+            15,
+            16
+          ]
+        },
+        {
+          "hexes": [
+            6,
+            17,
+            18
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              5,
+              15,
+              16
+            ],
+            [
+              5,
+              14,
+              15
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              6,
+              17,
+              18
+            ],
+            [
+              1,
+              6,
+              18
+            ]
+          ]
+        }
+      ]
+    },
+    "Woo6817": {
+      "settlements": [
+        {
+          "hexes": [
+            4,
+            12,
+            13
+          ]
+        },
+        {
+          "hexes": [
+            1,
+            7,
+            18
+          ]
+        }
+      ],
+      "roads": [
+        {
+          "endpoints": [
+            [
+              4,
+              12,
+              13
+            ],
+            [
+              4,
+              13,
+              14
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              1,
+              7,
+              18
+            ],
+            [
+              7,
+              18
+            ]
+          ]
+        }
+      ]
+    }
+  }
+}

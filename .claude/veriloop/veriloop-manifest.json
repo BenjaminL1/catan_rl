@@ -1,0 +1,326 @@
+{
+  "veriloop_version": "0.3.7",
+  "generated_at": "2026-07-17T08:00:43.092Z",
+  "repo_name": "catan-rl-v2",
+  "repo_root": ".",
+  "repo_sha": "aad09c2b9f360a7ac704510d7b505888bdada6ed",
+  "stack": [
+    "python",
+    "rust"
+  ],
+  "package_manager": "pip",
+  "has_ui": false,
+  "polyglot": [
+    "rust (maturin extension crate — detectRust emits the cargo fmt/clippy/test/check surface alongside this build)"
+  ],
+  "roster": [
+    {
+      "key": "code-review",
+      "title": "Baseline Reviewer",
+      "tiers": [
+        "trivial",
+        "standard",
+        "high"
+      ],
+      "evidence": [
+        "always included — correctness, conventions, type-safety, test integrity"
+      ],
+      "file": ".claude/veriloop/experts/baseline-reviewer.md"
+    },
+    {
+      "key": "drift",
+      "title": "Drift Sentinel",
+      "tiers": [
+        "standard",
+        "high"
+      ],
+      "evidence": [
+        "parity/golden files: scripts/dev/probe_oracle_sprt.py, scripts/record_conformance.py, src/catan_rl/selfplay/snapshot_opponent.py",
+        "docs describe an oracle / source-of-truth / byte-parity contract"
+      ],
+      "file": ".claude/veriloop/experts/drift.md"
+    }
+  ],
+  "roster_notes": [
+    "security expert NOT added — no concrete auth/db/secret surface detected (avoids a jobless expert)"
+  ],
+  "gate_commands": [
+    {
+      "name": "typecheck",
+      "cmd": "make typecheck",
+      "verified": true,
+      "ci": true
+    },
+    {
+      "name": "lint",
+      "cmd": "make lint",
+      "verified": false,
+      "ci": true
+    },
+    {
+      "name": "format",
+      "cmd": "cargo fmt --all -- --check",
+      "verified": true,
+      "ci": true
+    },
+    {
+      "name": "test",
+      "cmd": "make test-unit",
+      "verified": null,
+      "ci": true
+    }
+  ],
+  "budget": {
+    "posture": "balanced",
+    "presets": {
+      "frugal": {
+        "plan": {
+          "model": "sonnet",
+          "effort": "high"
+        },
+        "implement": {
+          "model": "sonnet",
+          "effort": "medium"
+        },
+        "review": {
+          "model": "sonnet",
+          "effort": "medium"
+        },
+        "checks": {
+          "model": "haiku",
+          "effort": "low"
+        },
+        "fix": {
+          "model": "sonnet",
+          "effort": "medium"
+        },
+        "land": {
+          "model": "haiku",
+          "effort": "low"
+        },
+        "report": {
+          "model": "haiku",
+          "effort": "medium"
+        }
+      },
+      "balanced": {
+        "plan": {
+          "model": "opus",
+          "effort": "high"
+        },
+        "implement": {
+          "model": "opus",
+          "effort": "medium"
+        },
+        "review": {
+          "model": "opus",
+          "effort": "high"
+        },
+        "checks": {
+          "model": "haiku",
+          "effort": "low"
+        },
+        "fix": {
+          "model": "opus",
+          "effort": "medium"
+        },
+        "land": {
+          "model": "sonnet",
+          "effort": "low"
+        },
+        "report": {
+          "model": "sonnet",
+          "effort": "high"
+        }
+      },
+      "max": {
+        "plan": {
+          "model": "opus",
+          "effort": "xhigh"
+        },
+        "implement": {
+          "model": "opus",
+          "effort": "high"
+        },
+        "review": {
+          "model": "opus",
+          "effort": "xhigh"
+        },
+        "checks": {
+          "model": "sonnet",
+          "effort": "low"
+        },
+        "fix": {
+          "model": "opus",
+          "effort": "high"
+        },
+        "land": {
+          "model": "sonnet",
+          "effort": "medium"
+        },
+        "report": {
+          "model": "opus",
+          "effort": "high"
+        }
+      }
+    },
+    "models": {
+      "plan": "opus",
+      "implement": "opus",
+      "review": "opus",
+      "checks": "opus",
+      "fix": "opus",
+      "land": "opus",
+      "report": "opus"
+    },
+    "effort": {}
+  },
+  "e2e": {
+    "cmd": "pytest tests/integration -v -m integration --tb=short",
+    "verified": null,
+    "ci": true
+  },
+  "commands_summary": {
+    "install": {
+      "cmd": "python -m pip install -e \".[dev]\"",
+      "safety": "ask",
+      "verified": null,
+      "verified_by_ci": true
+    },
+    "typecheck": {
+      "cmd": "make typecheck",
+      "safety": "safe",
+      "verified": true,
+      "verified_by_ci": true
+    },
+    "lint": {
+      "cmd": "make lint",
+      "safety": "safe",
+      "verified": false,
+      "verified_by_ci": true
+    },
+    "format": {
+      "cmd": "cargo fmt --all -- --check",
+      "safety": "safe",
+      "verified": true,
+      "verified_by_ci": true
+    },
+    "test": {
+      "cmd": "make test-unit",
+      "safety": "ask",
+      "verified": null,
+      "verified_by_ci": true
+    },
+    "test_single": {
+      "cmd": "pytest <path>::<test>",
+      "safety": "ask",
+      "verified": null,
+      "verified_by_ci": false
+    },
+    "build": {
+      "cmd": "make rust-build",
+      "safety": "ask",
+      "verified": null,
+      "verified_by_ci": false
+    },
+    "e2e": {
+      "cmd": "pytest tests/integration -v -m integration --tb=short",
+      "safety": "never",
+      "verified": null,
+      "verified_by_ci": true
+    }
+  },
+  "verified_at": "2026-07-17T07:51:45.995Z",
+  "emitted_files": [
+    {
+      "path": ".claude/workflows/catan-rl-v2-dev-loop.js",
+      "ownership": "machine",
+      "status": "written"
+    },
+    {
+      "path": ".claude/commands/dev-loop.md",
+      "ownership": "machine",
+      "status": "written"
+    },
+    {
+      "path": ".claude/commands/advise.md",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/commands/review.md",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/commands/dev-plan.md",
+      "ownership": "machine",
+      "status": "written"
+    },
+    {
+      "path": ".claude/commands/posture.md",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/veriloop/commands.json",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/veriloop/experts/baseline-reviewer.md",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/veriloop/experts/baseline-reviewer.overrides.md",
+      "ownership": "hand",
+      "status": "preserved"
+    },
+    {
+      "path": ".claude/veriloop/experts/drift.md",
+      "ownership": "machine",
+      "status": "unchanged"
+    },
+    {
+      "path": ".claude/veriloop/experts/drift.overrides.md",
+      "ownership": "hand",
+      "status": "preserved"
+    },
+    {
+      "path": ".claude/veriloop/constitution.md",
+      "ownership": "starter",
+      "status": "preserved"
+    },
+    {
+      "path": ".gitignore",
+      "ownership": "shared-block",
+      "status": "unchanged"
+    }
+  ],
+  "interview_answers": {
+    "cross_model": true,
+    "budget_posture": "balanced",
+    "phase_models": {
+      "plan": "opus",
+      "implement": "opus",
+      "review": "opus",
+      "checks": "opus",
+      "fix": "opus",
+      "land": "opus",
+      "report": "opus"
+    },
+    "high_risk_areas": [
+      "engine",
+      "conformance",
+      "parity",
+      "fixture",
+      "maturin",
+      "train",
+      "checkpoint",
+      "league",
+      "gui",
+      "device"
+    ]
+  }
+}

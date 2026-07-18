@@ -1,26 +1,102 @@
 {
   "video_id": "Hj_VF4PhHwM",
   "game_index": 1,
-  "vlm_note": "Clean 8-piece opening board (score 0-0), board fitted from empty_baseline (residual 1.00px). Colours per meta: ThePhantom=BLACK, BigSlip=RED. Read against the CV's own vertex-id overlay. ThePhantom settlements v3=[0,1,6] and v18=[4,13,14] (roads v3-v2, v18-v17); BigSlip settlements v7=[1,7,8] and v0=[0,3,4] (roads v7-v24, v0-v5). GRANT SELF-CHECK PASSES: ThePhantom's grant {BRICK:1,WOOD:2} equals exactly v18's hexes (WOO10+BRI5+WOO8) and NOT v3's (WHE11+WHE5+SHE6); BigSlip's grant {ORE:1,WHEAT:1,WOOD:1} equals exactly v0's hexes (WHE11+ORE9+WOO10) and NOT v7's (WHE5+BRI9+BRI10). Each grant matches EXACTLY ONE settlement, so the glyph anchor independently pins the 2nd (granting) settlement for both players.",
+  "vlm_note": "Clean 8-piece opening (BigSlip's Build Road prompt, setup complete). Colours per meta: ThePhantom=BLACK, BigSlip=RED; matches on-screen pieces. Board fit empty_baseline residual 1.06px. ThePhantom(BLACK): settlement v18=[4,13,14] (WOO10+BRI5+WOO8) road up-left to v17=[4,5,14]; settlement v3=[0,1,6] (WHE11+WHE5+SHE6) road up-right to v2=[0,1,2]. BigSlip(RED): settlement v0=[0,3,4] (WHE11+ORE9+WOO10) road down-right to v15=[3,4,12]; settlement v6=[1,2,8] (WHE5+SHE4+BRI10) road up-right to v12=[2,8,9]. GRANT SELF-CHECK: ThePhantom grant {BRICK,WOOD:2} == v18 (WOO+BRI+WOO) exactly, NOT v3 (WHE+WHE+SHE). BigSlip grant {ORE,WHEAT,WOOD} == v0 (WHE+ORE+WOO) exactly, NOT v6 (WHE+SHE+BRI). Each grant matches EXACTLY ONE settlement; every road resolves to a real edge.",
   "players": {
     "ThePhantom": {
       "settlements": [
-        {"hexes": [0, 1, 6]},
-        {"hexes": [4, 13, 14]}
+        {
+          "hexes": [
+            4,
+            13,
+            14
+          ]
+        },
+        {
+          "hexes": [
+            0,
+            1,
+            6
+          ]
+        }
       ],
       "roads": [
-        {"endpoints": [[0, 1, 6], [0, 1, 2]]},
-        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+        {
+          "endpoints": [
+            [
+              4,
+              13,
+              14
+            ],
+            [
+              4,
+              5,
+              14
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              0,
+              1,
+              6
+            ],
+            [
+              0,
+              1,
+              2
+            ]
+          ]
+        }
       ]
     },
     "BigSlip": {
       "settlements": [
-        {"hexes": [1, 7, 8]},
-        {"hexes": [0, 3, 4]}
+        {
+          "hexes": [
+            0,
+            3,
+            4
+          ]
+        },
+        {
+          "hexes": [
+            1,
+            2,
+            8
+          ]
+        }
       ],
       "roads": [
-        {"endpoints": [[1, 7, 8], [7, 8]]},
-        {"endpoints": [[0, 3, 4], [0, 4, 5]]}
+        {
+          "endpoints": [
+            [
+              0,
+              3,
+              4
+            ],
+            [
+              3,
+              4,
+              12
+            ]
+          ]
+        },
+        {
+          "endpoints": [
+            [
+              1,
+              2,
+              8
+            ],
+            [
+              2,
+              8,
+              9
+            ]
+          ]
+        }
       ]
     }
   }

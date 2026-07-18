@@ -148,25 +148,20 @@ constants / `obs_schema.py`. Resource order in the RL stack is **Charlesworth**
 - CI still runs on push to main (ruff + mypy + pytest, Python 3.11+); keep it
   green, but it's a safety net, not a merge gate.
 
-## Review-and-resolve loop (the default workflow for feature work)
+## /dev-loop (the default workflow for feature work)
 
-When the user says **"the review-and-resolve loop"** (or asks to "review and
-resolve until ready"), run this loop per feature/slice — it is the standing
-expectation for substantive implementation work:
+Feature work runs through the **veriloop-generated `/dev-loop`**
+(`.claude/workflows/catan-rl-v2-dev-loop.js`; installed 2026-07-17, superseding the
+hand-run "review-and-resolve loop" below): spec detection (`/dev-plan` for non-trivial
+specs) → plan-review against `.claude/veriloop/constitution.md` → worktree implement →
+risk-tiered GO/NO-GO gate on **real command exit codes** (`make typecheck` · `make lint`
+· `cargo fmt --check` · `make test-unit`) plus review lenses
+(`.claude/veriloop/experts/`: baseline + drift) → bounded auto-fix → docs sync →
+preview branch, stopping before merge for owner sign-off. The old loop's
+RL-experiment-correctness + SWE/additivity review intent lives on in the lens
+personas — extend them via the `.overrides.md` siblings, which are never overwritten.
 
-1. **Implement** the feature (or a coherent slice), test-first where practical.
-   Re-green `ruff` + `mypy --strict` + `pytest` and commit.
-2. **Review** — run a senior-RL-game-dev review of the diff via the **Workflow**
-   tool: independent lenses (typically RL-experiment-correctness + SWE/additivity,
-   adapted to the feature) reading the actual files, → a synthesis that returns a
-   **severity-tagged issue list** (`BLOCKER` / `SHOULD-FIX` / `NIT`) + a verdict.
-   This is the same "senior RL engineer" reviewer used throughout the project
-   (the `specs/003-inference-search/reviewers.md` A+B personas generalized).
-3. **Resolve** every `BLOCKER` and `SHOULD-FIX` (NITs at discretion). Re-green
-   ruff + mypy + pytest; commit each resolution.
-4. **Loop** — re-review (or spot-verify the fixes) until the verdict is **READY**
-   (no open BLOCKER/SHOULD-FIX). Only then move on.
-5. **Next feature** — repeat from (1) for the next item in the plan.
+*(Legacy phrase: if the user says "the review-and-resolve loop", run `/dev-loop`.)*
 
 **With a long-running training run in the loop:** launch the run as early as a
 *correct* config allows (it is usually the long pole), then do the review/resolve
