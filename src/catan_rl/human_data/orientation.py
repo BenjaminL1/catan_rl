@@ -154,19 +154,27 @@ def granted_multiset_matches_a_settlement(
 # The openings CV reads a single order-blind post-setup frame, so a
 # :class:`~catan_rl.human_data.record.PlayerOpening`'s raw tuple order carries NO
 # placement information. Recovering "which settlement was placed 2nd (the
-# resource-granting one, ``settlements[1]``)" needs TWO signals, both required:
+# resource-granting one, ``settlements[1]``)" draws on TWO signals:
 #
 #   1. LOG-side (the ordinal): the game log's setup-event sequence shows each
 #      player placing 2 settlements with a ``"received starting resources"`` line
 #      immediately after their 2nd — :func:`_log_grant_ordinal` verifies the grant
 #      follows the 2nd settlement (ordinal ``1``). A missing setup/grant line →
-#      unestablished.
+#      log-unestablished.
 #   2. VERTEX-side (which vertex): the glyph anchor's granted-card multiset equals
 #      the adjacent-resource multiset of exactly ONE of the two opening settlements
 #      — :func:`identify_granting_settlement`. A granted multiset that matches
 #      neither or (collision) both → unestablished.
 #
-# When both resolve, the tuples are re-ordered to log-placement order
+# By DEFAULT (the two-signal regime, ``require_log_ordinal=True`` in the harvest /
+# vlm-spike log-gates) BOTH are required; :func:`establish_placement_order` combines
+# them. Under the audit-Decision-1 opt-in (``require_log_ordinal=False``) the
+# VERTEX-side signal ALONE establishes order — :func:`order_openings_by_grant`, the
+# grant-only establisher — because re-OCR duplication makes the LOG ordinal
+# permanently unavailable on real footage while the glyph anchor pins the granting
+# vertex uniquely (still failing closed on any grant collision/ambiguity).
+#
+# When order resolves, the tuples are re-ordered to log-placement order
 # (``settlements[1]`` = the granting vertex, ``roads[i]`` incident to
 # ``settlements[i]``). Otherwise the record is ORDER-UNESTABLISHED (EVAL-excluded,
 # seed-only; the bridge samples the grant hypothesis per episode).

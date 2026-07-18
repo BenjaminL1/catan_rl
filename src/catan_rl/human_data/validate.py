@@ -56,6 +56,7 @@ from catan_rl.human_data.record import (
     PROVENANCE_BOARD_DESERT,
     PROVENANCE_DICE_VALUES_READABLE,
     PROVENANCE_OPENINGS_DESERT,
+    PROVENANCE_ORDER_SOURCE,
     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED,
     VALID_DICE_VALUES,
     GameRecord,
@@ -269,7 +270,17 @@ def cross_check(
     and ``provenance["placement_order_established"]`` records whether the order was
     established (a granted multiset matching neither / both settlements leaves the
     order UNESTABLISHED — frame order kept, the record then EVAL-excluded but still
-    seed-eligible). It is built with ``passed_crosscheck=True``. The
+    seed-eligible). ``cross_check`` carries no setup-event stream, so it establishes
+    order from the GRANT (VERTEX-side glyph) alone and stamps the additive
+    ``provenance["order_source"]`` (:data:`~catan_rl.human_data.record.PROVENANCE_ORDER_SOURCE`)
+    accordingly: ``"glyph_only"`` when the grant established it, ``None`` when it did
+    not. The harvest / vlm-spike LOG-gate downstream refines this — UPGRADING to
+    ``"log+glyph"`` when the log ordinal confirms, or (default two-signal mode)
+    downgrading the flag and resetting the source to ``None`` when it cannot (the
+    audit-Decision-1 ``require_log_ordinal=False`` opt-in instead keeps the
+    ``"glyph_only"`` establishment). ``order_source`` is purely informational — it
+    never gates eligibility, which keys on ``placement_order_established`` alone. The
+    accepted record is built with ``passed_crosscheck=True``. The
     ``GameRecord`` constructor then re-runs its own pure-value :meth:`validate`
     (standard resource/number multisets, distinctness, snake-draft, provenance
     orientation-binding, sub-1080p, dice-log range). Those finer contract invariants
@@ -353,6 +364,15 @@ def cross_check(
                     PROVENANCE_BOARD_DESERT: board.desert_hex,
                     PROVENANCE_OPENINGS_DESERT: openings_desert_hex,
                     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: order_established,
+                    # WHICH signal established order (audit Decision 1, additive).
+                    # ``cross_check`` carries no setup-event stream, so the grant
+                    # (VERTEX-side glyph) is the only signal it can consult: a
+                    # grant-established order is ``"glyph_only"`` here, unestablished
+                    # is ``None``. The harvest / vlm-spike LOG-gate then refines this
+                    # — UPGRADING to ``"log+glyph"`` when the log ordinal confirms,
+                    # or (default mode) downgrading the flag + resetting the source to
+                    # ``None`` when it cannot.
+                    PROVENANCE_ORDER_SOURCE: "glyph_only" if order_established else None,
                     PROVENANCE_DICE_VALUES_READABLE: dice_values_readable,
                 },
                 rejection_reason=None,
@@ -432,8 +452,10 @@ def cross_check(
                 PROVENANCE_BOARD_DESERT: desert_hex,
                 PROVENANCE_OPENINGS_DESERT: desert_hex,
                 # A rejected record is never scoreboard/seed-eligible; its openings
-                # are frame-order (or a placeholder), so order is not established.
+                # are frame-order (or a placeholder), so order is not established
+                # and no signal sourced it.
                 PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False,
+                PROVENANCE_ORDER_SOURCE: None,
                 PROVENANCE_DICE_VALUES_READABLE: dice_values_readable,
             },
             rejection_reason=reason,

@@ -113,6 +113,7 @@ from catan_rl.human_data.logparse import (
 from catan_rl.human_data.openings import OpeningResult, detect_openings_result, read_hud_seat_colors
 from catan_rl.human_data.orientation import MIN_RESOLUTION, establish_placement_order
 from catan_rl.human_data.record import (
+    PROVENANCE_ORDER_SOURCE,
     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED,
     GameRecord,
     OpponentStrength,
@@ -1288,6 +1289,7 @@ def parse_video(
     topology: Topology,
     download_gate: threading.BoundedSemaphore | None = None,
     work_dir: Path | None = None,
+    require_log_ordinal: bool = True,
 ) -> list[GameRecord]:
     """Parse one video into its per-game :class:`GameRecord` rows (the ``parse_fn``).
 
@@ -1298,12 +1300,18 @@ def parse_video(
     2. fuses them through :func:`~catan_rl.human_data.validate.cross_check` (the
        accept/reject gate that also runs the NON-OPTIONAL joint-flip glyph anchor);
     3. for an ACCEPTED game, applies the LOG-side placement-order gate on top of
-       ``cross_check``'s grant-only order: if
-       :func:`~catan_rl.human_data.orientation.establish_placement_order` cannot
-       confirm the grant follows each player's 2nd settlement, the record is
-       DOWNGRADED to order-unestablished
-       (``provenance[placement_order_established] = False``) — EVAL-excluded, still
-       seed-eligible (step6 §3.1), never a silent scoreboard promotion.
+       ``cross_check``'s grant-only order (:func:`_apply_log_order_gate`): if
+       :func:`~catan_rl.human_data.orientation.establish_placement_order` confirms
+       the grant follows each player's 2nd settlement the order is UPGRADED to
+       ``order_source = "log+glyph"``; otherwise, under the DEFAULT
+       ``require_log_ordinal=True`` (two-signal) regime the record is DOWNGRADED to
+       order-unestablished (``provenance[placement_order_established] = False``) —
+       EVAL-excluded, still seed-eligible (step6 §3.1), never a silent scoreboard
+       promotion. Under the audit-Decision-1 opt-in (``require_log_ordinal=False``)
+       the grant-only (``"glyph_only"``) establishment is kept instead of downgraded
+       (re-OCR duplication makes the log ordinal permanently unavailable on real
+       footage); the fail-closed grant-collision/ambiguous cases stay ``False`` in
+       BOTH regimes.
 
     A ruleset-failing window (not exactly two acting seats — a mis-segmented / non-1v1
     window) is NOT a game and is dropped from the game list before CV. Every window
@@ -1358,7 +1366,9 @@ def parse_video(
         )
         record = result.record
         if result.accepted:
-            record = _apply_log_order_gate(record, segment.events, gi, topology)
+            record = _apply_log_order_gate(
+                record, segment.events, gi, topology, require_log_ordinal=require_log_ordinal
+            )
         records.append(record)
     return records
 
@@ -1368,17 +1378,35 @@ def _apply_log_order_gate(
     segment_events: Sequence[LogEvent],
     gi: GameInputs,
     topology: Topology,
+    *,
+    require_log_ordinal: bool = True,
 ) -> GameRecord:
-    """Downgrade an accepted record to order-unestablished when the LOG cannot confirm
-    the placement order (step6 §3.1 — the harvest-side gate on top of ``cross_check``).
+    """Confirm / downgrade an accepted record's placement-order flag against the LOG
+    (step6 §3.1 — the harvest-side gate on top of ``cross_check``).
 
     ``cross_check`` stamps ``placement_order_established`` from the grant-only
     (VERTEX-side) signal because it carries no setup-event stream; the harvest driver
-    additionally requires the LOG-side ordinal (the grant follows each player's 2nd
-    settlement) via :func:`~catan_rl.human_data.orientation.establish_placement_order`.
-    When the record is currently ESTABLISHED but the log cannot confirm it, the flag
-    is flipped to ``False`` — EVAL-excluded, still seed-eligible. When it is already
-    unestablished, nothing changes.
+    layers the LOG-side ordinal (the grant follows each player's 2nd settlement) via
+    :func:`~catan_rl.human_data.orientation.establish_placement_order` on top.
+
+    ``require_log_ordinal`` (audit Decision 1) selects the regime, DEFAULT ``True`` =
+    today's byte-identical two-signal behaviour:
+
+    * The record is already order-unestablished (flag not ``True``) — nothing changes
+      (the fail-closed early return is regime-independent; the opt-in never rescues a
+      grant-collision/ambiguous record, whose flag ``cross_check`` already set
+      ``False``).
+    * The LOG confirms the ordinal — the flag stays ``True`` and ``order_source`` is
+      UPGRADED to ``"log+glyph"`` (openings are left as ``cross_check`` grant-ordered
+      them; ``establish_placement_order`` yields the identical order).
+    * The LOG cannot confirm and ``require_log_ordinal`` is ``True`` (default) — the
+      flag is DOWNGRADED to ``False`` and ``order_source`` reset to ``None``
+      (EVAL-excluded, still seed-eligible — today's behaviour).
+    * The LOG cannot confirm and ``require_log_ordinal`` is ``False`` (the opt-in) —
+      the flag stays ``True`` on the GRANT-ONLY establishment (``order_source`` stays
+      ``"glyph_only"`` as ``cross_check`` stamped it); the log downgrade is SKIPPED.
+      This is the glyph-anchor-only ordering adopted after re-OCR duplication made the
+      log ordinal permanently unavailable on real footage.
     """
     if record.provenance.get(PROVENANCE_PLACEMENT_ORDER_ESTABLISHED) is not True:
         return record
@@ -1391,10 +1419,20 @@ def _apply_log_order_gate(
         list(segment_events), openings, readable, board_resource_by_hex, topology
     )
     if log_established:
+        return replace(
+            record,
+            provenance={**record.provenance, PROVENANCE_ORDER_SOURCE: "log+glyph"},
+        )
+    if not require_log_ordinal:
+        # Opt-in (audit Decision 1): keep the grant-only ("glyph_only") establishment.
         return record
     return replace(
         record,
-        provenance={**record.provenance, PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False},
+        provenance={
+            **record.provenance,
+            PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False,
+            PROVENANCE_ORDER_SOURCE: None,
+        },
     )
 
 
@@ -1416,8 +1454,13 @@ def run_harvest(
     work_dir: str | Path | None = None,
     glyph_validation: Any = None,
     now_fn: Any = time.time,
+    require_log_ordinal: bool = True,
 ) -> tuple[BatchResult, HarvestTelemetry]:
     """Run the e2e harvest and return ``(BatchResult, HarvestTelemetry)``.
+
+    ``require_log_ordinal`` (audit Decision 1, DEFAULT ``True``) is threaded into
+    :func:`parse_video` → :func:`_apply_log_order_gate` unchanged; ``False`` opts into
+    glyph-anchor-only placement ordering (see :func:`_apply_log_order_gate`).
 
     Binds :func:`parse_video` to the loaded manifest + topology and hands it to
     :func:`~catan_rl.human_data.batch.run_batch` (which owns the resumable ledger,
@@ -1433,6 +1476,7 @@ def run_harvest(
         manifest=manifest,
         topology=topology,
         work_dir=Path(work_dir) if work_dir is not None else None,
+        require_log_ordinal=require_log_ordinal,
     )
     result = run_batch(
         manifest_path=manifest_path,

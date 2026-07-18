@@ -130,9 +130,12 @@ For every game with `clean_opening ∧ grants_readable` (from the sweep's JSON +
 4. **Collect:** new `scripts/dev/collect_corpus.py` — read every `data/human/vlm_spike/records/
    *.json` with `accepted: true`, append `record.to_json_line()` to
    `data/human/corpus/provisional_openings.jsonl` (dedup on `(video_id, game_index)`; stable
-   order; idempotent). Everything is PROVISIONAL + seed-eligible-only
-   (`placement_order_established` stays False — the log-side ordinal is a PENDING USER DECISION;
-   do NOT relax it). Commit records + localized JSONs + corpus file + the two new scripts.
+   order; idempotent). Everything is PROVISIONAL + seed-eligible-only under the DEFAULT
+   two-signal regime (`placement_order_established` stays False). **Resolved (audit Decision 1):**
+   the log-side ordinal is no longer a pending decision — `collect_corpus.py` now has a
+   `--no-require-log-ordinal` opt-in that re-localizes with `require_log_ordinal=False` for
+   glyph-anchor-only ordering (`order_source="glyph_only"`). The default stays fail-closed.
+   Commit records + localized JSONs + corpus file + the two new scripts.
 5. Track a running tally in the final summary: games seen / localizable / localized / accepted,
    per video.
 
@@ -177,5 +180,6 @@ Also: once training exits, the OCR/sweep worker cap is lifted — sweep legs may
 3. `data/human/corpus/provisional_openings.jsonl` — the first N accepted human openings, with the
    per-video tally and every reject reason.
 4. v10 gate verdict (or training-still-running status).
-5. The two standing user decisions, restated: (a) scoreboard eligibility via glyph-anchor-only
-   ordering vs log de-dup; (b) CONTINUE/USER-CALL/ARCHIVE on the gating cell.
+5. The remaining standing user decision, restated: CONTINUE/USER-CALL/ARCHIVE on the gating cell.
+   (Decision (a), scoreboard eligibility via glyph-anchor-only ordering vs log de-dup, is
+   RESOLVED per audit Decision 1 — shipped as the `--no-require-log-ordinal` opt-in.)
