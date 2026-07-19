@@ -1,0 +1,27 @@
+{
+  "video_id": "jQmlneZ2vdo",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline (residual 0.99px). meta COLOURS WRONG (flagged may-be-wrong): pieces are BLACK + PURPLE, not RED + BLACK. Grant self-check assigns handles colour-agnostically: Frostzeagle grant {BRICK,SHEEP,WOOD} pins uniquely to v17 (a BLACK piece) -> Frostzeagle=BLACK {v17,v13}; ThePhantom grant {BRICK,BRICK,WOOD} matches v16 (a PURPLE piece; v18 is the EMPTY vertex in the gap between the two bottom houses) -> ThePhantom=PURPLE {v16,v23}. Robber on h10 (desert, center). GRANT SELF-CHECK PASSES (exactly one per player): Frostzeagle {BRICK,SHEEP,WOOD} == v17 [4,5,14]=(WOO5+SHE6+BRI12) and NOT v13 [3,11,12]=(ORE4+WHE8+BRI10={ORE,WHEAT,BRICK}); ThePhantom {BRICK,BRICK,WOOD} == v16 [4,12,13]=(WOO5+BRI10+BRI9) and NOT v23 [6,16,17]=(WHE3+ORE4+SHE8={WHEAT,ORE,SHEEP}). Roads: Frostzeagle v17-v21 & v13-v14; ThePhantom v16-v39 & v23-v22. Verified via three vertex-labelled region crops.",
+  "players": {
+    "Frostzeagle": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [5, 14, 15]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [12, 13]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    }
+  }
+}

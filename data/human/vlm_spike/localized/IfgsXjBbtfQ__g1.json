@@ -1,0 +1,27 @@
+{
+  "video_id": "IfgsXjBbtfQ",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline (residual 0.80px). meta COLOURS BOTH WRONG (flagged may-be-wrong): pieces are PURPLE + BLACK, not RED + BLACK. Grant self-check assigns handles colour-agnostically: Gitlow1720 grant {BRICK,SHEEP,WHEAT} pins uniquely to v3 (a BLACK piece) -> Gitlow1720=BLACK {v3,v11}; ThePhantom grant {BRICK,WHEAT,WHEAT} matches v22 (a PURPLE piece) -> ThePhantom=PURPLE {v22,v12}. Robber on h7 (desert, top-left). GRANT SELF-CHECK PASSES (exactly one per player): Gitlow1720 {BRICK,SHEEP,WHEAT} == v3 [0,1,6]=(BRI11+SHE4+WHE9) and NOT v11 [2,9,10]=(ORE5+SHE10+WOO9={ORE,SHEEP,WOOD}); ThePhantom {BRICK,WHEAT,WHEAT} == v22 [6,17,18]=(WHE9+BRI6+WHE3) and NOT v12 [2,8,9]=(ORE5+WOO8+SHE10={ORE,WOOD,SHEEP}). Roads: Gitlow v3-v4 & v11-v10; ThePhantom v22-v23 & v12-v11. Verified via full-board vertex-labelled overlay.",
+  "players": {
+    "Gitlow1720": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 5, 6]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "video_id": "9Sm86ml04aI",
+  "game_index": 6,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline (residual 0.63px). meta COLOUR partly wrong: rayman147 is GREEN, not WHITE (ThePhantom=BLACK correct). Handles assigned via grant self-check (colour-agnostic): ThePhantom grant {BRICK,WHEAT,WOOD} pins uniquely to v3 (a BLACK piece) -> ThePhantom=BLACK {v3,v13}; rayman147 grant {ORE,SHEEP,WOOD} matches v18 (a GREEN piece) -> rayman147=GREEN {v18,v30}. Robber on h8 (desert, top-left). Local fit imprecision near v2/v3 and v13 (labels landed a vertex off); placements resolved by grant + tile-adjacency + programmatic road-pixel sampling (t=0.3-0.7 along each candidate edge). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,WHEAT,WOOD} == v3 [0,1,6]=(WHE11+BRI10+WOO3) and NOT v13 [3,11,12]=(SHE4+ORE8+WHE10={SHEEP,ORE,WHEAT}); rayman147 {ORE,SHEEP,WOOD} == v18 [4,13,14]=(SHE5+WOO9+ORE12) and NOT v30 [9,10]=(WHE6+BRI3={WHEAT,BRICK}). Roads (pixel-verified): ThePhantom v3-v4 & v13-v37; rayman147 v18-v16 & v30-v34.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 5, 6]]},
+        {"endpoints": [[3, 11, 12], [11, 12]]}
+      ]
+    },
+    "rayman147": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[9, 10], [10]]}
+      ]
+    }
+  }
+}
