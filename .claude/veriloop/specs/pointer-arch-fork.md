@@ -1,4 +1,4 @@
-# Spec: pointer-arch fork — the one-shot policy architecture change (DRAFT, pending owner ratification)
+# Spec: pointer-arch fork — the one-shot policy architecture change (RATIFIED 2026-07-19, BINDING)
 
 **Feature in one line.** One batched lineage fork that gives all three location heads
 (corner/edge/tile) pointer readouts over the GNN's currently-discarded per-node states, adds
@@ -111,11 +111,12 @@ A later rounds-3 experiment requires a pre-registered gate (WR + sims/s).
 8. BC regen produces new-schema shards + BC training smoke passes.
 9. Docs sync: CLAUDE.md spec-009 bank line, obs docs, lineage note — same change.
 
-## Open items the owner ratifies WITH this spec (recommendations recorded)
-- **Seeding**: full re-bootstrap (recommended — clean priors for fresh pointer heads; the
-  regenerated BC exists anyway) vs transplant-from-v11 via the D5 migration utility
-  (faster; inherits the blind-spot prior) vs transplant-pilot-with-fallback.
-- **Accept gate for the new lineage** (pre-registered before training): recommended dual gate —
-  (a) h2h vs v11_cand Wilson-LB > 0.50 at n=600 (non-regression) AND (b) human-scoreboard
-  opening metric ≥ v11's on the same games; one live playtest (opening/ore focus) recorded as
-  qualitative evidence.
+## Ratified decisions (owner, 2026-07-19)
+- **Seeding: FULL RE-BOOTSTRAP** — BC regen → BC train → heuristic bootstrap → lowered-bar
+  self-play. Clean priors for the fresh pointer heads; the regenerated BC data gets used.
+  The D5 migration utility still ships (keeps the transplant path open as contingency).
+- **Accept gate: DUAL GATE, pre-registered** — the new lineage is accepted only if BOTH:
+  (a) h2h vs v11_cand Wilson-LB > 0.50 at n=600 (in-lineage non-regression), AND
+  (b) the human-scoreboard opening metric ≥ v11's on the same eligible games (15 live at
+  ratification, growing with the Intel sweep). One live playtest (opening/ore focus) is
+  recorded as qualitative evidence, not a gate.
