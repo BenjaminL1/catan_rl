@@ -1,0 +1,27 @@
+{
+  "video_id": "GteEy0ljm7Y",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline. meta colours CORRECT (Heim1286=RED, ThePhantom=BLACK). Blob-base snapping + grant self-check agree: ThePhantom {ORE,WHEAT} (coastal 2-hex) == v39 [12,13]; Heim1286 {BRICK,WHEAT,WOOD} == v15 [3,4,12]. Robber on h9 (desert, bottom-left). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {ORE,WHEAT} == v39 [12,13]=(WHE8+ORE5) and NOT v6 [1,2,8]=(SHE... {SHEEP,WOOD,ORE}); Heim1286 {BRICK,WHEAT,WOOD} == v15 [3,4,12]=(BRI3+WOO10+WHE8) and NOT v22 [6,17,18]=({WOOD,BRICK,SHEEP}). Roads (pixel + crop verified; brick-tile false-positive on v22-v23 and dark-stone false-positive on v39-v40 discarded): ThePhantom v39-v38 & v6-v2; Heim1286 v15-v13 & v22-v9.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [12, 13]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[12, 13], [12]]},
+        {"endpoints": [[1, 2, 8], [0, 1, 2]]}
+      ]
+    },
+    "Heim1286": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

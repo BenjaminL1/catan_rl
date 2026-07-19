@@ -1,0 +1,27 @@
+{
+  "video_id": "GteEy0ljm7Y",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline. meta COLOUR WRONG for ThePhantom: pieces are GREEN/olive, not BLACK (the olive rendering only partially trips the black detector). Handles assigned via grant self-check (colour-agnostic) + marker-confirmed bases: ThePhantom grant {WHEAT,WHEAT,WHEAT} pins uniquely to v5 [0,4,5] (three wheat, olive piece); Heim1286 grant {ORE,WHEAT,WOOD} pins uniquely to v15 [3,4,12] (red piece). Robber on h13 (desert, bottom-right). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {WHEAT,WHEAT,WHEAT} == v5 [0,4,5]=(WHE11+WHE10+WHE3) and NOT v6 [1,2,8]=({ORE,ORE,SHEEP}); Heim1286 {ORE,WHEAT,WOOD} == v15 [3,4,12]=(ORE9+WHE10+WOO5) and NOT v9 [1,6,18]=({ORE,SHEEP,BRICK}). Roads (reds pixel-detected, greens crop-confirmed): ThePhantom v5-v17 & v6-v12; Heim1286 v15-v0 & v9-v8.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    },
+    "Heim1286": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]},
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]}
+      ]
+    }
+  }
+}
