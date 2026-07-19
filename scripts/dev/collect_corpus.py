@@ -82,8 +82,17 @@ def _relocalize_with_glyph_only() -> None:
     vlm = _load_vlm_spike()
     RECORDS.mkdir(parents=True, exist_ok=True)
     n = 0
+    skipped = 0
     for meta_path in sorted(FRAMES.glob("*/meta.json")):
         game_dir = meta_path.parent
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        if not meta.get("board_hexes"):
+            # Prepared but board-unreadable — localize_game cannot even build the
+            # board; skip instead of aborting the whole recompute. (A missing VLM
+            # localization is already a graceful typed reject inside localize_game.)
+            print(f"[recompute] skip {game_dir.name}: board unreadable")
+            skipped += 1
+            continue
         result = vlm.localize_game(game_dir, require_log_ordinal=False)
         payload: dict[str, Any] = {
             "game": game_dir.name,
@@ -97,7 +106,7 @@ def _relocalize_with_glyph_only() -> None:
         n += 1
     print(
         f"=== GLYPH-ANCHOR-ONLY RECOMPUTE (require_log_ordinal=False) "
-        f"-> re-localized {n} game(s) ==="
+        f"-> re-localized {n} game(s), skipped {skipped} non-localizable ==="
     )
 
 
