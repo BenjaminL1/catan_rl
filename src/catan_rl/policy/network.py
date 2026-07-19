@@ -25,11 +25,14 @@ from catan_rl.policy.encoders import (
     curr_player_encoder,
     opp_player_encoder,
 )
-from catan_rl.policy.heads import BeliefHead, CatanActionHeads, ValueHead
+from catan_rl.policy.heads import AuxValueHead, BeliefHead, CatanActionHeads, ValueHead
 from catan_rl.policy.obs_schema import (
+    GLOBAL_DIM,
+    N_EDGES,
     N_OPP_KINDS,
     N_OPP_POLICY_SLOTS,
     N_TILES,
+    N_VERTICES,
 )
 
 
@@ -75,6 +78,7 @@ class CatanPolicy(nn.Module):
         use_graph_encoder: bool = True,
         use_opp_id: bool = True,
         use_belief_head: bool = True,
+        use_aux_value_head: bool = True,
         # Vertex/edge feature dims for the graph encoder (matched to obs).
         vertex_in_dim: int = 16,
         edge_in_dim: int = 16,
@@ -84,6 +88,7 @@ class CatanPolicy(nn.Module):
         self.use_graph_encoder = use_graph_encoder
         self.use_opp_id = use_opp_id
         self.use_belief_head = use_belief_head
+        self.use_aux_value_head = use_aux_value_head
 
         self.tile_encoder = TileEncoder(out_dim=tile_out_dim)
         self.curr_player_enc = curr_player_encoder()
@@ -96,7 +101,14 @@ class CatanPolicy(nn.Module):
             + self.curr_player_enc.out_dim
             + self.opp_player_enc.out_dim
             + 2 * dev_out_dim
+            # POV-neutral global block (bank + dev-deck + reserved) concatenated
+            # raw into the fusion input (D3.3).
+            + GLOBAL_DIM
         )
+        # Per-node state width for the pointer readouts (D1) — the GNN hidden
+        # dim. Falls back to the GraphEncoder default when the graph is disabled
+        # (ablation): the pointer heads then read zero node states.
+        node_dim = 64
         if use_graph_encoder:
             self.graph_encoder = GraphEncoder(
                 hex_in_dim=hex_in_dim,
@@ -105,8 +117,10 @@ class CatanPolicy(nn.Module):
                 out_dim=graph_out_dim,
             )
             fused_dim += graph_out_dim
+            node_dim = self.graph_encoder.hidden_dim
         else:
             self.graph_encoder = None  # type: ignore[assignment]
+        self._node_dim = node_dim
 
         if use_opp_id:
             self.opp_id_emb = _OppIdEmbedding(dim=opp_id_dim)
@@ -120,9 +134,10 @@ class CatanPolicy(nn.Module):
             nn.GELU(),
         )
 
-        self.action_heads = CatanActionHeads(trunk_dim=trunk_dim)
+        self.action_heads = CatanActionHeads(trunk_dim=trunk_dim, node_dim=node_dim)
         self.value_head = ValueHead(trunk_dim=trunk_dim)
         self.belief_head = BeliefHead(trunk_dim=trunk_dim) if use_belief_head else None
+        self.aux_value_head = AuxValueHead(trunk_dim=trunk_dim) if use_aux_value_head else None
 
         self.trunk_dim = trunk_dim
 
@@ -137,7 +152,11 @@ class CatanPolicy(nn.Module):
     # Trunk
     # ------------------------------------------------------------------
 
-    def _encode(self, obs: dict[str, torch.Tensor]) -> torch.Tensor:
+    def _encode(self, obs: dict[str, torch.Tensor]) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Return ``(trunk, nodes)`` where ``nodes`` are the per-node GNN states
+        (``{"v","e","h"}``) the pointer readouts consume. When the graph encoder
+        is disabled the node states are zeros (pointer heads degrade to a
+        constant-per-node readout)."""
         tile = self.tile_encoder(obs["tile_representations"])
         # Flatten per-tile vectors -> (B, N_TILES * tile_out_dim).
         tile_flat = tile.flatten(start_dim=1)
@@ -149,18 +168,32 @@ class CatanPolicy(nn.Module):
 
         parts = [tile_flat, curr_p, opp_p, curr_dev, opp_dev]
 
+        batch = tile_flat.size(0)
         if self.graph_encoder is not None:
-            g = self.graph_encoder(
+            g, v, e, h = self.graph_encoder(
                 obs["hex_features"], obs["vertex_features"], obs["edge_features"]
             )
             parts.append(g)
+            nodes = {"v": v, "e": e, "h": h}
+        else:
+            zeros = torch.zeros(batch, 1, self._node_dim, device=tile_flat.device)
+            nodes = {
+                "v": zeros.expand(batch, N_VERTICES, self._node_dim),
+                "e": zeros.expand(batch, N_EDGES, self._node_dim),
+                "h": zeros.expand(batch, N_TILES, self._node_dim),
+            }
 
         if self.opp_id_emb is not None:
             parts.append(
                 self.opp_id_emb(obs["opponent_kind"].long(), obs["opponent_policy_id"].long())
             )
 
-        return self.fusion(torch.cat(parts, dim=-1))
+        # POV-neutral global block (bank + public dev-deck + reserved) is
+        # appended LAST so a migration zero-pads the fusion's new input columns
+        # as a pure tail-append (all legacy fusion columns keep their position).
+        parts.append(obs["global_features"])
+
+        return self.fusion(torch.cat(parts, dim=-1)), nodes
 
     # ------------------------------------------------------------------
     # Forward / sample
@@ -173,19 +206,34 @@ class CatanPolicy(nn.Module):
         the PPO rollout path uses :meth:`sample` to get an action and its
         log-prob in one shot.
         """
-        trunk = self._encode(obs)
+        trunk, nodes = self._encode(obs)
         value = self.value_head(trunk)
         out: dict[str, torch.Tensor] = {"trunk": trunk, "value": value}
+        # Stash the per-node states + is_setup so sample/evaluate_actions can
+        # feed the pointer readouts without re-encoding.
+        out["_node_v"] = nodes["v"]
+        out["_node_e"] = nodes["e"]
+        out["_node_h"] = nodes["h"]
+        if "is_setup" in obs:
+            out["_is_setup"] = obs["is_setup"]
         if self.belief_head is not None:
             out["belief_logits"] = self.belief_head(trunk)
+        if self.aux_value_head is not None:
+            out["aux_value"] = self.aux_value_head(trunk)
         return out
+
+    @staticmethod
+    def _nodes_from_out(out: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return {"v": out["_node_v"], "e": out["_node_e"], "h": out["_node_h"]}
 
     def sample(
         self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor]
     ) -> dict[str, torch.Tensor]:
         """Sample an action from the masked policy + return value + belief."""
         out = self.forward(obs)
-        action, log_prob, entropy, per_head_log_prob = self.action_heads.sample(out["trunk"], masks)
+        action, log_prob, entropy, per_head_log_prob = self.action_heads.sample(
+            out["trunk"], masks, self._nodes_from_out(out), out.get("_is_setup")
+        )
         out.update(
             {
                 "action": action,
@@ -203,7 +251,9 @@ class CatanPolicy(nn.Module):
         masks: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
         out = self.forward(obs)
-        head_out = self.action_heads.evaluate_actions(out["trunk"], action, masks)
+        head_out = self.action_heads.evaluate_actions(
+            out["trunk"], action, masks, self._nodes_from_out(out), out.get("_is_setup")
+        )
         out.update(head_out)
         return out
 

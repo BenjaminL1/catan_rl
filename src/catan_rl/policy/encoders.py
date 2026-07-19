@@ -174,6 +174,9 @@ class GraphEncoder(nn.Module):
     ) -> None:
         super().__init__()
         self.n_rounds = n_rounds
+        # Exposed so the pointer readouts (D1) can size their per-node input to
+        # the GNN's per-node state width without hardcoding it.
+        self.hidden_dim = hidden_dim
         self.hex_proj = nn.Linear(hex_in_dim, hidden_dim)
         self.vertex_proj = nn.Linear(vertex_in_dim, hidden_dim)
         self.edge_proj = nn.Linear(edge_in_dim, hidden_dim)
@@ -249,14 +252,21 @@ class GraphEncoder(nn.Module):
 
     def forward(
         self, hex_feats: torch.Tensor, vertex_feats: torch.Tensor, edge_feats: torch.Tensor
-    ) -> torch.Tensor:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             hex_feats: (B, N_TILES, hex_in_dim)
             vertex_feats: (B, N_VERTICES, vertex_in_dim)
             edge_feats: (B, N_EDGES, edge_in_dim)
         Returns:
-            (B, out_dim) — mean-pool over hex nodes after MP, then projected.
+            ``(pooled, v, e, h)`` where ``pooled`` is (B, out_dim) — the
+            mean-pool over hex nodes after MP, then projected (the legacy
+            trunk contribution) — and ``v`` (B, N_VERTICES, hidden_dim),
+            ``e`` (B, N_EDGES, hidden_dim), ``h`` (B, N_TILES, hidden_dim)
+            are the post-final-round per-node states the pointer readouts
+            (D1) consume. The pooled path and topology are byte-unchanged;
+            the per-node tensors were already computed and simply discarded
+            at the mean-pool before this fork.
         """
         h = self.act(self.hex_proj(hex_feats))
         v = self.act(self.vertex_proj(vertex_feats))
@@ -287,7 +297,7 @@ class GraphEncoder(nn.Module):
             h = self.norm_h(h + self.act(self.hex_update[r](torch.cat([h, msg_h_from_v], dim=-1))))
 
         pooled = h.mean(dim=1)
-        return self.output_proj(pooled)
+        return self.output_proj(pooled), v, e, h
 
 
 # ---------------------------------------------------------------------------

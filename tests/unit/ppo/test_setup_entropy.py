@@ -235,6 +235,7 @@ def _metrics(**over: float) -> UpdateMetrics:
         "entropy_bonus": 1.4,
         "setup_head_entropy": 1.23,
         "belief_loss": 0.0,
+        "aux_value_loss": 0.0,
         "total_loss": 0.3,
         "approx_kl": 0.01,
         "clip_frac": 0.05,

@@ -113,10 +113,13 @@ def test_prior_corner_subaction_is_policy_argmax_at_setup(policy) -> None:  # ty
     device = next(policy.parameters()).device
     obs_t = obs_to_torch(env._get_obs(), device, add_batch=True)
     masks_t = masks_to_torch(env.get_action_masks(), device, add_batch=True)
-    trunk = policy.forward(obs_t)["trunk"]
+    out = policy.forward(obs_t)
+    trunk = out["trunk"]
     heads = policy.action_heads
     type_idx = torch.tensor([ActionType.BUILD_SETTLEMENT], device=device)
-    logits = heads.corner_head(trunk, heads._corner_context(type_idx))
+    logits = heads.corner_head(
+        trunk, out["_node_v"], heads._corner_context(type_idx, out.get("_is_setup"))
+    )
     cmask = heads._corner_mask(type_idx, masks_t)
     expected = int(logits.masked_fill(~cmask, float("-inf")).argmax(-1)[0].item())
     settle = [a for a in priors if a[0] == ActionType.BUILD_SETTLEMENT]
@@ -135,18 +138,19 @@ def test_prior_subaction_uses_policy_head_not_first_legal(policy) -> None:  # ty
     device = next(policy.parameters()).device
     obs_t = obs_to_torch(env._get_obs(), device, add_batch=True)
     masks_t = masks_to_torch(env.get_action_masks(), device, add_batch=True)
-    trunk = policy.forward(obs_t)["trunk"]
+    out = policy.forward(obs_t)
+    trunk = out["trunk"]
 
     checked = False
     for action in priors:
         t = action[0]
         if t == ActionType.BUILD_ROAD and bool(masks_t["edge"].any()):
-            logits = policy.action_heads.edge_head(trunk)
+            logits = policy.action_heads.edge_head(trunk, out["_node_e"])
             expected = int(logits.masked_fill(~masks_t["edge"], float("-inf")).argmax(-1)[0].item())
             assert action[2] == expected
             checked = True
         elif t in (ActionType.MOVE_ROBBER, ActionType.PLAY_KNIGHT) and bool(masks_t["tile"].any()):
-            logits = policy.action_heads.tile_head(trunk)
+            logits = policy.action_heads.tile_head(trunk, out["_node_h"])
             expected = int(logits.masked_fill(~masks_t["tile"], float("-inf")).argmax(-1)[0].item())
             assert action[3] == expected
             checked = True

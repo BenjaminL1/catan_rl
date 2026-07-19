@@ -79,6 +79,8 @@ def test_all_keys_present(
         "hex_features",
         "vertex_features",
         "edge_features",
+        "global_features",
+        "is_setup",
         "opponent_kind",
         "opponent_policy_id",
     }

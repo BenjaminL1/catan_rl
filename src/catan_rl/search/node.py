@@ -127,7 +127,15 @@ def build_node(
     out = policy.forward(obs_t)
     v = squash_value(out["value"], a, b)
     assert isinstance(v, torch.Tensor)
-    priors = priors_from_trunk(policy.action_heads, out["trunk"], masks_t, sub_actions_per_type)
+    nodes = {"v": out["_node_v"], "e": out["_node_e"], "h": out["_node_h"]}
+    priors = priors_from_trunk(
+        policy.action_heads,
+        out["trunk"],
+        masks_t,
+        nodes,
+        sub_actions_per_type,
+        out.get("_is_setup"),
+    )
     return SearchNode(
         env=env,
         obs=obs,

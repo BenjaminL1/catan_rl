@@ -56,6 +56,7 @@ from catan_rl.policy.obs_encoder import (
 )
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
+    GLOBAL_DIM,
     N_DEV_TYPES,
     N_OPP_KINDS,
     N_OPP_POLICY_SLOTS,
@@ -259,6 +260,10 @@ class CatanEnv(gym.Env):
                 "edge_features": spaces.Box(
                     low=0.0, high=1.0, shape=(N_EDGES, EDGE_FEATURE_DIM), dtype=np.float32
                 ),
+                "global_features": spaces.Box(
+                    low=0.0, high=1.0, shape=(GLOBAL_DIM,), dtype=np.float32
+                ),
+                "is_setup": spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32),
                 "opponent_kind": spaces.Discrete(N_OPP_KINDS),
                 "opponent_policy_id": spaces.Discrete(N_OPP_POLICY_SLOTS),
             }

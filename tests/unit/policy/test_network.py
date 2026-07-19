@@ -18,6 +18,7 @@ import torch
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
+    GLOBAL_DIM,
     N_DEV_TYPES,
     N_EDGES,
     N_OPP_KINDS,
@@ -60,6 +61,11 @@ def _make_obs(batch_size: int, *, with_opp_id: bool = True) -> dict[str, torch.T
         "edge_features": torch.from_numpy(
             rng.standard_normal((batch_size, N_EDGES, 16)).astype(np.float32)
         ),
+        # POV-neutral global block + setup flag (pointer-arch fork D3.3/D2).
+        "global_features": torch.from_numpy(
+            rng.random((batch_size, GLOBAL_DIM)).astype(np.float32)
+        ),
+        "is_setup": torch.from_numpy(rng.integers(0, 2, (batch_size, 1)).astype(np.float32)),
     }
     if with_opp_id:
         obs["opponent_kind"] = torch.from_numpy(
@@ -230,6 +236,8 @@ def test_backward_updates_every_parameter() -> None:
         + 0.5 * out["value"].pow(2).mean()
         + 0.05
         * torch.nn.functional.cross_entropy(out["belief_logits"], torch.zeros(8, dtype=torch.long))
+        # Aux value head (pointer-arch fork D4) is co-trained at coef 0.05.
+        + 0.05 * out["aux_value"].pow(2).mean()
     )
     loss.backward()
 

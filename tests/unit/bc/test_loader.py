@@ -112,6 +112,8 @@ def test_getitem_obs_has_full_v2_schema(tiny_dataset: Path) -> None:
         "hex_features",
         "vertex_features",
         "edge_features",
+        "global_features",
+        "is_setup",
         "opponent_kind",
         "opponent_policy_id",
     }

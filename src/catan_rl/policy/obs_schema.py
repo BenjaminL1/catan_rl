@@ -5,9 +5,14 @@ obs-construction code (Step 3+) and the network (Step 2) import these
 constants, so any change here is automatically picked up by both sides.
 
 Notes on the dim choices (vs v1 Phase 1.3 compact obs):
-  * ``CURR_PLAYER_DIM = 54`` — same as v1 compact.
-  * ``NEXT_PLAYER_DIM = 61`` — same as v1 compact (54 base + 6 hidden-dev
-    one-hot + 1 total-resources scalar).
+  * ``CURR_PLAYER_DIM = 67`` — 54 legacy compact base + 5 current-player-only
+    extras (own hand-total, discard-pressure, own played YoP/Mono/RB) + 8
+    reserved strict-0.0 slots (pointer-arch fork, D3).
+  * ``NEXT_PLAYER_DIM = 69`` — 54 legacy compact base + 7 opponent extras
+    (6-bin hidden-dev one-hot + 1 total-resources scalar) + 8 reserved
+    strict-0.0 slots.
+  * ``GLOBAL_DIM = 14`` — POV-neutral block: 5 finite-bank-remaining + 5
+    public-reveal-derived dev-deck-remaining + 4 reserved (D3.3).
   * ``TILE_DIM = 79`` — same as v1; per-tile features cover resource +
     number token + dot count + robber + per-corner ownership + per-edge
     ownership + per-corner port.
@@ -46,8 +51,41 @@ N_EDGES_PER_TILE = 6
 # ---------------------------------------------------------------------------
 
 TILE_DIM = 79
-CURR_PLAYER_DIM = 54
-NEXT_PLAYER_DIM = 61
+
+# --- Per-player scalar blocks (pointer-arch fork, D3) -----------------------
+# The legacy shared block (54 dims) is preserved BYTE-FOR-BYTE at the FRONT of
+# both player vectors so a migration can copy the old encoder columns verbatim
+# and zero-pad only the appended tail. New signals are appended AFTER the base.
+PLAYER_BASE_DIM = 54  # legacy compact block (unchanged ordering)
+
+# Current-player-only honest additions (D3.1 + D3.2):
+#   own hand-total (1) + discard-pressure (1) + own played YoP/Mono/RB (3).
+CURR_EXTRA_DIM = 5
+# Opponent-only extras (legacy): 6-bin hidden-dev-count one-hot + total-res.
+OPP_EXTRA_DIM = 7
+# Reserved strict-0.0 headroom, per player block (D3.4). Keeps future scalars
+# shape-stable so a new signal fills a slot mid-lineage with no fork / BC-regen.
+RESERVED_PLAYER_SLOTS = 8
+
+CURR_PLAYER_DIM = PLAYER_BASE_DIM + CURR_EXTRA_DIM + RESERVED_PLAYER_SLOTS  # 67
+NEXT_PLAYER_DIM = PLAYER_BASE_DIM + OPP_EXTRA_DIM + RESERVED_PLAYER_SLOTS  # 69
+
+# --- POV-neutral GLOBAL block (D3.3) ----------------------------------------
+# Lives OUTSIDE the current/next player pair; built once per obs. Public,
+# honest signals only (bank + public-reveal-derived dev-deck) + reserved slots.
+GLOBAL_BANK_DIM = N_RESOURCES  # finite bank remaining, bank[r]/19
+GLOBAL_DEVDECK_DIM = N_DEV_TYPES  # public-reveal-derived per-type deck remaining
+GLOBAL_RESERVED_SLOTS = 4
+GLOBAL_DIM = GLOBAL_BANK_DIM + GLOBAL_DEVDECK_DIM + GLOBAL_RESERVED_SLOTS  # 14
+
+#: Finite resource bank capacity per resource (spec-009); used for bank[r]/CAP.
+BANK_CAPACITY = 19
+
+#: Initial dev-deck composition over DEV_CARD_ORDER (KNIGHT, VP, ROADBUILDER,
+#: YEAROFPLENTY, MONOPOLY). Standard Catan deck = 14/5/2/2/2 = 25 cards. This is
+#: a PUBLIC constant (not engine deck truth); the honest per-type-remaining
+#: feature derives from it minus own-cards minus publicly-played (see D3.3).
+DEV_DECK_INITIAL: tuple[int, ...] = (14, 5, 2, 2, 2)
 
 # ---------------------------------------------------------------------------
 # Opponent identity embedding (Phase 3.6 carryover — keeps the policy able to
@@ -107,7 +145,7 @@ HEAD_DIMS: tuple[tuple[str, int], ...] = (
 #: The corner head needs to know whether this is a settlement (0) or city (1)
 #: placement; the resource heads need the type of dev-card / trade in flight.
 #: The other heads (type, edge, tile) take no per-action-type context.
-CORNER_CONTEXT_DIM = 2  # settlement vs city
+CORNER_CONTEXT_DIM = 3  # settlement, city, is_setup (D2 snake-draft modulation)
 RESOURCE_CONTEXT_DIM = 4  # which "resource-consuming" action: YoP, Mono, Trade, Discard
 RESOURCE2_RES1_CONTEXT_DIM = N_RESOURCES  # one-hot over the first resource
 

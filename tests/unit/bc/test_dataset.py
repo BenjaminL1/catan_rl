@@ -215,6 +215,8 @@ def test_generate_dataset_shard_npz_has_v2_schema_keys(tmp_path: Path) -> None:
         "hex_features",
         "vertex_features",
         "edge_features",
+        "global_features",
+        "is_setup",
         "opponent_kind",
         "opponent_policy_id",
     }

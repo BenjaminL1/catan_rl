@@ -44,8 +44,14 @@ eval).
   rule), and build / dev-buy / bank-trade-give / discard costs **recirculate**
   into the bank while setup-grant / YoP / bank-trade-receive **draw** from it.
   Conservation invariant: `resourceBank[R] + Σ hands[R] == 19` for every R. The
-  bank is **engine state only — NOT in the obs** (no policy-shape change). All
-  mutation paths (engine, env, recorder, heuristic, random_ai, bc.dataset,
+  bank remaining (`bank[R]/19`, all 5 resources) **IS now in the obs** — the
+  POV-neutral `global_features` block added by the pointer-arch fork (ratified
+  2026-07-19, `.claude/veriloop/specs/pointer-arch-fork.md` D3.3). This reverses
+  the earlier "engine state only — NOT in the obs" rule, whose justification (no
+  policy-shape change) evaporated in a fork whose purpose is a shape change; the
+  bank is still read via **read-only accessors** (no mutation path near
+  `bank_recirculate`/`bank_draw`, conservation untouched). All mutation paths
+  (engine, env, recorder, heuristic, random_ai, bc.dataset,
   labeling) route through `bank_recirculate` / `bank_draw`. Mirrors the Torevan
   TS `resourceBank`; the conformance harness pins parity (seeds 7/8/15 are a
   no-op; depletion is exercised by a dedicated fixture + cross-engine tests).
