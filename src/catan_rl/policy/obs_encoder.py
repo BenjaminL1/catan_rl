@@ -24,7 +24,11 @@ Schema (sizes from :mod:`catan_rl.policy.obs_schema`):
   * ``hex_features``              (19, 19) — GNN per-hex node input.
   * ``vertex_features``           (54, 16) — GNN per-vertex node input.
   * ``edge_features``             (72, 16) — GNN per-edge node input.
-  * ``global_features``           (14,)    — POV-neutral global block
+  * ``global_features``           (14,)    — shared global block, OUTSIDE the
+                                             POV player pair (bank subvector is
+                                             seat-invariant; dev-deck subvector is
+                                             each seat's honest per-POV view — it
+                                             DIFFERS across seats, by design)
                                              (bank remaining 5 + public-reveal-
                                              derived dev-deck remaining 5 +
                                              4 reserved). Pointer-arch fork D3.3.

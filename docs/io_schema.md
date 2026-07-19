@@ -33,7 +33,7 @@ Every key is always present (no opt-in/legacy keys). Dims come from
 | `tile_representations` | `(19, 79)` | `float32` | per-tile features (`TILE_DIM=79`); breakdown below |
 | `current_player_main` | `(67,)` | `float32` | agent scalars (`CURR_PLAYER_DIM=67` = 54 legacy base + 5 own-extras (hand-total, discard-pressure, own played YoP/Mono/RB) + 8 reserved strict-0.0 slots) |
 | `next_player_main` | `(69,)` | `float32` | opponent scalars (`NEXT_PLAYER_DIM=69` = 54 legacy base + 7 opp-extras (6-bin hidden-count one-hot + total-res scalar) + 8 reserved strict-0.0 slots) |
-| `global_features` | `(14,)` | `float32` | POV-neutral global block (`GLOBAL_DIM=14` = 5 finite-bank-remaining + 5 public-reveal-derived dev-deck-remaining + 4 reserved); pointer-arch fork D3.3 |
+| `global_features` | `(14,)` | `float32` | Shared block outside the POV player pair (`GLOBAL_DIM=14` = 5 finite-bank-remaining + 5 public-reveal-derived dev-deck-remaining + 4 reserved). The bank subvector is seat-invariant; the dev-deck subvector is each seat's honest per-POV view of the unseen pool and **differs across seats by design** (the seat-swap pin asserts only the bank subvector). pointer-arch fork D3.3 |
 | `is_setup` | `(1,)` | `float32` | snake-draft-setup flag, threaded to the corner pointer head's FiLM context (D2) |
 | `current_dev_counts` | `(5,)` | `float32` | agent's *held* dev counts over `DEV_CARD_ORDER` |
 | `next_played_dev_counts` | `(5,)` | `float32` | opponent's *played* dev counts (observable) |
