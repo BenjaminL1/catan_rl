@@ -137,7 +137,10 @@ def _process_video(video: str, i: int, n: int, env_extra: dict[str, str]) -> dic
     t0 = time.monotonic()
     try:
         spike = str(REPO / "scripts/vlm_spike.py")
-        cmd = [sys.executable, spike, "prepare-frames", "--video", video]
+        # `--video=<id>` (not `--video <id>`): the equals form binds ids that start
+        # with a dash (e.g. "-r4CDp4lBm8"), which bare `--video <id>` mis-parses as
+        # a flag and dies with argparse exit 2.
+        cmd = [sys.executable, spike, "prepare-frames", f"--video={video}"]
         proc = subprocess.run(
             cmd,
             cwd=str(REPO),
