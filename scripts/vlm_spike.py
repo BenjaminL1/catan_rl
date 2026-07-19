@@ -78,6 +78,7 @@ from catan_rl.human_data.logparse import LogEvent
 from catan_rl.human_data.openings import OpeningResult
 from catan_rl.human_data.orientation import establish_placement_order
 from catan_rl.human_data.record import (
+    PROVENANCE_ORDER_SOURCE,
     PROVENANCE_PLACEMENT_ORDER_ESTABLISHED,
     GameRecord,
     OpponentStrength,
@@ -347,13 +348,25 @@ def apply_log_placement_order(
     granted_by_player: Mapping[str, Counter[str] | None],
     board: BoardRead,
     topology: Topology,
+    *,
+    require_log_ordinal: bool = True,
 ) -> GameRecord:
     """Confirm / downgrade an accepted record's placement-order flag against the LOG
     (step6 §3.1). ``cross_check`` stamps ``placement_order_established`` from the
-    grant-only signal; this adds the LOG-side ordinal (the grant must follow each
-    player's 2nd settlement) via
+    grant-only (``"glyph_only"``) signal; this layers the LOG-side ordinal (the grant
+    must follow each player's 2nd settlement) via
     :func:`~catan_rl.human_data.orientation.establish_placement_order`. Reuses the
-    canonical establisher so the order is the LOG's, never the localizer's."""
+    canonical establisher so the order is the LOG's, never the localizer's.
+
+    ``require_log_ordinal`` (audit Decision 1, DEFAULT ``True``) mirrors
+    :func:`catan_rl.human_data.harvest._apply_log_order_gate`: when the log confirms
+    the ordinal the order stands (openings re-ordered to the LOG+grant order,
+    ``order_source = "log+glyph"``); when it cannot, the DEFAULT regime downgrades the
+    flag to ``False`` (``order_source`` reset to ``None``) while the opt-in
+    (``require_log_ordinal=False``) keeps the grant-only (``"glyph_only"``)
+    establishment. The fail-closed early return (flag already not ``True`` from a
+    grant-collision/ambiguous ``cross_check``) is regime-independent — the opt-in
+    never rescues an unestablished record."""
     from dataclasses import replace
 
     if record.provenance.get(PROVENANCE_PLACEMENT_ORDER_ESTABLISHED) is not True:
@@ -365,10 +378,22 @@ def apply_log_placement_order(
     )
     if log_established:
         # ``ordered`` is the LOG+grant placement order (settlements[1] == granting).
-        return replace(record, openings=ordered)
+        return replace(
+            record,
+            openings=ordered,
+            provenance={**record.provenance, PROVENANCE_ORDER_SOURCE: "log+glyph"},
+        )
+    if not require_log_ordinal:
+        # Opt-in (audit Decision 1): keep the grant-only ("glyph_only") establishment
+        # (cross_check already grant-ordered the openings + stamped order_source).
+        return record
     return replace(
         record,
-        provenance={**record.provenance, PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False},
+        provenance={
+            **record.provenance,
+            PROVENANCE_PLACEMENT_ORDER_ESTABLISHED: False,
+            PROVENANCE_ORDER_SOURCE: None,
+        },
     )
 
 
@@ -413,6 +438,7 @@ def snap_and_validate(
     dice_values_readable: bool = True,
     video_id: str = "vlm_spike",
     game_index: int = 1,
+    require_log_ordinal: bool = True,
 ) -> SpikeResult:
     """End-to-end: SNAP the localized adjacency -> ORDER from the log -> VALIDATE
     through the existing fail-closed gate. The VLM supplied ONLY the perception; the
@@ -420,7 +446,12 @@ def snap_and_validate(
 
     Returns a :class:`SpikeResult` carrying an accepted :class:`GameRecord` or a
     typed rejection (the snap's ``ambiguous_snap`` reason, or any downstream
-    invariant / glyph-anchor rejection from :func:`cross_check`)."""
+    invariant / glyph-anchor rejection from :func:`cross_check`).
+
+    ``require_log_ordinal`` (audit Decision 1, DEFAULT ``True``) is passed to
+    :func:`apply_log_placement_order`: ``False`` opts into glyph-anchor-only ordering
+    (the grant-glyph adjacency alone keeps order established when the log ordinal is
+    unavailable; grant collisions/ambiguity still fail closed)."""
     opening_result = snap_localized_openings(localized, topology)
     desert = openings_desert_hex if openings_desert_hex is not None else board.desert_hex
     result = cross_check(
@@ -443,7 +474,14 @@ def snap_and_validate(
     )
     record = result.record
     if result.accepted and setup_events is not None:
-        record = apply_log_placement_order(record, setup_events, granted_by_player, board, topology)
+        record = apply_log_placement_order(
+            record,
+            setup_events,
+            granted_by_player,
+            board,
+            topology,
+            require_log_ordinal=require_log_ordinal,
+        )
     return SpikeResult(cross_check_result=result, record=record)
 
 
@@ -867,11 +905,16 @@ def localize_game(
     game_dir: Path,
     *,
     localizer: Localizer | None = None,
+    require_log_ordinal: bool = True,
 ) -> SpikeResult:
     """Run the localize -> snap -> order -> validate pipeline for one prepared game
     dir. ``localizer`` defaults to the :class:`FileLocalizer` reading
     ``localized/<game_key>.json`` (the VLM's output). Uses the game dir's
-    ``meta.json`` for the board + log + strength context."""
+    ``meta.json`` for the board + log + strength context.
+
+    ``require_log_ordinal`` (audit Decision 1, DEFAULT ``True``) is threaded straight
+    into :func:`snap_and_validate`: ``False`` opts into glyph-anchor-only placement
+    ordering (the log ordinal is not required to keep an established order)."""
     meta = json.loads((game_dir / "meta.json").read_text(encoding="utf-8"))
     topology = load_topology()
     board = _board_from_meta(meta)
@@ -920,6 +963,7 @@ def localize_game(
         openings_desert_hex=int(meta["board_desert_hex"]),
         video_id=str(meta.get("video", "vlm_spike")),
         game_index=int(meta.get("game_index", 1)),
+        require_log_ordinal=require_log_ordinal,
     )
 
 
@@ -942,7 +986,7 @@ def _cmd_localize(args: argparse.Namespace) -> int:
     if not game_dir.exists():
         print(f"no prepared game dir {game_dir}", file=sys.stderr)
         return 2
-    result = localize_game(game_dir)
+    result = localize_game(game_dir, require_log_ordinal=args.require_log_ordinal)
     _RECORDS_ROOT.mkdir(parents=True, exist_ok=True)
     out = _RECORDS_ROOT / f"{args.game}.json"
     payload: dict[str, Any] = {
@@ -1115,6 +1159,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     p_loc = sub.add_parser("localize", help="snap+order+validate via the FileLocalizer")
     p_loc.add_argument("game", help="prepared game key, e.g. game1__g1")
+    p_loc.add_argument(
+        "--require-log-ordinal",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "require the LOG setup-event ordinal (the grant follows each player's 2nd "
+            "settlement) to keep placement order established (DEFAULT). "
+            "--no-require-log-ordinal opts into glyph-anchor-only ordering (audit "
+            "Decision 1): the grant-glyph adjacency alone keeps order established when "
+            "the log ordinal is unavailable (re-OCR duplication on real footage); "
+            "grant collisions/ambiguity still fail closed."
+        ),
+    )
     p_loc.set_defaults(func=_cmd_localize)
 
     p_score = sub.add_parser("score", help="exact vertex/edge match vs ground truth")

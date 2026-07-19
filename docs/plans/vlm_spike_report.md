@@ -118,6 +118,22 @@ upper bound until then.
    backs it; if the true scoreboard-eligibility fraction is lower, every cell above
    shrinks proportionally.
 
+**Implementation note (audit Decision 1 — glyph-anchor-only ordering).** The order
+factor above assumed the DEFAULT two-signal regime (order established only when BOTH the
+grant glyph AND the LOG setup-event ordinal agree), under which every real-video record
+downgraded to `placement_order_established=False` — re-OCR duplication makes the LOG
+ordinal permanently unavailable, so the true factor was ~0, not 0.6. The
+`require_log_ordinal=False` opt-in now establishes order from the grant glyph ALONE
+(the anchor pinned each granting settlement on 20/20 hand-verified games with zero
+collisions; grant collisions/ambiguity still fail closed), so a grant-established
+winner-bearing high-tournament game is now scoreboard-eligible. The `order_source`
+provenance (`"log+glyph"` / `"glyph_only"` / `None`) records which signal established
+each row so the scoreboard can split/audit its `n`. Recompute the corpus with the
+established order via
+`PYTHONPATH=src python3 scripts/dev/collect_corpus.py --no-require-log-ordinal`
+(expected ~15 winner-bearing eligible games); the DEFAULT run stays byte-identical
+(seed-only).
+
 ### Pre-registered decision rule (verbatim)
 
 ```

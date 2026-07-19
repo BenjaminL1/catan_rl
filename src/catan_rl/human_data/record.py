@@ -197,9 +197,8 @@ PROVENANCE_OPENINGS_DESERT = "openings_desert_hex"
 
 #: Provenance flag (step6 §3.1, harvest-blocking placement-order contract): whether
 #: the record's :class:`PlayerOpening` tuples are in established LOG PLACEMENT ORDER
-#: (``settlements[1]`` = the 2nd/resource-granting settlement). ``True`` only when
-#: the setup-event sequence + granted-glyph adjacency together disambiguate each
-#: player's 1st vs 2nd settlement (see
+#: (``settlements[1]`` = the 2nd/resource-granting settlement). ``True`` when each
+#: player's 1st-vs-2nd settlement is disambiguated (see
 #: :func:`catan_rl.human_data.orientation.establish_placement_order`). Absent or
 #: ``False`` ⟹ **ORDER-UNESTABLISHED**: the tuple order is arbitrary (CV-detection
 #: order), so the record is EVAL-excluded — :meth:`GameRecord.is_scoreboard_eligible`
@@ -207,7 +206,32 @@ PROVENANCE_OPENINGS_DESERT = "openings_desert_hex"
 #: loader samples the grant hypothesis per episode). It is **not** enforced by
 #: :meth:`GameRecord.validate` (a missing flag is a valid, order-unestablished
 #: record), so pre-contract records stay loadable and default to seed-only.
+#:
+#: **Two establishing regimes (audit Decision 1, ``require_log_ordinal``).** The
+#: harvest / vlm-spike log-gates support an opt-in: by DEFAULT the flag needs BOTH
+#: the granted-glyph adjacency (VERTEX-side) AND the log setup-event ordinal (the
+#: grant follows each player's 2nd settlement) — the two-signal path. Under the
+#: explicit opt-in (``require_log_ordinal=False``) the flag may be established by
+#: the granted-glyph adjacency ALONE (``glyph_only``): re-OCR duplication makes the
+#: log ordinal unavailable on real footage, but the glyph anchor pins the granting
+#: settlement uniquely (or fails closed on any grant collision/ambiguity → flag
+#: ``False``). WHICH signal established the order is recorded additively in
+#: :data:`PROVENANCE_ORDER_SOURCE`; the flag's meaning (established vs not) is
+#: identical in both regimes, and eligibility keys on the flag alone.
 PROVENANCE_PLACEMENT_ORDER_ESTABLISHED = "placement_order_established"
+
+#: Provenance key (audit Decision 1): WHICH signal established the placement order —
+#: ``"log+glyph"`` (both the log setup-event ordinal and the granted-glyph adjacency
+#: agreed — the two-signal default), ``"glyph_only"`` (the granted-glyph adjacency
+#: alone, under the ``require_log_ordinal=False`` opt-in — the log ordinal was
+#: unavailable or unconfirmed but the flag was NOT downgraded), or ``None`` (order
+#: UNESTABLISHED — no signal pinned it). Purely INFORMATIONAL provenance: it is
+#: additive, never renames an existing key, is NOT enforced by
+#: :meth:`GameRecord.validate`, and does NOT gate eligibility —
+#: :meth:`GameRecord.is_scoreboard_eligible` keys on
+#: :data:`PROVENANCE_PLACEMENT_ORDER_ESTABLISHED` alone. It exists so a downstream
+#: scoreboard builder can split / audit its ``n`` by ordering provenance.
+PROVENANCE_ORDER_SOURCE = "order_source"
 
 #: Provenance flag: whether the per-roll DICE VALUES were readable for this game.
 #: Colonist renders the rolled dice as FACE GLYPHS, not text — the log line OCRs as
@@ -890,6 +914,12 @@ class GameRecord:
         a record stays :meth:`is_seed_eligible` (the seed loader samples the grant
         hypothesis per episode); only the eval/scoreboard side excludes it. A
         missing flag reads as ``False`` (order-unestablished, the safe default).
+        Eligibility keys on :data:`PROVENANCE_PLACEMENT_ORDER_ESTABLISHED` ALONE;
+        :data:`PROVENANCE_ORDER_SOURCE` (``"log+glyph"`` / ``"glyph_only"`` /
+        ``None``) is purely informational provenance for a downstream split/audit
+        and never changes this predicate — a ``glyph_only``-established record
+        (audit Decision 1 opt-in) is scoreboard-eligible exactly when the flag is
+        ``True``, same as a ``log+glyph`` one.
 
         scoreboard-eligible ⟺ ``winner is not None`` AND ``passed_crosscheck``
         AND ``opponent_strength.tier == "high"`` AND

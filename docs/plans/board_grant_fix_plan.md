@@ -229,8 +229,9 @@ Step 5). **Acceptance: ≥3 of the 5 become grant-readable.** REGRESSION: the 3 
    apply the pre-registered rule verbatim to the post-fix cell; the CONTINUE/ARCHIVE decision
    remains the user's).
 4. Morning summary: corpus row count, the post-fix yield table, both fixes' validation numbers,
-   regression checks, and the two standing user decisions (scoreboard eligibility via
-   glyph-anchor-only ordering; the gate call).
+   regression checks, and the remaining standing user decision (the gate call). Scoreboard
+   eligibility via glyph-anchor-only ordering is RESOLVED per audit Decision 1 — shipped as the
+   `collect_corpus.py --no-require-log-ordinal` opt-in (`order_source="glyph_only"`).
 
 **STOP conditions:** any regression check fails → revert that commit and write up. A fix branch's
 evidence doesn't match any pre-registered case → STOP and write up; do not invent a new threshold.

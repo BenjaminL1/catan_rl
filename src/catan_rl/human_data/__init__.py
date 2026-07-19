@@ -150,6 +150,7 @@ from catan_rl.human_data.orientation import (
     order_openings_by_grant,
 )
 from catan_rl.human_data.record import (
+    PROVENANCE_ORDER_SOURCE,
     RESOURCE_LITERALS,
     SCHEMA_VERSION,
     GameRecord,
@@ -198,6 +199,7 @@ __all__ = [
     "PAIR_SHARE_THRESHOLD",
     "PALETTE",
     "PIP_BY_NUMBER",
+    "PROVENANCE_ORDER_SOURCE",
     "RESOURCE_CARD_HUES",
     "RESOURCE_LITERALS",
     "RESOURCE_ORDER_CW",
