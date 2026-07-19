@@ -75,7 +75,10 @@ class TestCli:
         assert "missing 'schema_version'" in cap.err
 
     def test_chain_applied(self, tmp_path: Path) -> None:
-        # Register two fake migrations covering v(SCHEMA-2) -> SCHEMA.
+        # Exercise a multi-step chain end-to-end: one FAKE v(SCHEMA-2)->v(SCHEMA-1)
+        # step plus the REAL v(SCHEMA-1)->v(SCHEMA) migration already registered in
+        # migrations.py (the league-sidecar cutover). We only register the fake
+        # first stage — registering the real one's slot would collide.
         target = SCHEMA_VERSION
 
         def step(p: dict[str, Any]) -> dict[str, Any]:
@@ -83,7 +86,6 @@ class TestCli:
 
         if target >= 2:
             register_migration(target - 2, step)
-            register_migration(target - 1, step)
             src = tmp_path / "in.pt"
             torch.save({"schema_version": target - 2}, src)
             out = tmp_path / "out.pt"

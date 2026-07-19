@@ -11,7 +11,11 @@ from __future__ import annotations
 import pytest
 
 from catan_rl.ppo.arguments import AutoStopConfig, TrainConfig
-from catan_rl.ppo.training_loop import AutoStopTracker, evaluate_auto_stop
+from catan_rl.ppo.training_loop import (
+    AutoStopTracker,
+    _resume_updates_since_promotion,
+    evaluate_auto_stop,
+)
 
 
 def _cfg(**kw: object) -> AutoStopConfig:
@@ -90,6 +94,39 @@ class TestAutoStopTracker:
         assert len(tr.window_means) == 0
         # A promotion mid-hover restarts the clock → no immediate stop.
         assert tr.evaluate() is None
+
+    def test_initial_updates_since_promotion_seeds_counter(self) -> None:
+        # Per-lineage (not per-session) plateau clock: a resumed tracker starts
+        # at the seeded count, not 0, so the hard-400 clock keeps counting.
+        tr = AutoStopTracker(_cfg(), min_games=150, initial_updates_since_promotion=350)
+        assert tr.updates_since_promotion == 350
+        # 50 more ticks → 400 → hard stop fires (would NOT fire if it reset to 0).
+        for _ in range(50):
+            tr.tick()
+        assert tr.updates_since_promotion == 400
+        assert tr.evaluate() == "hard"
+
+    def test_initial_updates_since_promotion_clamped_nonneg(self) -> None:
+        tr = AutoStopTracker(_cfg(), min_games=150, initial_updates_since_promotion=-5)
+        assert tr.updates_since_promotion == 0
+
+    def test_default_initial_is_zero(self) -> None:
+        tr = AutoStopTracker(_cfg(), min_games=150)
+        assert tr.updates_since_promotion == 0
+
+
+class TestResumeUpdatesSincePromotion:
+    def test_continues_from_last_promotion(self) -> None:
+        # Resumed at update 500, last promoted at 200 → 300 updates since.
+        assert _resume_updates_since_promotion(500, 200) == 300
+
+    def test_never_promoted_counts_from_lineage_start(self) -> None:
+        # last_promote_update == -1 (never) → full update_idx.
+        assert _resume_updates_since_promotion(500, -1) == 500
+
+    def test_clamped_non_negative(self) -> None:
+        # A checkpoint written a tick before the promotion counter caught up.
+        assert _resume_updates_since_promotion(200, 250) == 0
 
     def test_record_check_gates_on_full_window(self) -> None:
         tr = AutoStopTracker(_cfg(), min_games=150)

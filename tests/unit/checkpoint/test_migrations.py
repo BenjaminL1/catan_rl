@@ -49,40 +49,43 @@ class TestNoOp:
 
 
 class TestRegistry:
+    # These tests exercise the registry mechanics with FAKE migrations at
+    # versions >= 10 so they never collide with the real registered
+    # v1 -> v2 (league-sidecar) migration in migrations.py.
     def test_register_and_apply(self) -> None:
-        def v0_to_v1(p: dict[str, Any]) -> dict[str, Any]:
+        def v10_to_v11(p: dict[str, Any]) -> dict[str, Any]:
             out = dict(p)
-            out["schema_version"] = 1
+            out["schema_version"] = 11
             out["new_field"] = "added"
             return out
 
-        register_migration(0, v0_to_v1)
-        out = apply_migrations({"schema_version": 0}, target_version=1)
-        assert out["schema_version"] == 1
+        register_migration(10, v10_to_v11)
+        out = apply_migrations({"schema_version": 10}, target_version=11)
+        assert out["schema_version"] == 11
         assert out["new_field"] == "added"
 
     def test_chain_two_migrations(self) -> None:
-        def v0_to_v1(p: dict[str, Any]) -> dict[str, Any]:
-            return {**p, "schema_version": 1, "a": "v1"}
+        def v10_to_v11(p: dict[str, Any]) -> dict[str, Any]:
+            return {**p, "schema_version": 11, "a": "v11"}
 
-        def v1_to_v2(p: dict[str, Any]) -> dict[str, Any]:
-            return {**p, "schema_version": 2, "b": "v2"}
+        def v11_to_v12(p: dict[str, Any]) -> dict[str, Any]:
+            return {**p, "schema_version": 12, "b": "v12"}
 
-        register_migration(0, v0_to_v1)
-        register_migration(1, v1_to_v2)
-        out = apply_migrations({"schema_version": 0}, target_version=2)
-        assert out["schema_version"] == 2
-        assert out["a"] == "v1"
-        assert out["b"] == "v2"
+        register_migration(10, v10_to_v11)
+        register_migration(11, v11_to_v12)
+        out = apply_migrations({"schema_version": 10}, target_version=12)
+        assert out["schema_version"] == 12
+        assert out["a"] == "v11"
+        assert out["b"] == "v12"
 
     def test_missing_step_raises(self) -> None:
-        # v0 -> v1 registered; jump to v3 requested → fail.
-        def v0_to_v1(p: dict[str, Any]) -> dict[str, Any]:
-            return {**p, "schema_version": 1}
+        # v10 -> v11 registered; jump to v13 requested → fail.
+        def v10_to_v11(p: dict[str, Any]) -> dict[str, Any]:
+            return {**p, "schema_version": 11}
 
-        register_migration(0, v0_to_v1)
-        with pytest.raises(MigrationError, match="no migration registered from v1"):
-            apply_migrations({"schema_version": 0}, target_version=3)
+        register_migration(10, v10_to_v11)
+        with pytest.raises(MigrationError, match="no migration registered from v11"):
+            apply_migrations({"schema_version": 10}, target_version=13)
 
     def test_duplicate_registration_raises(self) -> None:
         def v0_to_v1_a(p: dict[str, Any]) -> dict[str, Any]:
@@ -96,13 +99,13 @@ class TestRegistry:
             register_migration(0, v0_to_v1_b)
 
     def test_migration_must_advance_one_step(self) -> None:
-        # A buggy migration that bumps to v3 instead of v1 is caught.
+        # A buggy migration that bumps to v13 instead of v11 is caught.
         def bad(p: dict[str, Any]) -> dict[str, Any]:
-            return {**p, "schema_version": 3}
+            return {**p, "schema_version": 13}
 
-        register_migration(0, bad)
-        with pytest.raises(MigrationError, match="expected v1"):
-            apply_migrations({"schema_version": 0}, target_version=2)
+        register_migration(10, bad)
+        with pytest.raises(MigrationError, match="expected v11"):
+            apply_migrations({"schema_version": 10}, target_version=12)
 
     def test_downgrade_attempt_raises(self) -> None:
         with pytest.raises(MigrationError, match="newer than the target"):

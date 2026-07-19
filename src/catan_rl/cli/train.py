@@ -369,7 +369,7 @@ def construct_trainer(
     device_label: str,
     logger: logging.Logger,
     max_updates: int | None = None,
-) -> None:
+) -> str | None:
     """Drive the Phase 10 end-to-end training loop.
 
     Delegates to
@@ -378,22 +378,34 @@ def construct_trainer(
     parked at the primitive layer and is not consumed here yet —
     the trainer doesn't accept an anchor argument and ``PiKLConfig``
     is not a field on ``TrainConfig``.
+
+    Returns the loop's ``stop_reason`` (``None`` = budget/max_updates
+    exhausted; ``"hard"``/``"soft"`` = plateau auto_stop; ``"disk"`` =
+    free-disk-guard trip / disk-abort) so :func:`main` can pick an exit code.
     """
     from catan_rl.ppo.training_loop import run_training
 
-    run_training(
+    state = run_training(
         cfg,
         run_dir=run_dir,
         device_label=device_label,
         logger=logger,
         max_updates=max_updates,
     )
+    return state.stop_reason
 
 
 #: Retained for back-compat with any prior caller that ran a Phase 2
 #: dry-run and expected the placeholder exit code. The new loop never
 #: emits it (success → 0, failure → raised exception).
 EXIT_TRAINER_NOT_WIRED = 64
+
+#: Process exit code when the free-disk guard tripped a save and the run
+#: aborted (after writing a policy-only slim fallback + ``disk_abort.json``).
+#: Nonzero so a supervisor / the operator can tell a stranded run apart from a
+#: clean plateau auto-stop (which still exits 0). See the disk-guard path in
+#: ``training_loop.run_training_loop``.
+EXIT_DISK_ABORT = 65
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -449,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        construct_trainer(
+        stop_reason = construct_trainer(
             cfg,
             run_dir,
             device_label=resolved_device,
@@ -459,6 +471,15 @@ def main(argv: list[str] | None = None) -> int:
     except NotImplementedError as e:
         logger.error("trainer not yet wired: %s", e)
         return EXIT_TRAINER_NOT_WIRED
+
+    if stop_reason == "disk":
+        logger.critical(
+            "run aborted by the free-disk guard (disk_abort.json written under %s); "
+            "exiting %d — reclaim disk (scripts/reclaim_disk.py) before resuming",
+            run_dir,
+            EXIT_DISK_ABORT,
+        )
+        return EXIT_DISK_ABORT
 
     return 0
 
@@ -473,6 +494,7 @@ if __name__ == "__main__":
 # ---------------------------------------------------------------------------
 
 __all__ = [
+    "EXIT_DISK_ABORT",
     "EXIT_TRAINER_NOT_WIRED",
     "build_parser",
     "build_run_directory",

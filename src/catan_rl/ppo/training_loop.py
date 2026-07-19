@@ -139,6 +139,11 @@ class TrainingState:
     resumed_from: Path | None = None
     metadata_extras: dict[str, Any] = field(default_factory=dict)
 
+    # Why the loop exited: None (budget exhausted / max_updates), "hard"/"soft"
+    # (plateau auto_stop), or "disk" (free-disk guard trip → disk-abort exit).
+    # Consumed by the CLI to map to a process exit code.
+    stop_reason: str | None = None
+
 
 # ---------------------------------------------------------------------------
 # Automated plateau stop (auto_stop)
@@ -182,6 +187,25 @@ def _free_disk_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / (1024.0**3)
 
 
+def _resume_updates_since_promotion(update_idx: int, last_promote_update: int) -> int:
+    """Reconstruct the per-lineage plateau clock on resume.
+
+    The hard-400 auto_stop clock counts updates since the last anchor promotion.
+    It must be per-LINEAGE, not per-SESSION: a run that resumes 300 updates into
+    a hover cannot silently restart at 0 and grant itself another full grace
+    period. We rebuild it from the already-round-tripping
+    ``League._last_promote_update`` (no new checkpoint field):
+
+    * promoted at least once → ``update_idx - last_promote_update``;
+    * never promoted (``-1``) → ``update_idx`` (updates since lineage start).
+
+    Clamped ``>= 0`` defensively (a checkpoint written before a promotion tick
+    could momentarily make the difference negative)."""
+    if last_promote_update >= 0:
+        return max(0, update_idx - last_promote_update)
+    return max(0, update_idx)
+
+
 class AutoStopTracker:
     """Stateful helper that maintains the auto_stop signals across PPO updates.
 
@@ -192,10 +216,21 @@ class AutoStopTracker:
     nothing and never calls :func:`evaluate_auto_stop` (byte-identical).
     """
 
-    def __init__(self, cfg: AutoStopConfig, *, min_games: int) -> None:
+    def __init__(
+        self,
+        cfg: AutoStopConfig,
+        *,
+        min_games: int,
+        initial_updates_since_promotion: int = 0,
+    ) -> None:
         self.cfg = cfg
         self._min_games = min_games
-        self.updates_since_promotion = 0
+        # Seeded from the resumed lineage's (update_idx - last_promote_update) so
+        # the hard-400 plateau clock is per-lineage, not per-session (a run that
+        # resumes 300 updates into a hover must not silently restart at 0 and
+        # grant itself another full grace period). Default 0 preserves fresh-run
+        # behaviour. Clamped >= 0 defensively.
+        self.updates_since_promotion = max(0, int(initial_updates_since_promotion))
         # Only the last soft_window_checks recorded means matter for the median.
         self.window_means: deque[float] = deque(maxlen=max(1, cfg.soft_window_checks))
 
@@ -793,10 +828,25 @@ def run_training_loop(
 
     # Automated plateau stop (auto_stop). Constructed ONLY when enabled so a
     # disabled run allocates nothing and never touches evaluate_auto_stop — the
-    # loop stays byte-identical. Fresh per call: after a resume the clock restarts
-    # at 0, giving the warm-started learner a full grace period (the plan's intent).
+    # loop stays byte-identical. On a RESUME (state.update_idx > 0) the plateau
+    # clock is reconstructed from the lineage's last promotion so the hard-400
+    # clock is per-lineage, not per-session: updates_since_promotion =
+    # update_idx - last_promote_update (or update_idx if never promoted). This
+    # uses the already-round-tripping League._last_promote_update — no new
+    # checkpoint field. Fresh runs seed 0 (identical to before).
+    initial_usp = (
+        _resume_updates_since_promotion(
+            state.update_idx, int(getattr(state.league, "_last_promote_update", -1))
+        )
+        if state.update_idx > 0
+        else 0
+    )
     auto_stop: AutoStopTracker | None = (
-        AutoStopTracker(cfg.auto_stop, min_games=cfg.league.auto_reanchor_min_games)
+        AutoStopTracker(
+            cfg.auto_stop,
+            min_games=cfg.league.auto_reanchor_min_games,
+            initial_updates_since_promotion=initial_usp,
+        )
         if cfg.auto_stop.enabled
         else None
     )
@@ -804,24 +854,74 @@ def run_training_loop(
 
     # Free-disk guard: probed immediately BEFORE every checkpoint save (rolling,
     # promo, terminal). Disabled (default 0.0) → never probes disk → byte-identical.
-    # On a low-disk trip it SKIPS the write (never risk a torch.save truncation)
-    # and requests the same clean auto-stop exit as a plateau stop.
+    # On a low-disk trip it SKIPS the full write (never risk a torch.save
+    # truncation of a ~577 MB / now-slim file), then — critically, so v11's
+    # "final weights never written" failure can't recur — attempts a ~5.6 MB
+    # policy-only slim save, drops a ``disk_abort.json`` marker, and requests a
+    # DISTINGUISHED disk-abort exit (stop_reason="disk" → nonzero process exit),
+    # so a stranded run is never confused with a clean plateau auto-stop.
     def _disk_guard_ok(label: str) -> bool:
         nonlocal stop_reason
         if cfg.min_free_disk_gb <= 0:
             return True
+        if stop_reason == "disk":
+            # A disk trip already fired this run: the slim fallback + disk_abort.json
+            # (recording the TRUE origin label) are written. Later guarded saves in
+            # the same run — the rolling save after a promotion trip, or the terminal
+            # save — must NOT re-handle: a second _handle_disk_trip would write a
+            # duplicate slim and clobber the marker's label with a later stage.
+            return False
         free_gb = _free_disk_gb(run_dir)
         if free_gb < cfg.min_free_disk_gb:
             log.critical(
                 "DISK GUARD (%s): free %.2f GB < min_free_disk_gb %.2f GB — skipping "
-                "this save and stopping cleanly (never risk a torch.save truncation)",
+                "the full save; attempting policy-only slim fallback + disk_abort marker",
                 label,
                 free_gb,
                 cfg.min_free_disk_gb,
             )
-            stop_reason = stop_reason or "disk"
+            _handle_disk_trip(label, free_gb)
+            # "disk" takes precedence over a prior plateau reason ("hard"/"soft"):
+            # a skipped terminal full save is the v11-style stranded-run failure and
+            # MUST yield a nonzero exit, not be masked as a clean plateau auto-stop.
+            stop_reason = "disk"
             return False
         return True
+
+    def _handle_disk_trip(label: str, free_gb: float) -> None:
+        """Best-effort slim save + disk_abort.json marker on a disk-guard trip.
+
+        The slim save is ~5.6 MB so it fits under the GB-scale guard threshold
+        (the trip means we're *near* the floor, not necessarily at true ENOSPC).
+        Both steps are wrapped so a genuine ENOSPC still lets the run exit with
+        the marker written (or, failing that, at least logged)."""
+        slim_path: str | None = None
+        try:
+            written = state.ckpt_mgr.save_slim(
+                config=cfg.to_dict(),
+                policy=state.policy,
+                update_idx=max(0, state.update_idx),
+                global_step=state.global_step,
+                metadata={"reason": "disk_abort", "label": label},
+            )
+            slim_path = str(written)
+            log.critical("disk-abort slim checkpoint saved: %s", written)
+        except Exception as e:  # best-effort under low disk
+            log.critical("disk-abort slim save FAILED (%s): %s", label, e)
+        marker = {
+            "kind": "disk_abort",
+            "label": label,
+            "update_idx": int(state.update_idx),
+            "global_step": int(state.global_step),
+            "free_gb": float(free_gb),
+            "min_free_disk_gb": float(cfg.min_free_disk_gb),
+            "slim_path": slim_path,
+            "wall_time": _wall_time_iso(),
+        }
+        try:
+            (run_dir / "disk_abort.json").write_text(json.dumps(marker, indent=2))
+        except Exception as e:  # marker is best-effort
+            log.critical("disk-abort marker write FAILED: %s", e)
 
     # Self-play opponent resolver (US3). Cache the heavy CatanPolicy per
     # snapshot id (D6), pruned to the live pool — but hand back a SEPARATE
@@ -1138,6 +1238,10 @@ def run_training_loop(
             with contextlib.suppress(Exception):
                 state.metrics_fh.flush()
 
+    # Surface why the loop exited (None = budget/max_updates; "hard"/"soft" =
+    # plateau auto_stop; "disk" = disk-guard trip) so the CLI can pick an exit
+    # code — a disk abort must be distinguishable from a clean completion.
+    state.stop_reason = stop_reason
     return state
 
 

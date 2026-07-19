@@ -56,9 +56,14 @@ auto_stop:
 
 Semantics (implement in `training_loop.py`, evaluated at the SAME cadence as the reanchor check,
 immediately after `maybe_promote_anchor`):
-- Maintain `updates_since_promotion` (reset to 0 on every promotion; starts at 0 at run start —
-  the warm-started learner gets a full grace period). Emit it as a NEW TensorBoard scalar
-  `selfplay/updates_since_promotion` (additive — never rename existing scalars).
+- Maintain `updates_since_promotion` (reset to 0 on every promotion). On a FRESH run it starts
+  at 0 (the warm-started learner gets a full grace period). On a RESUMED run it is **seeded per
+  lineage** from the resumed checkpoint — `AutoStopTracker(initial_updates_since_promotion=...)`
+  via `_resume_updates_since_promotion(update_idx, last_promote_update)` = `update_idx -
+  last_promote_update` — so the resumed run continues the hard-400 clock from where the crashed
+  run left off instead of resetting to 0 and buying itself another full grace period (spec req 5).
+  Emit it as a NEW TensorBoard scalar `selfplay/updates_since_promotion` (additive — never rename
+  existing scalars).
 - Keep the last `soft_window_checks` values of the anchor-window mean (the same
   `anchor_window_stats()` number the ratchet uses; record only when the window is FULL).
 - **HARD stop**: `updates_since_promotion >= hard_updates_since_promotion`.
@@ -93,6 +98,16 @@ Commit: `feat(ppo): auto_stop — automated plateau termination for unbounded ru
    optional field, default 0 = disabled), log CRITICAL and trigger the SAME clean auto-stop exit
    (terminal save is attempted ONLY if space allows a full write, else skipped with a loud log —
    never risk the June torch.save truncation). Test with a monkeypatched `disk_usage`.
+
+   **Implementation note (checkpoint-disk-lifecycle feature, 2026-07):** the guard-trip path was
+   SUPERSEDED. On a trip it no longer merely skips-and-stops; it now (a) writes a ~5.6 MB
+   policy-only slim fallback (`slim_ckpt_*.pt`) so the run's final weights are never lost (v11 died
+   at u749 with the terminal save skipped), (b) drops a `disk_abort.json` marker in the run dir, and
+   (c) exits the process with a distinguished nonzero code (`EXIT_DISK_ABORT = 65`) so a stranded
+   run is distinguishable from a clean plateau auto-stop (still exit 0). The underlying cause — a
+   ~577 MB checkpoint that is 97% embedded league pool — was fixed by moving the league pool to a
+   content-addressed sidecar store (`src/catan_rl/checkpoint/league_store.py`), dropping rolling
+   checkpoints to < 25 MB (schema v1 → v2; fat v1 files still load unchanged).
 
 Commit: `feat(ppo): promotion checkpoints + free-disk guard for long runs`.
 

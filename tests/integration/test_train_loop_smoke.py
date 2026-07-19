@@ -93,7 +93,9 @@ class TestEndToEndSmoke:
             open_tb=False,
         )
         ckpt_dir = tmp_path / "checkpoints"
-        files = sorted(p.name for p in ckpt_dir.iterdir())
+        # Filter to .pt checkpoints: save_checkpoint also writes sibling
+        # `<ckpt>.refs.json` league-store manifests and a `league_store/` subdir.
+        files = sorted(p.name for p in ckpt_dir.iterdir() if p.name.endswith(".pt"))
         # save_every_updates=1 → one ckpt per update.
         assert files == [
             "ckpt_000000000.pt",
@@ -624,16 +626,19 @@ class TestAutoStop:
 
 
 class TestDiskGuard:
-    def test_guard_stops_and_skips_save_when_low(
+    def test_guard_skips_full_save_writes_slim_fallback_and_marker(
         self, tmp_path: Path, silent_logger: logging.Logger, monkeypatch
     ) -> None:
+        import json
         from collections import namedtuple
 
         from catan_rl.ppo import training_loop as tl
 
         usage = namedtuple("usage", ["total", "used", "free"])
-        # 1 GB free, below the 5 GB guard → every save is skipped + the run stops
-        # cleanly (never risk a torch.save truncation on a full disk).
+        # 1 GB free, below the 5 GB guard → the full save is skipped, BUT a
+        # policy-only slim fallback + disk_abort.json marker are written and the
+        # run stops with stop_reason="disk" (v11's "final weights never written"
+        # failure must not recur).
         monkeypatch.setattr(
             tl.shutil,
             "disk_usage",
@@ -647,8 +652,21 @@ class TestDiskGuard:
             run_training_loop(state, run_dir=tmp_path, logger=silent_logger, open_tb=False)
         finally:
             state.vec_env.close()
-        files = [p.name for p in (tmp_path / "checkpoints").iterdir() if p.name.endswith(".pt")]
-        assert files == [], f"disk guard should skip all saves; found {files}"
+        ckpt_files = [
+            p.name for p in (tmp_path / "checkpoints").iterdir() if p.name.endswith(".pt")
+        ]
+        # No FULL rolling checkpoint, but a slim fallback exists.
+        assert not any(n.startswith("ckpt_") for n in ckpt_files), ckpt_files
+        assert any(n.startswith("slim_ckpt_") for n in ckpt_files), ckpt_files
+        # disk_abort marker written with the expected fields.
+        marker_path = tmp_path / "disk_abort.json"
+        assert marker_path.is_file()
+        marker = json.loads(marker_path.read_text())
+        assert marker["kind"] == "disk_abort"
+        assert marker["label"] == "rolling"
+        assert marker["slim_path"] is not None
+        # stop_reason surfaced for the CLI exit-code mapping.
+        assert state.stop_reason == "disk"
         # Stopped at the first rolling-save attempt (update 0), incremented once.
         assert state.update_idx == 1
 

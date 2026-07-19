@@ -255,6 +255,24 @@ class TestMain:
         assert rc == train_mod.EXIT_TRAINER_NOT_WIRED
         assert rc == 64
 
+    def test_disk_abort_stop_reason_maps_to_exit_code(
+        self, train_mod, tmp_path: Path, monkeypatch
+    ) -> None:
+        # A run that ends with stop_reason="disk" (free-disk-guard trip) must exit
+        # with the DISTINGUISHED EXIT_DISK_ABORT, not 0 — so a supervisor can tell
+        # a stranded run from a clean plateau auto-stop.
+        monkeypatch.setattr(train_mod, "construct_trainer", lambda *a, **k: "disk")
+        rc = train_mod.main(["--output-dir", str(tmp_path), "--device", "cpu"])
+        assert rc == train_mod.EXIT_DISK_ABORT
+        assert rc == 65
+
+    def test_clean_stop_reason_exits_zero(self, train_mod, tmp_path: Path, monkeypatch) -> None:
+        # A plateau auto-stop ("hard"/"soft") or budget-exhaustion (None) exits 0.
+        for reason in (None, "hard", "soft"):
+            monkeypatch.setattr(train_mod, "construct_trainer", lambda *a, _r=reason, **k: _r)
+            rc = train_mod.main(["--output-dir", str(tmp_path), "--device", "cpu"])
+            assert rc == 0
+
     def test_dry_run_writes_config_snapshot(self, train_mod, tmp_path: Path) -> None:
         rc = train_mod.main(
             [

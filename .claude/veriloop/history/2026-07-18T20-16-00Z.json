@@ -1,0 +1,149 @@
+{
+  "ts": "2026-07-18T20-16-00Z",
+  "feature": "Audit #2 — checkpoint disk lifecycle: stop embedding the ~560.9 MB league pool in every checkpoint (content-addressed sidecar store, resume-exact), guarantee a policy-only slim fallback + disk_abort marker when the free-disk guard trips, ship bank_anchor()/scripts/reclaim_disk.py (dry-run default, tested on synthetic files only), and persist updates_since_promotion across resume. Backward-compatible: existing fat checkpoints stay loadable.",
+  "repo": "catan-rl-v2",
+  "tier": "high",
+  "baseSha": "684c10027a21776c4830df1c5bcdb2eb3adbe5ae",
+  "headSha": "05b6908a9d4a21c16adbf9b573a2f10c30e0b860",
+  "verdict": "CONCERNS",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "exit": 0,
+      "tail": "mypy src\nSuccess: no issues found in 137 source files"
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "exit": 0,
+      "tail": "ruff check src tests scripts\nAll checks passed!"
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "tail": "(no output)"
+    },
+    {
+      "name": "test",
+      "command": "make test-unit",
+      "exit": 0,
+      "tail": "=========== 2782 passed, 5 skipped, 75 warnings in 291.47s (0:04:51) ==========="
+    }
+  ],
+  "baselineProbe": null,
+  "screenshots": [],
+  "screenshotVerdict": null,
+  "fixPasses": 2,
+  "blockers": [],
+  "concerns": [
+    "[drift] The spec's Acceptance clause literally requires \"mypy --strict green\", but `_tensor_bytes` fails it: `mypy --strict` reports `league_store.py:60: Returning Any from function declared to return \"bytes\" [no-any-return]` (numpy's `.tobytes()` is untyped). NOTE the actual constitution/CI gate is `make typecheck` = `mypy src` with `strict=false` (pyproject L163), which passes — so this is NOT a gate failure and NOT a constitution BLOCKER; it only fails the spec's literal `--strict` wording, and the repo has deliberately deferred full strict mode. Flagging so the mismatch is a conscious call rather than an unnoticed gap."
+  ],
+  "waived": [],
+  "filesChanged": [
+    "src/catan_rl/checkpoint/league_store.py",
+    "src/catan_rl/checkpoint/manager.py",
+    "src/catan_rl/checkpoint/migrations.py",
+    "src/catan_rl/checkpoint/__init__.py",
+    "src/catan_rl/ppo/training_loop.py",
+    "src/catan_rl/cli/train.py",
+    "src/catan_rl/cli/reclaim_disk.py",
+    "scripts/reclaim_disk.py",
+    "tests/unit/checkpoint/test_league_store.py",
+    "tests/unit/checkpoint/test_disk_lifecycle.py",
+    "tests/unit/checkpoint/test_migrations.py",
+    "tests/unit/checkpoint/test_migrate_cli.py",
+    "tests/unit/scripts/test_reclaim_disk.py",
+    "tests/unit/scripts/test_train_entry.py",
+    "tests/unit/ppo/test_auto_stop.py",
+    "tests/integration/test_train_loop_smoke.py",
+    "docs/plans/v11_unbounded_plan.md"
+  ],
+  "implSummary": "Implemented the checkpoint disk-lifecycle feature per the binding spec (all 5 requirements). (1) League sidecar: bumped SCHEMA_VERSION 1->2 with a shape-preserving v1->v2 migration; the ~560 MB league pool is now written to a content-addressed sidecar store (new league_store.py, sha256 over deterministic tensor bytes, dedups ~99/100 identical snapshots), with the checkpoint holding a small `ref` per snapshot and a sibling `<ckpt>.refs.json` GC manifest. Rolling checkpoints drop from ~577 MB to <25 MB. (2) Backward compat: fat v1 (embedded) checkpoints load unchanged (migration keeps inline state_dicts; load resolves refs only when a state_dict is absent) — v11_cand_u724.pt / runs/anchors/* stay loadable. Migration is one-way on save. (3) Slim disk-trip fallback: on a free-disk-guard trip the loop now writes a ~5.6 MB policy-only slim_ckpt via save_policy_only/save_slim, drops a disk_abort.json marker, sets stop_reason='disk', and cli/train maps that to a new nonzero EXIT_DISK_ABORT=65 (clean plateau stops still exit 0). (4) bank_anchor() re-saves a checkpoint policy-only; scripts/reclaim_disk.py (+ cli/reclaim_disk.py) reports+dedups byte-identical files via hardlink and slims fat anchors, dry-run by default, tested only on synthetic trees. (5) updates_since_promotion is reconstructed across resume from League._last_promote_update via _resume_updates_since_promotion (no new checkpoint field), making the hard-400 plateau clock per-lineage not per-session. GC deletes store entries no surviving manifest references and bails conservatively if any un-manifested .pt is present. Added a store GC step, manifest read/write helpers, and slim-file patterns excluded from pruning and latest(). Additive/compatible: guard disabled by default (byte-identical), no TB scalars renamed, no promotion/ratchet/game-rule changes, engine and glyph_anchor untouched. Updated 3 tests that registered fake migrations at version 1 (now owned by the real v1->v2 migration) to use non-colliding versions, and updated the existing disk-guard test for the new slim-fallback behavior. Docs: refreshed checkpoint __init__ and manager/migrations docstrings, added an implementation note to docs/plans/v11_unbounded_plan.md STEP 2. Added 6 new test files/sections covering every acceptance pin (round-trip resume, fat-load, disk-trip slim fallback, reclaim dry-run on synthetic tree, <25 MB rolling ckpt, dedup, GC, resume counter, exit-code mapping).",
+  "lenses": [
+    {
+      "lens": "baseline-reviewer (senior-engineer correctness + conventions, MODE: REVIEW)",
+      "summary": "READY — no BLOCKER or SHOULD-FIX. The change faithfully implements all five binding spec requirements and every hard constraint. Verified green in the worktree: `ruff check src tests scripts` (All checks passed), `mypy src` (no issues, 137 files), and pytest across the feature + touched suites (test_disk_lifecycle, test_league_store, test_reclaim_disk, test_auto_stop, test_migrations, test_migrate_cli, test_train_entry, test_manager, integration smoke) — 167 passed / 1 skipped over the two runs. Spec pins all present and meaningful: (1) sidecar round-trip equality on league/anchor/ids/tensors + checkpoint carries `ref` not embedded `state_dict` + rolling ckpt asserted <25MB; (2) handcrafted schema-v1 FAT checkpoint loads via shape-preserving `_migrate_v1_to_v2` with no store dir touched; (3) monkeypatched `disk_usage` trip → policy-only slim fallback + `disk_abort.json` marker + `stop_reason=\"disk\"` → `EXIT_DISK_ABORT=65`; (4) `bank_anchor` slims a fat ckpt and `reclaim_disk` is dry-run-default, tested only on synthetic trees, root-confined; (5) `updates_since_promotion` reconstructed per-lineage from `_last_promote_update` on resume (arithmetic verified to match a continuous run exactly, incl. never-promoted and clamp cases). Constitution invariants upheld: gate green on real exit codes; guard disabled by default never probes disk (test asserts 0 probe calls) so existing configs train byte-identically modulo file layout; no TB scalar renamed; no promotion/ratchet or engine/game-rule change. Migration registry test isolation confirmed via autouse snapshot/restore fixture. Only minor NITs below.",
+      "findings": [
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/checkpoint/manager.py:~535 (bank_anchor)",
+          "issue": "When bank_anchor re-saves in place (dest==src) over a v2 checkpoint that carried a league, save_policy_only writes with league=None so it emits NO new manifest and does not delete the pre-existing `<ckpt>.refs.json`; the stale manifest plus now-orphaned league_store/*.pt entries are left behind. In the intended paths this never fires (reclaim only targets `_is_fat_checkpoint` files under anchors/, which are v1-inline with no manifest/store, and real v2 anchors are already slim), so impact is nil today — but if bank_anchor is ever hand-run on a live rolling/promo v2 checkpoint inside a manager directory, the stale manifest keeps GC pinning dead store entries.",
+          "fix": "In bank_anchor, after writing the slim file, best-effort unlink refs_manifest_path(dest) (contextlib.suppress(OSError)) so a slimmed policy-only file stops advertising league-store references."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/checkpoint/manager.py:1004 (_gc_league_store)",
+          "issue": "GC bails entirely (conservatively) whenever any un-manifested `ckpt_*.pt` exists in the directory. If a run resumes in place into a dir whose latest checkpoint is a legacy FAT v1 file (matches the ckpt_ glob, has no manifest), GC stays disabled and the sidecar store grows unbounded until that fat file is pruned. Documented and self-healing on prune, so low impact — worth a one-line note or a follow-up only if in-place resume from a legacy fat run is an expected workflow.",
+          "fix": "Optional: when a `ckpt_*.pt` lacks a manifest but loads as an inline/fat league (or non-league), treat it as pinning nothing rather than disabling GC; otherwise leave as-is and rely on prune to self-heal."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/checkpoint/manager.py:451 (_write_refs_manifest) and src/catan_rl/checkpoint/league_store.py:139 (LeagueStore.put)",
+          "issue": "Redundant function-local `import contextlib`; manager.py already imports contextlib at module top (added in this diff), and league_store.py could hoist it too. Purely stylistic — ruff passes.",
+          "fix": "Drop the local `import contextlib` in _write_refs_manifest; optionally hoist the one in LeagueStore.put to a module-level import."
+        },
+        {
+          "severity": "NIT",
+          "location": "pyproject.toml:190",
+          "issue": "Adds `pythonpath = [\"src\"]` to [tool.pytest.ini_options] — a repo-wide test-import-resolution change slightly outside the feature's surgical scope. Benign (all suites green), but it makes pytest import catan_rl from src/ directly, which would mask a broken/absent editable install rather than surface it.",
+          "fix": "Confirm the change is intentional (needed because the new test modules rely on src-path import) and that an editable install still works; if not strictly required, drop it to keep the diff surgical."
+        }
+      ]
+    },
+    {
+      "lens": "drift",
+      "summary": "GO. The change faithfully implements all 5 binding requirements with no scope drift: league pool moved to a content-addressed sidecar store (rolling ckpt drops to <25 MB, deduped, GC'd conservatively), fat v1 checkpoints still load (shape-preserving v1→v2 migration + inline-resolve load path), disk-trip writes a policy-only slim fallback + disk_abort.json marker + distinguished EXIT_DISK_ABORT=65, bank_anchor()/reclaim_disk.py ship dry-run-default and are tested on synthetic trees only, and updates_since_promotion is reconstructed per-lineage on resume from the already-round-tripping League._last_promote_update. Constitution gate is green on real exit codes: ruff (repo-wide) clean, `make typecheck` (mypy src) clean, full unit suite 2782 passed / 5 skipped. Docs (v11_unbounded_plan.md) and module docstrings are synced. No engine/game-rule/obs/action-space/TB-scalar drift. Acceptance pins are all present and non-vacuous. No BLOCKERs; two NITs and one SHOULD-FIX that is really a spec-wording-vs-repo-policy mismatch.",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/checkpoint/league_store.py:60",
+          "issue": "The spec's Acceptance clause literally requires \"mypy --strict green\", but `_tensor_bytes` fails it: `mypy --strict` reports `league_store.py:60: Returning Any from function declared to return \"bytes\" [no-any-return]` (numpy's `.tobytes()` is untyped). NOTE the actual constitution/CI gate is `make typecheck` = `mypy src` with `strict=false` (pyproject L163), which passes — so this is NOT a gate failure and NOT a constitution BLOCKER; it only fails the spec's literal `--strict` wording, and the repo has deliberately deferred full strict mode. Flagging so the mismatch is a conscious call rather than an unnoticed gap.",
+          "fix": "One-liner: `return bytes(t.numpy().tobytes())` (or `return cast(bytes, t.numpy().tobytes())`) so the declared return type holds under --strict; or, if the owner accepts the repo's non-strict policy as the real bar, note in the spec that acceptance is `make typecheck`, not `mypy --strict`."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/checkpoint/manager.py:443",
+          "issue": "`_write_refs_manifest` does a local `import contextlib` even though `contextlib` is now imported at module top (added at L103 in this diff and used by `_gc_league_store`/`prune_checkpoints`). Redundant local import.",
+          "fix": "Drop the in-function `import contextlib` in `_write_refs_manifest`; use the module-level import."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/checkpoint/manager.py:471",
+          "issue": "`bank_anchor` (and thus `reclaim_disk.execute`) re-saves a checkpoint policy-only in place via `save_policy_only`, but if the source was a v2 sidecar checkpoint co-located with a `league_store/` dir and a `<ckpt>.refs.json` manifest, those are left orphaned on disk after the slim rewrite — an incomplete reclaim for a tool whose purpose is reclaiming disk. Low real-world impact: runs/anchors/* are typically standalone fat-v1 or already-slim files with no co-located store.",
+          "fix": "Optionally have bank_anchor delete the source's `.refs.json` manifest after an in-place slim rewrite, and/or have reclaim_disk report+GC orphaned `league_store/` entries; or document that anchors are expected to be standalone. Not required for correctness."
+        }
+      ]
+    }
+  ],
+  "gateHistory": [
+    {
+      "verdict": "FAIL",
+      "blockers": 2,
+      "concerns": 0,
+      "waived": 0
+    },
+    {
+      "verdict": "FAIL",
+      "blockers": 1,
+      "concerns": 4,
+      "waived": 0
+    },
+    {
+      "verdict": "CONCERNS",
+      "blockers": 0,
+      "concerns": 1,
+      "waived": 0
+    }
+  ],
+  "crossModel": null,
+  "missingGateJobs": [],
+  "implPreflight": "typecheck exit 0 (mypy src: Success, 137 files); lint exit 0 (ruff check src tests scripts: All checks passed). New/changed tests all pass; broader sweep of 559 unit tests (checkpoint, selfplay, ppo, scripts, search, eval) passed with 0 failures. Env note: fresh worktree venv pulled numpy 2.5.1 whose stubs need mypy py3.12 mode, but pyproject pins mypy python_version=3.11; pinned numpy==2.3.4 to match the owner's base env, after which typecheck is clean. Rust extension built via maturin (exit 0).",
+  "dryRun": false,
+  "land": {
+    "sha": "05b6908a9d4a21c16adbf9b573a2f10c30e0b860",
+    "pushed": true,
+    "branch": "feat/checkpoint-disk-lifecycle"
+  }
+}
