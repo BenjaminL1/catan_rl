@@ -311,23 +311,39 @@ def test_harvest_gate_threads_optin_keeps_glyph_only() -> None:
 # --- pin (e): the localize CLI wires --no-require-log-ordinal -----------------
 
 
-def test_localize_cli_wires_no_require_log_ordinal() -> None:
-    # The argparse BooleanOptionalAction default is True; --no-require-log-ordinal flips it,
-    # and localize_game must forward it. We parse via the real CLI parser to pin the wiring.
-    import argparse
+def test_localize_cli_wires_no_require_log_ordinal(tmp_path: Path, monkeypatch: Any) -> None:
+    # Drive the REAL vlm_spike.main() so the pin covers both halves of the wiring:
+    # main registers --require-log-ordinal/--no-require-log-ordinal on the localize
+    # subcommand, and _cmd_localize forwards args.require_log_ordinal into
+    # localize_game. A dropped flag or a dropped forward fails this test loudly.
+    game = "testvid__g1"
+    frames = tmp_path / "frames"
+    (frames / game).mkdir(parents=True)
+    monkeypatch.setattr(vlm, "_FRAMES_ROOT", frames)
+    monkeypatch.setattr(vlm, "_RECORDS_ROOT", tmp_path / "records")
 
-    parser = argparse.ArgumentParser()
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    # Re-derive the same option the localize subcommand registers (kept in lockstep with
-    # vlm_spike.main); a drift here fails loudly rather than silently ignoring the flag.
-    p_loc = sub.add_parser("localize")
-    p_loc.add_argument("game")
-    p_loc.add_argument("--require-log-ordinal", action=argparse.BooleanOptionalAction, default=True)
-    assert parser.parse_args(["localize", "g1"]).require_log_ordinal is True
-    off = parser.parse_args(["localize", "g1", "--no-require-log-ordinal"])
-    on = parser.parse_args(["localize", "g1", "--require-log-ordinal"])
-    assert off.require_log_ordinal is False
-    assert on.require_log_ordinal is True
+    forwarded: list[bool] = []
+
+    def _fake_localize(game_dir: Path, *, require_log_ordinal: bool = True) -> Any:
+        forwarded.append(require_log_ordinal)
+
+        class _FakeResult:
+            accepted = False
+            rejection_reason = "test_stub"
+
+            class record:  # minimal stand-in for the payload dump
+                @staticmethod
+                def to_dict() -> dict[str, Any]:
+                    return {}
+
+        return _FakeResult()
+
+    monkeypatch.setattr(vlm, "localize_game", _fake_localize)
+
+    assert vlm.main(["localize", game, "--no-require-log-ordinal"]) == 0
+    assert vlm.main(["localize", game]) == 0
+    assert vlm.main(["localize", game, "--require-log-ordinal"]) == 0
+    assert forwarded == [False, True, True]
 
 
 def test_run_harvest_signature_accepts_require_log_ordinal() -> None:

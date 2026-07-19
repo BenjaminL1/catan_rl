@@ -57,7 +57,9 @@ def _tensor_bytes(value: Any) -> bytes:
     only on the numeric contents, not on storage strides or device tags.
     """
     t = value.detach().to("cpu").contiguous()
-    return t.numpy().tobytes()
+    # bytes(...) wrapper: numpy's .tobytes() is untyped and would return Any
+    # under ``mypy --strict`` (the spec's literal acceptance bar).
+    return bytes(t.numpy().tobytes())
 
 
 def snapshot_hash(state_dict: Mapping[str, Any]) -> str:
