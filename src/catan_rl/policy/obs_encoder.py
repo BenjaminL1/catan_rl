@@ -12,16 +12,32 @@ and the tensors the v2 policy network consumes. Used by:
 Schema (sizes from :mod:`catan_rl.policy.obs_schema`):
 
   * ``tile_representations``      (19, 79) — Charlesworth tile features.
-  * ``current_player_main``       (54,)    — agent scalar features.
-  * ``next_player_main``          (61,)    — opponent scalar features.
+  * ``current_player_main``       (67,)    — agent scalar features
+                                             (CURR_PLAYER_DIM = 54 base + 5
+                                             own-extras + 8 reserved).
+  * ``next_player_main``          (69,)    — opponent scalar features
+                                             (NEXT_PLAYER_DIM = 54 base + 7
+                                             opp-extras + 8 reserved).
   * ``current_dev_counts``        (5,)     — agent's dev-card counts
                                               (KNIGHT/VP/ROADBUILDER/YOP/MONO).
   * ``next_played_dev_counts``    (5,)     — opp's PLAYED dev cards (observable).
   * ``hex_features``              (19, 19) — GNN per-hex node input.
   * ``vertex_features``           (54, 16) — GNN per-vertex node input.
   * ``edge_features``             (72, 16) — GNN per-edge node input.
+  * ``global_features``           (14,)    — POV-neutral global block
+                                             (bank remaining 5 + public-reveal-
+                                             derived dev-deck remaining 5 +
+                                             4 reserved). Pointer-arch fork D3.3.
+  * ``is_setup``                  (1,)     — snake-draft-setup flag, threaded to
+                                             the corner pointer head's FiLM
+                                             context at train + inference (D2).
   * ``opponent_kind``             scalar int64 — Phase 3.6 opp-id kind.
   * ``opponent_policy_id``        scalar int64 — Phase 3.6 opp-id slot.
+
+The current-player block additionally carries an own hand-total + discard-
+pressure pair and own played YoP/Mono/RB counts (D3.1/D3.2), plus reserved
+strict-0.0 headroom slots per player block (D3.4); all new signals are appended
+at the TAIL so a checkpoint migration zero-pads only the appended columns.
 
 **Resource-ordering footgun** (CLAUDE.md rule #5): the engine's internal
 ``RESOURCES`` order is alphabetical (BRICK, ORE, SHEEP, WHEAT, WOOD),
@@ -47,8 +63,11 @@ import numpy as np
 
 from catan_rl.engine.board import catanBoard
 from catan_rl.policy.obs_schema import (
+    BANK_CAPACITY,
     CURR_PLAYER_DIM,
     DEV_CARD_ORDER,
+    DEV_DECK_INITIAL,
+    GLOBAL_DIM,
     N_DEV_TYPES,
     N_EDGES,
     N_OPP_KINDS,
@@ -57,6 +76,8 @@ from catan_rl.policy.obs_schema import (
     N_VERTICES,
     NEXT_PLAYER_DIM,
     OPP_KIND_UNKNOWN,
+    PLAYER_BASE_DIM,
+    RESERVED_PLAYER_SLOTS,
     RESOURCES_CW,
     TILE_DIM,
 )
@@ -319,9 +340,57 @@ class ObsEncoder:
             "hex_features": self._build_hex_features(game),
             "vertex_features": self._build_vertex_features(game, agent_player),
             "edge_features": self._build_edge_features(game, agent_player),
+            "global_features": self._build_global_features(game, agent_player, opponent_player),
+            # is_setup is threaded to the corner pointer head's FiLM context at
+            # BOTH training (rides the rollout buffer as an obs key) and
+            # inference (search/eval featurize obs the same way). D2.
+            "is_setup": np.asarray(
+                [1.0 if env_state.initial_placement_phase else 0.0], dtype=np.float32
+            ),
             "opponent_kind": np.int64(opp_kind),
             "opponent_policy_id": np.int64(opp_policy_id),
         }
+
+    # ------------------------------------------------------------------
+    # POV-neutral global block (D3.3)
+    # ------------------------------------------------------------------
+
+    def _build_global_features(
+        self, game: Any, agent_player: Any, opponent_player: Any
+    ) -> np.ndarray:
+        """(GLOBAL_DIM,): finite-bank + public-reveal-derived dev-deck + reserved.
+
+        POV-neutral by construction: the finite-bank subvector is truly global
+        (identical from either seat); the dev-deck subvector is each player's
+        *honest* view of the unseen pool (initial composition minus own held
+        minus all publicly-played), which is exactly what a real Colonist player
+        can derive — it NEVER reads engine deck ground truth.
+        """
+        out = np.zeros(GLOBAL_DIM, dtype=np.float32)
+
+        # Finite bank remaining, bank[r]/19 (Charlesworth order). Read-only
+        # accessor — no path near bank_recirculate/bank_draw (rule 2 / D3.5).
+        bank = getattr(game.board, "resourceBank", None)
+        if bank is not None:
+            for i, r in enumerate(RESOURCES_CW):
+                out[i] = float(bank.get(r, 0)) / float(BANK_CAPACITY)
+
+        # Public-reveal-derived per-type dev-deck remaining. Honest formula:
+        #   remaining[t] = initial[t] - own_held[t] - agent_played[t] - opp_played[t]
+        # = cards still in (deck union opponent hidden hand). Scaled by initial[t].
+        # Uses ONLY the public initial constant + player card attributes; the
+        # engine's devCardStack (deck truth) is deliberately NOT read here.
+        own_held = _dev_counts(agent_player, hidden=True)
+        agent_played = _dev_counts(agent_player, hidden=False)
+        opp_played = _dev_counts(opponent_player, hidden=False)
+        for t in range(N_DEV_TYPES):
+            initial = float(DEV_DECK_INITIAL[t])
+            remaining = initial - own_held[t] - agent_played[t] - opp_played[t]
+            remaining = max(0.0, remaining)
+            out[len(RESOURCES_CW) + t] = remaining / initial if initial > 0 else 0.0
+
+        # Final GLOBAL_RESERVED_SLOTS entries stay strict 0.0 (already zeroed).
+        return out
 
     # ------------------------------------------------------------------
     # Per-tile / per-hex features
@@ -598,16 +667,38 @@ class ObsEncoder:
         # devCardPlayedThisTurn.
         feats.append(1.0 if getattr(player, "devCardPlayedThisTurn", False) else 0.0)
 
-        # Sanity check against the schema constant.
-        if len(feats) != CURR_PLAYER_DIM:
+        # Sanity check the legacy shared block (byte-preserved at the front of
+        # both player vectors). New signals are appended AFTER this so a
+        # migration can copy the old encoder columns verbatim.
+        if len(feats) != PLAYER_BASE_DIM:
             raise RuntimeError(
-                f"player_main dim={len(feats)} expected {CURR_PLAYER_DIM} (is_agent={is_agent})"
+                f"player_main base dim={len(feats)} expected {PLAYER_BASE_DIM} "
+                f"(is_agent={is_agent})"
             )
 
         if is_agent:
+            # D3.1/D3.2 current-player-only honest additions (own private /
+            # publicly-revealed info), then reserved strict-0.0 headroom.
+            total_hand = float(sum(resources.get(r, 0) for r in RESOURCES_CW))
+            # Own hand-total, saturating at the 9-card discard cliff (the
+            # per-resource /8 clips can't see the aggregate cliff).
+            feats.append(min(1.0, total_hand / 9.0))
+            # Discard-pressure: ramps 0 (≤7 cards) → 1 (≥9 cards), encoding
+            # proximity to the friendly-ruleset 9-card discard threshold.
+            feats.append(min(1.0, max(0.0, total_hand - 7.0) / 2.0))
+            # Own played YoP / Monopoly / RoadBuilder (publicly revealed).
+            feats.append(min(1.0, float(getattr(player, "yopPlayed", 0)) / 4.0))
+            feats.append(min(1.0, float(getattr(player, "monopolyPlayed", 0)) / 4.0))
+            feats.append(min(1.0, float(getattr(player, "roadBuilderPlayed", 0)) / 4.0))
+            feats.extend([0.0] * RESERVED_PLAYER_SLOTS)
+            if len(feats) != CURR_PLAYER_DIM:
+                raise RuntimeError(
+                    f"current_player_main dim={len(feats)} expected {CURR_PLAYER_DIM}"
+                )
             return np.asarray(feats, dtype=np.float32)
 
-        # Opponent: append hidden-dev count one-hot (6) + total_res / 20 (1).
+        # Opponent: append hidden-dev count one-hot (6) + total_res / 20 (1),
+        # then reserved strict-0.0 headroom.
         hidden = 0
         new_dev = getattr(player, "newDevCards", []) or []
         hidden += len(new_dev)
@@ -621,6 +712,8 @@ class ObsEncoder:
         total_res = float(sum(resources.values()))
         # Same saturation reasoning as the per-resource clip above.
         feats.append(min(1.0, total_res / 20.0))
+
+        feats.extend([0.0] * RESERVED_PLAYER_SLOTS)
 
         if len(feats) != NEXT_PLAYER_DIM:
             raise RuntimeError(f"next_player_main dim={len(feats)} expected {NEXT_PLAYER_DIM}")

@@ -12,6 +12,7 @@ import torch
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
+    GLOBAL_DIM,
     N_DEV_TYPES,
     N_EDGES,
     N_RESOURCES,
@@ -47,6 +48,10 @@ def _synth_batch(b: int, type_for_row: list[int]) -> dict:
             rng.standard_normal((b, N_VERTICES, 16)).astype(np.float32)
         ),
         "edge_features": torch.from_numpy(rng.standard_normal((b, N_EDGES, 16)).astype(np.float32)),
+        "global_features": torch.from_numpy(
+            rng.standard_normal((b, GLOBAL_DIM)).astype(np.float32)
+        ),
+        "is_setup": torch.zeros((b, 1), dtype=torch.float32),
         "opponent_kind": torch.zeros(b, dtype=torch.int64),
         "opponent_policy_id": torch.zeros(b, dtype=torch.int64),
     }
@@ -273,7 +278,9 @@ def test_value_loss_matches_mse() -> None:
 def test_backward_updates_policy_value_belief_when_all_weights_nonzero() -> None:
     from catan_rl.bc.loss import bc_loss
 
-    policy = CatanPolicy()
+    # BC builds the policy without the D4 aux value head (bc_loss does not train
+    # it — it is a PPO-only representation-shaping term), matching bc.train.
+    policy = CatanPolicy(use_aux_value_head=False)
     # Spread action types to ensure every head is relevant for at least one row.
     types = [
         ActionType.BUILD_SETTLEMENT,

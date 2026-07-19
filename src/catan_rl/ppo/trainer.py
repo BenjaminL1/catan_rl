@@ -56,6 +56,7 @@ class UpdateMetrics:
     entropy_bonus: float
     setup_head_entropy: float
     belief_loss: float
+    aux_value_loss: float
     total_loss: float
     approx_kl: float
     clip_frac: float
@@ -178,6 +179,7 @@ class PPOTrainer:
             "entropy_bonus": 0.0,
             "setup_head_entropy": 0.0,
             "belief_loss": 0.0,
+            "aux_value_loss": 0.0,
             "total_loss": 0.0,
             "approx_kl": 0.0,
             "clip_frac": 0.0,
@@ -220,6 +222,7 @@ class PPOTrainer:
             entropy_bonus=means["entropy_bonus"],
             setup_head_entropy=means["setup_head_entropy"],
             belief_loss=means["belief_loss"],
+            aux_value_loss=means["aux_value_loss"],
             total_loss=means["total_loss"],
             approx_kl=means["approx_kl"],
             clip_frac=means["clip_frac"],
@@ -334,6 +337,18 @@ class PPOTrainer:
         if setup_coef != 0.0:
             total = total - setup_coef * setup_entropy_mean
 
+        # Auxiliary value-target head (pointer-arch fork D4): MSE regression of
+        # the aux head onto the discounted returns, shaping the shared trunk.
+        # Computed for the TB diagnostic regardless of coef; folded into the
+        # loss only when the run opts in (coef != 0) so coef-0 is byte-identical
+        # to before this term existed (guard mirrors setup_coef above).
+        aux_value_coef = self.cfg.loss.aux_value_coef
+        aux_value_loss = torch.zeros((), device=self.device)
+        if "aux_value" in head_out:
+            aux_value_loss = torch.nn.functional.mse_loss(head_out["aux_value"], returns)
+        if aux_value_coef != 0.0 and "aux_value" in head_out:
+            total = total + aux_value_coef * aux_value_loss
+
         self.optimizer.zero_grad(set_to_none=True)
         total.backward()
         grad_norm_value = torch.nn.utils.clip_grad_norm_(
@@ -361,6 +376,7 @@ class PPOTrainer:
             "entropy_bonus": entropy_term.detach(),
             "setup_head_entropy": setup_entropy_mean.detach(),
             "belief_loss": belief_loss.detach(),
+            "aux_value_loss": aux_value_loss.detach(),
             "total_loss": total.detach(),
             "approx_kl": approx_kl.detach(),
             "clip_frac": p_stats["clip_frac"],

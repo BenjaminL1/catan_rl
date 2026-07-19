@@ -165,6 +165,13 @@ def train_bc(
         drop_last=False,
     )
 
+    # The D4 auxiliary value head is a PPO representation-shaping term folded by
+    # PPOTrainer via ``aux_value_coef``; the BC objective (bc_loss) does not
+    # train it. We still build it (the CatanPolicy default) so BC checkpoints
+    # carry the same state-dict keys as PPO / distill policies: those load
+    # BC-lineage weights under ``strict=True`` (init_policy_checkpoint warm-start,
+    # distill.py), which would raise on a missing/extra aux head. The head stays
+    # at its init until a downstream PPO stage trains it.
     policy = CatanPolicy().to(dev)
     policy.set_board_geometry(build_geometry().as_dict_of_tensors())
     if init_ckpt is not None:

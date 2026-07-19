@@ -30,8 +30,9 @@ The env emits a dict obs (keys/shapes in `obs_schema.py`, built by
    flattened.
 2. **GraphEncoder** (GNN) over `hex_features` / `vertex_features` /
    `edge_features` — tripartite message passing → pooled vector.
-3. **Player/dev encoders** over `current_player_main` `(54,)`,
-   `next_player_main` `(61,)`, and the two `(5,)` dev-count vectors.
+3. **Player/dev encoders** over `current_player_main` `(67,)`,
+   `next_player_main` `(69,)`, the `global_features` `(14,)` block, and the two
+   `(5,)` dev-count vectors.
 4. **Opp-id embedding** over `opponent_kind` + `opponent_policy_id`.
 
 All parts are concatenated → `Linear → LayerNorm → GELU` → **512-d trunk**

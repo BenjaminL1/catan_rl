@@ -31,10 +31,7 @@ from catan_rl.policy.obs_schema import (
     HEAD_DIMS,
     N_ACTION_TYPES,
     N_DEV_TYPES,
-    N_EDGES,
     N_RESOURCES,
-    N_TILES,
-    N_VERTICES,
     RESOURCE2_RES1_CONTEXT_DIM,
     RESOURCE_CONTEXT_DIM,
     ActionType,
@@ -121,6 +118,82 @@ class _FiLMHead(nn.Module):
         return self.proj(modulated)
 
 
+#: Per-node state width consumed by the pointer readouts — the GNN's
+#: hidden_dim (``GraphEncoder.hidden_dim``). Kept as a module constant so the
+#: heads default consistently with the encoder.
+POINTER_NODE_DIM = 64
+
+
+class _PointerHead(nn.Module):
+    """Per-node pointer readout: ``logit_i = MLP([trunk_proj, node_i])`` (D1).
+
+    A single shared ``trunk_proj`` is broadcast over the N per-node states and
+    concatenated with each node's GNN state, then an MLP scores each node. The
+    output dim equals the number of nodes (54/72/19); masking is applied by the
+    caller exactly as before. No per-action context (used for edge / tile).
+    """
+
+    def __init__(
+        self, trunk_dim: int, node_dim: int, proj_dim: int = 64, hidden_dim: int = 128
+    ) -> None:
+        super().__init__()
+        self.trunk_proj = nn.Linear(trunk_dim, proj_dim)
+        # Final projection to a per-node scalar has NO bias: a single bias would
+        # add the SAME constant to every node's logit, which is softmax-invariant
+        # (identically zero gradient, zero effect) — a dead parameter.
+        self.mlp = nn.Sequential(
+            nn.Linear(proj_dim + node_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1, bias=False),
+        )
+
+    def forward(self, trunk: torch.Tensor, nodes: torch.Tensor) -> torch.Tensor:
+        """Args: trunk (B, trunk_dim), nodes (B, N, node_dim). Returns (B, N)."""
+        tp = self.trunk_proj(trunk).unsqueeze(1).expand(-1, nodes.size(1), -1)
+        return self.mlp(torch.cat([tp, nodes], dim=-1)).squeeze(-1)
+
+
+class _CornerPointerHead(nn.Module):
+    """Corner pointer readout with FiLM context modulating ``trunk_proj``.
+
+    The FiLM context (``[settlement, city, is_setup]``) modulates the projected
+    trunk vector BEFORE the per-node concat (D1), so settlement/city and
+    snake-draft-setup placement each get dedicated modulation. ``γ`` init-0 →
+    identity at construction.
+    """  # noqa: RUF002
+
+    def __init__(
+        self,
+        trunk_dim: int,
+        node_dim: int,
+        context_dim: int,
+        proj_dim: int = 64,
+        hidden_dim: int = 128,
+    ) -> None:
+        super().__init__()
+        self.trunk_proj = nn.Linear(trunk_dim, proj_dim)
+        self.norm = nn.LayerNorm(proj_dim)
+        self.film = nn.Linear(context_dim, 2 * proj_dim)
+        nn.init.zeros_(self.film.weight)
+        nn.init.zeros_(self.film.bias)
+        # Final per-node scalar projection has no bias — softmax-invariant dead
+        # weight (see :class:`_PointerHead`).
+        self.mlp = nn.Sequential(
+            nn.Linear(proj_dim + node_dim, hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, 1, bias=False),
+        )
+
+    def forward(
+        self, trunk: torch.Tensor, nodes: torch.Tensor, context: torch.Tensor
+    ) -> torch.Tensor:
+        tp = self.trunk_proj(trunk)
+        gamma, beta = self.film(context).chunk(2, dim=-1)
+        tp = (1.0 + gamma) * self.norm(tp) + beta
+        tp = tp.unsqueeze(1).expand(-1, nodes.size(1), -1)
+        return self.mlp(torch.cat([tp, nodes], dim=-1)).squeeze(-1)
+
+
 # ---------------------------------------------------------------------------
 # CatanActionHeads
 # ---------------------------------------------------------------------------
@@ -134,12 +207,20 @@ class CatanActionHeads(nn.Module):
     head_relevance: torch.Tensor
     resource_context_idx: torch.Tensor
 
-    def __init__(self, trunk_dim: int = 512, hidden_dim: int = 128) -> None:
+    def __init__(
+        self, trunk_dim: int = 512, hidden_dim: int = 128, node_dim: int = POINTER_NODE_DIM
+    ) -> None:
         super().__init__()
         self.type_head = _SimpleHead(trunk_dim, N_ACTION_TYPES, hidden_dim)
-        self.edge_head = _SimpleHead(trunk_dim, N_EDGES, hidden_dim)
-        self.tile_head = _SimpleHead(trunk_dim, N_TILES, hidden_dim)
-        self.corner_head = _FiLMHead(trunk_dim, N_VERTICES, CORNER_CONTEXT_DIM, hidden_dim)
+        # The three LOCATION heads are pointer readouts over the GNN's per-node
+        # states (D1): edge/tile take no context; corner FiLM-modulates its
+        # trunk_proj with [settlement, city, is_setup].
+        self.edge_head = _PointerHead(trunk_dim, node_dim, hidden_dim=hidden_dim)
+        self.tile_head = _PointerHead(trunk_dim, node_dim, hidden_dim=hidden_dim)
+        self.corner_head = _CornerPointerHead(
+            trunk_dim, node_dim, CORNER_CONTEXT_DIM, hidden_dim=hidden_dim
+        )
+        self.node_dim = node_dim
         self.resource1_head = _FiLMHead(trunk_dim, N_RESOURCES, RESOURCE_CONTEXT_DIM, hidden_dim)
         self.resource2_head = _FiLMHead(
             trunk_dim,
@@ -184,11 +265,22 @@ class CatanActionHeads(nn.Module):
     # Context constructors
     # ------------------------------------------------------------------
 
-    def _corner_context(self, type_idx: torch.Tensor) -> torch.Tensor:
-        """One-hot ``[settlement, city]`` derived from the sampled type."""
+    def _corner_context(
+        self, type_idx: torch.Tensor, is_setup: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """``[settlement, city, is_setup]`` context for the corner pointer head.
+
+        ``is_setup`` is threaded from env state (obs key) at both training and
+        inference (D2); when absent (legacy callers / ablations) it defaults to
+        0.0 (main-phase modulation).
+        """
         is_settle = (type_idx == ActionType.BUILD_SETTLEMENT).float().unsqueeze(-1)
         is_city = (type_idx == ActionType.BUILD_CITY).float().unsqueeze(-1)
-        return torch.cat([is_settle, is_city], dim=-1)
+        if is_setup is None:
+            setup_col = torch.zeros_like(is_settle)
+        else:
+            setup_col = is_setup.reshape(is_settle.shape).to(is_settle.dtype)
+        return torch.cat([is_settle, is_city, setup_col], dim=-1)
 
     def _resource1_context(self, type_idx: torch.Tensor) -> torch.Tensor:
         """4-dim one-hot ``[YoP, Mono, Trade, Discard]``."""
@@ -253,13 +345,20 @@ class CatanActionHeads(nn.Module):
     # ------------------------------------------------------------------
 
     def sample(
-        self, trunk: torch.Tensor, masks: dict[str, torch.Tensor]
+        self,
+        trunk: torch.Tensor,
+        masks: dict[str, torch.Tensor],
+        nodes: dict[str, torch.Tensor],
+        is_setup: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Autoregressive sample.
 
         Args:
             trunk: (B, trunk_dim).
             masks: dict of bool tensors per :data:`MASK_KEYS` schema.
+            nodes: per-node GNN states — ``{"v": (B,54,D), "e": (B,72,D),
+                "h": (B,19,D)}`` — for the corner/edge/tile pointer readouts.
+            is_setup: (B,) / (B,1) float, threaded to the corner FiLM context.
         Returns:
             ``(action, joint_log_prob, joint_entropy, per_head_log_prob)``
             where ``action`` is (B, 6) int64, ``joint_log_prob`` /
@@ -273,17 +372,17 @@ class CatanActionHeads(nn.Module):
         type_dist = Categorical(probs=type_logp.exp())
         type_idx = type_dist.sample()
 
-        corner_ctx = self._corner_context(type_idx)
-        corner_logits = self.corner_head(trunk, corner_ctx)
+        corner_ctx = self._corner_context(type_idx, is_setup)
+        corner_logits = self.corner_head(trunk, nodes["v"], corner_ctx)
         corner_mask = self._corner_mask(type_idx, masks)
         corner_logp = masked_log_softmax(corner_logits, corner_mask)
         corner_idx = Categorical(probs=corner_logp.exp()).sample()
 
-        edge_logits = self.edge_head(trunk)
+        edge_logits = self.edge_head(trunk, nodes["e"])
         edge_logp = masked_log_softmax(edge_logits, masks["edge"])
         edge_idx = Categorical(probs=edge_logp.exp()).sample()
 
-        tile_logits = self.tile_head(trunk)
+        tile_logits = self.tile_head(trunk, nodes["h"])
         tile_logp = masked_log_softmax(tile_logits, masks["tile"])
         tile_idx = Categorical(probs=tile_logp.exp()).sample()
 
@@ -339,6 +438,8 @@ class CatanActionHeads(nn.Module):
         trunk: torch.Tensor,
         action: torch.Tensor,
         masks: dict[str, torch.Tensor],
+        nodes: dict[str, torch.Tensor],
+        is_setup: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Compute per-head log-probs and entropies for *given* actions.
 
@@ -348,6 +449,8 @@ class CatanActionHeads(nn.Module):
             trunk: (B, trunk_dim).
             action: (B, 6) int64.
             masks: dict of bool tensors per :data:`MASK_KEYS` schema.
+            nodes: per-node GNN states for the corner/edge/tile pointer heads.
+            is_setup: (B,) / (B,1) float threaded to the corner FiLM context.
         Returns:
             dict with keys ``log_prob`` (B,), ``entropy`` (B,),
             ``per_head_log_prob`` (B, 6), ``per_head_entropy`` (B, 6),
@@ -356,10 +459,11 @@ class CatanActionHeads(nn.Module):
         type_idx, corner_idx, edge_idx, tile_idx, res1_idx, res2_idx = action.unbind(dim=-1)
 
         type_logp = masked_log_softmax(self.type_head(trunk), masks["type"])
-        corner_logits = self.corner_head(trunk, self._corner_context(type_idx))
+        corner_ctx = self._corner_context(type_idx, is_setup)
+        corner_logits = self.corner_head(trunk, nodes["v"], corner_ctx)
         corner_logp = masked_log_softmax(corner_logits, self._corner_mask(type_idx, masks))
-        edge_logp = masked_log_softmax(self.edge_head(trunk), masks["edge"])
-        tile_logp = masked_log_softmax(self.tile_head(trunk), masks["tile"])
+        edge_logp = masked_log_softmax(self.edge_head(trunk, nodes["e"]), masks["edge"])
+        tile_logp = masked_log_softmax(self.tile_head(trunk, nodes["h"]), masks["tile"])
         res1_logits = self.resource1_head(trunk, self._resource1_context(type_idx))
         res1_logp = masked_log_softmax(res1_logits, self._resource1_mask(type_idx, masks))
         res2_logits = self.resource2_head(trunk, self._resource2_context(type_idx, res1_idx))
@@ -421,6 +525,39 @@ class ValueHead(nn.Module):
             nn.GELU(),
             nn.Linear(128, 1),
         )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x).squeeze(-1)
+
+
+# ---------------------------------------------------------------------------
+# Auxiliary value-target head (pointer-arch fork, D4 — representation-shaping)
+# ---------------------------------------------------------------------------
+
+
+class AuxValueHead(nn.Module):
+    """Small head off the 512-d trunk predicting the discounted outcome z_disc.
+
+    Purpose is representation-SHAPING (D4): co-trained from update 0 with a low
+    coef so the shared trunk carries outcome-predictive structure. It is
+    soft-additive and does NOT gate the fork; the trainer folds its loss only
+    when the coef is non-zero (coef-0 is byte-identical to no head). Distinct
+    from :class:`ValueHead`, whose output feeds PPO/search; this head is a pure
+    auxiliary regression target and its output is never used for control.
+
+    Final-layer init gain=0.01 so predictions start near zero.
+    """
+
+    def __init__(self, trunk_dim: int = 512, hidden_dim: int = 128) -> None:
+        super().__init__()
+        final = nn.Linear(hidden_dim, 1)
+        self.net = nn.Sequential(
+            nn.Linear(trunk_dim, hidden_dim),
+            nn.GELU(),
+            final,
+        )
+        nn.init.normal_(final.weight, std=0.01)
+        nn.init.zeros_(final.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x).squeeze(-1)

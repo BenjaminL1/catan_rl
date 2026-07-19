@@ -95,6 +95,8 @@ _OBS_KEYS_FLOAT: tuple[str, ...] = (
     "hex_features",
     "vertex_features",
     "edge_features",
+    "global_features",
+    "is_setup",
 )
 _OBS_KEYS_INT: tuple[str, ...] = ("opponent_kind", "opponent_policy_id")
 _MASK_KEYS: tuple[str, ...] = (

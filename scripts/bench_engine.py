@@ -235,6 +235,43 @@ def _stack_rust_obs(obs_list: list[dict[str, np.ndarray]]) -> dict[str, np.ndarr
     return out
 
 
+def _reconcile_rust_obs(obs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Zero-pad the legacy Rust obs up to the current Python schema.
+
+    The Rust engine (scaffolding, not the default backend) still emits the
+    pre-pointer-arch obs: a 54-dim ``current_player_main``, a 61-dim
+    ``next_player_main`` and no ``global_features`` / ``is_setup``. The frozen
+    policy now expects the appended-tail schema, so we synthesize the missing
+    columns/keys as strict zeros — the same zero-pad an old-checkpoint migration
+    applies to the fusion's new input columns. This keeps the throughput bench
+    runnable against the Rust backend without touching the Rust crate.
+    """
+    from catan_rl.policy.obs_schema import (
+        CURR_PLAYER_DIM,
+        GLOBAL_DIM,
+        NEXT_PLAYER_DIM,
+    )
+
+    out = dict(obs)
+
+    def _pad_tail(key: str, target: int) -> None:
+        arr = out.get(key)
+        if arr is None or arr.shape[-1] >= target:
+            return
+        pad = np.zeros((*arr.shape[:-1], target - arr.shape[-1]), dtype=arr.dtype)
+        out[key] = np.concatenate([arr, pad], axis=-1)
+
+    _pad_tail("current_player_main", CURR_PLAYER_DIM)
+    _pad_tail("next_player_main", NEXT_PLAYER_DIM)
+
+    n = out["current_player_main"].shape[0]
+    if "global_features" not in out:
+        out["global_features"] = np.zeros((n, GLOBAL_DIM), dtype=np.float32)
+    if "is_setup" not in out:
+        out["is_setup"] = np.zeros((n, 1), dtype=np.float32)
+    return out
+
+
 def _obs_to_torch(obs: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
     """Move a batched obs dict onto CPU torch tensors. The frozen
     policy lives on CPU; cross-device tensor copies are out of scope
@@ -300,7 +337,7 @@ def _run_rust_no_op_backend(
     with torch.inference_mode():
         for _ in range(n_steps):
             if include_policy:
-                obs_t = _obs_to_torch(obs)
+                obs_t = _obs_to_torch(_reconcile_rust_obs(obs))
                 _ = policy(obs_t)
             obs_list, _r, _t, _tr = vec_env.step_batch(actions)
             obs = _stack_rust_obs(list(obs_list))

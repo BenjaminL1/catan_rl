@@ -241,6 +241,14 @@ class LossConfig:
     the opponent took). Only fires when the opponent is a historical
     league policy; filtered out for random/heuristic/self."""
 
+    aux_value_coef: float = 0.05
+    """Auxiliary value-target head weight (pointer-arch fork D4). A small MSE
+    regression from the shared 512-d trunk onto the discounted return (the
+    ``z_disc`` analogue is the existing GAE returns), co-trained from update 0
+    to SHAPE the trunk representation. Its output never feeds control (distinct
+    from the PPO value head). Guarded on ``!= 0`` so ``aux_value_coef=0`` is
+    byte-identical to the objective before this term existed."""
+
     setup_entropy_coef: float = 0.0
     """Setup-phase-only entropy bonus (step6 human-corpus plan §2.2/§5).
     An ADDITIONAL entropy bonus, applied on top of the annealed global

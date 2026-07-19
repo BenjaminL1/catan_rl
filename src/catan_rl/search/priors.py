@@ -59,6 +59,8 @@ def _representative_action(
     trunk: torch.Tensor,
     masks_t: dict[str, torch.Tensor],
     type_id: int,
+    nodes: dict[str, torch.Tensor],
+    is_setup: torch.Tensor | None,
 ) -> ActionTuple:
     """Build the policy's argmax sub-action for a fixed action ``type_id``.
 
@@ -71,12 +73,12 @@ def _representative_action(
     corner = edge = tile = res1 = res2 = 0
 
     if relevance[1].item() == 1.0:  # corner (settlement / city)
-        logits = heads.corner_head(trunk, heads._corner_context(type_idx))
+        logits = heads.corner_head(trunk, nodes["v"], heads._corner_context(type_idx, is_setup))
         corner = _masked_argmax(logits, heads._corner_mask(type_idx, masks_t))
     if relevance[2].item() == 1.0:  # edge (road)
-        edge = _masked_argmax(heads.edge_head(trunk), masks_t["edge"])
+        edge = _masked_argmax(heads.edge_head(trunk, nodes["e"]), masks_t["edge"])
     if relevance[3].item() == 1.0:  # tile (robber / knight)
-        tile = _masked_argmax(heads.tile_head(trunk), masks_t["tile"])
+        tile = _masked_argmax(heads.tile_head(trunk, nodes["h"]), masks_t["tile"])
     if relevance[4].item() == 1.0:  # resource1 (YoP / monopoly / trade-give / discard)
         logits = heads.resource1_head(trunk, heads._resource1_context(type_idx))
         res1 = _masked_argmax(logits, heads._resource1_mask(type_idx, masks_t))
@@ -100,6 +102,8 @@ def _subaction_candidates(
     masks_t: dict[str, torch.Tensor],
     type_id: int,
     k: int,
+    nodes: dict[str, torch.Tensor],
+    is_setup: torch.Tensor | None,
 ) -> list[tuple[ActionTuple, float]]:
     """Up to ``k`` (action, conditional-prob) candidates for ``type_id``.
 
@@ -109,20 +113,20 @@ def _subaction_candidates(
     to 1 (k=1 -> [1.0], i.e. prior == P(type), preserving the US1 behavior). Types
     without a WHERE head (resources / EndTurn / ...) get a single argmax rep.
     """
-    base = _representative_action(heads, trunk, masks_t, type_id)
+    base = _representative_action(heads, trunk, masks_t, type_id, nodes, is_setup)
     slot = _WHERE_HEAD.get(type_id)
     if slot is None or k <= 1:
         return [(base, 1.0)]
 
     type_idx = torch.tensor([type_id], device=trunk.device)
     if slot == 1:  # corner (FiLM, type-conditioned)
-        logits = heads.corner_head(trunk, heads._corner_context(type_idx))
+        logits = heads.corner_head(trunk, nodes["v"], heads._corner_context(type_idx, is_setup))
         mask = heads._corner_mask(type_idx, masks_t)
     elif slot == 2:  # edge
-        logits = heads.edge_head(trunk)
+        logits = heads.edge_head(trunk, nodes["e"])
         mask = masks_t["edge"]
     else:  # slot == 3, tile
-        logits = heads.tile_head(trunk)
+        logits = heads.tile_head(trunk, nodes["h"])
         mask = masks_t["tile"]
 
     if not bool(mask.any()):
@@ -145,7 +149,9 @@ def priors_from_trunk(
     heads: CatanActionHeads,
     trunk: torch.Tensor,
     masks_t: dict[str, torch.Tensor],
+    nodes: dict[str, torch.Tensor],
     sub_actions_per_type: int = 1,
+    is_setup: torch.Tensor | None = None,
 ) -> dict[ActionTuple, float]:
     """Priors over representative legal actions, from a trunk.
 
@@ -154,6 +160,10 @@ def priors_from_trunk(
     type's P(type) is split across its top-k WHERE sub-actions by the conditional
     head probs, so search can explore *where* to build, not only *which* type.
     The hot-path core (no forward here): the MCTS node builder shares one forward.
+
+    ``nodes`` are the per-node GNN states (``{"v","e","h"}``) the pointer readouts
+    (D1) require; ``is_setup`` threads the corner FiLM setup bit (D2). Both are
+    produced by the same ``policy.forward`` that yields ``trunk``.
     """
     type_logp = masked_log_softmax(heads.type_head(trunk), masks_t["type"])
     type_p = type_logp.exp()[0]  # (13,)
@@ -163,7 +173,7 @@ def priors_from_trunk(
     for type_id in legal_types:
         p_type = float(type_p[type_id].item())
         for action, sub_p in _subaction_candidates(
-            heads, trunk, masks_t, int(type_id), sub_actions_per_type
+            heads, trunk, masks_t, int(type_id), sub_actions_per_type, nodes, is_setup
         ):
             priors[action] = priors.get(action, 0.0) + p_type * sub_p
 
@@ -194,5 +204,13 @@ def action_priors(
 
     obs_t = obs_to_torch(env._get_obs(), device, add_batch=True)
     masks_t = masks_to_torch(env.get_action_masks(), device, add_batch=True)
-    trunk = policy.forward(obs_t)["trunk"]
-    return priors_from_trunk(policy.action_heads, trunk, masks_t, sub_actions_per_type)
+    out = policy.forward(obs_t)
+    nodes = {"v": out["_node_v"], "e": out["_node_e"], "h": out["_node_h"]}
+    return priors_from_trunk(
+        policy.action_heads,
+        out["trunk"],
+        masks_t,
+        nodes,
+        sub_actions_per_type,
+        out.get("_is_setup"),
+    )
