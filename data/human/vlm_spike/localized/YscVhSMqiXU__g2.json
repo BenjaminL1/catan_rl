@@ -1,0 +1,27 @@
+{
+  "video_id": "YscVhSMqiXU",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening. Board fit post_setup FALLBACK (pan, residual 0.89px) — vertex labels locally imprecise, so settlements resolved by grant self-check + colour grouping and roads by programmatic red/black road-pixel sampling (t=0.32-0.68) cross-checked with tight crops. meta colours CORRECT (Sj122=RED, ThePhantom=BLACK). Robber on h13 (desert, bottom-center). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,ORE,WOOD} == v10 [2,3,10]=(ORE6+BRI5+WOO9) and NOT v8 [1,7,18]=(WHE3+SHE2+BRI4={WHEAT,SHEEP,BRICK}); Sj122 {ORE,WHEAT,WOOD} == v2 [0,1,2]=(WOO11+WHE3+ORE6) and NOT v15 [3,4,12]=(BRI5+BRI... {BRICK,BRICK,SHEEP}). Roads: ThePhantom v10-v11 & v8-v9; Sj122 v2-v6 & v15-v16 (v15-v13 red-detector hit was the brick tile, not a road — verified v15's road is the straight-down red segment to v16).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    },
+    "Sj122": {
+      "settlements": [
+        {"hexes": [0, 1, 2]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 2], [1, 2, 8]]},
+        {"endpoints": [[3, 4, 12], [4, 12, 13]]}
+      ]
+    }
+  }
+}

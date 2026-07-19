@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "fit_imprecision_unreliable_pieces_and_roads",
+  "vlm_note": "Grants are self-consistent (ThePhantom {BRICK,ORE,SHEEP}->v16/v21; Jon4711 {BRICK,SHEEP,WOOD}->v0/v1), and tile-adjacency confidently places all four settlements (Jon4711 RED v0=[0,3,4] granted + v9=[1,6,18]; ThePhantom BLACK v21=[5,14,15] granted + v7=[1,7,8]). BUT the empty_baseline fit (residual 1.18px) has local vertex offsets large enough that pixel methods CONFLICT: blob-detection snapped pieces ~40px off (to v13/v3/v18/v12, none grant-matching) while tile-adjacency gives grant-consistent vertices; and programmatic road-pixel sampling returns ZERO black on all edges of v21 despite a clearly-visible black road there (v0-v5 and v9-v3 reds detected fine). Because the black roads cannot be localized reliably and the fit disagrees with itself across methods, fail-closed rejected rather than ship guessed roads into the BC corpus. Re-parse with a cleaner board fit may recover it."
+}

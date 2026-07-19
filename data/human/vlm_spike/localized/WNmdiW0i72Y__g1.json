@@ -1,0 +1,27 @@
+{
+  "video_id": "WNmdiW0i72Y",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline (residual 0.74px). meta colours CORRECT (Woniu=RED, ThePhantom=BLACK). Handles located by labelling grant-candidate vertices on the board: ThePhantom {BRICK,SHEEP,WHEAT} -> v11 (top black); Woniu {BRICK,ORE,WOOD} -> v18 (bottom red). NB v9 (ThePhantom's 1st, black) also matches Woniu's grant multiset, but the self-check is per-player so it's harmless. Robber on h19 (desert, bottom-left). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,SHEEP,WHEAT} == v11 [2,9,10]=(BRI3+SHE4+WHE8) and NOT v9 [1,6,18]=(WOO6+ORE5+BRI9={WOOD,ORE,BRICK}); Woniu {BRICK,ORE,WOOD} == v18 [4,13,14]=(ORE9+WOO6+BRI3) and NOT v33 [10,11]=(WHE8+SHE4={WHEAT,SHEEP}). Roads (pixel-verified; brick-tile false-positives on v18-v41 and v33-v34 discarded): ThePhantom v11-v30 & v9-v3; Woniu v18-v17 & v33-v14.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [9, 10]]},
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]}
+      ]
+    },
+    "Woniu": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[10, 11], [3, 10, 11]]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "video_id": "JHZnNTrhoT8",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline (piece bases snap tight, d<=13px). meta colours CORRECT (Jon4711=RED, ThePhantom=BLACK). Grant self-check + blob-base snapping agree: ThePhantom {BRICK,ORE,SHEEP} pins to v11 (top-right black); Jon4711 {BRICK,SHEEP,WHEAT} pins uniquely to v19 (left red). Robber on h11 (desert, center-right). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,ORE,SHEEP} == v11 [2,9,10]=(SHE4+ORE6+BRI3) and NOT v16 [4,12,13]=(WHE5+WOO... {WHEAT,WOOD,WOOD}); Jon4711 {BRICK,SHEEP,WHEAT} == v19 [5,6,16]=(BRI6+SHE3+WHE4) and NOT v8 [1,7,18]=(ORE... {ORE,ORE,WOOD}). Roads (pixel-sampled + crop-confirmed; brick-tile red false-positives on v19's other edges discarded): ThePhantom v11-v30 & v16-v18; Jon4711 v19-v23 & v8-v7.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [9, 10]]},
+        {"endpoints": [[4, 12, 13], [4, 13, 14]]}
+      ]
+    },
+    "Jon4711": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]},
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]}
+      ]
+    }
+  }
+}

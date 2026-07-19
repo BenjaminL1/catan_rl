@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "grant_multiset_matches_no_vertex:jungabahadur:{ORE,ORE}",
+  "vlm_note": "ThePhantom grant {ORE,WHEAT,WHEAT} resolves (v4/v13), but jungabahadur's meta grant {ORE:2} matches NO vertex on this board (exhaustive topology scan): a two-ORE-only settlement requires either a coastal vertex between two ore tiles or an ore+ore+desert vertex, neither of which exists here. Fail-closed typed reject (same class as Mh-LeHGVvoc Klevz {BRICK,ORE}) — declined rather than trust a board/grant pair that cannot self-verify. Likely a grant-parser undercount or a board CV hex misread on this game."
+}
