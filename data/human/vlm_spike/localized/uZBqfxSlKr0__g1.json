@@ -1,0 +1,27 @@
+{
+  "video_id": "uZBqfxSlKr0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colour WRONG for Johnny80085 (meta WHITE; pieces are RED, detected by red mask). ThePhantom {ORE,ORE,SHEEP}==v18 [4,13,14]; Johnny80085 {BRICK,SHEEP,WOOD}==v4 [0,5,6] (grant+marker pinned). 1st settlements by tile-adjacency: ThePhantom v2 [0,1,2]={BRICK,WHEAT,WOOD}, Johnny80085 v11 [2,9,10]={WOOD,ORE,WHEAT} (neither matches its grant). Roads pixel-detected (clear only-nonzero winners): ThePhantom v18-v16 & v2-v6; Johnny80085 v4-v3 & v11-v30.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [0, 1, 2]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[0, 1, 2], [1, 2, 8]]}
+      ]
+    },
+    "Johnny80085": {
+      "settlements": [
+        {"hexes": [0, 5, 6]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 5, 6], [0, 1, 6]]},
+        {"endpoints": [[2, 9, 10], [9, 10]]}
+      ]
+    }
+  }
+}

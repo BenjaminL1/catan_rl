@@ -1,0 +1,27 @@
+{
+  "video_id": "MY6EsxBSAaw",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (Lobell8185=RED, ThePhantom=BLACK). ThePhantom {SHEEP,WHEAT,WOOD}==v23 [6,16,17]; Lobell8185 {BRICK,SHEEP,WOOD}==v16 [4,12,13] (both grant+marker pinned). 1st settlements by tile-adjacency: ThePhantom v10 [2,3,10]={WOOD,BRICK,ORE}, Lobell8185 v9 [1,6,18]={WHEAT,WHEAT,SHEEP} (neither matches its grant). Roads crop-verified (weak/contaminated detection): ThePhantom v23-v19 & v10-v1 (v10-v14 was brick contamination); Lobell8185 v16-v15 & v9-v3.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]},
+        {"endpoints": [[2, 3, 10], [0, 2, 3]]}
+      ]
+    },
+    "Lobell8185": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]}
+      ]
+    }
+  }
+}

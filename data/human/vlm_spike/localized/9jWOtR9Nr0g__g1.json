@@ -1,0 +1,27 @@
+{
+  "video_id": "9jWOtR9Nr0g",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (Flinn8076=RED, ThePhantom=BLACK). Both granted settlements uniquely pinned by grant + marker: ThePhantom {SHEEP,WHEAT,WHEAT}==v9 [1,6,18]; Flinn8076 {BRICK,WHEAT,WOOD}==v2 [0,1,2]. 1st settlements by tile-adjacency: ThePhantom v18 [4,13,14]={ORE,ORE,WOOD}, Flinn8076 v20 [5,15,16]={WOOD,BRICK,SHEEP} (neither matches its grant -> exactly one match each). Roads pixel+crop verified (dark-stone false-positive on v18-v41 and tile false-positive on v2-v3 discarded): ThePhantom v9-v22 & v18-v16; Flinn8076 v2-v1 & v20-v19.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    },
+    "Flinn8076": {
+      "settlements": [
+        {"hexes": [0, 1, 2]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 2], [0, 2, 3]]},
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]}
+      ]
+    }
+  }
+}
