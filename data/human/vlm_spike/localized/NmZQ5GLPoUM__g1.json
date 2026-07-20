@@ -1,0 +1,27 @@
+{
+  "video_id": "NmZQ5GLPoUM",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline. meta colours: ThePhantom=PURPLE (pieces confirmed purple), Albina4433=WHITE (pieces render dark-GREY, not white — the white detector found nothing; caught by dark mask). Grant self-check + tight blob snaps (purple d<6px): ThePhantom {BRICK,ORE,WHEAT} == v19 [5,6,16]; Albina4433 {ORE,WHEAT,WOOD} == v12 [2,8,9]. Robber elsewhere. GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,ORE,WHEAT} == v19 [5,6,16]=(BRI+ORE+WHE) and NOT v15 [3,4,12]=({ORE,SHEEP,WOOD}); Albina4433 {ORE,WHEAT,WOOD} == v12 [2,8,9]=(WHE+WOO+ORE) and NOT v5 [0,4,5]=({WHEAT,SHEEP,BRICK}). Roads (purple pixel-detected, grey crop-confirmed): ThePhantom v19-v4 & v15-v13; Albina4433 v12-v6 & v5-v0.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]},
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]}
+      ]
+    },
+    "Albina4433": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]},
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]}
+      ]
+    }
+  }
+}

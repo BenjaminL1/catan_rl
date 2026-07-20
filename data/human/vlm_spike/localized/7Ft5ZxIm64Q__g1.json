@@ -1,0 +1,27 @@
+{
+  "video_id": "7Ft5ZxIm64Q",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline. meta colours CORRECT (SoClose=RED, ThePhantom=BLACK). ThePhantom {BRICK,SHEEP,WHEAT} pins uniquely to v15 [3,4,12] (marker at base); other black v10 [2,3,10]. NOTE: SoClose's TWO red settlements v18 [4,13,14]={SHEEP,WHEAT,ORE} and v21 [5,14,15]={SHEEP,ORE,WHEAT} BOTH equal its grant {ORE,SHEEP,WHEAT}, so the grant anchor cannot order them (placement order will be seed-only, not scoreboard, under glyph-anchor-only). Robber on h1 (desert, top-center). GRANT SELF-CHECK: ThePhantom {BRICK,SHEEP,WHEAT} == v15 and NOT v10 [2,3,10]=({ORE,BRICK,WOOD}). Roads (pixel + crop verified; wheat/stone false-positive on v18-v41 discarded): ThePhantom v15-v0 & v10-v11; SoClose v18-v16 & v21-v20.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    },
+    "SoClose": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    }
+  }
+}

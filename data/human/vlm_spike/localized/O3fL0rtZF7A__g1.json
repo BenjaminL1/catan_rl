@@ -1,0 +1,27 @@
+{
+  "video_id": "O3fL0rtZF7A",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. Board fit empty_baseline. meta colours CORRECT (TGWINZ=RED, ThePhantom=BLACK). Grant self-check + marker-confirmed bases: ThePhantom {BRICK,ORE,WOOD} == v22 [6,17,18]; TGWINZ {BRICK,SHEEP,WOOD} == v11 [2,9,10] (blob missed the top red v11 under its road overlap; candidate overlay + crop confirm). Robber on h7 (desert, center). GRANT SELF-CHECK PASSES (exactly one per player): ThePhantom {BRICK,ORE,WOOD} == v22 [6,17,18]=(BRI+WOO+ORE) and NOT v13 [3,11,12]=({ORE,SHEEP,WHEAT}); TGWINZ {BRICK,SHEEP,WOOD} == v11 [2,9,10]=(WOO+SHE+BRI) and NOT v16 [4,12,13]=({WHEAT,WHEAT,WHEAT}). Roads (pixel + crop verified; brick-tile false-positive on v11-v30 discarded): ThePhantom v22-v23 & v13-v14; TGWINZ v11-v10 & v16-v18.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    },
+    "TGWINZ": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[4, 12, 13], [4, 13, 14]]}
+      ]
+    }
+  }
+}
