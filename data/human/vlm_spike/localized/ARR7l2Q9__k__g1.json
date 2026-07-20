@@ -1,0 +1,27 @@
+{
+  "video_id": "ARR7l2Q9_k",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (JordN=RED, ThePhantom=BLACK). ThePhantom {ORE,SHEEP,WHEAT}==v1 [0,2,3]; JordN {SHEEP,WHEAT,WOOD}==v6 [1,2,8]. 1st settlements: ThePhantom v17 [4,5,14]={WHEAT,BRICK,ORE}, JordN v19 [5,6,16]={BRICK,BRICK,WOOD}. Roads pixel-detected: ThePhantom v1-v10 & v17-v18; JordN v6-v12 & v19-v4 (v19-v20/v23 detections were brick-tile contamination around the double-brick vertex).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]}
+      ]
+    },
+    "JordN": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]},
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]}
+      ]
+    }
+  }
+}

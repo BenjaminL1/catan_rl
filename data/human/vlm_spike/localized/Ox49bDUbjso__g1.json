@@ -1,0 +1,27 @@
+{
+  "video_id": "Ox49bDUbjso",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (Psycho018=RED, ThePhantom=BLACK). ThePhantom {ORE,SHEEP,WHEAT}==v1 [0,2,3]; Psycho018 {ORE,WHEAT,WOOD}==v12 [2,8,9]. 1st settlements: ThePhantom v7 [1,7,8]={ORE,BRICK,WOOD}, Psycho018 v21 [5,14,15]={SHEEP,SHEEP,BRICK}. Roads crop-verified (weak detection corrected): ThePhantom v1-v10 & v7-v6; Psycho018 v12-v6 & v21-v20 (both v7-v6 and v12-v6 exist, meeting at empty v6).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]}
+      ]
+    },
+    "Psycho018": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    }
+  }
+}

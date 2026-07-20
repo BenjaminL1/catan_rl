@@ -1,0 +1,27 @@
+{
+  "video_id": "4-axIXpwCSk",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + blob/colour detection. meta colours CORRECT (Tol8775=RED [renders orange], ThePhantom=WHITE [renders grey]). ThePhantom {ORE,SHEEP,WOOD}==v5 [0,4,5]; Tol8775 {BRICK,SHEEP,WOOD}==v13 [3,11,12]. 1st settlements: ThePhantom v10 [2,9,10]={BRICK,ORE,WHEAT}, Tol8775 v21 [5,14,15]={WOOD,ORE,WHEAT}. Roads colour-mask-detected: ThePhantom v5-v0 & v10-v11; Tol8775 v13-v14 & v21-v20.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    },
+    "Tol8775": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    }
+  }
+}

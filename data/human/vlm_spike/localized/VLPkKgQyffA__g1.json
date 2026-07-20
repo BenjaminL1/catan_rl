@@ -1,0 +1,27 @@
+{
+  "video_id": "VLPkKgQyffA",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (Kbiz=RED, ThePhantom=BLACK). ThePhantom {BRICK,WHEAT,WOOD}==v15 [3,4,12]; Kbiz {ORE,SHEEP,WHEAT}==v10 [2,3,10] (unique). 1st settlements: ThePhantom v28 [8,9]={SHEEP,ORE}, Kbiz v4 [0,5,6]={WHEAT,ORE,BRICK} (neither matches its grant). Roads: ThePhantom v15-v0 & v28-v12; Kbiz v10-v14 & v4-v3.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]},
+        {"endpoints": [[8, 9], [2, 8, 9]]}
+      ]
+    },
+    "Kbiz": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [0, 5, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [3, 10, 11]]},
+        {"endpoints": [[0, 5, 6], [0, 1, 6]]}
+      ]
+    }
+  }
+}

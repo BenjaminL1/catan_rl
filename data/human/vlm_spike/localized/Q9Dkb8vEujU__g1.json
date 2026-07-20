@@ -1,0 +1,27 @@
+{
+  "video_id": "Q9Dkb8vEujU",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, read via full 54-vertex overlay. ThePhantom(BLACK) {BRICK,SHEEP,WOOD}==v12 [2,8,9]; Vinnie07(RED) {SHEEP,WHEAT,WOOD}==v7 [1,7,8]. 1st settlements: ThePhantom v0 [0,3,4]={SHEEP,WOOD,WOOD}, Vinnie07 v17 [4,5,14]={WOOD,BRICK,ORE} (neither matches its grant -> exactly one each; v8, also {WOOD,WHEAT,SHEEP}, is just a road endpoint, no piece). Roads (overlay-confirmed): ThePhantom v12-v6 & v0-v15; Vinnie07 v7-v8 & v17-v5.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]},
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]}
+      ]
+    },
+    "Vinnie0789": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 7, 18]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    }
+  }
+}

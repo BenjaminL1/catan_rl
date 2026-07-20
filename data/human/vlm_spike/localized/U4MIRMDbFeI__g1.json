@@ -1,0 +1,27 @@
+{
+  "video_id": "U4MIRMDbFeI",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (Redrom=RED, ThePhantom=BLACK). ThePhantom {SHEEP,SHEEP,WOOD}==v1 [0,2,3]; Redrom {BRICK,SHEEP,WOOD}==v20 [5,15,16] (grant-pinned). 1st settlements: ThePhantom v19 [5,6,16]={WOOD,ORE,BRICK}, Redrom v12 [2,8,9]={SHEEP,WHEAT,WHEAT} (neither matches its grant -> exactly one match each). Roads (crop+pixel; brick-tile false-positive on v20-v19 discarded): ThePhantom v1-v10 & v19-v23; Redrom v20-v21 & v12-v6.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    },
+    "Redrom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    }
+  }
+}

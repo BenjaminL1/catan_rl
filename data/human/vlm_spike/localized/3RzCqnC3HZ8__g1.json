@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "Grants are self-consistent (ThePhantom {BRICK,ORE,WOOD}->v11; ACfresh {WHEAT,WHEAT,WOOD}->v7/v21), but read_board_stable returns None on BOTH the empty_baseline and post_setup frames, so no board fit / vertex-pixel positions can be recovered (the meta board_hexes was produced by a prepare-frames fallback that does not persist the affine). Without vertex positions the settlement/road pixels cannot be localized or snapped. Fail-closed reject rather than guess placements blind. A re-parse yielding a clean read_board_stable fit would recover it."
+}

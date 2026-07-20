@@ -1,0 +1,27 @@
+{
+  "video_id": "1rUf8g3djWU",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours BOTH WRONG: ThePhantom is PURPLE (meta BLACK), HoangAnhTuan is BLACK (meta WHITE). Grant self-check: ThePhantom {BRICK,ORE,SHEEP} pins to v11 [2,9,10] (piece at the stone4/brick10/sheep8 corner; v10 also matches the multiset but is empty); HoangAnhTuan {BRICK,ORE,WOOD}==v20 [5,15,16]. 1st settlements: ThePhantom v23 [6,16,17]={WHEAT,ORE,WOOD}, HoangAnhTuan v33 [10,11]={BRICK,WHEAT}. Local fit slightly offset (v11 piece renders near the v30 label). Roads pixel-detected: ThePhantom v11-v30 & v23-v19; HoangAnhTuan v20-v21 & v33-v14.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [9, 10]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "HoangAnhTuan": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]},
+        {"endpoints": [[10, 11], [3, 10, 11]]}
+      ]
+    }
+  }
+}

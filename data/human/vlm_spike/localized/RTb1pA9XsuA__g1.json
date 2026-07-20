@@ -1,0 +1,27 @@
+{
+  "video_id": "RTb1pA9XsuA",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (theJONN=RED, ThePhantom=BLACK). ThePhantom {BRICK,SHEEP,WHEAT}==v9 [1,6,18]; theJONN {BRICK,WHEAT,WOOD}==v7 [1,7,8]. 1st settlements: ThePhantom v11 [2,9,10]={WOOD,ORE,ORE}, theJONN v21 [5,14,15]={WOOD,WOOD,SHEEP}. Roads pixel+crop verified (brick-tile false-positive on v7-v24 discarded): ThePhantom v9-v3 & v11-v12; theJONN v7-v6 & v21-v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]},
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]}
+      ]
+    },
+    "theJONN": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    }
+  }
+}

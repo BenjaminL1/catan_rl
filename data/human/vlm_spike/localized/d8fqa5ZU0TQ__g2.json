@@ -1,0 +1,27 @@
+{
+  "video_id": "d8fqa5ZU0TQ",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening, read via full 54-vertex overlay + crops. ThePhantom(BLACK) {SHEEP,WHEAT,WOOD}==v20 [5,15,16]; JBOWKNOWS(RED) {ORE,ORE,WHEAT}==v4 [0,5,6]. 1st settlements: ThePhantom v18 [4,13,14]={BRICK,ORE,WOOD}, JBOWKNOWS v7 [1,7,8]={SHEEP,WHEAT,WHEAT} (neither matches its grant). Roads crop-verified (contaminated detection corrected): ThePhantom v20-v19 & v18-v17; JBOWKNOWS v4-v5 & v7-v6.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "JBOWKNOWS": {
+      "settlements": [
+        {"hexes": [0, 5, 6]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 5, 6], [0, 4, 5]]},
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]}
+      ]
+    }
+  }
+}
