@@ -1,0 +1,27 @@
+{
+  "video_id": "tEJGhsBjX60",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours: ThePhantom=PURPLE, fulligin=BLACK. ThePhantom {SHEEP,WHEAT,WOOD}==v17 [4,5,14]; fulligin {BRICK,SHEEP} (coastal 2-hex)==v28 [8,9]. 1st settlements: ThePhantom v6 [1,2,8]={SHEEP,ORE,BRICK}, fulligin v10 [2,3,10]={ORE,WHEAT,WOOD}. Roads crop-verified: ThePhantom v17-v5 & v6-v12; fulligin v28-v29 & v10-v11.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    },
+    "fulligin": {
+      "settlements": [
+        {"hexes": [8, 9]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[8, 9], [8]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    }
+  }
+}

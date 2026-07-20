@@ -1,0 +1,27 @@
+{
+  "video_id": "Jmu1m5Ior0c",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (Noelle3276=RED, ThePhantom=BLACK). ThePhantom {ORE,SHEEP,WHEAT}==v3 [0,1,6]; Noelle3276 {BRICK,SHEEP,WHEAT}==v11 [2,9,10]. 1st settlements: ThePhantom v14 [3,10,11]={WOOD,WHEAT,ORE}, Noelle3276 v17 [4,5,14]={SHEEP,WOOD,BRICK}. Roads crop-verified (v11-v30 and v14-v33 detections were fit/stone-tile artifacts): ThePhantom v3-v2 & v14-v13; Noelle3276 v11-v12 & v17-v21.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [3, 10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 1, 2]]},
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]}
+      ]
+    },
+    "Noelle3276": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]},
+        {"endpoints": [[4, 5, 14], [5, 14, 15]]}
+      ]
+    }
+  }
+}

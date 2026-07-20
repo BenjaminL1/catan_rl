@@ -1,0 +1,27 @@
+{
+  "video_id": "EdMnUD-eZ6A",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (ProxyWoxy=RED, ThePhantom=BLACK). ThePhantom {BRICK,ORE,SHEEP}==v12 [2,8,9]; ProxyWoxy {BRICK,SHEEP,WHEAT}==v13 [3,11,12]. 1st settlements: ThePhantom v4 [0,5,6]={SHEEP,WHEAT,WOOD}, ProxyWoxy v8 [1,7,18]={BRICK,ORE,ORE}. Roads crop-verified (v8-v7 was dice-number, v4-v5 was contamination): ThePhantom v12-v11 & v4-v19; ProxyWoxy v13-v37 & v8-v9.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [0, 5, 6]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]},
+        {"endpoints": [[0, 5, 6], [5, 6, 16]]}
+      ]
+    },
+    "ProxyWoxy": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [11, 12]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

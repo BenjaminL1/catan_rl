@@ -1,0 +1,27 @@
+{
+  "video_id": "A1JStgwFIsI",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + blob detection. meta colours CORRECT (BigDyl=RED, ThePhantom=BLACK). ThePhantom {WHEAT,WOOD} (coastal 2-hex)==v41 [13,14]; BigDyl {BRICK,BRICK,WOOD}==v9 [1,6,18]. 1st settlements: ThePhantom v10 [2,3,10]={SHEEP,ORE,ORE}, BigDyl v21 [5,14,15]={WHEAT,WHEAT,SHEEP}. Roads pixel-detected: ThePhantom v41-v18 & v10-v11; BigDyl v9-v8 & v21-v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [13, 14]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[13, 14], [4, 13, 14]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    },
+    "BigDyl": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    }
+  }
+}

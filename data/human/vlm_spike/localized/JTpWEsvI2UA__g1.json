@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "Grants self-consistent (ThePhantom {ORE,ORE,SHEEP}->v9/v22; VegDelight {BRICK,ORE,WOOD}->v0), but read_board_stable returns None on both frames, so no vertex-pixel positions can be recovered for piece/road localization. Fail-closed reject (same class as 3RzCqnC3HZ8). A re-parse with a clean board fit would recover it."
+}

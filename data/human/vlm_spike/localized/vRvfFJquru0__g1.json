@@ -1,0 +1,27 @@
+{
+  "video_id": "vRvfFJquru0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours: ThePhantom=PURPLE, Sj122=BLACK. ThePhantom {BRICK,ORE,WOOD}==v15 [3,4,12]; Sj122 {ORE,WHEAT,WOOD}==v10 [2,3,10]. 1st settlements: ThePhantom v6 [1,2,8]={SHEEP,WHEAT,ORE}, Sj122 v17 [4,5,14]={BRICK,WHEAT,SHEEP}. Roads overlay-read: ThePhantom v15-v16 & v6-v12; Sj122 v10-v11 & v17-v18.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 4, 12]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 4, 12], [4, 12, 13]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    },
+    "Sj122": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]}
+      ]
+    }
+  }
+}

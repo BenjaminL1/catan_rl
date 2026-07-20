@@ -1,0 +1,27 @@
+{
+  "video_id": "IVvj3NgRWCs",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (retailrow=RED, ThePhantom=BLACK). ThePhantom {ORE,ORE,SHEEP}==v17 [4,5,14]; retailrow {BRICK,SHEEP,WOOD}==v0 [0,3,4]. 1st settlements: ThePhantom v11 [2,9,10]={WHEAT,WHEAT,BRICK}, retailrow v19 [5,6,16]={ORE,ORE,WHEAT}. Roads overlay-read: ThePhantom v17-v5 & v11-v12; retailrow v0-v1 & v19-v23.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]},
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]}
+      ]
+    },
+    "retailrow": {
+      "settlements": [
+        {"hexes": [0, 3, 4]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 3, 4], [0, 2, 3]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    }
+  }
+}
