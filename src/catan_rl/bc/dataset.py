@@ -591,6 +591,53 @@ def _git_sha() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Resume helpers
+# ---------------------------------------------------------------------------
+
+
+def _shard_index_from_name(name: str) -> int:
+    """``"shard_0003.npz"`` → ``3``."""
+    return int(Path(name).stem.split("_")[1])
+
+
+def _reconstruct_shard_entry(path: Path, game_perturbations: list[str]) -> dict[str, Any]:
+    """Rebuild a manifest shard entry from a shard's arrays alone.
+
+    Used by ``--resume`` when a partial dir predates ``progress.json`` (e.g.
+    shards dropped in from an earlier, pre-resume run). Every field the loader
+    needs (``shard``, ``n_pairs``, ``game_ids``) is read directly from the
+    arrays; win/perturbation provenance is derived (perturbation from the
+    deterministic ``game_perturbations`` assignment, outcome from the sign of
+    each game's seat-0 ``z_disc``), so the entry is honest without a replay.
+    """
+    d = np.load(path, mmap_mode="r")
+    gid = np.asarray(d["game_id"])
+    seat = np.asarray(d["player_seat"])
+    z = np.asarray(d["z_disc"])
+    game_ids = sorted(int(x) for x in np.unique(gid))
+    n_pairs = int(np.asarray(d["action"]).shape[0])
+    # A game's seat-0 decisions all carry the same z_disc sign (±1 on a
+    # decisive game, 0 when truncated), so a positive seat-0 z_disc ⇒ P1 won.
+    p1_wins = int(np.unique(gid[(seat == 0) & (z > 0)]).shape[0])
+    p2_wins = int(np.unique(gid[(seat == 0) & (z < 0)]).shape[0])
+    perturbations = {
+        k: sum(1 for g in game_ids if g < len(game_perturbations) and game_perturbations[g] == k)
+        for k in ("canonical", "epsilon_greedy", "weight_noised")
+    }
+    return {
+        "shard": path.name,
+        "n_games": len(game_ids),
+        "game_ids": game_ids,
+        "n_pairs": n_pairs,
+        "perturbations": perturbations,
+        "p1_wins": p1_wins,
+        "p2_wins": p2_wins,
+        "truncated": len(game_ids) - p1_wins - p2_wins,
+        "reconstructed": True,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Public entry
 # ---------------------------------------------------------------------------
 
@@ -606,6 +653,7 @@ def generate_dataset(
     discount: float = 0.998,
     include_forced: bool = False,
     progress_every: int = 500,
+    resume: bool = False,
 ) -> dict[str, Any]:
     """Generate the BC dataset and write sharded NPZ + manifest.
 
@@ -624,9 +672,22 @@ def generate_dataset(
             pairs at write time. The BC plan §1 D4 dropped these via
             unanimous panel vote.
         progress_every: print progress every N games.
+        resume: if True and ``out_dir`` already holds ``shard_*.npz`` files,
+            count the games already persisted (from ``progress.json`` when
+            present, else by reading the shard arrays), continue shard
+            numbering from max-existing-index + 1 (never overwriting an
+            existing shard), and generate only the remaining
+            ``n_games − games_done`` games. Per-game seeds stay
+            ``seed + game_index``, so resumed games occupy a disjoint,
+            deterministic RNG stream from the already-done games. Default
+            ``False`` leaves the from-scratch behaviour byte-identical.
 
     Returns:
         The manifest dict (also written to ``out_dir/manifest.json``).
+
+    Crash-tolerance: ``manifest.json`` and a small ``progress.json`` sidecar
+    are refreshed after **every** shard flush (not only at the end), so a run
+    killed mid-way leaves a loader-readable dataset of whatever completed.
     """  # noqa: RUF002
     if not 0 <= perturb_pct <= 1.0:
         raise ValueError(f"perturb_pct must be in [0, 1]: {perturb_pct}")
@@ -657,9 +718,87 @@ def generate_dataset(
     sha = _git_sha()
     t0 = time.time()
 
-    shards: list[dict[str, Any]] = []
-    pending_games: list[_GameRecord] = []
+    # ---- Resume: adopt any shards already on disk -----------------------
+    # ``resume_shards`` seeds the manifest with the already-persisted shards;
+    # ``games_done`` is how many games we skip; ``next_shard_idx`` continues
+    # numbering past the highest existing shard so none is ever overwritten.
+    resume_shards: list[dict[str, Any]] = []
+    games_done = 0
     next_shard_idx = 0
+    if resume:
+        existing = sorted(out_dir.glob("shard_*.npz"), key=lambda p: _shard_index_from_name(p.name))
+        if existing:
+            progress_path = out_dir / "progress.json"
+            prog: dict[str, Any] | None = None
+            if progress_path.exists():
+                try:
+                    prog = json.loads(progress_path.read_text())
+                except (json.JSONDecodeError, OSError):
+                    prog = None
+            existing_names = {p.name for p in existing}
+            prog_names = {s["shard"] for s in prog["shards"]} if prog else set()
+            if prog is not None and prog_names == existing_names:
+                # Fast path: trust the sidecar written by a prior run.
+                resume_shards = list(prog["shards"])
+                games_done = int(prog["games_done"])
+            else:
+                # Sidecar absent or stale (e.g. pre-resume partial shards):
+                # count games straight from the shard arrays.
+                resume_shards = [_reconstruct_shard_entry(p, game_perturbations) for p in existing]
+                games_done = sum(int(s["n_games"]) for s in resume_shards)
+            next_shard_idx = max(_shard_index_from_name(p.name) for p in existing) + 1
+            print(
+                f"[bc.dataset] resume: {games_done} games already persisted across "
+                f"{len(existing)} shard(s); continuing at shard_{next_shard_idx:04d}, "
+                f"generating {max(n_games - games_done, 0)} more.",
+                flush=True,
+            )
+
+    shards: list[dict[str, Any]] = list(resume_shards)
+    pending_games: list[_GameRecord] = []
+    total_pre_filter = 0
+    total_post_filter = 0
+
+    def _build_manifest() -> dict[str, Any]:
+        return {
+            "run_id": run_id,
+            "git_sha": sha,
+            "seed": seed,
+            "n_games": n_games,
+            "perturb_pct": perturb_pct,
+            "epsilon_greedy_share_of_perturbed": epsilon_greedy_share_of_perturbed,
+            "shard_size": shard_size,
+            "max_turns": max_turns,
+            "discount": discount,
+            "include_forced": include_forced,
+            "perturbation_counts": perturbation_counts,
+            "shards": shards,
+            "total_decisions_pre_filter": total_pre_filter,
+            "total_decisions_post_filter": total_post_filter,
+            "forced_move_drop_pct": (
+                (total_pre_filter - total_post_filter) / max(total_pre_filter, 1)
+            ),
+            "wall_clock_seconds": time.time() - t0,
+        }
+
+    def _persist() -> dict[str, Any]:
+        """Write manifest.json (loader input) + progress.json (resume sidecar)."""
+        manifest = _build_manifest()
+        (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        (out_dir / "progress.json").write_text(
+            json.dumps(
+                {
+                    "shards": shards,
+                    "games_done": sum(int(s["n_games"]) for s in shards),
+                    "seed_base": seed,
+                    "target_games": n_games,
+                    "shard_size": shard_size,
+                    "run_id": run_id,
+                },
+                indent=2,
+            )
+        )
+        return manifest
 
     def _flush_shard() -> None:
         nonlocal next_shard_idx
@@ -691,10 +830,11 @@ def generate_dataset(
         )
         next_shard_idx += 1
         pending_games.clear()
+        # Crash-tolerance: refresh the loader manifest + resume sidecar after
+        # every flush so a mid-run death leaves a usable dataset.
+        _persist()
 
-    total_pre_filter = 0
-    total_post_filter = 0
-    for i in range(n_games):
+    for i in range(games_done, n_games):
         perturb = game_perturbations[i]
         rec = play_game(
             game_id=i,
@@ -721,23 +861,4 @@ def generate_dataset(
 
     _flush_shard()
 
-    manifest = {
-        "run_id": run_id,
-        "git_sha": sha,
-        "seed": seed,
-        "n_games": n_games,
-        "perturb_pct": perturb_pct,
-        "epsilon_greedy_share_of_perturbed": epsilon_greedy_share_of_perturbed,
-        "shard_size": shard_size,
-        "max_turns": max_turns,
-        "discount": discount,
-        "include_forced": include_forced,
-        "perturbation_counts": perturbation_counts,
-        "shards": shards,
-        "total_decisions_pre_filter": total_pre_filter,
-        "total_decisions_post_filter": total_post_filter,
-        "forced_move_drop_pct": ((total_pre_filter - total_post_filter) / max(total_pre_filter, 1)),
-        "wall_clock_seconds": time.time() - t0,
-    }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    return manifest
+    return _persist()

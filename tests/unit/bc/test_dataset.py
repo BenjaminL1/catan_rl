@@ -343,3 +343,190 @@ def test_generate_dataset_no_game_id_duplication_across_shards(tmp_path: Path) -
     for shard in m["shards"]:
         all_game_ids.extend(shard["game_ids"])
     assert all_game_ids == list(range(6))  # contiguous, no dupes
+
+
+# ---------------------------------------------------------------------------
+# Resumable / crash-tolerant generation
+# ---------------------------------------------------------------------------
+
+
+def test_resume_writes_manifest_and_progress_every_flush(tmp_path: Path) -> None:
+    """A completed (or mid-run-killed) partial leaves loader-readable files.
+
+    After each shard flush, both manifest.json and progress.json exist and
+    cover the flushed shards — so a job that dies after the first shard is
+    already usable, not orphaned.
+    """
+    generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    assert (tmp_path / "manifest.json").exists()
+    assert (tmp_path / "progress.json").exists()
+    prog = json.loads((tmp_path / "progress.json").read_text())
+    assert prog["games_done"] == 4
+    assert prog["seed_base"] == 0
+    assert prog["target_games"] == 4
+    # The partial is loadable by the training loader.
+    from catan_rl.bc.loader import BcDataset
+
+    ds = BcDataset(tmp_path, aug_prob=0.0)
+    assert len(ds) > 0
+
+
+def test_resume_continues_numbering_and_generates_remainder(tmp_path: Path) -> None:
+    m1 = generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    assert len(m1["shards"]) == 2
+    b0 = (tmp_path / "shard_0000.npz").read_bytes()
+    b1 = (tmp_path / "shard_0001.npz").read_bytes()
+
+    m2 = generate_dataset(
+        out_dir=tmp_path,
+        n_games=6,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+    # (b) new shard continues numbering; (b') existing shards never overwritten.
+    assert (tmp_path / "shard_0002.npz").exists()
+    assert not (tmp_path / "shard_0003.npz").exists()
+    assert (tmp_path / "shard_0000.npz").read_bytes() == b0
+    assert (tmp_path / "shard_0001.npz").read_bytes() == b1
+    # (e) final manifest covers ALL shards; (a/c) only remainder generated.
+    assert len(m2["shards"]) == 3
+    gids: list[int] = []
+    for s in m2["shards"]:
+        gids.extend(s["game_ids"])
+    assert sorted(gids) == list(range(6))  # contiguous 0..5, no dupes
+
+
+def test_resume_generates_non_overlapping_games(tmp_path: Path) -> None:
+    """Resumed games occupy a disjoint, deterministic slice of the run.
+
+    We can't pin dice byte-for-byte (``StackedDice`` is entropy-seeded from
+    the stdlib ``random`` state — a pre-existing property of the engine, not
+    of resume), so we pin the two guarantees that actually prevent
+    duplication: (1) the resumed shard's game_ids are disjoint from the
+    already-done games and continue contiguously, and (2) the perturbation
+    assignment — the only RNG stream ``generate_dataset`` itself owns — is
+    deterministic in the game index, so the resumed run's final mix equals an
+    uninterrupted run's mix rather than restarting the stream from 0.
+    """
+    d_full = tmp_path / "full"
+    d_res = tmp_path / "resume"
+    m_full = generate_dataset(
+        out_dir=d_full,
+        n_games=6,
+        perturb_pct=1.0,  # exercise the perturbation RNG stream
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    # Simulate an interruption after 4 games, then resume to 6.
+    generate_dataset(
+        out_dir=d_res,
+        n_games=4,
+        perturb_pct=1.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    m_res = generate_dataset(
+        out_dir=d_res,
+        n_games=6,
+        perturb_pct=1.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+
+    # (1) Non-overlapping game_ids: the newly written shard holds exactly the
+    #     remainder, disjoint from the games already persisted.
+    done_gids = {g for s in m_res["shards"][:2] for g in s["game_ids"]}
+    new_gids = {g for s in m_res["shards"][2:] for g in s["game_ids"]}
+    assert done_gids == {0, 1, 2, 3}
+    assert new_gids == {4, 5}
+    assert done_gids.isdisjoint(new_gids)
+
+    # (2) The perturbation assignment is deterministic in the game index, so a
+    #     resumed run reproduces the uninterrupted run's overall mix (it did
+    #     NOT restart the stream from game 0 for the resumed games).
+    assert m_res["perturbation_counts"] == m_full["perturbation_counts"]
+
+
+def test_resume_reconstructs_when_progress_missing(tmp_path: Path) -> None:
+    """Pre-resume shards that predate progress.json are handled: games_done
+    is counted from the shard arrays, and a valid manifest is rebuilt."""
+    generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    # Simulate legacy partial: only the raw shards survive.
+    (tmp_path / "progress.json").unlink()
+    (tmp_path / "manifest.json").unlink()
+
+    m = generate_dataset(
+        out_dir=tmp_path,
+        n_games=6,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+    assert len(m["shards"]) == 3
+    gids: list[int] = []
+    for s in m["shards"]:
+        gids.extend(s["game_ids"])
+    assert sorted(gids) == list(range(6))
+    # Reconstructed + new shards are together loader-readable.
+    from catan_rl.bc.loader import BcDataset
+
+    train, val = BcDataset.train_val_split(tmp_path, val_pct=0.25)
+    assert len(train) > 0 and len(val) > 0
+
+
+def test_resume_without_existing_shards_is_fresh_run(tmp_path: Path) -> None:
+    """--resume on an empty dir behaves exactly like a fresh run."""
+    m = generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+    assert (tmp_path / "shard_0000.npz").exists()
+    assert len(m["shards"]) == 2
+    gids: list[int] = []
+    for s in m["shards"]:
+        gids.extend(s["game_ids"])
+    assert sorted(gids) == list(range(4))

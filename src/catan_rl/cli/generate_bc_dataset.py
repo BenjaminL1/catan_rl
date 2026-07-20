@@ -30,6 +30,15 @@ def main() -> None:
     parser.add_argument("--discount", type=float, default=0.998)
     parser.add_argument("--include-forced", action="store_true")
     parser.add_argument("--progress-every", type=int, default=500)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Continue an interrupted run: skip games already persisted as "
+            "shard_*.npz in --out, number new shards past the highest existing "
+            "index (never overwriting one), and generate only the remainder."
+        ),
+    )
     args = parser.parse_args()
 
     manifest = generate_dataset(
@@ -43,6 +52,7 @@ def main() -> None:
         discount=args.discount,
         include_forced=args.include_forced,
         progress_every=args.progress_every,
+        resume=args.resume,
     )
     print(f"[generate_bc_dataset] wrote {args.out}/manifest.json")
     print(
