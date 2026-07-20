@@ -1,0 +1,27 @@
+{
+  "video_id": "5yIHzWoFmS4",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (hakutamu=RED, ThePhantom=BLACK). ThePhantom {ORE,WHEAT,WOOD}==v7 [1,7,8]; hakutamu {SHEEP,WHEAT,WOOD}==v11 [2,9,10]. 1st settlements: ThePhantom v22 [6,17,18]={SHEEP,ORE,ORE}, hakutamu v17 [4,5,14]={BRICK,BRICK,SHEEP}. Roads overlay-read: ThePhantom v7-v6 & v22-v9; hakutamu v11-v10 & v17-v5.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    },
+    "hakutamu": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    }
+  }
+}

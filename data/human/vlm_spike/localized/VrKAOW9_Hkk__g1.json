@@ -1,0 +1,27 @@
+{
+  "video_id": "VrKAOW9_Hkk",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (Bud7259=RED, ThePhantom=BLACK). ThePhantom {SHEEP,WHEAT,WOOD}==v14 [3,10,11]; Bud7259 {BRICK,ORE,SHEEP}==v8 [1,7,18]. 1st settlements: ThePhantom v22 [6,17,18]={WHEAT,ORE,BRICK}, Bud7259 v20 [5,15,16]={WOOD,WOOD,WHEAT}. Roads crop-verified (v14-v33 and v8 contamination corrected): ThePhantom v14-v10 & v22-v9; Bud7259 v8-v7 & v20-v21.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    },
+    "Bud7259": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]}
+      ]
+    }
+  }
+}

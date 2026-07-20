@@ -1,0 +1,27 @@
+{
+  "video_id": "VdVTZb4ngK8",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours: ThePhantom=PURPLE, LilOnion=BLACK. ThePhantom {BRICK,ORE,SHEEP}==v9 [1,6,18]; LilOnion {BRICK,ORE,WOOD}==v20 [5,15,16]. 1st settlements: ThePhantom v18 [4,13,14]={WHEAT,ORE,WOOD}, LilOnion v0 [0,3,4]={SHEEP,WHEAT,WHEAT}. Roads overlay-read (clear vertical roads; colour detection returned 0): ThePhantom v9-v8 & v18-v16; LilOnion v20-v21 & v0-v1.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    },
+    "LilOnion": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]},
+        {"endpoints": [[0, 3, 4], [0, 2, 3]]}
+      ]
+    }
+  }
+}

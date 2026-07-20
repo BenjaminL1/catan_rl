@@ -1,0 +1,27 @@
+{
+  "video_id": "AS6rT1uiilU",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (Marrin0650=RED, ThePhantom=BLACK). ThePhantom {ORE,SHEEP,WOOD}==v14 [3,10,11]; Marrin0650 {BRICK,ORE,WOOD}==v22 [6,17,18] (both uniquely pinned). 1st settlements: ThePhantom v5 [0,4,5]={WHEAT,SHEEP,BRICK}, Marrin0650 v15 [3,4,12]={ORE,SHEEP,WHEAT}. Roads pixel-detected: ThePhantom v14-v10 & v5-v17; Marrin0650 v22-v9 & v15-v13.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]}
+      ]
+    },
+    "Marrin0650": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]},
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]}
+      ]
+    }
+  }
+}
