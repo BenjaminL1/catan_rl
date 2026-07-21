@@ -1,0 +1,27 @@
+{
+  "video_id": "1EnlKCfBR7k",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours CORRECT (nads17=RED, ThePhantom=BLACK). ThePhantom {BRICK,BRICK,WOOD}==v21 [5,14,15]; nads17 {BRICK,SHEEP,WOOD}==v18 [4,13,14]. 1st settlements: ThePhantom v6 [1,2,8]={WHEAT,WHEAT,SHEEP}, nads17 v8 [1,7,18]={WHEAT,WHEAT,ORE}. Roads overlay-read: ThePhantom v21-v20 & v6-v12; nads17 v18-v16 & v8-v9.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    },
+    "nads17": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

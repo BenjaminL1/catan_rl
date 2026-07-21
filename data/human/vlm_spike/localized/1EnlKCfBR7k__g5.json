@@ -1,0 +1,27 @@
+{
+  "video_id": "1EnlKCfBR7k",
+  "game_index": 5,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crop. meta colours CORRECT (nads17=RED, ThePhantom=BLACK). ThePhantom {ORE,WHEAT,WOOD}==v17 [4,5,14]; nads17 {BRICK,ORE,WOOD}==v3 [0,1,6]. 1st settlements: ThePhantom v8 [1,7,18]={ORE,BRICK,SHEEP}, nads17 v13 [3,11,12]={BRICK,WHEAT,SHEEP}. Roads crop-verified (v13-v14 was piece/tile bleed; both v8-v9 black and v3-v9 red meet at empty v9): ThePhantom v17-v5 & v8-v9; nads17 v3-v9 & v13-v15.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    },
+    "nads17": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [1, 6, 18]]},
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]}
+      ]
+    }
+  }
+}

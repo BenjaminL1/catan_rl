@@ -1,0 +1,27 @@
+{
+  "video_id": "Rdy7jiEKF5M",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. NOTE: BOTH players' grant is {BRICK,SHEEP,WOOD} (each matching v8/v9/v23), so grant self-check CANNOT assign handles here — handle->colour mapping relies on meta player_colors (OreKing=RED, ThePhantom=BLACK), which matches the pieces: RED at v9(granted)+v5, BLACK at v23(granted)+v13. Robber on h2 (desert). ThePhantom(BLACK) granted v23 [6,16,17]={WOOD,BRICK,SHEEP}; OreKing(RED) granted v9 [1,6,18]={BRICK,WOOD,SHEEP}. 1st: ThePhantom v13 [3,11,12]={ORE,SHEEP,WHEAT}, OreKing v5 [0,4,5]={ORE,WHEAT,BRICK}. Roads crop-verified: ThePhantom v23-v19 & v13-v15; OreKing v9-v22 & v5-v0.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]},
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]}
+      ]
+    },
+    "OreKing": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]},
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]}
+      ]
+    }
+  }
+}
