@@ -34,6 +34,16 @@ Param count ≈ 1.38M (was ≈ 1.376M) — the fork buys STRUCTURE, not width.
   heuristic bootstrap → lowered-bar self-play. Clean priors for the fresh pointer
   heads; the regenerated BC data is used. This is the seeding path that produces
   the accepted lineage.
+  - BC train writes a BARE `{policy_state_dict, step, val_nll}` `best.pt` (no
+    `schema_version`), which `load_checkpoint` / the PPO learner warm-start
+    (`init_policy_checkpoint`) / `build_actor` refuse. Bridge it once with
+    `scripts/bc_to_checkpoint.py --in runs/bc/<run>/best.pt` → a schema'd,
+    policy-only `best_ckpt.pt` (reuses `save_policy_only`; mirrors the
+    `expert_iteration/distill.py` re-save precedent; weights byte-equal).
+  - The heuristic-bootstrap PPO stage runs from
+    `configs/bootstrap_pointer_arch.yaml` (fixed-heuristic opponent, self-play
+    OFF, `init_policy_checkpoint` = the bridged BC `best_ckpt.pt`, MPS). The
+    pointer-arch is the default `CatanPolicy`, so no arch flags are needed.
 - **CONTINGENCY — transplant (kept open).** `scripts/migrate_pointer_arch.py`
   (`catan_rl.checkpoint.pointer_arch_migration`) loads any legacy v2 checkpoint
   and transplants the tile-encoder + GNN verbatim, zero-pads the new player-

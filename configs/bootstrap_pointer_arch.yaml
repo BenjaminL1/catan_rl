@@ -1,0 +1,101 @@
+# Heuristic-bootstrap config for the pointer-arch fork lineage.
+#
+# Stage 2 of the ratified re-bootstrap sequence (spec:
+# .claude/veriloop/specs/pointer-arch-fork.md §"Ratified decisions"):
+#   BC regen -> BC train -> [THIS: heuristic bootstrap] -> lowered-bar self-play.
+#
+# PPO warm-started from the BC-trained pointer-arch policy, played vs the FIXED
+# heuristic opponent (NOT self-play / snapshots). Mirrors the original v2
+# `bootstrap_v1` recipe (fixed-heuristic opponent, from `configs/ppo_default.yaml`
+# audit defaults); the ONE structural change vs a cold start is the BC warm-start
+# via `init_policy_checkpoint`, which points at the schema'd bridge of BC best.pt
+# produced by `scripts/bc_to_checkpoint.py`.
+#
+# 1v1 Colonist ruleset is preserved end-to-end: the engine is unchanged, the
+# opponent is the same heuristic the phase-advancement gate measures, and no
+# league / self-play knob is enabled here.
+#
+# Launch (from the repo root):
+#   PYTHONPATH=src nohup python scripts/train.py \
+#       --config configs/bootstrap_pointer_arch.yaml > bootstrap_pointer_arch.out 2>&1 &
+
+rollout:
+  n_envs: 128                    # audit: above MPS crossover for SGD, amortises Python overhead
+  n_steps: 256                   # 128 envs * 256 steps = 32768 transitions / rollout
+  vec_env_mode: serial           # only serial is implemented
+  max_turns: 400                 # truncation cap
+  opponent_type: heuristic       # FIXED heuristic bootstrap opponent (NOT self-play)
+  engine_backend: python         # production default; Rust path is scaffolding-only
+
+ppo:
+  n_epochs: 4
+  batch_size: 512                # audit: MPS SGD 2.3x faster than CPU at 512; must divide n_envs*n_steps
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02                # early-stop within an update when KL exceeds
+  kl_approx: k3                  # Schulman 2020 unbiased low-variance
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995                   # ~one-game effective horizon
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.04       # Charlesworth-style anneal
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05              # belief-head aux (CE vs engine ground truth)
+  opp_action_coef: 0.03          # opp-action aux (only fires vs league opponents -> inert here)
+  aux_value_coef: 0.05           # pointer-arch fork D4: trunk-shaping aux value head, co-trained from update 0
+  setup_entropy_coef: 0.0        # opening-diversity sweep knob; off for the bootstrap
+
+optimizer:
+  lr_start: 3.0e-4
+  lr_end: 1.0e-5
+  weight_decay: 1.0e-4
+  betas: [0.9, 0.999]
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 0     # 0 = infer from total_steps / rollout size
+
+checkpoint:
+  save_every_updates: 50
+  keep_last_n: 5
+  save_optimizer_state: true     # required for clean resume
+
+eval:
+  eval_every_updates: 40         # periodic WR-vs-heuristic monitoring
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]    # the bootstrap's phase-advancement signal
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 1.0          # fixed-heuristic bootstrap: the only active opponent
+  snapshot_weight: 0.0           # 0 = self-play OFF (this is the fixed-opponent stage)
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  anchor_weight: 0.0             # no frozen anchor during the bootstrap
+
+# auto_stop stays at its (disabled) default: it requires league.auto_reanchor_enabled,
+# which is off here. Monitor the WR-vs-heuristic curve and stop when it flattens
+# (the original bootstrap plateaued ~0.66 after ~12M steps).
+
+total_steps: 50003968            # 1526 rollouts * 128 * 256 ~= 50.0M; bootstrap horizon (plateaus well before this)
+seed: 42
+device: mps                      # M1 training device (batched SGD ~2.6-3.3x faster than CPU); eval pins CPU internally
+torch_compile: false
+run_name: bootstrap_pointer_arch
+output_dir: runs/train
+
+# Learner warm-start from the BC-trained pointer-arch policy (strict load, FRESH
+# optimizer). This is the schema'd bridge of runs/bc/pointer_arch_30k/best.pt
+# (best_val_nll=3.2046) produced by scripts/bc_to_checkpoint.py. Repo-root-relative
+# (matches every other config); the run must be launched from the repo root.
+init_policy_checkpoint: runs/bc/pointer_arch_30k/best_ckpt.pt
+
+min_free_disk_gb: 5.0            # free-disk floor before each save; clean auto-stop if the disk runs low (unattended multi-day run)
