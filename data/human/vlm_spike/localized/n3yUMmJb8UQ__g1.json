@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_board_hexes",
+  "vlm_note": "No board_hexes from phaseC board CV. Grants present but IDENTICAL for both players (ThePhantom & Kanovi both {ORE,SHEEP,WOOD}), so even after a board recovery the grant self-check cannot split handles color-agnostically; would rely on meta colours (ThePhantom=BLACK, Kanovi=RED). Recoverable via manual screenshot + colour read."
+}

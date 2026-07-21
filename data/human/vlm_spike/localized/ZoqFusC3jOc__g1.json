@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_board_hexes",
+  "vlm_note": "phaseC board CV produced no board_hexes (resource map) -> cannot map grants to vertices. Grants ARE present (ThePhantom {BRICK,SHEEP,WHEAT}; Ko8078 {BRICK,WHEAT,WOOD}), so recoverable via a manual board screenshot or clean re-parse."
+}

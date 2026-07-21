@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_and_no_grants",
+  "vlm_note": "No board_hexes AND granted_resources empty (grant_diag: no_grant_line_in_any_frame). Neither firewall input available. Unrecoverable from this parse."
+}
