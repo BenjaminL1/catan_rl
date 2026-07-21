@@ -1,0 +1,27 @@
+{
+  "video_id": "QCCgzcw9S3k",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (ThePhantom=BLACK, woolcitywool=RED). Grant-locked 2nds: ThePhantom {BRICK,ORE,WOOD}==v4 [0,5,6] (unique); woolcitywool {BRICK,BRICK,WHEAT}==v8 [1,7,18]. 1st settlements: ThePhantom v13 [3,11,12]={SHEEP,WHEAT,ORE}, woolcitywool v18 [4,13,14]={ORE,WOOD,WOOD}. Roads: red v8-v7 [4,0,201] & v18-v16 [3,0,210] pure-red; black v4-v5 & v13-v15 crop-confirmed (both dark road bars into adjacent ore tiles; midpoint samples were ore/tree contaminated).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 5, 6]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 5, 6], [0, 4, 5]]},
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]}
+      ]
+    },
+    "woolcitywool": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    }
+  }
+}

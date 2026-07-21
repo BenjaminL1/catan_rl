@@ -1,0 +1,27 @@
+{
+  "video_id": "5LNbGhh0orc",
+  "game_index": 1,
+  "vlm_note": "meta colour WRONG for MoTuMa (meta says WHITE; pieces are clearly RED, confirmed by grant self-check: {ORE,ORE,WHEAT} uniquely = v19 which holds a red piece). ThePhantom=BLACK (meta correct). Grant-locked 2nds: ThePhantom {SHEEP,WOOD,WOOD}==v1 [0,2,3]; MoTuMa {ORE,ORE,WHEAT}==v19 [5,6,16]. 1st settlements: ThePhantom v18 [4,13,14]={WOOD,WHEAT,desert}, MoTuMa v30 [9,10]={WHEAT,BRICK} (coastal 2-hex). Roads: MoTuMa red v19-v4 (redscore 207) & v30-v11 (196, straight-down); ThePhantom black v1-v10 & v18-v17, confirmed via baseline-diff neutral-run scan (settlement-body bleed cleared by sampling the neighbor end; v1-v2 and v18-v16 have no road, v1-v0/v18-v41 are tree-tile shadow).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "MoTuMa": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]},
+        {"endpoints": [[9, 10], [2, 9, 10]]}
+      ]
+    }
+  }
+}

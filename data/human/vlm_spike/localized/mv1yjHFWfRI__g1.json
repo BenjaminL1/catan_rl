@@ -1,0 +1,27 @@
+{
+  "video_id": "mv1yjHFWfRI",
+  "game_index": 1,
+  "vlm_note": "meta colour WRONG for quirkless (meta says WHITE; pieces are clearly RED, confirmed by grant self-check: {SHEEP,SHEEP,WHEAT} = v23 which holds a red piece). ThePhantom=BLACK (meta correct). Grant-locked 2nds: ThePhantom {BRICK,WHEAT,WOOD}==v13 [3,11,12]; quirkless {SHEEP,SHEEP,WHEAT}==v23 [6,16,17]. 1st settlements: ThePhantom v9 [1,6,18]={WOOD,WHEAT,SHEEP}, quirkless v10 [2,3,10]={ORE,WOOD,BRICK}. Roads crop-confirmed: black v13-v14 & v9-v8; red v10-v11 (red 244) & v23-v22 (red 242).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]},
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]}
+      ]
+    },
+    "quirkless": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    }
+  }
+}
