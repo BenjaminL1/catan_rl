@@ -1,0 +1,27 @@
+{
+  "video_id": "mY2X6Dw0iFE",
+  "game_index": 8,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crop. meta colours CORRECT (moo61101=RED, ThePhantom=BLACK). ThePhantom {BRICK,ORE,WHEAT}==v1 [0,2,3]; moo61101 {BRICK,SHEEP,SHEEP}==v20 [5,15,16]. 1st settlements: ThePhantom v17 [4,5,14]={WOOD,SHEEP,WHEAT}, moo61101 v12 [2,8,9]={ORE,BRICK,WOOD}. Roads (v12-v28 detection was piece/tile bleed): ThePhantom v1-v2 & v17-v5; moo61101 v20-v19 & v12-v11.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [0, 1, 2]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    },
+    "moo61101": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    }
+  }
+}
