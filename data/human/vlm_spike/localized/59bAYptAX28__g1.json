@@ -1,0 +1,27 @@
+{
+  "video_id": "59bAYptAX28",
+  "game_index": 1,
+  "vlm_note": "All 4 settlements render as near-identical grey (meta TejaReddy=BLACK, ThePhantom=WHITE both muddy at overlay scale), so player split came from grant anchors + road luminance. Grant-locked 2nd settlements: ThePhantom {BRICK,ORE,SHEEP}==v3 [0,1,6]; TejaReddy {BRICK,WHEAT,WOOD}==v11 [2,9,10]. Each settlement has exactly one neutral-grey road edge; luminance splits cleanly: light pair v3-v2(149)/v13-v15(148)=ThePhantom, dark pair v11-v30(83)/v7-v8(106)=TejaReddy, consistent with the two grant anchors. 1st settlements: ThePhantom v13 [3,11,12]={SHEEP,WHEAT,WHEAT}, TejaReddy v7 [1,7,8]={ORE,ORE,SHEEP}. Roads crop-confirmed (v7-v8 sits between two ore tiles but the dark road bar is distinct from the ~150 ore grey).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 1, 2]]},
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]}
+      ]
+    },
+    "TejaReddy": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [9, 10]]},
+        {"endpoints": [[1, 7, 8], [1, 7, 18]]}
+      ]
+    }
+  }
+}

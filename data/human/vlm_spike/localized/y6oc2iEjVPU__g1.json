@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "Grants self-consistent (ThePhantom {BRICK,BRICK,WOOD}->v0; Xingyu {BRICK,SHEEP,WOOD}->v17/v18), but read_board_stable returns None on both frames, so no vertex-pixel positions can be recovered. Fail-closed reject (6th board-unreadable this run). Recoverable via a manual board screenshot (grants already extracted) or a re-parse with a clean board fit."
+}

@@ -1,0 +1,27 @@
+{
+  "video_id": "mx-f3upNYEQ",
+  "game_index": 1,
+  "vlm_note": "meta colours INVERTED (meta says Diabetus2=PURPLE/ThePhantom=BLACK; grant self-check proves the opposite). {BRICK,BRICK,WHEAT} uniquely matches v9, whose piece body is unambiguously purple ([90,49,160], strong R/low G) -> ThePhantom=PURPLE. Grant-locked 2nd settlements: ThePhantom {BRICK,BRICK,WHEAT}==v9 [1,6,18]; Diabetus2 {ORE,SHEEP,WOOD}==v0 [0,3,4]. Two purple pieces (v9,v18)=ThePhantom, two black (v0,v21)=Diabetus2. 1st settlements: ThePhantom v18 [4,13,14]={SHEEP,WOOD,ORE}, Diabetus2 v21 [5,14,15]={WHEAT,WHEAT,ORE}. Roads crop-confirmed from settlement crops + v0 wide crop (edge midpoints were brick/wheat/ore contaminated): ThePhantom v9-v3 & v18-v17; Diabetus2 v0-v15 & v21-v43.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "Diabetus2": {
+      "settlements": [
+        {"hexes": [0, 3, 4]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]},
+        {"endpoints": [[5, 14, 15], [14, 15]]}
+      ]
+    }
+  }
+}
