@@ -1,0 +1,27 @@
+{
+  "video_id": "KcyVdwgbsV8",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours: ThePhantom=PURPLE, voittaja=BLACK. ThePhantom {BRICK,SHEEP,WOOD}==v7 [1,7,8]; voittaja {BRICK,ORE,WOOD}==v18 [4,13,14] (both uniquely pinned). 1st settlements: ThePhantom v15 [3,4,12]={SHEEP,ORE,WHEAT}, voittaja v19 [5,6,16]={SHEEP,SHEEP,WHEAT}. Roads crop-verified (purple detection unreliable: v7-v6 and v15-v13 discarded): ThePhantom v7-v24 & v15-v0; voittaja v18-v16 & v19-v4.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [7, 8]]},
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]}
+      ]
+    },
+    "voittaja": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]}
+      ]
+    }
+  }
+}

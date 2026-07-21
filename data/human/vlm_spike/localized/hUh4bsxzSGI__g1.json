@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "Grants self-consistent (ThePhantom {BRICK,SHEEP,WOOD}->v4/v19; apsycho23 {ORE,ORE,WHEAT}->v7), but read_board_stable returns None on both frames, so no vertex-pixel positions can be recovered. Fail-closed reject (same class as 3RzCqnC3HZ8, JTpWEsvI2UA). A re-parse with a clean board fit would recover it."
+}

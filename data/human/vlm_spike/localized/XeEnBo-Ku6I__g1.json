@@ -1,0 +1,27 @@
+{
+  "video_id": "XeEnBo-Ku6I",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, candidate-overlay + crops (full overlay was cluttered, blob detect failed). meta colours CORRECT (luckytibo=RED, ThePhantom=BLACK). ThePhantom {BRICK,ORE,WOOD}==v14 [3,10,11]; luckytibo {BRICK,SHEEP,WHEAT}==v9 [1,6,18]. 1st settlements: ThePhantom v23 [6,16,17]={BRICK,WHEAT,SHEEP}, luckytibo v20 [5,15,16]={WOOD,ORE,WHEAT}. Roads crop-verified: ThePhantom v14-v10 & v23-v22; luckytibo v9-v8 & v20-v19.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    },
+    "luckytibo": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]},
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]}
+      ]
+    }
+  }
+}
