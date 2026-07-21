@@ -1,0 +1,27 @@
+{
+  "video_id": "-JBxkcioHFY",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crop. meta colours: ThePhantom=PURPLE, ehong=BLACK. ThePhantom {ORE,SHEEP,WHEAT}==v23 [6,16,17]; ehong {SHEEP,WHEAT,WOOD}==v12 [2,8,9]. 1st settlements: ThePhantom v18 [4,13,14]={BRICK,WOOD,ORE}, ehong v21 [5,14,15]={BRICK,ORE,ORE}. Roads crop-verified (v23-v22 was piece bleed): ThePhantom v23-v19 & v18-v17; ehong v12-v6 & v21-v20.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "ehong": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    }
+  }
+}

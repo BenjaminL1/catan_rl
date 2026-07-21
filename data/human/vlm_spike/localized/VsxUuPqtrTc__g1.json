@@ -1,0 +1,27 @@
+{
+  "video_id": "VsxUuPqtrTc",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (Ramon9319=RED, ThePhantom=BLACK). ThePhantom {BRICK,ORE,WOOD}==v18 [4,13,14]; Ramon9319 {BRICK,SHEEP,WHEAT}==v7 [1,7,8]. 1st settlements: ThePhantom v12 [2,8,9]={SHEEP,WHEAT,WOOD}, Ramon9319 v21 [5,14,15]={BRICK,WOOD,ORE}. Roads crop-verified (v18-v16 and v12-v28 were weak/bleed): ThePhantom v18-v17 & v12-v6; Ramon9319 v7-v8 & v21-v43.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    },
+    "Ramon9319": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 7, 18]]},
+        {"endpoints": [[5, 14, 15], [14, 15]]}
+      ]
+    }
+  }
+}

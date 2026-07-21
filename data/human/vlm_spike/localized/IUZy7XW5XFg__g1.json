@@ -1,0 +1,27 @@
+{
+  "video_id": "IUZy7XW5XFg",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crop. meta colours CORRECT (BigSxc=RED, ThePhantom=BLACK). ThePhantom {BRICK,WOOD} (coastal 2-hex)==v12 [2,8,9]; BigSxc {BRICK,WHEAT,WOOD}==v18 [4,13,14]. 1st settlements: ThePhantom v23 [6,16,17]={ORE,SHEEP,WHEAT}, BigSxc v14 [3,10,11]={WOOD,SHEEP,ORE}. Roads crop-verified (v14-v10 was piece bleed): ThePhantom v12-v28 & v23-v19; BigSxc v18-v17 & v14-v33.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [8, 9]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "BigSxc": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [3, 10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[3, 10, 11], [10, 11]]}
+      ]
+    }
+  }
+}
