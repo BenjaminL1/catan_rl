@@ -1,0 +1,27 @@
+{
+  "video_id": "hbVngGPROvQ",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (ThePhantom=BLACK, Winsor03841352=RED). Grant-locked 2nds: ThePhantom {ORE,WHEAT,WHEAT}==v21 [5,14,15] (unique); Winsor {BRICK,SHEEP,WHEAT}==v5 [0,4,5]. 1st settlements: ThePhantom v11 [2,9,10]={ORE,ORE,SHEEP}, Winsor v28 [8,9]={WOOD,ORE} (coastal 2-hex). Roads: red v5-v17 & v28-v12 both pure-red midpoints; black v11-v10 [101,101,101]; v21's road crop+dense-scan confirmed as v21-v17 (only neutral-grey run, sat~3; the v20/v43 edges are wheat-orange). v5-v17 and v21-v17 are distinct edges meeting at shared junction v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "Winsor03841352": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]},
+        {"endpoints": [[8, 9], [2, 8, 9]]}
+      ]
+    }
+  }
+}
