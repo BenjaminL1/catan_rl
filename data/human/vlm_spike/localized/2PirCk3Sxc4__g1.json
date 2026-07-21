@@ -1,0 +1,27 @@
+{
+  "video_id": "2PirCk3Sxc4",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (Recor6888=RED, ThePhantom=BLACK). ThePhantom {ORE,WHEAT,WOOD}==v1 [0,2,3]; Recor6888 {ORE,SHEEP,WHEAT}==v14 [3,10,11]. 1st settlements: ThePhantom v17 [4,5,14]={BRICK,ORE,SHEEP}, Recor6888 v8 [1,7,18]={BRICK,WOOD,WHEAT}. Roads crop-verified (v14-v33 and v17-v5 were piece bleed): ThePhantom v1-v10 & v17-v18; Recor6888 v14-v13 & v8-v9.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [2, 3, 10]]},
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]}
+      ]
+    },
+    "Recor6888": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}
