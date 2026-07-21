@@ -39,7 +39,7 @@ it's to be a non-uniform prior that piKL can leash and PPO can build on.
 | Source mix | **70% canonical heuristic vs heuristic, 30% perturbed vs heuristic** | Unanimous panel vote: pure heur-vs-heur is mode-collapsed on a single trajectory distribution. Variant mix broadens state coverage without injecting random-policy noise. |
 | Perturbation recipe (variant side) | ε-greedy with ε=0.10 over the heuristic's top-K candidate actions, OR ±15% noise on the heuristic's scoring weights | Cheap implementation, preserves "heuristic-like" plays but reaches different states. |
 | Player side filter | **Both players** | 3-2 vote: winner-only halves the data and is survivorship bias; the heuristic is symmetric so both sides are valid behavioral targets. Catanatron's "training on losing trajectories trains blind spots" concern is addressed by the variant mix above, not by filtering. |
-| Storage format | Sharded NPZ (~256 MB / shard), one shard per 5k games | Easy to mmap and to parallelize generation. |
+| Storage format | Sharded NPZ (~320 MB / shard), one shard per 2.5k games | Parallelizes generation. NB: `np.savez_compressed` archives are **NOT** mmap-able (`np.load(mmap_mode=...)` is silently ignored for `.npz`, and reading any member decompresses the whole ~5.5 GB array). The loader therefore chunk-streams bounded row-ranges into a small LRU rather than mmapping — see `src/catan_rl/bc/loader.py`. |
 | Compute target | **≤ 1 hour on M1 Pro**, 8-way concurrent rollouts | 17k env-steps/sec measured in Step 1 random-vs-random; heuristic adds ~2× per-step cost. 30k games × ~50 actions = 1.5M env-steps. Target wall-clock ~30 min single-process, less with parallelism. |
 
 **Filter at write time**: drop (s, a) pairs where `mask_sum(type) == 1` — i.e., the

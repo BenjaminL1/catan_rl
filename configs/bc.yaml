@@ -36,11 +36,21 @@ loader:
   # Plan: start at 0.5; re-probe equivariance after BC to revisit.
   aug_prob: 0.5
   batch_size: 1024              # M1 Pro throughput-bound at BC; large batch OK
-  num_workers: 0                # DataLoader worker procs. Authoritative knob is the
-                                # CLI flag `catan-rl-bc-train --num-workers` (default
-                                # 0); this value is reference-only. >0 is now safe —
-                                # train.py reseeds each worker's aug RNG per worker_id.
-  shuffle: true
+  num_workers: 0                # KEEP 0. The dataset is chunk-streamed (loader.py):
+                                # each shard is ~15 GB uncompressed, so a shard is
+                                # decompressed one bounded chunk at a time into an LRU.
+                                # Each DataLoader worker holds its OWN chunk LRU, so
+                                # peak RSS scales with worker count — >0 risks OOM on a
+                                # 16 GB machine. Authoritative knob is the CLI flag
+                                # `--num-workers` (default 0). train.py reseeds each
+                                # worker's aug RNG per worker_id if you do raise it.
+  # Loader RAM knobs (chunk-streamed shards). Peak RSS ≈ ~one chunk + torch.
+  # chunk_rows=200k ⇒ ~3.3 GB/chunk ⇒ ~4-5 GB peak (measured). Lower it to
+  # shrink peak (more re-decompression); the chunk-grouped BatchSampler keeps
+  # each batch inside one cached chunk so max_cached_chunks=1 is sufficient.
+  chunk_rows: 200000
+  max_cached_chunks: 1
+  shuffle: true                 # chunk order + within-chunk rows (ShardChunkBatchSampler)
   val_split_pct: 0.10           # 10% holdout by game_id (not by sample)
 
 # ---------------------------------------------------------------------------
@@ -57,7 +67,9 @@ loss:
 # ---------------------------------------------------------------------------
 optimizer:
   name: AdamW                   # matches PPO; weight_decay decoupled
-  lr: 3e-4                      # constant peak
+  lr: 3.0e-4                    # constant peak. NOTE: keep the decimal point —
+                                # YAML parses `3e-4` (no dot) as a STRING, which
+                                # then reaches AdamW(lr=...) and TypeErrors.
   weight_decay: 1.0e-4
   betas: [0.9, 0.999]
   eps: 1.0e-5
@@ -65,8 +77,9 @@ optimizer:
 
 schedule:
   warmup_steps: 500
-  lr_after_warmup: 3e-4         # constant after warmup (3-2 panel vote
-                                # against cosine for short BC run)
+  lr_after_warmup: 3.0e-4       # constant after warmup (3-2 panel vote
+                                # against cosine for short BC run). Decimal
+                                # point required (see optimizer.lr note).
 
 train:
   max_epochs: 10                # cap on the to-convergence loop

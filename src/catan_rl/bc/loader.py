@@ -1,9 +1,38 @@
 """PyTorch Dataset for BC training data.
 
 Reads sharded NPZ files produced by :func:`catan_rl.bc.dataset.generate_dataset`,
-indexes them lazily (mmap), converts numpy arrays to torch tensors at
+indexes them into a flat global pair ID, decompresses **bounded row-ranges
+(chunks)** on demand, converts numpy arrays to torch tensors at
 ``__getitem__`` time, applies D6 augmentation at configured probability,
 and supports a stratified train/val split by ``game_id``.
+
+Memory model (why this is not a naive ``np.load``)
+--------------------------------------------------
+The shards are ``np.savez_compressed`` ZIP archives. ``np.load(...,
+mmap_mode="r")`` **silently ignores** ``mmap_mode`` for ``.npz`` and returns
+an eager :class:`numpy.lib.npyio.NpzFile`: indexing any member (e.g.
+``npz["obs/tile_representations"]``) decompresses the **entire** member into
+RAM. At this dataset's scale one shard is ~15 GB uncompressed (the
+``tile_representations`` member alone is ~5.5 GB), so a per-row
+``npz[key][row]`` access would decompress ~5.5 GB to read one row — under a
+shuffled multi-worker ``DataLoader`` that multiplies into an OOM SIGKILL, and
+a single training step could never run.
+
+The fix: never hold a whole shard. Each shard is divided into **chunks** of
+``chunk_rows`` rows. A chunk is materialised by **streaming** each ``.npy``
+member out of the ZIP and keeping only the chunk's row-range (the DEFLATE
+stream is read sequentially and the pre-chunk prefix is discarded in bounded
+pieces, so the transient never exceeds one chunk-slice, not one whole member).
+Chunks live in a small **LRU** (``max_cached_chunks``, default 1). Paired with
+:class:`ShardChunkBatchSampler` — which groups every batch inside a single
+chunk and shuffles chunk order + rows within a chunk each epoch — the loader
+touches one chunk at a time and reuses it for many rows before eviction. This
+keeps peak RSS at a few GB (≈ one chunk + torch) while preserving stochasticity
+(chunk-level + within-chunk shuffle).
+
+``num_workers`` note: each worker process holds its **own** chunk LRU, so peak
+RSS scales with the worker count. ``num_workers=0`` (single process) is the
+safe default on a 16 GB machine; see ``configs/bc.yaml``.
 
 Shard layout (from :mod:`catan_rl.bc.dataset`):
   * top-level keys: ``action``, ``belief_target``, ``z_disc``,
@@ -36,55 +65,21 @@ labels — faculty review correction).
 from __future__ import annotations
 
 import json
+import zipfile
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset
+from numpy.lib import format as _npformat
+from torch.utils.data import Dataset, Sampler
 
 from catan_rl.augmentation import apply_symmetry, sample_d6_element
 
 # ---------------------------------------------------------------------------
-# Shard registry
+# Obs / mask member keys
 # ---------------------------------------------------------------------------
-
-
-class _ShardRegistry:
-    """Holds shard file paths and indexes a flat global pair ID → (shard, row).
-
-    Loads shards lazily on first access via ``np.load`` with ``mmap_mode="r"``.
-    """
-
-    def __init__(self, paths: list[Path], n_pairs_per_shard: list[int]) -> None:
-        self.paths = paths
-        self.n_pairs = n_pairs_per_shard
-        self.cum = np.cumsum([0] + n_pairs_per_shard)  # noqa: RUF005
-        self._cache: dict[int, Any] = {}
-
-    def total(self) -> int:
-        return int(self.cum[-1])
-
-    def locate(self, global_idx: int) -> tuple[int, int]:
-        """Map a flat index to (shard_idx, row_in_shard)."""
-        if not 0 <= global_idx < self.total():
-            raise IndexError(global_idx)
-        shard_idx = int(np.searchsorted(self.cum[1:], global_idx, side="right"))
-        row = global_idx - int(self.cum[shard_idx])
-        return shard_idx, row
-
-    def get_shard(self, shard_idx: int) -> Any:
-        if shard_idx not in self._cache:
-            # ``np.load`` with mmap returns a lazy reader; per-key arrays
-            # are mmap-backed and copies happen only at .copy() / index time.
-            self._cache[shard_idx] = np.load(self.paths[shard_idx], mmap_mode="r")
-        return self._cache[shard_idx]
-
-
-# ---------------------------------------------------------------------------
-# Dataset
-# ---------------------------------------------------------------------------
-
 
 _OBS_KEYS_FLOAT: tuple[str, ...] = (
     "tile_representations",
@@ -111,9 +106,156 @@ _MASK_KEYS: tuple[str, ...] = (
     "resource2_default",
 )
 
+# Members materialised per chunk (everything ``__getitem__`` reads). ``game_id``
+# is read separately at construction time; ``phase`` / ``step_idx`` /
+# ``player_seat`` / ``forced`` are never consumed by the loader.
+_CHUNK_MEMBERS: tuple[str, ...] = (
+    *(f"obs/{k}" for k in _OBS_KEYS_FLOAT),
+    *(f"obs/{k}" for k in _OBS_KEYS_INT),
+    "action",
+    "belief_target",
+    "z_disc",
+    *(f"mask/{k}" for k in _MASK_KEYS),
+)
+
+# Default rows per chunk. One chunk of all members is ~16.5 KB/row, so 200k
+# rows ≈ 3.3 GB — decompressed via streaming (peak ≈ one chunk + torch, a few
+# GB) and reused across all its batches by ``ShardChunkBatchSampler``.
+DEFAULT_CHUNK_ROWS = 200_000
+
+# ---------------------------------------------------------------------------
+# Streaming .npy slice reader
+# ---------------------------------------------------------------------------
+
+
+def _read_member_row_slice(zf: zipfile.ZipFile, member: str, start: int, stop: int) -> np.ndarray:
+    """Read rows ``[start:stop)`` of an ``.npy`` member with bounded memory.
+
+    A ``savez_compressed`` member is a DEFLATE stream that cannot be seeked
+    into, so the pre-``start`` prefix is decompressed and discarded in bounded
+    pieces; only the requested row-range is materialised. The returned array is
+    an owned (writable, C-contiguous) copy — it does not alias the ZIP buffer,
+    so evicting the chunk actually frees memory.
+    """
+    with zf.open(member + ".npy") as fp:
+        major, minor = _npformat.read_magic(fp)
+        if (major, minor) == (1, 0):
+            shape, fortran, dtype = _npformat.read_array_header_1_0(fp)
+        elif (major, minor) == (2, 0):
+            shape, fortran, dtype = _npformat.read_array_header_2_0(fp)
+        else:  # pragma: no cover - datasets are written with format 1.0
+            raise ValueError(f"unsupported .npy version {(major, minor)} in {member}")
+        if fortran:  # pragma: no cover - savez writes C-order
+            raise ValueError(f"fortran-order member not supported: {member}")
+
+        row_shape = tuple(int(d) for d in shape[1:])
+        row_nbytes = int(dtype.itemsize) * int(np.prod(row_shape, dtype=np.int64))
+
+        # Discard the [0:start) prefix in bounded pieces.
+        skip = int(start) * row_nbytes
+        piece = 1 << 20
+        while skip > 0:
+            got = fp.read(min(skip, piece))
+            if not got:  # pragma: no cover - defensive
+                raise EOFError(f"unexpected EOF skipping prefix of {member}")
+            skip -= len(got)
+
+        n = int(stop - start) * row_nbytes
+        buf = fp.read(n)
+        if len(buf) != n:  # pragma: no cover - defensive
+            raise EOFError(f"short read for {member}: got {len(buf)} want {n}")
+        arr = np.frombuffer(buf, dtype=dtype).reshape((int(stop - start), *row_shape))
+        return arr.copy()
+
+
+# ---------------------------------------------------------------------------
+# Shard registry (chunked, LRU-cached, streaming)
+# ---------------------------------------------------------------------------
+
+
+class _ShardRegistry:
+    """Flat global pair ID → (shard, chunk, row); serves chunks from an LRU.
+
+    Chunks are decompressed on demand via :func:`_read_member_row_slice` and
+    held in an ``OrderedDict`` LRU bounded to ``max_cached_chunks`` entries.
+    """
+
+    def __init__(
+        self,
+        paths: list[Path],
+        n_pairs_per_shard: list[int],
+        *,
+        chunk_rows: int = DEFAULT_CHUNK_ROWS,
+        max_cached_chunks: int = 1,
+    ) -> None:
+        if chunk_rows <= 0:
+            raise ValueError(f"chunk_rows must be positive, got {chunk_rows}")
+        if max_cached_chunks <= 0:
+            raise ValueError(f"max_cached_chunks must be positive, got {max_cached_chunks}")
+        self.paths = paths
+        self.n_pairs = n_pairs_per_shard
+        self.cum = np.cumsum([0] + n_pairs_per_shard)  # noqa: RUF005
+        self.chunk_rows = int(chunk_rows)
+        self.max_cached_chunks = int(max_cached_chunks)
+        # Chunks per shard = ceil(n_pairs / chunk_rows).
+        self.n_chunks = [(n + self.chunk_rows - 1) // self.chunk_rows for n in n_pairs_per_shard]
+        self._chunk_cache: OrderedDict[tuple[int, int], dict[str, np.ndarray]] = OrderedDict()
+
+    def total(self) -> int:
+        return int(self.cum[-1])
+
+    def locate(self, global_idx: int) -> tuple[int, int]:
+        """Map a flat index to (shard_idx, row_in_shard)."""
+        if not 0 <= global_idx < self.total():
+            raise IndexError(global_idx)
+        shard_idx = int(np.searchsorted(self.cum[1:], global_idx, side="right"))
+        row = global_idx - int(self.cum[shard_idx])
+        return shard_idx, row
+
+    def locate_chunk(self, global_idx: int) -> tuple[int, int, int]:
+        """Map a flat index to (shard_idx, chunk_idx, row_within_chunk)."""
+        shard_idx, row = self.locate(global_idx)
+        chunk_idx = row // self.chunk_rows
+        return shard_idx, chunk_idx, row - chunk_idx * self.chunk_rows
+
+    def read_game_ids(self, shard_idx: int) -> np.ndarray:
+        """Stream the full ``game_id`` member of a shard (small: int64 per pair)."""
+        n = self.n_pairs[shard_idx]
+        with zipfile.ZipFile(self.paths[shard_idx]) as zf:
+            return _read_member_row_slice(zf, "game_id", 0, n)
+
+    def get_chunk(self, shard_idx: int, chunk_idx: int) -> dict[str, np.ndarray]:
+        """Return the (LRU-cached) dict of member arrays for one chunk."""
+        key = (shard_idx, chunk_idx)
+        cached = self._chunk_cache.get(key)
+        if cached is not None:
+            self._chunk_cache.move_to_end(key)
+            return cached
+
+        start = chunk_idx * self.chunk_rows
+        stop = min(start + self.chunk_rows, self.n_pairs[shard_idx])
+        if not 0 <= start < self.n_pairs[shard_idx]:
+            raise IndexError(f"chunk {chunk_idx} out of range for shard {shard_idx}")
+
+        chunk: dict[str, np.ndarray] = {}
+        with zipfile.ZipFile(self.paths[shard_idx]) as zf:
+            for member in _CHUNK_MEMBERS:
+                chunk[member] = _read_member_row_slice(zf, member, start, stop)
+
+        # Evict oldest until we're within budget, then insert.
+        while len(self._chunk_cache) >= self.max_cached_chunks:
+            self._chunk_cache.popitem(last=False)
+        self._chunk_cache[key] = chunk
+        return chunk
+
+
+# ---------------------------------------------------------------------------
+# Dataset
+# ---------------------------------------------------------------------------
+
 
 class BcDataset(Dataset):
-    """BC training Dataset over sharded NPZ shards.
+    """BC training Dataset over sharded NPZ shards (chunk-streamed).
 
     Args:
         data_dir: directory containing ``manifest.json`` + ``shard_*.npz``.
@@ -122,6 +264,12 @@ class BcDataset(Dataset):
         seed: per-dataset RNG seed for augmentation sampling.
         indices: optional subset of pair indices (used by
             ``train_val_split``); when ``None``, expose all pairs.
+        chunk_rows: rows per decompressed chunk (memory/throughput knob;
+            default :data:`DEFAULT_CHUNK_ROWS`). Smaller ⇒ lower peak RSS +
+            more re-decompression.
+        max_cached_chunks: LRU size in chunks (default 1). Peak RSS ≈
+            ``max_cached_chunks`` chunks + torch; keep at 1 with a
+            :class:`ShardChunkBatchSampler` (batches never span a chunk).
     """
 
     def __init__(
@@ -131,6 +279,8 @@ class BcDataset(Dataset):
         aug_prob: float = 0.5,
         seed: int = 0,
         indices: np.ndarray | None = None,
+        chunk_rows: int = DEFAULT_CHUNK_ROWS,
+        max_cached_chunks: int = 1,
     ) -> None:
         super().__init__()
         data_dir = Path(data_dir)
@@ -147,15 +297,18 @@ class BcDataset(Dataset):
                 raise FileNotFoundError(f"Manifest references missing shard {shard_path}")
             paths.append(shard_path)
             n_pairs.append(int(shard["n_pairs"]))
-        self._registry = _ShardRegistry(paths, n_pairs)
+        self._registry = _ShardRegistry(
+            paths, n_pairs, chunk_rows=chunk_rows, max_cached_chunks=max_cached_chunks
+        )
         self._manifest = manifest
         self._aug_prob = float(aug_prob)
         self._rng = np.random.default_rng(seed)
 
-        # Pre-cache the flat game_id array for stratified splits.
+        # Pre-cache the flat game_id array for stratified splits. Streams only
+        # the (small) game_id member per shard — never the heavy obs members.
         gids: list[np.ndarray] = []
         for s_idx in range(len(self._registry.paths)):
-            gids.append(np.asarray(self._registry.get_shard(s_idx)["game_id"]))
+            gids.append(self._registry.read_game_ids(s_idx))
         self._game_ids = np.concatenate(gids) if gids else np.zeros(0, dtype=np.int64)
 
         if indices is None:
@@ -171,24 +324,24 @@ class BcDataset(Dataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         flat = int(self._indices[idx])
-        shard_idx, row = self._registry.locate(flat)
-        shard = self._registry.get_shard(shard_idx)
+        shard_idx, chunk_idx, row = self._registry.locate_chunk(flat)
+        chunk = self._registry.get_chunk(shard_idx, chunk_idx)
 
         obs: dict[str, torch.Tensor] = {}
         for key in _OBS_KEYS_FLOAT:
-            arr = np.asarray(shard[f"obs/{key}"][row], dtype=np.float32)
+            arr = np.asarray(chunk[f"obs/{key}"][row], dtype=np.float32)
             obs[key] = torch.from_numpy(arr)
         for key in _OBS_KEYS_INT:
-            v = int(shard[f"obs/{key}"][row])
+            v = int(chunk[f"obs/{key}"][row])
             obs[key] = torch.tensor(v, dtype=torch.int64)
 
-        action = torch.from_numpy(np.asarray(shard["action"][row], dtype=np.int64))
+        action = torch.from_numpy(np.asarray(chunk["action"][row], dtype=np.int64))
         mask: dict[str, torch.Tensor] = {
-            key: torch.from_numpy(np.asarray(shard[f"mask/{key}"][row], dtype=bool))
+            key: torch.from_numpy(np.asarray(chunk[f"mask/{key}"][row], dtype=bool))
             for key in _MASK_KEYS
         }
-        belief_target = torch.from_numpy(np.asarray(shard["belief_target"][row], dtype=np.float32))
-        z_disc = torch.tensor(float(shard["z_disc"][row]), dtype=torch.float32)
+        belief_target = torch.from_numpy(np.asarray(chunk["belief_target"][row], dtype=np.float32))
+        z_disc = torch.tensor(float(chunk["z_disc"][row]), dtype=torch.float32)
 
         # D6 augmentation. apply_symmetry expects batched inputs (B, ...);
         # we add a fake batch dim, apply, then squeeze.
@@ -223,6 +376,8 @@ class BcDataset(Dataset):
         seed: int = 0,
         train_aug_prob: float = 0.5,
         val_aug_prob: float = 0.0,
+        chunk_rows: int = DEFAULT_CHUNK_ROWS,
+        max_cached_chunks: int = 1,
     ) -> tuple[BcDataset, BcDataset]:
         """Stratified split by ``game_id`` — no within-game leakage.
 
@@ -242,16 +397,122 @@ class BcDataset(Dataset):
         n_val_games = max(1, int(round(len(unique_ids) * val_pct)))  # noqa: RUF046
         val_set = set(unique_ids[:n_val_games])
 
-        # Build the boolean masks over the flat pair index.
+        # Build the boolean masks over the flat pair index. This helper view
+        # only reads game_id, so chunk_rows/cache are irrelevant here.
         tmp = cls(data_dir, aug_prob=0.0)
         gids = tmp._game_ids
         val_mask = np.isin(gids, list(val_set))
         train_idx = np.where(~val_mask)[0].astype(np.int64)
         val_idx = np.where(val_mask)[0].astype(np.int64)
 
-        train = cls(data_dir, aug_prob=train_aug_prob, seed=seed, indices=train_idx)
-        val = cls(data_dir, aug_prob=val_aug_prob, seed=seed + 1, indices=val_idx)
+        train = cls(
+            data_dir,
+            aug_prob=train_aug_prob,
+            seed=seed,
+            indices=train_idx,
+            chunk_rows=chunk_rows,
+            max_cached_chunks=max_cached_chunks,
+        )
+        val = cls(
+            data_dir,
+            aug_prob=val_aug_prob,
+            seed=seed + 1,
+            indices=val_idx,
+            chunk_rows=chunk_rows,
+            max_cached_chunks=max_cached_chunks,
+        )
         return train, val
+
+
+# ---------------------------------------------------------------------------
+# Chunk-grouped batch sampler
+# ---------------------------------------------------------------------------
+
+
+class ShardChunkBatchSampler(Sampler[list[int]]):
+    """Yield batches whose items all live in one shard-chunk.
+
+    Grouping every batch inside a single chunk is what makes the ``max_cached``
+    -bounded LRU effective: consecutive ``__getitem__`` calls hit the same
+    chunk, so a chunk is decompressed once and reused for all its batches
+    before eviction. Shuffling (chunk order across the epoch + rows within a
+    chunk) preserves training stochasticity while keeping memory bounded.
+
+    Args:
+        dataset: the :class:`BcDataset` view to iterate (respects its
+            ``indices`` subset — train/val).
+        batch_size: rows per yielded batch.
+        shuffle: reshuffle chunk order and within-chunk rows each epoch (train);
+            ``False`` gives a deterministic chunk-ordered pass (val).
+        seed: base RNG seed; combined with the epoch counter.
+        drop_last: drop a trailing partial batch within each chunk.
+    """
+
+    def __init__(
+        self,
+        dataset: BcDataset,
+        batch_size: int,
+        *,
+        shuffle: bool = True,
+        seed: int = 0,
+        drop_last: bool = False,
+    ) -> None:
+        if batch_size <= 0:
+            raise ValueError(f"batch_size must be positive, got {batch_size}")
+        self.batch_size = int(batch_size)
+        self.shuffle = bool(shuffle)
+        self.seed = int(seed)
+        self.drop_last = bool(drop_last)
+        self.epoch = 0
+
+        reg = dataset._registry
+        globals_ = dataset._indices  # global pair id per dataset position
+        # Vectorised (shard, chunk) key per position.
+        shard = np.searchsorted(reg.cum[1:], globals_, side="right")
+        row = globals_ - reg.cum[shard]
+        chunk = row // reg.chunk_rows
+        max_chunks = max(reg.n_chunks) if reg.n_chunks else 1
+        group_key = shard.astype(np.int64) * max_chunks + chunk
+
+        # Group dataset positions (0..len-1) by (shard, chunk).
+        positions = np.arange(globals_.shape[0], dtype=np.int64)
+        order = np.argsort(group_key, kind="stable")
+        sorted_keys = group_key[order]
+        sorted_pos = positions[order]
+        boundaries = np.flatnonzero(np.diff(sorted_keys)) + 1
+        self._groups: list[np.ndarray] = [g for g in np.split(sorted_pos, boundaries) if g.size > 0]
+
+        # Number of batches (fixed across epochs; depends only on group sizes).
+        n = 0
+        for grp in self._groups:
+            if self.drop_last:
+                n += grp.size // self.batch_size
+            else:
+                n += (grp.size + self.batch_size - 1) // self.batch_size
+        self._length = n
+
+    def set_epoch(self, epoch: int) -> None:
+        """Set the epoch so ``shuffle`` produces a fresh permutation."""
+        self.epoch = int(epoch)
+
+    def __len__(self) -> int:
+        return self._length
+
+    def __iter__(self) -> Any:
+        rng = np.random.default_rng([self.seed, self.epoch])
+        group_order = np.arange(len(self._groups))
+        if self.shuffle:
+            rng.shuffle(group_order)
+        for gi in group_order:
+            pos = self._groups[gi]
+            if self.shuffle:
+                pos = pos.copy()
+                rng.shuffle(pos)
+            for start in range(0, pos.size, self.batch_size):
+                batch = pos[start : start + self.batch_size]
+                if self.drop_last and batch.size < self.batch_size:
+                    continue
+                yield [int(i) for i in batch]
 
 
 # ---------------------------------------------------------------------------

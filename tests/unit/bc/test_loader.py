@@ -16,6 +16,8 @@ honour:
 
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -329,3 +331,166 @@ def test_works_with_torch_dataloader(tiny_dataset: Path) -> None:
     assert batch["z_disc"].shape == (4,)
     assert batch["obs"]["tile_representations"].shape == (4, N_TILES, TILE_DIM)
     assert batch["mask"]["type"].shape == (4, 13)
+
+
+# ---------------------------------------------------------------------------
+# Chunk-streaming: index mapping, correctness vs direct read, memory bound
+# ---------------------------------------------------------------------------
+
+
+def test_locate_chunk_maps_every_index(tiny_dataset: Path) -> None:
+    """Every global index → the right (shard, row); chunk math round-trips."""
+    from catan_rl.bc.loader import BcDataset
+
+    ds = BcDataset(tiny_dataset, aug_prob=0.0, chunk_rows=37)
+    reg = ds._registry
+    # Reference (shard, row) from the manifest's per-shard n_pairs.
+    manifest = json.loads((tiny_dataset / "manifest.json").read_text())
+    n_pairs = [int(s["n_pairs"]) for s in manifest["shards"]]
+    ref: list[tuple[int, int]] = []
+    for s_idx, n in enumerate(n_pairs):
+        ref.extend((s_idx, r) for r in range(n))
+
+    assert reg.total() == len(ref)
+    for gi in range(reg.total()):
+        assert reg.locate(gi) == ref[gi], f"locate({gi})"
+        s_idx, c_idx, row_in_chunk = reg.locate_chunk(gi)
+        # (shard, chunk, row_in_chunk) must reconstruct (shard, row).
+        assert (s_idx, c_idx * reg.chunk_rows + row_in_chunk) == ref[gi]
+
+
+def test_chunk_read_matches_direct_npz(tiny_dataset: Path) -> None:
+    """Canonical ``__getitem__`` must byte-match a plain ``np.load`` of the shard.
+
+    Pins the streaming chunk reader against an independent full-decompress path
+    so the memory fix cannot silently corrupt any record.
+    """
+    import numpy as np
+
+    from catan_rl.bc.loader import (
+        _MASK_KEYS,
+        _OBS_KEYS_FLOAT,
+        _OBS_KEYS_INT,
+        BcDataset,
+    )
+
+    ds = BcDataset(tiny_dataset, aug_prob=0.0, chunk_rows=29, max_cached_chunks=1)
+    reg = ds._registry
+    manifest = json.loads((tiny_dataset / "manifest.json").read_text())
+    # Full-decompress every shard once, independently of the loader.
+    direct = [dict(np.load(tiny_dataset / s["shard"])) for s in manifest["shards"]]
+
+    total = reg.total()
+    probe = sorted({0, 1, total // 3, total // 2, (2 * total) // 3, total - 1})
+    for gi in probe:
+        s_idx, row = reg.locate(gi)
+        item = ds[gi]
+        d = direct[s_idx]
+        for key in _OBS_KEYS_FLOAT:
+            assert np.array_equal(
+                item["obs"][key].numpy(), d[f"obs/{key}"][row].astype(np.float32)
+            ), f"obs/{key} @ gi={gi}"
+        for key in _OBS_KEYS_INT:
+            assert int(item["obs"][key]) == int(d[f"obs/{key}"][row]), f"obs/{key} @ gi={gi}"
+        assert np.array_equal(item["action"].numpy(), d["action"][row]), f"action @ gi={gi}"
+        for mk in _MASK_KEYS:
+            assert np.array_equal(item["mask"][mk].numpy(), d[f"mask/{mk}"][row].astype(bool)), (
+                f"mask/{mk} @ gi={gi}"
+            )
+        assert np.array_equal(
+            item["belief_target"].numpy(), d["belief_target"][row].astype(np.float32)
+        ), f"belief @ gi={gi}"
+        assert item["z_disc"].item() == float(d["z_disc"][row]), f"z_disc @ gi={gi}"
+
+
+def test_chunk_lru_stays_bounded(tiny_dataset: Path) -> None:
+    """Iterating the chunk-grouped loader keeps the LRU ≤ max_cached_chunks and
+    decompresses each chunk exactly once (never per-row).
+
+    This is the memory-bound guarantee: without it a single ``__getitem__``
+    decompressed a whole ~5.5 GB member (OOM under a shuffled DataLoader).
+    """
+    import resource
+
+    from torch.utils.data import DataLoader
+
+    from catan_rl.bc.loader import BcDataset, ShardChunkBatchSampler, bc_collate
+
+    ds = BcDataset(tiny_dataset, aug_prob=0.0, chunk_rows=31, max_cached_chunks=1)
+    # The bound is only meaningful if the tiny dataset spans several chunks.
+    assert sum(ds._registry.n_chunks) > 2
+
+    # Instrument chunk loads (cache misses) and observed cache size.
+    reg = ds._registry
+    orig_get = reg.get_chunk
+    loads: list[tuple[int, int]] = []
+    cache_sizes: list[int] = []
+
+    def _counting(shard_idx: int, chunk_idx: int) -> dict:  # type: ignore[type-arg]
+        miss = (shard_idx, chunk_idx) not in reg._chunk_cache
+        out = orig_get(shard_idx, chunk_idx)
+        if miss:
+            loads.append((shard_idx, chunk_idx))
+        cache_sizes.append(len(reg._chunk_cache))
+        return out
+
+    reg.get_chunk = _counting  # type: ignore[method-assign]
+
+    sampler = ShardChunkBatchSampler(ds, batch_size=8, shuffle=True, seed=1)
+    loader = DataLoader(ds, batch_sampler=sampler, collate_fn=bc_collate, num_workers=0)
+
+    rss0 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    n_batches = 0
+    for batch in loader:
+        assert batch["action"].shape[0] <= 8
+        assert len(reg._chunk_cache) <= 1  # LRU bound holds after every batch
+        n_batches += 1
+    rss1 = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    assert n_batches == len(sampler)
+    # LRU never exceeded the bound at any load.
+    assert max(cache_sizes) <= 1
+    # Each chunk containing sampled rows is decompressed exactly once — NOT once
+    # per row (the bug). #loads == #non-empty chunk groups == #sampler groups.
+    assert len(loads) == len(sampler._groups)
+    assert len(loads) == len(set(loads))  # no chunk reloaded
+    assert len(loads) < len(ds)  # decisively fewer loads than rows
+    # RSS must not balloon while streaming a multi-chunk dataset (macOS ru_maxrss
+    # is bytes, Linux KiB; either way the delta here is tiny — no whole-shard blowup).
+    rss_delta_mb = (rss1 - rss0) / (1024 * 1024 if sys.platform == "darwin" else 1024)
+    assert rss_delta_mb < 512, f"RSS grew {rss_delta_mb:.0f} MB during iteration"
+
+
+def test_training_step_smoke(tiny_dataset: Path) -> None:
+    """Real pipeline: BcDataset → DataLoader(bc_collate) → evaluate_actions →
+    bc_loss → backward → step, with finite losses across several steps."""
+    import math
+
+    import torch
+    from torch.utils.data import DataLoader
+
+    from catan_rl.bc.loader import BcDataset, ShardChunkBatchSampler, bc_collate
+    from catan_rl.bc.loss import bc_loss
+    from catan_rl.policy import CatanPolicy
+    from catan_rl.policy.board_geometry import build_geometry
+
+    ds = BcDataset(tiny_dataset, aug_prob=0.5, seed=0, chunk_rows=40, max_cached_chunks=1)
+    sampler = ShardChunkBatchSampler(ds, batch_size=16, shuffle=True, seed=0)
+    loader = DataLoader(ds, batch_sampler=sampler, collate_fn=bc_collate, num_workers=0)
+
+    policy = CatanPolicy()
+    policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+    opt = torch.optim.AdamW(policy.parameters(), lr=3e-4)
+
+    losses: list[float] = []
+    for i, batch in enumerate(loader):
+        out = policy.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
+        loss = bc_loss(policy_out=out, batch=batch)
+        opt.zero_grad(set_to_none=True)
+        loss["total"].backward()
+        opt.step()
+        assert torch.isfinite(loss["total"]).item(), f"non-finite loss at step {i}"
+        losses.append(float(loss["total"].detach()))
+        if i >= 3:
+            break
+    assert losses and all(math.isfinite(x) for x in losses)

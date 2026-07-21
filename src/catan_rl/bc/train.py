@@ -39,7 +39,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 
-from catan_rl.bc.loader import BcDataset, bc_collate
+from catan_rl.bc.loader import BcDataset, ShardChunkBatchSampler, bc_collate
 from catan_rl.bc.loss import bc_loss
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.board_geometry import build_geometry
@@ -113,6 +113,9 @@ def train_bc(
     seed: int = 0,
     device: str = "cpu",
     num_workers: int = 0,
+    chunk_rows: int = 200_000,
+    max_cached_chunks: int = 1,
+    max_steps: int | None = None,
     verbose: bool = True,
     init_ckpt: Path | None = None,
 ) -> dict[str, Any]:
@@ -122,6 +125,13 @@ def train_bc(
     v2-lineage checkpoint before training — used for expert-iteration
     distillation (fine-tune v6 on search-derived targets). ``None`` keeps the
     original from-scratch behavior, byte-identical.
+
+    ``chunk_rows`` / ``max_cached_chunks`` bound the loader's RAM: the dataset
+    is chunk-streamed (see :mod:`catan_rl.bc.loader`) and a
+    :class:`ShardChunkBatchSampler` keeps each batch inside one cached chunk.
+    ``max_steps`` (default None) caps the number of optimizer steps — a smoke
+    guard for verifying the pipeline without a full run; ``None`` trains to the
+    epoch/early-stop budget unchanged.
     """
     data_dir = Path(data_dir)
     out_dir = Path(out_dir)
@@ -132,7 +142,13 @@ def train_bc(
     dev = torch.device(device)
 
     train_ds, val_ds = BcDataset.train_val_split(
-        data_dir, val_pct=val_pct, seed=seed, train_aug_prob=aug_prob, val_aug_prob=0.0
+        data_dir,
+        val_pct=val_pct,
+        seed=seed,
+        train_aug_prob=aug_prob,
+        val_aug_prob=0.0,
+        chunk_rows=chunk_rows,
+        max_cached_chunks=max_cached_chunks,
     )
 
     def _worker_init(worker_id: int) -> None:
@@ -147,22 +163,28 @@ def train_bc(
             assert isinstance(ds, BcDataset)
             ds._rng = np.random.default_rng([seed, worker_id])
 
+    # Chunk-grouped batch sampler: every batch lives inside one decompressed
+    # chunk, so the loader's LRU stays bounded (see loader module docstring).
+    # NB: num_workers>0 gives each worker its own chunk LRU, multiplying peak
+    # RSS — num_workers=0 is the memory-safe default on a 16 GB machine.
+    train_sampler = ShardChunkBatchSampler(
+        train_ds, batch_size, shuffle=True, seed=seed, drop_last=False
+    )
+    val_sampler = ShardChunkBatchSampler(
+        val_ds, batch_size, shuffle=False, seed=seed, drop_last=False
+    )
     train_loader = DataLoader(
         train_ds,
-        batch_size=batch_size,
-        shuffle=True,
+        batch_sampler=train_sampler,
         collate_fn=bc_collate,
         num_workers=num_workers,
         worker_init_fn=_worker_init if num_workers > 0 else None,
-        drop_last=False,
     )
     val_loader = DataLoader(
         val_ds,
-        batch_size=batch_size,
-        shuffle=False,
+        batch_sampler=val_sampler,
         collate_fn=bc_collate,
         num_workers=num_workers,
-        drop_last=False,
     )
 
     # The D4 auxiliary value head is a PPO representation-shaping term folded by
@@ -215,12 +237,15 @@ def train_bc(
     best_step = 0
     patience_counter = 0
     early_stopped = False
+    hit_max_steps = False
     global_step = 0
     epochs_run = 0
     t0 = time.time()
 
     for epoch in range(max_epochs):
         epoch_t0 = time.time()
+        # Fresh chunk order + within-chunk permutation for this epoch.
+        train_sampler.set_epoch(epoch)
         policy.train()
         for batch in train_loader:
             batch = _move_batch_to_device(batch, dev)
@@ -237,6 +262,12 @@ def train_bc(
             optimizer.step()
             scheduler.step()
             global_step += 1
+
+            if max_steps is not None and global_step >= max_steps:
+                hit_max_steps = True
+                if verbose:
+                    print(f"[bc.train] max_steps={max_steps} reached; stopping.", flush=True)
+                break
 
             history["train_step"].append(global_step)
             history["train_loss_total"].append(float(loss["total"].detach().item()))
@@ -291,7 +322,7 @@ def train_bc(
                 f"[bc.train] epoch {epoch + 1}/{max_epochs} done in {epoch_elapsed:.1f}s",
                 flush=True,
             )
-        if early_stopped:
+        if early_stopped or hit_max_steps:
             break
 
     # Always save the last checkpoint too.
@@ -302,6 +333,7 @@ def train_bc(
         "best_val_nll": best_val_nll,
         "best_step": best_step,
         "early_stopped": early_stopped,
+        "hit_max_steps": hit_max_steps,
         "epochs_run": epochs_run,
         "global_steps": global_step,
         "wall_clock_seconds": time.time() - t0,

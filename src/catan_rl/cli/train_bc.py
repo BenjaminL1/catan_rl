@@ -44,6 +44,24 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument(
+        "--chunk-rows",
+        type=int,
+        default=None,
+        help="Rows per decompressed shard chunk (loader RAM knob; smaller ⇒ lower peak).",
+    )
+    parser.add_argument(
+        "--max-cached-chunks",
+        type=int,
+        default=None,
+        help="LRU size in chunks (default 1; keep 1 with the chunk-grouped sampler).",
+    )
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=None,
+        help="Cap optimizer steps (smoke guard); default None trains the full budget.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -69,10 +87,13 @@ def main() -> None:
     _set("value_weight", args.value_weight, loss_cfg.get("value_weight", 0.10))
     _set("belief_weight", args.belief_weight, loss_cfg.get("belief_weight", 0.05))
     _set("aug_prob", args.aug_prob, loader_cfg.get("aug_prob", 0.5))
+    _set("chunk_rows", args.chunk_rows, loader_cfg.get("chunk_rows", 200_000))
+    _set("max_cached_chunks", args.max_cached_chunks, loader_cfg.get("max_cached_chunks", 1))
     kwargs.update(
         seed=args.seed,
         device=args.device,
         num_workers=args.num_workers,
+        max_steps=args.max_steps,
         verbose=args.verbose,
     )
 
