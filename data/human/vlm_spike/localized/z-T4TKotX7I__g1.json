@@ -1,0 +1,27 @@
+{
+  "video_id": "z-T4TKotX7I",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay read. meta colours: ThePhantom=BLACK, nessnlucas=GREEN. ThePhantom {BRICK,ORE,WOOD}==v11 [2,9,10]; nessnlucas {BRICK,SHEEP,WHEAT}==v17 [4,5,14]. 1st settlements: ThePhantom v20 [5,15,16]={BRICK,SHEEP,WHEAT}, nessnlucas v14 [3,10,11]={WHEAT,ORE,WOOD}. Roads overlay-read (both v11-black and v14-green terminate at empty v10): ThePhantom v11-v10 & v20-v21; nessnlucas v17-v5 & v14-v10.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[5, 15, 16], [5, 14, 15]]}
+      ]
+    },
+    "nessnlucas": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [3, 10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]},
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]}
+      ]
+    }
+  }
+}

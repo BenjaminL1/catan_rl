@@ -1,0 +1,27 @@
+{
+  "video_id": "vqWovAbvTyk",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (IMRosen=RED, ThePhantom=BLACK). ThePhantom {BRICK,WHEAT,WOOD}==v14 [3,10,11]; IMRosen {BRICK,ORE,SHEEP}==v4 [0,5,6]. 1st settlements: ThePhantom v18 [4,13,14]={ORE,ORE,SHEEP}, IMRosen v12 [2,8,9]={WHEAT,WHEAT,WOOD}. Roads crop-verified (v14-v33 and v4-v3 detections were piece/tile bleed): ThePhantom v14-v10 & v18-v16; IMRosen v4-v5 & v12-v6.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [2, 3, 10]]},
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]}
+      ]
+    },
+    "IMRosen": {
+      "settlements": [
+        {"hexes": [0, 5, 6]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 5, 6], [0, 4, 5]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    }
+  }
+}
