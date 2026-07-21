@@ -1,0 +1,27 @@
+{
+  "video_id": "nu3wq6pvRLI",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops. meta colours CORRECT (ThePhantom=BLACK, Monjo5887=RED). Grant-locked 2nds: ThePhantom {BRICK,BRICK,WOOD}==v2 [0,1,2] (unique); Monjo {BRICK,WHEAT,WOOD}==v11 [2,9,10] (unique). 1st settlements: ThePhantom v17 [4,5,14]={ORE,WHEAT,SHEEP}, Monjo v22 [6,17,18]={ORE,SHEEP,WHEAT}. Roads crop-confirmed (v2/v11/v22 midpoints were brick/tree contaminated): black v2-v3 & v17-v21 (sat 3); red v11-v10 & v22-v23.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 2]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 2], [0, 1, 6]]},
+        {"endpoints": [[4, 5, 14], [5, 14, 15]]}
+      ]
+    },
+    "Monjo5887": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]}
+      ]
+    }
+  }
+}

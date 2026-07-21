@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "read_board_stable returns None on both empty_baseline and post_setup (tested 2x each), so no vertex-pixel fit is recoverable. Grants ARE present (Bacon3147 {BRICK,WOOD,WOOD}->{0,1}; ThePhantom {BRICK,SHEEP,WOOD}->{2,14,23}), so recoverable via a manual board screenshot or clean re-parse. (Sibling g8 of the same video localized fine using the post frame; g2's post frame also fails.)"
+}

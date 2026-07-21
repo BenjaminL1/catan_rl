@@ -1,0 +1,27 @@
+{
+  "video_id": "nu3wq6pvRLI",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + crops + blob analysis. meta colours CORRECT (ThePhantom=BLACK, Monjo5887=RED). Grant-locked 2nds: ThePhantom {BRICK,WHEAT,WOOD}==v18 [4,13,14] (unique); Monjo {BRICK,ORE,WHEAT}==v5 [0,4,5]. 1st settlements: ThePhantom v12 [2,8,9]={WOOD,SHEEP,ORE}, Monjo v21 [5,14,15]={ORE,WOOD,SHEEP}. Roads: red v5-v0 (red 138) & v21-v43 (red 198); black v12-v28. v18's black road fused with the settlement blob (edge-midpoint scan missed it); black-blob analysis shows the v18 piece blob elongates left toward v17 (width 102px, next-nearest vertex v17) -> v18-v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[2, 8, 9], [8, 9]]}
+      ]
+    },
+    "Monjo5887": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]},
+        {"endpoints": [[5, 14, 15], [14, 15]]}
+      ]
+    }
+  }
+}

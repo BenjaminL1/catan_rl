@@ -1,0 +1,27 @@
+{
+  "video_id": "01HWBfj5ZzU",
+  "game_index": 8,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Bacon3147=RED). NOTE: read_board_stable fails on empty_baseline for this game (NONE) but succeeds on post_setup, so the board fit + all reads use the post frame. Grant-locked 2nds: ThePhantom {ORE,SHEEP,WHEAT}==v12 [2,8,9]; Bacon {BRICK,ORE,WOOD}==v19 [5,6,16] (unique). 1st settlements: ThePhantom v21 [5,14,15]={WOOD,BRICK,BRICK}, Bacon v7 [1,7,8]={WOOD,WOOD,WHEAT}. Roads: red v7-v24 (red 231) & v19-v4 (red road-end blob 28px from v4); black v12-v28; v21-v17 resolved via black-mask overlay (road bar heads up-right to v17, not v20 - brick-tile contamination + settlement bleed had masked the edge scan).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [8, 9]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    },
+    "Bacon3147": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]},
+        {"endpoints": [[1, 7, 8], [7, 8]]}
+      ]
+    }
+  }
+}
