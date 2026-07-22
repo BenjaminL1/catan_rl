@@ -1,0 +1,27 @@
+{
+  "video_id": "6--qCkGT0pI",
+  "game_index": 4,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Shotime=RED). ThePhantom's grant {BRICK,ORE,WOOD} matches THREE vertices {3,5,17}; the black piece among them is v3 (body-box 443 dark px vs v9's 178; zoom shows house at v3, v9 empty), so ThePhantom 2nd=v3 [0,1,6]. Shotime {BRICK,SHEEP,WHEAT} uniquely = v7 [1,7,8]. 1st settlements: ThePhantom v11 [2,9,10]={WHEAT,WHEAT,WHEAT}, Shotime v17 [4,5,14]={BRICK,WOOD,ORE} (red house base at v17, road up to v5; v5/v17 both red-road contaminated). Roads: black v11-v10 & v3-v9 (dark-neutral mask; v3's edges were light ore-grey / dark tree-green so midpoint scan blind); red v7-v6 & v17-v5.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [1, 6, 18]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "Shotime": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    }
+  }
+}

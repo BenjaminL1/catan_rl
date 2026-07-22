@@ -1,0 +1,27 @@
+{
+  "video_id": "B9IfK3tcdoM",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (a UI trade dialog overlays the empty SW corner but no pieces are there). meta colours CORRECT (ThePhantom=BLACK, hampers=RED). Grant-locked 2nds: ThePhantom {BRICK,WHEAT,WHEAT} uniquely = v8 [1,7,18] (blob centroid sat near v7 because the road runs west to v7; v7={BRICK,WHEAT,WOOD} does NOT match grant, so settlement is v8); hampers {ORE,SHEEP,WHEAT} = v22 [6,17,18] (red settlement near v9/v22, but v9={BRICK,SHEEP,WHEAT} fails grant so it is v22, road up to v9). 1st settlements: ThePhantom v16 [4,12,13]={ORE,ORE,SHEEP}, hampers v13 [3,11,12]={WHEAT,WOOD,SHEEP}. Roads via colour masks: black v8-v7 & v16-v15; red v22-v9 & v13-v37.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]},
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]}
+      ]
+    },
+    "hampers": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]},
+        {"endpoints": [[3, 11, 12], [11, 12]]}
+      ]
+    }
+  }
+}
