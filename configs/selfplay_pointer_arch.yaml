@@ -6,16 +6,21 @@
 # lineage's 0.66), stopped at update 649. That ckpt_649 is BOTH the learner warm-start AND the
 # initial frozen anchor here.
 #
-# RECIPE: identical to the validated v8->v9->v10->v11 lowered-bar recipe (bar 0.63 / sustained 2 /
-# check every 25 / min_games 150 / cooldown 75; same ppo/gae/loss/optimizer/auto_stop). Deliberate
+# RECIPE: the validated v8->v9->v10->v11 lowered-bar RATCHET is copied verbatim and NOT retuned (bar
+# 0.63 / sustained 2 / check every 25 / min_games 150 / cooldown 75; same ppo/gae/optimizer). Deliberate
 # deltas vs selfplay_v11.yaml: (a) warm+anchor on the pointer-arch bootstrap ckpt_649 (NOT v10),
-# (b) carry the pointer-arch D4 aux_value_coef=0.05 (trunk-shaping aux value head) + setup_entropy_coef,
-# (c) device pinned mps, (d) a fresh seed + run_name. Do NOT retune the ratchet — validated across
-# v8->v11.
+# (b) carry the pointer-arch D4 aux_value_coef=0.05 (trunk-shaping aux value head), (c) device pinned mps,
+# (d) a fresh seed + run_name. Plus the 2026-07-21 senior-RL REVIEW deviations (lineage-specific, each
+# justified inline): (e) setup_entropy_coef 0.02 to re-widen the seed's collapsed openings [S1/S2],
+# (f) league mix 60/30/10 snapshot/anchor/heuristic — heuristic 0.25->0.1 off a saturated 0.97 opponent
+# [S4], (g) eval cadence 40->100 (saturated eval) [S5], (h) auto_stop soft 250->300 + bar 0.55->0.58 so a
+# slow-ramping learner isn't cut pre-first-promotion and the [0.55,0.63] dead band shrinks [S3].
 #
 # TERMINATION: auto_stop (below) is the real terminator, NOT total_steps (a runaway ceiling). HARD
-# stop after 400 updates with no promotion; SOFT stop after 250+ with no promotion AND anchor-window
-# median over the last 8 checks below 0.55. Either fires a clean terminal save + exit.
+# stop after 400 updates with no promotion; SOFT stop after 300+ with no promotion AND anchor-window
+# median over the last 8 checks below 0.58. Either fires a clean terminal save + exit. A ZERO-promotion
+# hard-stop still exits cleanly with usable ROLLING checkpoints (the terminal save always writes one;
+# the gate's candidate is then the best rolling ckpt) — an informative "arch near its self-play ceiling".
 #
 # ACCEPT GATE at completion (dual gate, pre-registered in the spec — gate-first, do NOT bank a
 # successor before this returns): the new lineage is accepted only if BOTH
@@ -27,7 +32,7 @@ rollout:
   n_steps: 256
   vec_env_mode: serial
   max_turns: 400
-  opponent_type: heuristic   # the league block (snapshot 0.5 / anchor 0.25 / heuristic 0.25) drives
+  opponent_type: heuristic   # the league block (snapshot 0.6 / anchor 0.3 / heuristic 0.1) drives
                              # the ACTUAL self-play opponent mix; this is only the fallback kind.
   engine_backend: python
 
@@ -52,10 +57,24 @@ loss:
   entropy_anneal_start_update: 50
   entropy_anneal_end_update: 200
   belief_coef: 0.05
-  opp_action_coef: 0.03
+  opp_action_coef: 0.0       # INERT: the pointer-arch policy has NO opp_action head (verified —
+                             # network.py exposes only value/belief/aux_value heads), so the trainer
+                             # never reads this coef and no opp_action loss is ever computed. Pinned 0
+                             # (not v11's 0.03) to document that + stop a future head-wiring from
+                             # silently training an aux objective on this run.
   aux_value_coef: 0.05       # pointer-arch D4: trunk-shaping aux value head (MSE onto discounted
                              # return). Co-trained from update 0; never feeds control.
-  setup_entropy_coef: 0.0
+  setup_entropy_coef: 0.02   # S1/S2 review deviation (lineage-specific; NOT a v11 copy). The seed
+                             # ckpt_649's opening entropy collapsed during bootstrap and league
+                             # self-play narrows openings further, so re-widen them with an
+                             # ADDITIONAL setup-phase-only entropy bonus (step6 §2.2: masked mean of
+                             # H(pi) over is_setup rows, folded as total -= coef * setup_H; wired end
+                             # to end env->vec_env.setup_flags->buffer->trainer). Same per-decision
+                             # scale as entropy_coef, so 0.02 is 4x the pinned global 0.005 (real
+                             # re-widening pressure on the ~4 setup decisions/game) yet half the 0.04
+                             # bootstrap start (won't randomize openings / tank WR). Conservative
+                             # pick pending the step6 calibration sweep; monitor openings/
+                             # setup_head_entropy and tune in-flight if openings still collapse.
 
 optimizer:
   lr_start: 2.0e-4
@@ -69,20 +88,29 @@ optimizer:
 
 checkpoint:
   save_every_updates: 25
-  keep_last_n: 6           # 6 rolling + exempt promotion ckpts; fits the disk budget.
+  keep_last_n: 6           # 6 x ~16.7MB (policy+optimizer; the league pool lives in the deduped
+                           # sidecar store, NOT inline like v11's ~577MB fat ckpts) ~= 100MB rolling
+                           # + exempt promotion ckpts; fits the disk budget.
   save_optimizer_state: true
 
 eval:
-  eval_every_updates: 40
+  eval_every_updates: 100  # S5 review deviation: raised 40->100. The eval opponent is the heuristic
+                           # the seed already beats ~0.97 all run (saturated -> information-free), and
+                           # each round is ~1000 serial batch-1 CPU games contending the M1. Self-play
+                           # progress is read from anchor_wr_window / reanchor events, not this eval.
   eval_games: 100
   eval_seeds: [0, 1, 2, 3, 4]
   eval_opponents: [heuristic]
 
 league:
   random_weight: 0.0
-  heuristic_weight: 0.25
-  snapshot_weight: 0.5
-  anchor_weight: 0.25
+  heuristic_weight: 0.1    # S4 review deviation: lowered 0.25->0.1 (kept >0 for require_heuristic_floor
+                           # PG-2). The seed beats the heuristic ~0.97, so a quarter of every rollout on
+                           # it produced ~degenerate advantages that dilute the real self-play signal +
+                           # trained belief/aux heads on trivially-won states. The freed 0.15 goes to
+                           # snapshot/anchor below (2:1 kept), so 60/30/10 snapshot/anchor/heuristic.
+  snapshot_weight: 0.6     # S4: 0.5->0.6 (absorbs part of the lowered heuristic weight)
+  anchor_weight: 0.3       # S4: 0.25->0.3 (keeps the snapshot:anchor ratio at 2:1)
   anchor_checkpoint_path: runs/train/bootstrap_pointer_arch_20260721_020848/checkpoints/ckpt_000000649.pt
   require_heuristic_floor: true
   add_snapshot_every_n_updates: 4
@@ -104,8 +132,16 @@ league:
 auto_stop:
   enabled: true
   hard_updates_since_promotion: 400
-  soft_updates_since_promotion: 250
-  soft_window_bar: 0.55
+  soft_updates_since_promotion: 300   # S3 review deviation: raised 250->300. v10's FIRST promotion
+                                      # landed ~u275; a learner starts at anchor_wr_window ~0.50 (it IS
+                                      # the anchor at u0) and ramps, so a 250-update soft cap could
+                                      # soft-stop a healthy slow-ramper BEFORE its first promotion.
+                                      # 300 clears the observed first-promo latency; still < hard 400.
+  soft_window_bar: 0.58               # S3: 0.55->0.58 narrows the dead band. Promotion needs window WR
+                                      # > 0.63; a soft bar at 0.55 left [0.55,0.63] as a band that
+                                      # neither promotes nor soft-stops (rides to hard-400 with ZERO
+                                      # promotion ckpts). 0.58 shrinks that dead zone while staying
+                                      # clearly below the 0.63 promotion bar.
   soft_window_checks: 8
 
 # Warm-start the learner from the pointer-arch bootstrap ckpt_649 (fresh optimizer; the league

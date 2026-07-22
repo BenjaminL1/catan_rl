@@ -125,6 +125,76 @@ def _fill_random(buffer: CompositeRolloutBuffer, with_belief: bool = False) -> N
 
 
 # ---------------------------------------------------------------------------
+# Setup-phase-only entropy fold (loss.setup_entropy_coef, step6 §2.2)
+# ---------------------------------------------------------------------------
+
+
+class TestSetupEntropyFold:
+    """Pin the setup-phase-only entropy bonus that S1/S2 of the pointer-arch
+    self-play launch turns on (``loss.setup_entropy_coef``): the masked-mean
+    entropy over ``is_setup`` rows is COMPUTED for the diagnostic regardless of
+    the coef, and FOLDED into the total loss (``total -= coef * setup_H``) iff the
+    coef is non-zero. Without the fold, ``setup_entropy_coef > 0`` would be inert."""
+
+    @staticmethod
+    def _fill_all_setup(buffer: CompositeRolloutBuffer) -> None:
+        rng = np.random.default_rng(0)
+        N = buffer.n_envs
+        for _ in range(buffer.n_steps):
+            buffer.add(
+                obs={"current_player_main": rng.standard_normal((N, 8)).astype(np.float32)},
+                action=rng.integers(0, 5, (N, 6)).astype(np.int64),
+                per_head_log_prob=rng.standard_normal((N, 6)).astype(np.float32),
+                log_prob=(rng.standard_normal((N,)).astype(np.float32) * 0.1),
+                value=rng.standard_normal((N,)).astype(np.float32),
+                reward=rng.standard_normal((N,)).astype(np.float32),
+                terminated=np.zeros(N, dtype=bool),
+                truncated=np.zeros(N, dtype=bool),
+                masks={"type": np.ones((N, 13), dtype=bool)},
+                is_setup=np.ones(N, dtype=bool),  # every row is a setup decision
+            )
+
+    def _run_once(self, setup_coef: float) -> UpdateMetrics:
+        cfg = TrainConfig(
+            rollout=RolloutConfig(n_envs=4, n_steps=4, vec_env_mode="serial"),
+            ppo=PPOConfig(n_epochs=1, batch_size=16, target_kl=0.0),  # single SGD step
+            gae=GAEConfig(),
+            loss=LossConfig(
+                value_coef=0.5,
+                entropy_coef_start=0.0,  # isolate the SETUP term from the global one
+                entropy_coef_end=0.0,
+                setup_entropy_coef=setup_coef,
+            ),
+            optimizer=OptimizerConfig(lr_start=1e-3, lr_end=1e-4, lr_anneal_total_updates=10),
+            total_steps=16,
+        )
+        torch.manual_seed(0)  # identical policy init across the two runs
+        policy = _StubPolicy()
+        opt = torch.optim.AdamW(policy.parameters(), lr=cfg.optimizer.lr_start)
+        trainer = PPOTrainer(cfg=cfg, policy=policy, optimizer=opt, device="cpu")
+        buf = _make_buffer(cfg)
+        self._fill_all_setup(buf)
+        buf.compute_returns_and_advantages(
+            last_values=np.zeros(cfg.rollout.n_envs, dtype=np.float32),
+            gamma=cfg.gae.gamma,
+            gae_lambda=cfg.gae.gae_lambda,
+            advantage_norm="rollout",
+        )
+        return trainer.update(buf, update_idx=0, rng=np.random.default_rng(0))
+
+    def test_setup_entropy_computed_and_folded_when_coef_positive(self) -> None:
+        off = self._run_once(0.0)
+        on = self._run_once(0.02)
+        # Stub emits constant per-row entropy 1.5 → masked mean over setup rows = 1.5,
+        # recorded regardless of the coef (opening-diversity diagnostic).
+        assert off.setup_head_entropy == pytest.approx(1.5)
+        assert on.setup_head_entropy == pytest.approx(1.5)
+        # coef=0 leaves the objective byte-identical (fold guarded on != 0); coef=0.02
+        # subtracts exactly 0.02 * setup_H from the total → the term is LIVE in the loss.
+        assert on.total_loss == pytest.approx(off.total_loss - 0.02 * 1.5, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Schedules
 # ---------------------------------------------------------------------------
 
