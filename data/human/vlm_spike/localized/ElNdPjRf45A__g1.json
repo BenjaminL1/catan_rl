@@ -1,0 +1,27 @@
+{
+  "video_id": "ElNdPjRf45A",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (POST-frame fit; baseline board CV OK too). meta colours CORRECT (Karlis0047=RED, ThePhantom=BLACK). Grant-locked 2nds: Karlis {BRICK,ORE,WHEAT}==v2 [0,1,2] (red settlement, road up to v6); ThePhantom {ORE,WHEAT,WOOD}==v10 [2,3,10]. 1st settlements: Karlis v15 [3,4,12]={WOOD,SHEEP,WHEAT}, ThePhantom v23 [6,16,17]={BRICK,WOOD,ORE} (base at v23 confirmed by zoom - v22 is only the road vertex). Roads: red v2-v6 & v15-v13 (blob near v13); black v10-v14 (blob wide/horizontal 114px -> road goes right to v14; v10-v11 dark-neutral was settlement body, v10-v14/v10-v1 midpoints are tree tile) & v23-v22 (only dark-neutral edge sat~0).",
+  "players": {
+    "Karlis0047": {
+      "settlements": [
+        {"hexes": [0, 1, 2]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 2], [1, 2, 8]]},
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]}
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [3, 10, 11]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    }
+  }
+}

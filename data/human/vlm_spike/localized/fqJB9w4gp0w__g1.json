@@ -1,0 +1,27 @@
+{
+  "video_id": "fqJB9w4gp0w",
+  "game_index": 1,
+  "vlm_note": "meta colours BOTH WRONG (meta: Mirtuszka=RED, ThePhantom=BLACK). Pieces are PURPLE and BLACK. Grant self-check: {ORE,SHEEP,WOOD} uniquely = v0 (black piece) -> Mirtuszka=BLACK; {BRICK,SHEEP,WHEAT} = v18 (purple piece [204,45,162]) -> ThePhantom=PURPLE. Grant-locked 2nds: Mirtuszka v0 [0,3,4]; ThePhantom v18 [4,13,14]. 1st settlements: Mirtuszka v22 [6,17,18]={BRICK,ORE,WHEAT}, ThePhantom v12 [2,8,9]={WOOD,WOOD,ORE}. Roads confirmed via colour masks: purple v18-v17 & v12-v6; black v0-v5 & v22-v9 (edge-midpoint scans were tree/brick/ore contaminated).",
+  "players": {
+    "Mirtuszka": {
+      "settlements": [
+        {"hexes": [0, 3, 4]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 3, 4], [0, 4, 5]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    },
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]}
+      ]
+    }
+  }
+}

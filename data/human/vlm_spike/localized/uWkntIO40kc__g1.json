@@ -1,0 +1,27 @@
+{
+  "video_id": "uWkntIO40kc",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening, full-overlay + colour-mask crops. meta colours CORRECT (TruBraham=BLACK, ThePhantom=PURPLE). Grant-locked 2nds: ThePhantom {BRICK,SHEEP,WHEAT}==v18 [4,13,14]; TruBraham {SHEEP,WHEAT,WOOD}==v21 [5,14,15]. 1st settlements: ThePhantom v1 [0,2,3]={SHEEP,ORE,WOOD}, TruBraham v9 [1,6,18]={BRICK,ORE,WOOD}. Roads via colour masks: purple v18-v16 & v1-v2; black v9-v3 (edge-scan v9-v8 was brick-tile/bleed; mask shows road down-right to v3) & v21-v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [0, 2, 3]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 12, 13]]},
+        {"endpoints": [[0, 2, 3], [0, 1, 2]]}
+      ]
+    },
+    "TruBraham": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]}
+      ]
+    }
+  }
+}

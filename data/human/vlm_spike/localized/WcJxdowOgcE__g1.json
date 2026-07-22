@@ -1,0 +1,27 @@
+{
+  "video_id": "WcJxdowOgcE",
+  "game_index": 1,
+  "vlm_note": "meta colour WRONG for BrickedUp101 (meta says WHITE; pieces are BLACK/dark-grey). Grant self-check: {BRICK,BRICK,WOOD} = v11 which holds a black piece -> BrickedUp=BLACK; ThePhantom=PURPLE (meta correct, {BRICK,ORE,WOOD} uniquely = v1, purple piece [152,43,117]). Grant-locked 2nds: ThePhantom v1 [0,2,3]; BrickedUp v11 [2,9,10]. 1st settlements: ThePhantom v21 [5,14,15]={SHEEP,WHEAT,ORE}, BrickedUp v5 [0,4,5]={ORE,WHEAT,SHEEP}. Roads via colour masks: purple v1-v2 & v21-v17; black v11-v12 & v5-v0 (sat 1).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [0, 1, 2]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    },
+    "BrickedUp101": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [0, 4, 5]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]},
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]}
+      ]
+    }
+  }
+}
