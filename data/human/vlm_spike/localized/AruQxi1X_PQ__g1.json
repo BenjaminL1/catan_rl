@@ -1,0 +1,27 @@
+{
+  "video_id": "AruQxi1X_PQ",
+  "game_index": 1,
+  "vlm_note": "meta colours BOTH WRONG (meta says ThePhantom=PURPLE, Arjan9854=WHITE). Grant self-check: {SHEEP,WHEAT,WOOD} uniquely = v13 which holds a RED piece -> Arjan9854=RED; {ORE,WHEAT,WHEAT} = v23 which holds a dark olive/khaki piece -> that is ThePhantom's colour (renders olive, not purple). Two red pieces (v13,v19)=Arjan, two olive (v11,v23)=ThePhantom. Grant-locked 2nds: ThePhantom v23 [6,16,17]; Arjan v13 [3,11,12]. 1st settlements: ThePhantom v11 [2,9,10]={SHEEP,WOOD,ORE}, Arjan v19 [5,6,16]={BRICK,WHEAT,ORE}. Roads by colour-distance: olive v11-v10 & v23-v22; red v13-v15 (red 185) & v19-v20 (red 189).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    },
+    "Arjan9854": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]},
+        {"endpoints": [[5, 6, 16], [5, 15, 16]]}
+      ]
+    }
+  }
+}

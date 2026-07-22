@@ -1,0 +1,27 @@
+{
+  "video_id": "G9PfuPeXdIA",
+  "game_index": 9,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Catanaconda=RED). Grant-locked 2nds: ThePhantom {SHEEP,WHEAT,WOOD}==v11 [2,9,10] (unique); Catanaconda {BRICK,ORE,SHEEP}==v20 [5,15,16]. 1st settlements: ThePhantom v18 [4,13,14]={ORE,WHEAT,BRICK}, Catanaconda v14 [3,10,11]={WHEAT,WOOD,WOOD}. Roads: red v20-v19 (red 230) & v14-v13 (red 201); black v18-v17 (blk lum 29). v11's road was tricky: it runs along the dark tree-tile so the naive black-mask + edge scan pointed at v10, but a TRUE-NEUTRAL mask (green tiles excluded via G-not-dominant) shows the actual road bar heads up-left to v12 -> v11-v12.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 8, 9]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "Catanaconda": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [3, 10, 11]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]}
+      ]
+    }
+  }
+}

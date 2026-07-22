@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "read_board_stable returns None on both empty_baseline and post_setup, so no vertex-pixel fit is recoverable. Grants ARE present (HakMatata {BRICK,BRICK,WOOD}->v15; ThePhantom {BRICK,WOOD,WOOD}->{0,22}), so recoverable via a manual board screenshot or clean re-parse. Colours GREEN/BLACK."
+}

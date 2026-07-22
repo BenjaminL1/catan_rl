@@ -1,0 +1,27 @@
+{
+  "video_id": "Y5ariWB89_Y",
+  "game_index": 23,
+  "vlm_note": "IDENTICAL GRANTS: both players granted {BRICK,SHEEP,WOOD} (candidate set {11,12,13}), so grant self-check alone cannot assign handles. Resolved by colour split + meta authority: pieces are RED and BLACK (NOT white); meta says ThePhantom=BLACK (trusted) so ThePhantom=black pieces {v12,v18}, and by elimination Sonadourge=RED (meta's Sonadourge=WHITE is WRONG - there is no white piece). Each player has exactly one settlement in {11,12,13}: v12(BLACK)=ThePhantom 2nd, v13(RED)=Sonadourge 2nd, both hexes={BRICK,SHEEP,WOOD} so the per-player grant check holds; v11 is an unused candidate. 1st settlements: ThePhantom v18 [4,13,14]={WHEAT,ORE,ORE}, Sonadourge v7 [1,7,8]={WHEAT,ORE,BRICK}. Roads: red v13-v14 (218) & v7-v24 (219); black v12-v28 (neutral sat~3 run near v12; the v6/v11 edges are dark-GREEN tree tile, not road) & v18-v17 (dark-neutral blob elongates up-left to v17; v18 sits in light-grey ore so edge scan was blind). HANDLE ASSIGNMENT DEPENDS ON META COLOUR ThePhantom=BLACK.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [8, 9]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "Sonadourge": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [1, 7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]},
+        {"endpoints": [[1, 7, 8], [7, 8]]}
+      ]
+    }
+  }
+}
