@@ -1,0 +1,27 @@
+{
+  "video_id": "-dOEmCbAGjc",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening; minor fit offset resolved by resource-adjacency + crops. meta colours CORRECT (ThePhantom=BLACK, Kwan9826=RED). ThePhantom {BRICK,WHEAT,WOOD} matches {3,4}; the black center-left settlement is at v3 (borders {WHEAT,BRICK,WOOD}, base at v3 circle; v9 is up-left and empty, high density there was the v3-v9 road). Grant-locked 2nds: ThePhantom v3 [0,1,6]; Kwan9826 v18 [4,13,14]. 1st settlements: ThePhantom v10 [2,3,10]={WHEAT,SHEEP,ORE}, Kwan9826 v8 [1,7,18]={BRICK,WHEAT,ORE}. Roads: black v3-v9 & v10-v11; red v18-v17 (r-g 190+) & v8-v7 (crop).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [1, 6, 18]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    },
+    "Kwan9826": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[1, 7, 18], [1, 7, 8]]}
+      ]
+    }
+  }
+}

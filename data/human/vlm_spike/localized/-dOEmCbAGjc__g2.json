@@ -1,0 +1,27 @@
+{
+  "video_id": "-dOEmCbAGjc",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (fit verified: v16/v20 black, v6/v23 red at markers). meta colours CORRECT (ThePhantom=BLACK, Kwan9826=RED). Grant-locked 2nds: ThePhantom {BRICK,ORE,WOOD}==v16 [4,12,13] (unique); Kwan9826 {BRICK,ORE,WHEAT}==v6 [1,2,8]. 1st settlements: ThePhantom v20 [5,15,16]={SHEEP,ORE,WHEAT}, Kwan9826 v23 [6,16,17]={WOOD,WOOD,WHEAT}. Roads: black v16-v15 & v20-v19; red v6-v2 (229) & v23-v22 (214).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]}
+      ]
+    },
+    "Kwan9826": {
+      "settlements": [
+        {"hexes": [1, 2, 8]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 2, 8], [0, 1, 2]]},
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]}
+      ]
+    }
+  }
+}

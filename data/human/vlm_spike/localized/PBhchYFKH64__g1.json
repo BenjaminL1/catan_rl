@@ -1,0 +1,27 @@
+{
+  "video_id": "PBhchYFKH64",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening (fit verified: v1/v9 black, v23/v12 red at markers). meta colours CORRECT (ThePhantom=BLACK, Huttan2266=RED). ThePhantom grant {SHEEP,WHEAT,WOOD} matches {3,4,9,18}; the black center-left is v9 (b=473, {SHEEP,WOOD,WHEAT}), NOT the v8 marker beside it. Grant-locked 2nds: ThePhantom v9 [1,6,18]; Huttan2266 v23 [6,16,17]. 1st settlements: ThePhantom v1 [0,2,3]={WHEAT,BRICK,ORE}, Huttan2266 v12 [2,8,9]={BRICK,WOOD,WHEAT}. Roads: black v9-v8 (sat 2) & v1-v0; red v23-v22 & v12-v28 (per-step: strong red near the settlement fading to tile, vs uniform-brick on the other edges).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [0, 2, 3]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [1, 7, 18]]},
+        {"endpoints": [[0, 2, 3], [0, 3, 4]]}
+      ]
+    },
+    "Huttan2266": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[2, 8, 9], [8, 9]]}
+      ]
+    }
+  }
+}
