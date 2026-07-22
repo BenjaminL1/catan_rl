@@ -11,7 +11,8 @@
 # deltas vs selfplay_v11.yaml: (a) warm+anchor on the pointer-arch bootstrap ckpt_649 (NOT v10),
 # (b) carry the pointer-arch D4 aux_value_coef=0.05 (trunk-shaping aux value head), (c) device pinned mps,
 # (d) a fresh seed + run_name. Plus the 2026-07-21 senior-RL REVIEW deviations (lineage-specific, each
-# justified inline): (e) setup_entropy_coef 0.02 to re-widen the seed's collapsed openings [S1/S2],
+# justified inline): (e) setup_entropy_coef 0.0 — 0.02 was tried and REVERTED (it randomized openings
+#   and degraded the learner; opening diversity is handled by the scoreboard + corpus seeds instead),
 # (f) league mix 60/30/10 snapshot/anchor/heuristic — heuristic 0.25->0.1 off a saturated 0.97 opponent
 # [S4], (g) eval cadence 40->100 (saturated eval) [S5], (h) auto_stop soft 250->300 + bar 0.55->0.58 so a
 # slow-ramping learner isn't cut pre-first-promotion and the [0.55,0.63] dead band shrinks [S3].
@@ -64,17 +65,15 @@ loss:
                              # silently training an aux objective on this run.
   aux_value_coef: 0.05       # pointer-arch D4: trunk-shaping aux value head (MSE onto discounted
                              # return). Co-trained from update 0; never feeds control.
-  setup_entropy_coef: 0.02   # S1/S2 review deviation (lineage-specific; NOT a v11 copy). The seed
-                             # ckpt_649's opening entropy collapsed during bootstrap and league
-                             # self-play narrows openings further, so re-widen them with an
-                             # ADDITIONAL setup-phase-only entropy bonus (step6 §2.2: masked mean of
-                             # H(pi) over is_setup rows, folded as total -= coef * setup_H; wired end
-                             # to end env->vec_env.setup_flags->buffer->trainer). Same per-decision
-                             # scale as entropy_coef, so 0.02 is 4x the pinned global 0.005 (real
-                             # re-widening pressure on the ~4 setup decisions/game) yet half the 0.04
-                             # bootstrap start (won't randomize openings / tank WR). Conservative
-                             # pick pending the step6 calibration sweep; monitor openings/
-                             # setup_head_entropy and tune in-flight if openings still collapse.
+  setup_entropy_coef: 0.0    # REVERTED to the validated v11 recipe. The 0.02 first-relaunch value
+                             # OVER-corrected: it drove setup_head_entropy from 0.21 (u0) to ~2.3
+                             # (the untrained/random level) within 25 updates and held it there, so
+                             # the learner played near-random openings, lost to its own frozen anchor
+                             # (anchor_wr_window ~0.2), never promoted, and auto_stopped soft at u300.
+                             # The entropy bonus is the WRONG tool (randomizes ALL openings, not just
+                             # good diversity). Opening diversity is handled PROPERLY downstream: the
+                             # opening scoreboard MEASURES whether openings are weak, then corpus
+                             # opening-SEEDS (Workstream B) inject specific good human openings if so.
 
 optimizer:
   lr_start: 2.0e-4
