@@ -1,0 +1,122 @@
+# pointer-arch self-play — LOWERED-BAR ratchet self-play off the pointer-arch bootstrap.
+#
+# LINEAGE: the ratified pointer-arch fork (.claude/veriloop/specs/pointer-arch-fork.md) is a
+# FULL RE-BOOTSTRAP: BC regen -> BC train -> heuristic bootstrap -> lowered-bar self-play (THIS run).
+# The bootstrap CRUSHED the heuristic (WR 0.36 -> 0.94 by update 160, plateaued ~0.97 vs the old
+# lineage's 0.66), stopped at update 649. That ckpt_649 is BOTH the learner warm-start AND the
+# initial frozen anchor here.
+#
+# RECIPE: identical to the validated v8->v9->v10->v11 lowered-bar recipe (bar 0.63 / sustained 2 /
+# check every 25 / min_games 150 / cooldown 75; same ppo/gae/loss/optimizer/auto_stop). Deliberate
+# deltas vs selfplay_v11.yaml: (a) warm+anchor on the pointer-arch bootstrap ckpt_649 (NOT v10),
+# (b) carry the pointer-arch D4 aux_value_coef=0.05 (trunk-shaping aux value head) + setup_entropy_coef,
+# (c) device pinned mps, (d) a fresh seed + run_name. Do NOT retune the ratchet — validated across
+# v8->v11.
+#
+# TERMINATION: auto_stop (below) is the real terminator, NOT total_steps (a runaway ceiling). HARD
+# stop after 400 updates with no promotion; SOFT stop after 250+ with no promotion AND anchor-window
+# median over the last 8 checks below 0.55. Either fires a clean terminal save + exit.
+#
+# ACCEPT GATE at completion (dual gate, pre-registered in the spec — gate-first, do NOT bank a
+# successor before this returns): the new lineage is accepted only if BOTH
+#   (a) h2h vs v11_cand Wilson-LB > 0.50 at n=600 (in-lineage non-regression), AND
+#   (b) the human-scoreboard opening metric >= v11's on the same eligible games.
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic   # the league block (snapshot 0.5 / anchor 0.25 / heuristic 0.25) drives
+                             # the ACTUAL self-play opponent mix; this is only the fallback kind.
+  engine_backend: python
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.03
+  aux_value_coef: 0.05       # pointer-arch D4: trunk-shaping aux value head (MSE onto discounted
+                             # return). Co-trained from update 0; never feeds control.
+  setup_entropy_coef: 0.0
+
+optimizer:
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 900   # PIN the validated self-play schedule: 2.0e-4 -> 1.5e-4 over the
+                                 # first 900 updates, then HOLD at lr_end for the rest of the
+                                 # unbounded run (linear_lr_schedule clamps progress at 1.0).
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 6           # 6 rolling + exempt promotion ckpts; fits the disk budget.
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 40
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 0.25
+  snapshot_weight: 0.5
+  anchor_weight: 0.25
+  anchor_checkpoint_path: runs/train/bootstrap_pointer_arch_20260721_020848/checkpoints/ckpt_000000649.pt
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63          # the working bar — do NOT raise (0.85 froze v7)
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 25
+  auto_reanchor_min_games: 150                   # windowed gate: N_eff = 150 (not the old EMA's ~19)
+  auto_reanchor_cooldown_updates: 75             # short cooldown so promotions CHAIN within the run
+
+# Automated plateau termination — the real terminator for this unbounded run.
+auto_stop:
+  enabled: true
+  hard_updates_since_promotion: 400
+  soft_updates_since_promotion: 250
+  soft_window_bar: 0.55
+  soft_window_checks: 8
+
+# Warm-start the learner from the pointer-arch bootstrap ckpt_649 (fresh optimizer; the league
+# snapshot pool rebuilds from here). Same ckpt is installed as the initial frozen anchor above.
+init_policy_checkpoint: runs/train/bootstrap_pointer_arch_20260721_020848/checkpoints/ckpt_000000649.pt
+
+total_steps: 196608000           # 6000 rollouts x 128 x 256 — a RUNAWAY CEILING (~2 weeks), NOT a
+                                 # budget; auto_stop is the real terminator (KILL per plateau).
+min_free_disk_gb: 5.0            # stop cleanly BEFORE a full disk truncates a torch.save mid-write.
+seed: 721
+device: mps
+torch_compile: false
+run_name: selfplay_pointer_arch
+output_dir: runs/train
