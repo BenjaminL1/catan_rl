@@ -239,6 +239,83 @@ class TestResume:
         assert state.league.n_snapshots() == 3
 
 
+class TestCliRunDirResume:
+    """B1: the CLI ``--run-dir`` (stable, non-timestamped) path enables a
+    kill+relaunch to RESUME rather than restart from the seed into a new dir.
+
+    This exercises the whole entry point twice — the fix's real target —
+    rather than ``run_training`` directly (already covered by ``TestResume``).
+    """
+
+    def test_main_run_dir_kill_relaunch_resumes(self, tmp_path: Path) -> None:
+        from catan_rl.checkpoint.manager import list_checkpoints
+        from catan_rl.cli.train import main
+
+        cfg_path = tmp_path / "tiny.yaml"
+        _tiny_cfg(total_updates=4).to_yaml(cfg_path)
+        run_dir = tmp_path / "selfplay_resume"
+
+        # main() -> setup_logging mutates the SHARED 'catan_rl.train' logger
+        # (propagate=False + owned handlers) for production single-writer logging.
+        # Snapshot + restore it so this test leaves no trace — otherwise a later
+        # caplog-based test (TestResumeConfigDiff) that relies on propagation to
+        # the root logger would see nothing.
+        entry_logger = logging.getLogger("catan_rl.train")
+        saved_propagate = entry_logger.propagate
+        saved_handlers = list(entry_logger.handlers)
+        try:
+            # First launch: run 2 updates into the stable --run-dir, then "die".
+            rc1 = main(
+                [
+                    "--config",
+                    str(cfg_path),
+                    "--run-dir",
+                    str(run_dir),
+                    "--device",
+                    "cpu",
+                    "--max-updates",
+                    "2",
+                ]
+            )
+            assert rc1 == 0
+            first = list_checkpoints(run_dir / "checkpoints")
+            assert first, "first launch wrote no checkpoint"
+            # save_every_updates=1 → latest saved is update 1 (ckpt_000000001.pt).
+            assert first[-1].name == "ckpt_000000001.pt"
+
+            # Relaunch into the SAME --run-dir with --resume (fail-fast guard). It must
+            # pick up checkpoints/ and ADVANCE past update 1 — a fresh restart would
+            # re-run 0,1 and stop at ckpt_1 again.
+            rc2 = main(
+                [
+                    "--config",
+                    str(cfg_path),
+                    "--run-dir",
+                    str(run_dir),
+                    "--resume",
+                    "--device",
+                    "cpu",
+                    "--max-updates",
+                    "2",
+                ]
+            )
+            assert rc2 == 0
+            # No timestamped sibling dir was created — the run dir stayed stable.
+            assert [p.name for p in tmp_path.iterdir() if p.is_dir()] == ["selfplay_resume"]
+            # The run resumed at update 2 and ran through update 3.
+            latest = list_checkpoints(run_dir / "checkpoints")[-1]
+            assert latest.name == "ckpt_000000003.pt", (
+                f"expected resume to reach update 3, got {latest.name} — relaunch "
+                "restarted from the seed instead of resuming"
+            )
+        finally:
+            entry_logger.propagate = saved_propagate
+            for h in list(entry_logger.handlers):
+                if h not in saved_handlers:
+                    h.close()
+                    entry_logger.removeHandler(h)
+
+
 class TestBuildOnly:
     """Test the constructor path without running the loop."""
 

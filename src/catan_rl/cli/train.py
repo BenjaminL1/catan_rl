@@ -34,6 +34,14 @@ Examples::
   # Layer env-var overrides on top of YAML
   CATAN_PPO__ROLLOUT__N_ENVS=64 PYTHONPATH=src python scripts/train.py \
       --config configs/ppo_default.yaml --dry-run
+
+  # Resumable long run: a STABLE --run-dir (no timestamp) so a mid-run death
+  # (thermal / OOM / reboot) can be relaunched and RESUME (league pool +
+  # optimizer + plateau clock + reanchor promotions restored) instead of
+  # re-warm-starting from the seed into a new dir. Relaunch with the same
+  # --run-dir; add --resume to fail fast if there is nothing to resume.
+  PYTHONPATH=src python scripts/train.py --config configs/selfplay_pointer_arch.yaml \
+      --run-dir runs/train/selfplay_pointer_arch
 """
 
 from __future__ import annotations
@@ -92,6 +100,29 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="Override the output directory root.",
+    )
+    p.add_argument(
+        "--run-dir",
+        type=Path,
+        default=None,
+        help="Use this EXACT directory as the run dir (STABLE — no timestamp "
+        "suffix), instead of the default '<output_dir>/<run_name>_<timestamp>'. "
+        "Enables crash recovery for long runs: relaunching with the same "
+        "--run-dir reuses the directory so the resume path picks up "
+        "'checkpoints/' (restoring policy + optimizer + league + RNG + "
+        "plateau clock). First launch into an empty dir starts fresh "
+        "(warm-start); a later relaunch resumes automatically. Required for a "
+        "launchd/KeepAlive-supervised run to resume rather than restart from "
+        "the seed.",
+    )
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="Guard flag for a deliberate resume: requires --run-dir and fails "
+        "fast unless that directory already holds a resumable checkpoint. "
+        "Without it, --run-dir silently starts fresh when empty (the intended "
+        "first-launch behaviour); pass --resume when a relaunch MUST continue "
+        "an existing run so a typo'd path can't silently restart from the seed.",
     )
     p.add_argument(
         "--seed",
@@ -256,6 +287,61 @@ def build_run_directory(cfg: TrainConfig, *, now: float | None = None) -> Path:
                 ) from None
 
 
+def _run_dir_has_resumable_checkpoint(run_dir: Path) -> bool:
+    """True iff ``run_dir/checkpoints`` holds at least one *resumable* (rolling)
+    checkpoint.
+
+    Mirrors :meth:`CheckpointManager.latest` exactly — it enumerates via
+    ``list_checkpoints``, which matches only the canonical ``ckpt_NNNNNNNNN.pt``
+    rolling files (promotion + slim checkpoints are deliberately excluded there
+    too, since a slim/policy-only file must never be silently resumed as a full
+    run). So this predicate reflects precisely what
+    :func:`catan_rl.ppo.training_loop.maybe_resume_from_checkpoint` would pick up.
+    """
+    from catan_rl.checkpoint.manager import list_checkpoints
+
+    return bool(list_checkpoints(run_dir / "checkpoints"))
+
+
+def prepare_run_directory(run_dir: Path, *, resume: bool = False) -> Path:
+    """Resolve + create a STABLE (non-timestamped) run directory for a resumable
+    run (the ``--run-dir`` path), and return it.
+
+    Unlike :func:`build_run_directory`, this does NOT append a timestamp: the
+    directory name is exactly ``run_dir`` (tilde/relative expanded), created with
+    ``exist_ok=True`` so a relaunch reuses it. That stability is the crash-recovery
+    contract for a long run — because the run dir is stable, the checkpoint
+    manager's directory is stable, and
+    :func:`~catan_rl.ppo.training_loop.maybe_resume_from_checkpoint` finds
+    ``checkpoints/`` on relaunch and restores policy + optimizer + league pool +
+    RNG + the per-lineage plateau clock instead of re-warm-starting from the seed
+    into a fresh timestamped dir (which would silently discard the league pool,
+    optimizer, and every reanchor promotion).
+
+    Idempotent: the FIRST launch into an empty dir starts fresh (the warm-start
+    from ``init_policy_checkpoint`` fires; no checkpoint to resume), and any later
+    relaunch into the same dir resumes. This is exactly what a launchd/KeepAlive
+    supervisor needs — but see the ordering note: KeepAlive is only safe to add
+    AFTER resume is confirmed, else a fresh dir with no ckpt would restart from
+    the seed on every crash.
+
+    ``resume=True`` (the ``--resume`` guard) additionally REQUIRES an existing
+    resumable checkpoint and raises ``FileNotFoundError`` otherwise — a fail-fast
+    against the "relaunch silently restarts from the seed" foot-gun when the
+    operator *intended* to continue a crashed run (e.g., a typo'd path).
+    """
+    run_dir = run_dir.expanduser().resolve()
+    if resume and not _run_dir_has_resumable_checkpoint(run_dir):
+        raise FileNotFoundError(
+            f"--resume was set but no resumable checkpoint exists under "
+            f"{run_dir / 'checkpoints'} (a rolling 'ckpt_NNNNNNNNN.pt'). Drop "
+            f"--resume to start a fresh run in this directory, or point --run-dir "
+            f"at the crashed run's directory."
+        )
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def snapshot_config(cfg: TrainConfig, run_dir: Path) -> Path:
     """Write the resolved config to ``run_dir/config.yaml`` and return the
     path. Reloading the snapshot reproduces the run."""
@@ -418,7 +504,18 @@ def main(argv: list[str] | None = None) -> int:
     # fails immediately rather than midway through trainer construction.
     resolved_device = resolve_device(cfg.device)
 
-    run_dir = build_run_directory(cfg)
+    # Run directory: a stable ``--run-dir`` (resumable, no timestamp — the
+    # crash-recovery path for long runs) OR the default timestamped dir. The
+    # ``--resume`` guard is meaningless without a ``--run-dir`` to resume into.
+    if args.run_dir is not None:
+        run_dir = prepare_run_directory(args.run_dir, resume=args.resume)
+    else:
+        if args.resume:
+            raise ValueError(
+                "--resume requires --run-dir (which directory should it resume?). "
+                "Pass --run-dir <stable path> for a resumable run."
+            )
+        run_dir = build_run_directory(cfg)
     logger = setup_logging(run_dir, verbose=args.verbose)
 
     setup_seeding(cfg.seed)
@@ -428,6 +525,15 @@ def main(argv: list[str] | None = None) -> int:
         run_dir, resolved_device=resolved_device, launch_argv=launch_argv
     )
     logger.info("run_dir=%s", run_dir)
+    if args.run_dir is not None:
+        will_resume = _run_dir_has_resumable_checkpoint(run_dir)
+        logger.info(
+            "stable run-dir (resumable): %s at launch — will %s",
+            "checkpoint present" if will_resume else "no checkpoint",
+            "RESUME (restore policy+optimizer+league+RNG+plateau clock)"
+            if will_resume
+            else "start FRESH (warm-start from init_policy_checkpoint if set)",
+        )
     logger.info("config snapshot at %s", snapshot_path)
     logger.info("run metadata at %s", metadata_path)
     logger.info("resolved device: %s (requested: %s)", resolved_device, cfg.device)
@@ -500,6 +606,7 @@ __all__ = [
     "build_run_directory",
     "construct_trainer",
     "main",
+    "prepare_run_directory",
     "resolve_config",
     "setup_logging",
     "setup_seeding",

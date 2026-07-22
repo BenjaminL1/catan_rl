@@ -63,6 +63,16 @@ class TestParser:
         assert args.n_envs is None
         assert args.dry_run is False
         assert args.verbose is False
+        # B1 crash-recovery flags default off → byte-identical timestamped-dir path.
+        assert args.run_dir is None
+        assert args.resume is False
+
+    def test_run_dir_and_resume_parse(self, train_mod) -> None:
+        args = train_mod.build_parser().parse_args(
+            ["--run-dir", "runs/train/selfplay_pointer_arch", "--resume"]
+        )
+        assert args.run_dir == Path("runs/train/selfplay_pointer_arch")
+        assert args.resume is True
 
     def test_all_overrides_parse(self, train_mod) -> None:
         args = train_mod.build_parser().parse_args(
@@ -425,6 +435,69 @@ class TestRunDirCollision:
         # The 2nd & 3rd land at <name>_2 / <name>_3
         assert dir_b.name.endswith("_2")
         assert dir_c.name.endswith("_3")
+
+
+# ---------------------------------------------------------------------------
+# Stable --run-dir + --resume (B1 crash recovery for long runs)
+# ---------------------------------------------------------------------------
+
+
+class TestStableRunDir:
+    def test_prepare_run_directory_is_stable_no_timestamp(self, train_mod, tmp_path: Path) -> None:
+        target = tmp_path / "selfplay_pointer_arch"
+        run_dir = train_mod.prepare_run_directory(target)
+        # Exact path — NOT a timestamped child (contrast build_run_directory).
+        assert run_dir == target.resolve()
+        assert run_dir.is_dir()
+
+    def test_prepare_run_directory_idempotent_reuse(self, train_mod, tmp_path: Path) -> None:
+        target = tmp_path / "run"
+        a = train_mod.prepare_run_directory(target)
+        (a / "checkpoints").mkdir()
+        (a / "checkpoints" / "ckpt_000000001.pt").write_bytes(b"x")
+        # Relaunch into the SAME dir returns the same path (exist_ok) — this is
+        # what lets maybe_resume_from_checkpoint pick up checkpoints/ on restart.
+        b = train_mod.prepare_run_directory(target)
+        assert a == b
+        assert (b / "checkpoints" / "ckpt_000000001.pt").exists()
+
+    def test_resume_guard_raises_without_checkpoint(self, train_mod, tmp_path: Path) -> None:
+        # --resume into an empty dir must fail fast (else a supervised relaunch
+        # would silently restart from the seed — the KeepAlive footgun).
+        with pytest.raises(FileNotFoundError, match=r"no resumable checkpoint"):
+            train_mod.prepare_run_directory(tmp_path / "empty", resume=True)
+
+    def test_resume_guard_passes_with_rolling_checkpoint(self, train_mod, tmp_path: Path) -> None:
+        target = tmp_path / "run"
+        (target / "checkpoints").mkdir(parents=True)
+        (target / "checkpoints" / "ckpt_000000025.pt").write_bytes(b"x")
+        # A promotion/slim file alone must NOT satisfy the guard (they are excluded
+        # from latest()); a rolling ckpt does.
+        run_dir = train_mod.prepare_run_directory(target, resume=True)
+        assert run_dir == target.resolve()
+
+    def test_resume_guard_ignores_promo_only(self, train_mod, tmp_path: Path) -> None:
+        target = tmp_path / "promo_only"
+        (target / "checkpoints").mkdir(parents=True)
+        (target / "checkpoints" / "promo_ckpt_000000275.pt").write_bytes(b"x")
+        # promo_ckpt_* is deliberately excluded from CheckpointManager.latest(), so
+        # the resume predicate must not treat a promo-only dir as resumable.
+        with pytest.raises(FileNotFoundError, match=r"no resumable checkpoint"):
+            train_mod.prepare_run_directory(target, resume=True)
+
+    def test_main_run_dir_uses_stable_dir(self, train_mod, tmp_path: Path) -> None:
+        target = tmp_path / "stable"
+        rc = train_mod.main(["--dry-run", "--run-dir", str(target), "--device", "cpu"])
+        assert rc == 0
+        # The run dir is EXACTLY target (no timestamped sibling) and carries the snapshot.
+        assert (target / "config.yaml").exists()
+        assert list(tmp_path.iterdir()) == [target]
+
+    def test_main_resume_without_run_dir_raises(self, train_mod, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match=r"--resume requires --run-dir"):
+            train_mod.main(
+                ["--dry-run", "--resume", "--output-dir", str(tmp_path), "--device", "cpu"]
+            )
 
 
 # ---------------------------------------------------------------------------
