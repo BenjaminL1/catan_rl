@@ -1,0 +1,27 @@
+{
+  "video_id": "TOtpGFl2Nq0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Gagagugi=RED). Grant-locked 2nds: ThePhantom {ORE,SHEEP,WHEAT}==v8 [1,7,18]; Gagagugi {BRICK,WHEAT,WOOD}==v21 [5,14,15] (unique). 1st settlements: ThePhantom v18 [4,13,14]={ORE,WOOD,BRICK}, Gagagugi v13 [3,11,12]={BRICK,SHEEP,SHEEP}. Roads: red v13-v14 (217) & v21-v17 (133); black v8-v9 & v18-v17 (mask-confirmed; edge scans were ore/brick contaminated). v18-v17 and v21-v17 are distinct edges meeting at shared junction v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [4, 13, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]},
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]}
+      ]
+    },
+    "Gagagugi": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    }
+  }
+}

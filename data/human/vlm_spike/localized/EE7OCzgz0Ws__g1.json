@@ -1,0 +1,27 @@
+{
+  "video_id": "EE7OCzgz0Ws",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, degen1009=RED). Grant-locked 2nds: ThePhantom {ORE,SHEEP,SHEEP}==v8 [1,7,18]; degen {BRICK,WHEAT,WOOD}==v11 [2,9,10]. 1st settlements: ThePhantom v23 [6,16,17]={WHEAT,WHEAT,BRICK}, degen v22 [6,17,18]={WHEAT,WHEAT,SHEEP}. Roads: black v8-v9 (sat 9) & v23-v19; red v11-v10 (197) & v22-v9 (crop-confirmed). v8-v9 and v22-v9 are distinct edges meeting at shared junction v9.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [6, 16, 17]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]},
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]}
+      ]
+    },
+    "degen1009": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "video_id": "TOtpGFl2Nq0",
+  "game_index": 2,
+  "vlm_note": "IDENTICAL GRANTS: both players granted {BRICK,SHEEP,WOOD} (candidate set {2,6,7,11,12}), so grant multiset alone cannot assign handles. Resolved by colour split + meta authority: pieces are RED and BLACK; meta says ThePhantom=BLACK (trusted) so ThePhantom=black {v7,v20}, Gagagugi=RED {v11,v22}. Each player has exactly one settlement in {2,6,7,11,12}: v7(BLACK,{BRICK,WOOD,SHEEP})=ThePhantom 2nd, v11(RED,{WOOD,BRICK,SHEEP})=Gagagugi 2nd. Settlement vertices pinned by body-density: red@v11 (567 vs v12=21), black@v20 (487 vs v19=0, so 1st is v20 NOT v19). 1st settlements: ThePhantom v20 [5,15,16]={WOOD,ORE,SHEEP}, Gagagugi v22 [6,17,18]={WHEAT,BRICK,ORE}. Roads: black v7-v24 & v20-v19 (sat 0-3; v20-v21/v45 are light ore-grey); red v11-v10 & v22-v23 (232). HANDLE ASSIGNMENT DEPENDS ON META COLOUR ThePhantom=BLACK.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [5, 15, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [7, 8]]},
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]}
+      ]
+    },
+    "Gagagugi": {
+      "settlements": [
+        {"hexes": [2, 9, 10]},
+        {"hexes": [6, 17, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]},
+        {"endpoints": [[6, 17, 18], [6, 16, 17]]}
+      ]
+    }
+  }
+}
