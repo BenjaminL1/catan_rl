@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "read_board_stable None on both frames (fullov NONE + 30 retries timed out). IDENTICAL grants (both {ORE,SHEEP,WOOD}->{4,20,21}) so even with a board it would need colour+meta to split handles. Recoverable via manual screenshot/clean re-parse. Colours meta WHITE/BLACK."
+}

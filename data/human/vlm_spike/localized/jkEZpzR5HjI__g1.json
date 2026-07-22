@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "read_board_stable None on both empty_baseline and post_setup (8 retries each). Grants present (ThePhantom {SHEEP,WHEAT,WOOD}->{5,8}; macsellerste {BRICK,WOOD,WOOD}->v22). Recoverable via manual screenshot/clean re-parse. Colours meta WHITE/BLACK (likely wrong per sibling g2)."
+}

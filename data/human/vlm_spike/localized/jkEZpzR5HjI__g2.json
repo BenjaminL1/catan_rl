@@ -1,0 +1,27 @@
+{
+  "video_id": "jkEZpzR5HjI",
+  "game_index": 2,
+  "vlm_note": "meta colours BOTH WRONG (meta: macsellerste=WHITE, ThePhantom=BLACK). Pieces are PURPLE and BLACK. Grant self-check: {WHEAT,WHEAT,WOOD} = v21 (purple) -> ThePhantom=PURPLE; {BRICK,ORE,SHEEP} = v14 (black) -> macsellerste=BLACK. Grant-locked 2nds: ThePhantom v21 [5,14,15]; macsellerste v14 [3,10,11]. 1st settlements: ThePhantom v24 [7,8]={ORE,SHEEP} (coastal 2-hex; density box missed it but purple mask confirms settlement+road at v24), macsellerste v16 [4,12,13]={WHEAT,ORE,WOOD}. Roads: purple v21-v17 & v24-v7 (masks); black v14-v13 (sat 3) & v16-v15.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 14, 15]},
+        {"hexes": [7, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]},
+        {"endpoints": [[7, 8], [1, 7, 8]]}
+      ]
+    },
+    "macsellerste": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]},
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]}
+      ]
+    }
+  }
+}
