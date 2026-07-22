@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_fit_offset_inconsistent",
+  "vlm_note": "read_board_stable fit is offset/inconsistent in the top-right (same failure as 4oRadHB-WwM g1). The top-right red settlement visually borders {BRICK,BRICK,ORE} (brick-3, ore-8, brick-10 - matching NukeSmshr grant {BRICK,BRICK,ORE}=v10) but the fit places the v11 marker on it (v11 topology = {BRICK,SHEEP,ORE}, no 2nd brick). Red is over-detected across v10/v11/v12 boxes and several visible pieces (center-left red, center-left black) don't land at their expected markers. ThePhantom 2nd=v0 (black, {BRICK,SHEEP,WOOD}, in grant set {0,2,12,15}) IS clean, but with an inconsistent fit the remaining vertices + all road tracing are unreliable. meta colours correct (NukeSmshr=RED, ThePhantom=BLACK). Recoverable via a clean board re-parse."
+}

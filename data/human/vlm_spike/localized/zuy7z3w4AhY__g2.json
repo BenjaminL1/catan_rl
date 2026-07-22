@@ -1,0 +1,27 @@
+{
+  "video_id": "zuy7z3w4AhY",
+  "game_index": 2,
+  "vlm_note": "Clean 8-piece opening (fit verified: v0/v23 black, v10/v21 red at markers). meta colours CORRECT (ThePhantom=BLACK, NukeSmshr=RED). Grant-locked 2nds: ThePhantom {BRICK,ORE,SHEEP}==v23 [6,16,17]; NukeSmshr {BRICK,SHEEP,WOOD}==v10 [2,3,10]. 1st settlements: ThePhantom v0 [0,3,4]={WHEAT,WOOD,ORE}, NukeSmshr v21 [5,14,15]={WHEAT,WOOD,BRICK}. Roads: black v23-v19 & v0-v15 (masks); red v10-v11 (217) & v21-v20 (per-step r-g 130+; v21-v17 is pure green tree tile, not a road).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [5, 6, 16]]},
+        {"endpoints": [[0, 3, 4], [3, 4, 12]]}
+      ]
+    },
+    "NukeSmshr": {
+      "settlements": [
+        {"hexes": [2, 3, 10]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]},
+        {"endpoints": [[5, 14, 15], [5, 15, 16]]}
+      ]
+    }
+  }
+}

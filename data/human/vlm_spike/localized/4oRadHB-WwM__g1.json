@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_fit_offset_inconsistent",
+  "vlm_note": "read_board_stable is highly flaky on this frame (fails most attempts) and the recovered fit is OFFSET/inconsistent: the black top-right settlement visually borders {BRICK,ORE,WOOD} (brick-8, ore, tree - matching jpeanu's grant {BRICK,ORE,WOOD}=v10/v11) but the fit places its marker at v30, whose topology is only {BRICK,WOOD}. Bottom region (v23 purple, v20 black, v19 junction) fit correctly, so the fit is internally inconsistent. Grant self-check IS satisfiable in principle (ThePhantom=PURPLE {BRICK,WHEAT,WOOD}=v23; jpeanu=BLACK {BRICK,ORE,WOOD}=v10/v11) but reliable per-vertex placement + road tracing is impossible with an offset fit. meta colours BOTH WRONG (meta: jpeanu=RED/ThePhantom=BLACK; actual jpeanu=BLACK/ThePhantom=PURPLE). Recoverable via a clean board re-parse."
+}
