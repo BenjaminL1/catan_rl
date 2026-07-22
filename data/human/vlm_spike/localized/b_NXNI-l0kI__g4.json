@@ -1,0 +1,27 @@
+{
+  "video_id": "b_NXNI-l0kI",
+  "game_index": 4,
+  "vlm_note": "IDENTICAL GRANTS: both players granted {BRICK,SHEEP,WOOD} (candidate set {1,12,13}). Resolved by colour split + meta authority: pieces are RED and BLACK; meta says ThePhantom=BLACK (trusted, and consistent) so ThePhantom=black {v12,v8}, waterwings=red {v13,v19}. Each player has exactly one settlement in {1,12,13}: v12(BLACK)=ThePhantom 2nd, v13(RED)=waterwings 2nd. 1st settlements: ThePhantom v8 [1,7,18]={ORE,WOOD,desert}, waterwings v19 [5,6,16]={SHEEP,WHEAT,WHEAT}. Roads via colour masks: black v12-v6 & v8-v9 (sat 0); red v13-v15 & v19-v4. HANDLE ASSIGNMENT DEPENDS ON META COLOUR ThePhantom=BLACK (colours+meta agree here). read_board_stable is stochastic on this game (retry loop needed).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [1, 2, 8]]},
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]}
+      ]
+    },
+    "waterwings": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]},
+        {"endpoints": [[5, 6, 16], [0, 5, 6]]}
+      ]
+    }
+  }
+}

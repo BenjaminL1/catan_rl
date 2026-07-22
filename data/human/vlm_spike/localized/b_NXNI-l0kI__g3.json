@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_frame_incomplete_missing_2nd_settlement",
+  "vlm_note": "Only 3 of 4 opening settlements are present in post_setup: waterwings(RED) v7 [1st] + v18 [2nd, grant {BRICK,SHEEP,WOOD}], ThePhantom(BLACK) v21 [1st]. ThePhantom's GRANTED 2nd settlement is absent - grant {ORE} (single-resource, a coastal 1-ore vertex, candidates {35,36,37}) but all-vertex body-density scan + right-edge zoom show NO black piece at 35/36/37 or anywhere else (only v7/v18/v21 are real; v16/v4/v29 are brick tiles). The board snapshot was captured mid-setup, before ThePhantom placed their 2nd. Not localizable as a complete opening from this frame; recoverable only from a later frame. Note meta colours (waterwings=RED, ThePhantom=BLACK) verified correct via v21(black)/v7,v18(red)."
+}

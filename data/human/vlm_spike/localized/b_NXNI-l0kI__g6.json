@@ -1,0 +1,27 @@
+{
+  "video_id": "b_NXNI-l0kI",
+  "game_index": 6,
+  "vlm_note": "meta colours BOTH WRONG (meta: waterwings=RED, ThePhantom=BLACK). Pieces are PURPLE and BLACK. Grant self-check: {WHEAT,WHEAT,WHEAT} uniquely = v14 (purple piece) -> ThePhantom=PURPLE; {BRICK,WOOD,WOOD} = v19 (black piece) -> waterwings=BLACK. Grant-locked 2nds: ThePhantom v14 [3,10,11]; waterwings v19 [5,6,16]. 1st settlements: ThePhantom v15 [3,4,12]={WHEAT,ORE,SHEEP}, waterwings v11 [2,9,10]={SHEEP,ORE,WHEAT}. Roads: purple v14-v33 & v15-v13 (colour masks); black v11-v10 (sat 5) & v19-v23 (blob elongates up-left, v23=66px vs v4=96px; v19's edges all tile-colored).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [10, 11]]},
+        {"endpoints": [[3, 4, 12], [3, 11, 12]]}
+      ]
+    },
+    "waterwings": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    }
+  }
+}

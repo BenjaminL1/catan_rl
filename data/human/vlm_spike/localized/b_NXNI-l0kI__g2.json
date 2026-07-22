@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "board_read_failed_no_vertex_positions",
+  "vlm_note": "read_board_stable returns None on both empty_baseline and post_setup, so no vertex-pixel fit. Grants present (waterwings {BRICK,SHEEP,WOOD}->{17,18,20,21}; ThePhantom {BRICK,ORE,WOOD}->v12), recoverable via manual board screenshot or clean re-parse. Colours RED/BLACK."
+}
