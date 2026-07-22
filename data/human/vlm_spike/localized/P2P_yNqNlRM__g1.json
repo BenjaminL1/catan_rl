@@ -1,0 +1,27 @@
+{
+  "video_id": "P2P_yNqNlRM",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, bshad1=RED). Weak grant anchors resolved by colour + red-density: bshad1 {ORE,WHEAT,WOOD} matches {2,3,4,9,22}; the red center settlement is at v3 (red-density 288, matches grant; the v9 marker sits just left of it, empty). ThePhantom {BRICK,ORE,WHEAT} matches {11,19,23}; black center-left is v23 (b=355). Grant-locked 2nds: ThePhantom v23 [6,16,17]; bshad1 v3 [0,1,6]. 1st settlements: ThePhantom v0 [0,3,4]={WOOD,WOOD,SHEEP}, bshad1 v11 [2,9,10]={ORE,BRICK,WHEAT}. Roads: red v3-v2 & v11-v10 (243); black v23-v22 (sat 7) & v0-v5 (mask; scan v0-v1 was contamination).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[0, 3, 4], [0, 4, 5]]}
+      ]
+    },
+    "bshad1": {
+      "settlements": [
+        {"hexes": [0, 1, 6]},
+        {"hexes": [2, 9, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 1, 6], [0, 1, 2]]},
+        {"endpoints": [[2, 9, 10], [2, 3, 10]]}
+      ]
+    }
+  }
+}

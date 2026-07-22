@@ -1,0 +1,27 @@
+{
+  "video_id": "2jdK3ZeWd3c",
+  "game_index": 1,
+  "vlm_note": "meta colour WRONG for Yrruc (meta says WHITE; pieces are RED). Grant self-check: {ORE,WHEAT,WOOD} = v16 (red) -> Yrruc=RED; ThePhantom=BLACK (meta correct). Fit verified (all 4 pieces read correct colour at markers). Grant-locked 2nds: ThePhantom {BRICK,WOOD,WOOD}==v13 [3,11,12]; Yrruc {ORE,WHEAT,WOOD}==v16 [4,12,13]. 1st settlements: ThePhantom v19 [5,6,16]={WHEAT,SHEEP,SHEEP}, Yrruc v12 [2,8,9]={SHEEP,ORE,BRICK}. Roads via colour masks: black v13-v15 & v19-v23; red v16-v15 (217) & v12-v11. v13-v15 and v16-v15 are distinct edges meeting at shared junction v15.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [3, 11, 12]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 11, 12], [3, 4, 12]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    },
+    "Yrruc": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    }
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "unlocalizable": "white_on_light_roads_untraceable_plus_fit_shift",
+  "vlm_note": "RED/WHITE game. Settlements ARE determinable via resource-adjacency (grant self-check): ThePhantom(WHITE) 2nd=v13 [ORE,ORE,BRICK, grant {BRICK,ORE,ORE}], 1st=v7 [SHEEP,WHEAT,BRICK]; queencrab(RED) 2nd=v12 [WOOD,BRICK,SHEEP, grant {BRICK,SHEEP,WOOD}], 1st=v15 [ORE,WOOD,BRICK]. BUT: (1) fit is shifted in the bottom-right (the v15 red settlement renders at the v16 marker; v13/v15 read ~0 on density); (2) WHITE pieces barely exceed the light-tile background and both the white and red road masks over-detect massively on the light ore/sheep/wheat tiles, so only 1 of 4 roads (v15-v13, red 202) traces cleanly. Cannot give accurate roads for v7/v13/v12 -> not a reliable corpus entry. meta colours correct (queencrab=RED, ThePhantom=WHITE). Recoverable via a clean board re-parse."
+}
