@@ -1,0 +1,27 @@
+{
+  "video_id": "HFrkbtPtk8Y",
+  "game_index": 1,
+  "vlm_note": "IDENTICAL GRANTS: both players granted {BRICK,SHEEP,WHEAT} (candidate set {0,20,21}). Resolved by colour split + meta authority: pieces are RED and BLACK; meta says ThePhantom=BLACK (trusted, consistent) so ThePhantom=black {v20,v6}, rotiart=red {v0,v9}. Each player has exactly one settlement in {0,20,21}: v20(BLACK)=ThePhantom 2nd, v0(RED)=rotiart 2nd. 1st settlements: ThePhantom v6 [1,2,8]={ORE,WOOD,WOOD}, rotiart v9 [1,6,18]={ORE,WOOD,BRICK}. Roads: black v20-v19 & v6-v12 (per-step: dark-neutral near v6; v6-v7/v6-v2 are light stone tile); red v0-v5 & v9-v22 (202). HANDLE ASSIGNMENT DEPENDS ON META COLOUR ThePhantom=BLACK.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 15, 16]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 15, 16], [5, 6, 16]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    },
+    "rotiart": {
+      "settlements": [
+        {"hexes": [0, 3, 4]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 3, 4], [0, 4, 5]]},
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]}
+      ]
+    }
+  }
+}

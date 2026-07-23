@@ -1,0 +1,27 @@
+{
+  "video_id": "HFrkbtPtk8Y",
+  "game_index": 2,
+  "vlm_note": "meta colours BOTH WRONG (meta: rotiart=RED, ThePhantom=BLACK). Pieces are BLUE and OLIVE. Grant self-check: {ORE,ORE,WHEAT} = v19 (olive) -> ThePhantom=OLIVE; {BRICK,ORE,WOOD} = v16 (blue) -> rotiart=BLUE. Grant-locked 2nds: ThePhantom v19 [5,6,16]; rotiart v16 [4,12,13]. 1st settlements: ThePhantom v8 [1,7,18]={WHEAT,SHEEP,SHEEP}, rotiart v6 [1,2,8]={WHEAT,BRICK,BRICK}. Roads via colour masks: olive v19-v20 & v8-v27; blue v16-v15 & v6-v12. (read_board_stable stochastic here; post-frame fit cached.)",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [5, 6, 16]},
+        {"hexes": [1, 7, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[5, 6, 16], [5, 15, 16]]},
+        {"endpoints": [[1, 7, 18], [7, 18]]}
+      ]
+    },
+    "rotiart": {
+      "settlements": [
+        {"hexes": [4, 12, 13]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]},
+        {"endpoints": [[1, 2, 8], [2, 8, 9]]}
+      ]
+    }
+  }
+}

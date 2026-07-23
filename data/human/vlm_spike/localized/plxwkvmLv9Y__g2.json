@@ -1,0 +1,27 @@
+{
+  "video_id": "plxwkvmLv9Y",
+  "game_index": 2,
+  "vlm_note": "meta colour WRONG for itsOKK (meta says BLACK; pieces are PINK). Grant self-check: {BRICK,ORE,WHEAT} = v9 (pink) -> itsOKK=PINK; ThePhantom=WHITE (meta correct, renders medium-grey here). ThePhantom grant {ORE,WHEAT,WOOD} matches {0,2,5,15}; white 2nd is v5 (borders {ORE,WOOD,WHEAT}, base at v5 marker confirmed by crop). Grant-locked 2nds: ThePhantom v5 [0,4,5]; itsOKK v9 [1,6,18]. 1st settlements: ThePhantom v13 [3,11,12]={WOOD,SHEEP,ORE}, itsOKK v6 [1,2,8]={WHEAT,WOOD,SHEEP}. Roads: pink v9-v3 & v6-v7 (crops); white v13-v14 (crop) & v5-v17 (changed-from-baseline neutral, diff 62; the white road renders grey on the stone tile). read_board_stable stochastic; post-frame fit cached.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [3, 11, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [4, 5, 14]]},
+        {"endpoints": [[3, 11, 12], [3, 10, 11]]}
+      ]
+    },
+    "itsOKK": {
+      "settlements": [
+        {"hexes": [1, 6, 18]},
+        {"hexes": [1, 2, 8]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 6, 18], [0, 1, 6]]},
+        {"endpoints": [[1, 2, 8], [1, 7, 8]]}
+      ]
+    }
+  }
+}
