@@ -1,0 +1,27 @@
+{
+  "video_id": "WnXWRZxwwhw",
+  "game_index": 6,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Becaw=RED). Grant-locked 2nds: ThePhantom {BRICK,WHEAT,WOOD}==v5 [0,4,5]; Becaw {BRICK,BRICK,SHEEP}==v8 [1,7,18] (unique). 1st settlements: ThePhantom v10 [2,3,10]={SHEEP,ORE,ORE}, Becaw v21 [5,14,15]={WOOD,ORE,WHEAT}. Roads via colour masks: black v5-v0 & v10-v11; red v8-v9 (202) & v21-v17.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [0, 4, 5]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 4, 5], [0, 3, 4]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    },
+    "Becaw": {
+      "settlements": [
+        {"hexes": [1, 7, 18]},
+        {"hexes": [5, 14, 15]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 18], [1, 6, 18]]},
+        {"endpoints": [[5, 14, 15], [4, 5, 14]]}
+      ]
+    }
+  }
+}

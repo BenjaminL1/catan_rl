@@ -1,0 +1,27 @@
+{
+  "video_id": "bWyGCv-5EZ8",
+  "game_index": 13,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Canneloni=RED). Grant-locked 2nds: ThePhantom {BRICK,SHEEP,WHEAT}==v17 [4,5,14] (unique); Canneloni {BRICK,WHEAT,WOOD}==v14 [3,10,11] (unique). 1st settlements: ThePhantom v12 [2,8,9]={WOOD,SHEEP,ORE}, Canneloni v0 [0,3,4]={ORE,WHEAT,SHEEP}. Roads via colour masks: black v17-v18 & v12-v11; red v14-v33 (139) & v0-v1 (238). read_board_stable slow on this frame; post-fit cached.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 5, 14]},
+        {"hexes": [2, 8, 9]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 5, 14], [4, 13, 14]]},
+        {"endpoints": [[2, 8, 9], [2, 9, 10]]}
+      ]
+    },
+    "Canneloni": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 3, 4]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [10, 11]]},
+        {"endpoints": [[0, 3, 4], [0, 2, 3]]}
+      ]
+    }
+  }
+}

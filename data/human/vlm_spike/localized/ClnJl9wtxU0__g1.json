@@ -1,0 +1,27 @@
+{
+  "video_id": "ClnJl9wtxU0",
+  "game_index": 1,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=BLACK, Danazu=RED). Grant-locked 2nds: ThePhantom {BRICK,SHEEP,WHEAT}==v7 [1,7,8] (unique); Danazu {BRICK,WHEAT,WOOD}==v12 [2,8,9]. 1st settlements: ThePhantom v19 [5,6,16]={ORE,ORE,WOOD}, Danazu v15 [3,4,12]={WOOD,ORE,SHEEP}. Roads via colour masks: black v7-v6 & v19-v23; red v12-v28 (229) & v15-v0. (read_board_stable very slow on this frame; base-frame fit cached.)",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [1, 2, 8]]},
+        {"endpoints": [[5, 6, 16], [6, 16, 17]]}
+      ]
+    },
+    "Danazu": {
+      "settlements": [
+        {"hexes": [2, 8, 9]},
+        {"hexes": [3, 4, 12]}
+      ],
+      "roads": [
+        {"endpoints": [[2, 8, 9], [8, 9]]},
+        {"endpoints": [[3, 4, 12], [0, 3, 4]]}
+      ]
+    }
+  }
+}
