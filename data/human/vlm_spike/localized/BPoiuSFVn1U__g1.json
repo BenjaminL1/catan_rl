@@ -1,0 +1,27 @@
+{
+  "video_id": "BPoiuSFVn1U",
+  "game_index": 1,
+  "vlm_note": "IDENTICAL GRANTS: both players granted {BRICK,ORE,WOOD} (candidate set {1,22}). Resolved by colour split + meta authority: pieces are RED and BLACK; meta says ThePhantom=BLACK (trusted, consistent) so ThePhantom=black {v22,v16}, akpirate=red {v1,v17}. Each player has exactly one settlement in {1,22}: v22(BLACK)=ThePhantom 2nd, v1(RED)=akpirate 2nd. 1st settlements: ThePhantom v16 [4,12,13]={SHEEP,SHEEP,WHEAT}, akpirate v17 [4,5,14]={SHEEP,WHEAT,BRICK}. Roads: black v16-v15 (sat 0) & v22-v9 (blob elongates up-right, v9=58px vs v50=109px; v22's edges are tile-colored); red v1-v2 & v17-v5 (234). HANDLE ASSIGNMENT DEPENDS ON META COLOUR ThePhantom=BLACK.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [6, 17, 18]},
+        {"hexes": [4, 12, 13]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 17, 18], [1, 6, 18]]},
+        {"endpoints": [[4, 12, 13], [3, 4, 12]]}
+      ]
+    },
+    "akpirate": {
+      "settlements": [
+        {"hexes": [0, 2, 3]},
+        {"hexes": [4, 5, 14]}
+      ],
+      "roads": [
+        {"endpoints": [[0, 2, 3], [0, 1, 2]]},
+        {"endpoints": [[4, 5, 14], [0, 4, 5]]}
+      ]
+    }
+  }
+}

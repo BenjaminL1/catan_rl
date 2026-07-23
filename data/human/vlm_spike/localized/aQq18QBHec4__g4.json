@@ -1,0 +1,27 @@
+{
+  "video_id": "aQq18QBHec4",
+  "game_index": 4,
+  "vlm_note": "Clean 8-piece opening. meta colours CORRECT (ThePhantom=PURPLE, hoh=BLACK). Grant-locked 2nds: ThePhantom {BRICK,SHEEP,WOOD}==v18 [4,13,14]; hoh {BRICK,ORE,WHEAT}==v14 [3,10,11] (unique). 1st settlements: ThePhantom v9 [1,6,18]={WOOD,WHEAT,ORE}, hoh v2 [0,1,2]={SHEEP,WOOD,ORE}. Roads via colour masks: purple v18-v17 & v9-v22; black v14-v13 & v2-v3.",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [4, 13, 14]},
+        {"hexes": [1, 6, 18]}
+      ],
+      "roads": [
+        {"endpoints": [[4, 13, 14], [4, 5, 14]]},
+        {"endpoints": [[1, 6, 18], [6, 17, 18]]}
+      ]
+    },
+    "hoh": {
+      "settlements": [
+        {"hexes": [3, 10, 11]},
+        {"hexes": [0, 1, 2]}
+      ],
+      "roads": [
+        {"endpoints": [[3, 10, 11], [3, 11, 12]]},
+        {"endpoints": [[0, 1, 2], [0, 1, 6]]}
+      ]
+    }
+  }
+}
