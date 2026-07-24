@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
-"""Play 1v1 Catan (Colonist.io ruleset) as a HUMAN against champion v8 + search.
+"""Play 1v1 Catan (Colonist.io ruleset) as a HUMAN against the CHAMPION.
 
-The bot is the strongest available agent: champion ``v8_promobar_u243`` wrapped in
-determinized PUCT-MCTS (``SearchAgent``) at a high simulation budget (default 400).
-You play through the existing pygame board GUI (mouse + the on-screen buttons),
-exactly as the engine's human-render mode already supports.
+The bot defaults to the pointer-arch champion (``selfplay_pointer_arch_v2``
+``ckpt_000000500``) playing its RAW POLICY — no search. You play through the
+existing pygame board GUI (mouse + the on-screen buttons).
+
+**Why raw policy is the default (correctness, not taste).** The deployed
+determinized search is CLAIRVOYANT against a human: ``mcts.clone_env`` deep-copies
+the live env and ``MCTS._reseed`` reseeds only the opponent model + numpy/stdlib
+streams, leaving the Rust ``StackedDice`` bag deep-copied and untouched. Every
+simulated world therefore shares the opponent's TRUE hidden dev cards and the TRUE
+future dice. In a bot-vs-bot harness both sides sit in that same env so it only
+inflates the number; against a HUMAN the tree is literally reading your hand and
+your next rolls. ``--search`` still exists for bot-vs-bot work and prints a loud
+warning, but any human game played with it is uninterpretable.
+
+Each finished game appends a JSON record (result, VP, and the bot's move list) to
+``runs/human_playtest/games.jsonl`` so playtests accumulate into evidence instead
+of vanishing.
 
 Run it (a display is required for the real game)::
 
-    python scripts/play_vs_v8.py --sims 400
+    python scripts/play_vs_v8.py                 # champion, raw policy, logged
 
 Headless smoke (no display, no pygame window — auto-plays a legal human move so
 the full turn flow + win detection are exercised end-to-end)::
@@ -50,7 +63,10 @@ import numpy as np
 if TYPE_CHECKING:
     from catan_rl.search.agent import SearchAgent
 
-DEFAULT_CKPT = "runs/anchors/v8_promobar_u243.pt"
+#: The CURRENT champion (pointer-arch lineage). The old v8 anchor this script was
+#: written for no longer loads on main — the pointer-arch fork changed both the
+#: policy shape and the obs schema, so ``build_actor`` raises on a v8/v11 file.
+DEFAULT_CKPT = "runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt"
 DEFAULT_SIMS = 400
 
 
@@ -440,6 +456,42 @@ def _load_search_agent(ckpt: str, sims: int, seed: int) -> SearchAgent:
     return SearchAgent(actor.policy, cfg, device=actor.device)
 
 
+class _RawPolicyAgent:
+    """Raw-policy bot: ``choose_action(env)`` with NO search.
+
+    Drop-in for :class:`SearchAgent` (same one-method surface) so the game loop
+    is identical either way.
+
+    WHY THIS IS THE DEFAULT (correctness, not preference): the deployed
+    determinized search is CLAIRVOYANT against a human. ``search.mcts.clone_env``
+    deep-copies the live env, and ``MCTS._reseed`` reseeds only the opponent model
+    and the numpy/stdlib streams — the Rust ``StackedDice`` bag is deep-copied and
+    left untouched (its own docstring: "Dice stay per-line faithful via the env
+    clone"). So every simulated world shares (a) the opponent's TRUE hidden dev
+    cards and (b) the TRUE future dice. Against a bot-vs-bot harness both sides
+    live in that same env so it is merely optimistic; against a HUMAN it is the
+    tree reading your hand and your future rolls. A playtest run with search on is
+    therefore uninterpretable and flattering — use raw policy until the
+    de-clairvoyant determinization lands.
+    """
+
+    def __init__(self, actor: Any) -> None:
+        self._actor = actor
+
+    def choose_action(self, env: Any) -> np.ndarray:
+        # Same pairing the eval harness uses: obs + legal-action masks straight
+        # from the live env, sampled by the policy (no tree, no env clone).
+        return self._actor.select_action(env._get_obs(), env.get_action_masks())
+
+
+def _load_raw_agent(ckpt: str, seed: int) -> _RawPolicyAgent:
+    """Load a checkpoint as a bare policy actor (CPU), no search wrapper."""
+    from catan_rl.replay.player_factory import PlayerSpec, build_actor
+
+    actor = build_actor(PlayerSpec(kind="policy", ckpt_path=ckpt), seed=seed, device="cpu")
+    return _RawPolicyAgent(actor)
+
+
 def _describe_bot_move(action: np.ndarray) -> str:
     from catan_rl.env.catan_env import RESOURCES_CW, ActionType
 
@@ -474,8 +526,20 @@ def _describe_bot_move(action: np.ndarray) -> str:
 # ---------------------------------------------------------------------------
 
 
-def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
-    """Run an interactive human-vs-bot game with the pygame GUI."""
+def play_interactive(
+    ckpt: str,
+    sims: int,
+    seed: int,
+    human_seat: int,
+    *,
+    use_search: bool = False,
+    log_path: str | None = None,
+) -> None:
+    """Run an interactive human-vs-bot game with the pygame GUI.
+
+    ``use_search=False`` (the DEFAULT) plays the RAW policy — see
+    :class:`_RawPolicyAgent` for why search is not valid against a human.
+    """
     from catan_rl.gui.view import catanGameView as _catanGameView
 
     catanGameView: Any = _catanGameView
@@ -483,11 +547,20 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
     # The BOT is the env "agent" seat; the HUMAN is the env "opponent" seat.
     # agent_seat selects who acts first in the snake draft: bot_seat = 1 - human_seat.
     bot_seat = 1 - human_seat
+    mode = f"PUCT-MCTS, {sims} sims/move" if use_search else "RAW POLICY (no search)"
 
     print("=" * 70, flush=True)
-    print("  1v1 Catan (Colonist.io ruleset) — YOU vs champion v8 + search", flush=True)
+    print("  1v1 Catan (Colonist.io ruleset) — YOU vs the CHAMPION", flush=True)
     print("=" * 70, flush=True)
-    print(f"  Bot: {ckpt}  (PUCT-MCTS, {sims} sims/move, CPU)", flush=True)
+    print(f"  Bot: {ckpt}", flush=True)
+    print(f"  Mode: {mode}  (CPU)", flush=True)
+    if use_search:
+        print("  " + "!" * 66, flush=True)
+        print("  !! WARNING: search is CLAIRVOYANT against a human. Its simulated", flush=True)
+        print("  !! worlds share YOUR true hidden dev cards AND the true future dice", flush=True)
+        print("  !! (the dice bag is deep-copied and never reseeded). This game is", flush=True)
+        print("  !! NOT a valid strength read — the bot is cheating. Use raw policy.", flush=True)
+        print("  " + "!" * 66, flush=True)
     print("  Win = 15 VP. No player-to-player trading (bank/port only).", flush=True)
     print("  Discard threshold = 9 cards. Friendly Robber in effect.", flush=True)
     print(f"  You are {'FIRST' if human_seat == 0 else 'SECOND'} in the snake draft.", flush=True)
@@ -495,11 +568,12 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
     print("  HOW TO PLAY (click with the mouse):", flush=True)
     print("   - Setup: click a highlighted circle (settlement) then a line (road).", flush=True)
     print("   - Your turn: dice auto-roll; use the on-screen buttons. Click END", flush=True)
-    print("     TURN to pass to the bot. The bot then 'thinks' (search) and moves.", flush=True)
+    print("     TURN to pass to the bot. The bot then moves.", flush=True)
     print("   - On a 7: discard menu pops up (>9 cards); then move robber + steal.", flush=True)
     print("=" * 70, flush=True)
 
-    agent = _load_search_agent(ckpt, sims, seed)
+    agent: Any = _load_search_agent(ckpt, sims, seed) if use_search else _load_raw_agent(ckpt, seed)
+    move_log: list[dict[str, Any]] = []
     env: Any = HumanVsBotEnv(opponent_type="heuristic", max_turns=400)
     # Register the view builder BEFORE reset. When the human drafts first
     # (bot_seat==1), the env places the human's FIRST settlement inside reset();
@@ -536,6 +610,18 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
             f"You VP={env.opponent_player.victoryPoints}",
             flush=True,
         )
+        # Replayable record: the bot's action tuple + the VP state after it. The
+        # human's whole turn is folded inside env.step, so this is a bot-move log
+        # with score checkpoints, not a full move-by-move transcript.
+        move_log.append(
+            {
+                "step": n_steps,
+                "bot_action": [int(x) for x in action],
+                "bot_action_label": _describe_bot_move(action),
+                "bot_vp": int(env.agent_player.victoryPoints),
+                "human_vp": int(env.opponent_player.victoryPoints),
+            }
+        )
         n_steps += 1
         if n_steps > safety_cap:
             print("[WARN] safety cap hit; ending.", flush=True)
@@ -552,6 +638,38 @@ def play_interactive(ckpt: str, sims: int, seed: int, human_seat: int) -> None:
     else:
         print(f"  Game ended (truncated). Bot {bot_vp} - {you_vp} You", flush=True)
     print("=" * 70, flush=True)
+
+    if log_path:
+        import json
+        import time
+        from pathlib import Path
+
+        if you_vp >= 15 and you_vp > bot_vp:
+            winner = "human"
+        elif bot_vp >= 15 and bot_vp > you_vp:
+            winner = "bot"
+        else:
+            winner = None
+        record = {
+            "ckpt": ckpt,
+            "mode": "search" if use_search else "raw_policy",
+            "sims": sims if use_search else None,
+            "clairvoyant": bool(use_search),  # search reads hidden hand + future dice
+            "seed": seed,
+            "human_seat": human_seat,
+            "winner": winner,
+            "bot_vp": bot_vp,
+            "human_vp": you_vp,
+            "n_bot_moves": n_steps,
+            "truncated": bool(truncated),
+            "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "moves": move_log,
+        }
+        out = Path(log_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with out.open("a", encoding="utf-8") as fh:  # append: one JSON per game
+            fh.write(json.dumps(record) + "\n")
+        print(f"  game logged -> {out}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -665,8 +783,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--sims", type=int, default=DEFAULT_SIMS, help="MCTS sims/move (default 400)."
     )
-    parser.add_argument("--ckpt", type=str, default=DEFAULT_CKPT, help="v8 checkpoint path.")
+    parser.add_argument(
+        "--ckpt", type=str, default=DEFAULT_CKPT, help="Bot checkpoint (default: champion)."
+    )
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (reproducible search).")
+    parser.add_argument(
+        "--search",
+        action="store_true",
+        help="Enable PUCT-MCTS. OFF by default and NOT VALID vs a human: the tree "
+        "deep-copies the env, so it reads your hidden dev cards AND the true "
+        "future dice. Only for bot-vs-bot work.",
+    )
+    parser.add_argument(
+        "--log",
+        type=str,
+        default="runs/human_playtest/games.jsonl",
+        help="Append a JSON record per game here (set empty to disable).",
+    )
     parser.add_argument(
         "--human-seat",
         type=int,
@@ -689,7 +822,14 @@ def main(argv: list[str] | None = None) -> int:
         # at a real file (use a small --sims for speed).
         return self_test(args.sims, args.seed, ckpt=args.ckpt)
 
-    play_interactive(args.ckpt, args.sims, args.seed, args.human_seat)
+    play_interactive(
+        args.ckpt,
+        args.sims,
+        args.seed,
+        args.human_seat,
+        use_search=args.search,
+        log_path=args.log or None,
+    )
     return 0
 
 
