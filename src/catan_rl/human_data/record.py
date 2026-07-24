@@ -52,6 +52,20 @@ Conventions baked in here (build brief §5, §6):
      report the ``tournament`` (strong-vs-strong) games separately from the
      ``rank_badge`` (ThePhantom-high, opponent-uncontrolled) games — it must never
      collapse the two provenances into a single vs-humans number.
+
+**Downstream consumer (step6 §0.4 same-commit rewrite).** The eligibility predicates
+here feed exactly one scoreboard: :mod:`catan_rl.human_data.opening_scoreboard`. That
+consumer is a **read-only, paired cross-arch measurement** — it scores how well a
+policy *judges ThePhantom's winning openings* via a **rank-based paired ΔAUC** (new
+pointer-arch ``v̂`` vs the frozen v11 baseline ``v̂``, AUC against the realized
+outcome, one observation per eligible game = the mean over K=8 port-marginal
+layouts). It never level-compares raw values across the two architectures and applies
+NO squash (rank statistics are scale-invariant; spec ``opening-scoreboard.md`` D1). It
+measures on the committed by-video **EVAL-A** split, keys eligibility EXCLUSIVELY off
+:meth:`GameRecord.is_scoreboard_eligible` (this SoT predicate — never a re-implemented
+filter), and below the 100-game floor is MEASUREMENT-ONLY (metric + CI, verdict
+suppressed). These docstrings are the superseding guidance; the older "single
+calibration level" framing is retired.
 """
 
 from __future__ import annotations
@@ -948,10 +962,22 @@ class GameRecord:
         proxy for the *opponent's* strength — pooling them into one calibration
         number is the §5.5 mixed-opponent-strength bias the build brief forbids.
 
-        A scoreboard builder should report this tournament-only number as its
-        headline and the broader :meth:`is_scoreboard_eligible` number only as a
-        source-split robustness check, never collapsed into a single vs-humans
-        figure.
+        **Consumer contract (superseding — same-commit rewrite, step6 §0.4).** The
+        scoreboard that consumes this predicate is
+        :mod:`catan_rl.human_data.opening_scoreboard`, and it does NOT compute a
+        single "vs-humans" calibration level. It computes a **paired, rank-based
+        ΔAUC** -- ``AUC(new-arch v-hat, outcome) minus AUC(v11 v-hat, outcome)``, one
+        observation per eligible game (mean over the K=8 port-marginal layouts) —
+        for the new pointer-arch checkpoint vs the frozen v11 baseline. Because AUC
+        is scale-invariant, the raw value heads are NEVER cross-arch level-compared
+        and NO squash is applied (spec-D1). The consumer still SPLITS its ``n`` by
+        ``opponent_strength.source`` and reports this ``tournament`` subset (the
+        strong-vs-strong headline) separately from the broader
+        :meth:`is_scoreboard_eligible` set — never collapsed into one number. It
+        measures on the committed by-video **EVAL-A** split only (HOLDOUT-B stays
+        virgin for the later formal gate) and, below the step6 100-game floor, is
+        **MEASUREMENT-ONLY** — it emits the metric + a video-cluster bootstrap CI but
+        HARD-SUPPRESSES any GO/NO-GO verdict.
 
         strong-opponent-eligible ⟺ :meth:`is_scoreboard_eligible` AND
         ``opponent_strength.source == "tournament"``.

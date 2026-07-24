@@ -159,6 +159,9 @@ ignore = ["E741", "RUF012"]
 # axial-rotation comment exceeds 100 chars; ``B`` is a documented batch-size
 # local in dihedral.py.
 "src/catan_rl/augmentation/**" = ["RUF002", "B007", "E501", "RUF059"]
+# opening_scoreboard math docstrings carry proper Unicode (σ, ×, −, →, v̂, Δ,
+# en-dash) describing the paired ΔAUC / squash-rejection rationale.
+"src/catan_rl/human_data/opening_scoreboard.py" = ["RUF001", "RUF002", "RUF003"]
 "scripts/eval_harness.py" = ["RUF046", "E402", "F841", "RUF059", "SIM102"]
 "scripts/migrate_checkpoint.py" = ["E501", "E402"]
 
