@@ -179,7 +179,8 @@ def test_ac5_vhat_computed_exactly_8x_per_game(monkeypatch: pytest.MonkeyPatch) 
         return real_score(state)
 
     monkeypatch.setattr(scorer, "score_state", _counting)
-    cache = sb.compute_vhat_cache(recs, scorer, adapter)
+    cache, skipped = sb.compute_vhat_cache(recs, scorer, adapter)
+    assert skipped == []
     assert calls["n"] == sb.PORT_MARGINAL_K * len(recs)
     for entry in cache.values():
         assert len(entry["layouts"]) == sb.PORT_MARGINAL_K

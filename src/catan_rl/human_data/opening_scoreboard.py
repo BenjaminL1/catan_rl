@@ -83,6 +83,7 @@ import numpy as np
 
 from catan_rl.human_data.engine_bridge import (
     ENGINE_RESOURCES,
+    BridgeError,
     BridgeState,
     SeatPlacement,
     engine_state_hash,
@@ -298,9 +299,24 @@ def build_split_payload(corpus_path: Path) -> dict[str, Any]:
     }
 
 
-def write_split_file(corpus_path: Path, out_path: Path) -> dict[str, Any]:
-    """Write the by-video split file under ``data/human/**`` and return its payload."""
+def write_split_file(corpus_path: Path, out_path: Path, *, force: bool = False) -> dict[str, Any]:
+    """Write the by-video split file under ``data/human/**`` and return its payload.
+
+    Refuses to clobber an EXISTING split file unless ``force=True``. The corpus is
+    actively growing and :func:`by_video_split` permutes the WHOLE current video set,
+    so re-emitting on a grown corpus reshuffles every video and can move an already
+    committed EVAL-A video into HOLDOUT-B (or vice-versa) — silently burning the
+    virgin HOLDOUT-B that D3.4/AC9 require untouched for the later GATE-A verdict.
+    The pre-registration seam only holds if the committed split is immutable.
+    """
     _validate_write_path(out_path)
+    if out_path.exists() and not force:
+        raise FileExistsError(
+            f"split file already exists: {out_path} — refusing to overwrite the committed "
+            "split (re-emitting on a grown corpus reshuffles EVAL-A/HOLDOUT-B and burns the "
+            "virgin holdout, D3.4/AC9). Pass force=True / --force-emit-split only if you "
+            "intend to re-pre-register the split."
+        )
     payload = build_split_payload(corpus_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
@@ -572,29 +588,44 @@ def compute_vhat_cache(
     records: list[GameRecord],
     scorer: PairedScorer,
     adapter: RecordAdapter,
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, str]]]:
     """Compute the K=8 paired ``v̂`` cache, EXACTLY 8× per game per leg (D4/AC5).
 
     Keyed by ``video_id:game_index`` → ``{"outcome", "video_id", "source",
     "layouts": [{"k", "new", "legacy", "hash"}, ...]}``. Every later bootstrap /
     resample loop reads THIS cache — it never re-bridges.
+
+    ``is_scoreboard_eligible()`` (D6, the SoT filter) does NOT guarantee the record
+    can be reconstructed by :func:`rebuild_env` — the bridge enforces its own
+    spiral-consistency / distance / finite-bank post-conditions and raises
+    :class:`BridgeError` on a subset of otherwise-eligible games. Re-implementing the
+    eligibility filter is forbidden (D6), so the guard lives here: a record that
+    fails to bridge is logged and skipped (it never enters the cache), and the run
+    proceeds on the reconstructable games. The skipped keys are reported to the
+    caller so the run's ``n`` reflects the games actually scored, not merely eligible.
     """
     cache: dict[str, dict[str, Any]] = {}
+    skipped: list[dict[str, str]] = []
     rng_snapshot = _snapshot_global_rng()
     try:
         for rec in records:
             key = f"{rec.video_id}:{rec.game_index}"
-            layouts: list[dict[str, Any]] = []
-            for k, state in enumerate(adapter.bridge_states(rec)):
-                vals = scorer.score_state(state)
-                layouts.append(
-                    {
-                        "k": k,
-                        "new": vals.new,
-                        "legacy": vals.legacy,
-                        "hash": vals.engine_state_hash,
-                    }
-                )
+            try:
+                layouts: list[dict[str, Any]] = []
+                for k, state in enumerate(adapter.bridge_states(rec)):
+                    vals = scorer.score_state(state)
+                    layouts.append(
+                        {
+                            "k": k,
+                            "new": vals.new,
+                            "legacy": vals.legacy,
+                            "hash": vals.engine_state_hash,
+                        }
+                    )
+            except BridgeError as exc:
+                _LOG.warning("skipping eligible-but-unbridgeable game %s: %s", key, exc)
+                skipped.append({"key": key, "reason": str(exc)})
+                continue
             cache[key] = {
                 "video_id": rec.video_id,
                 "game_index": rec.game_index,
@@ -604,7 +635,13 @@ def compute_vhat_cache(
             }
     finally:
         _restore_global_rng(rng_snapshot)
-    return cache
+    if skipped:
+        _LOG.warning(
+            "compute_vhat_cache: %d of %d eligible games skipped (unbridgeable)",
+            len(skipped),
+            len(records),
+        )
+    return cache, skipped
 
 
 # ---------------------------------------------------------------------------
@@ -880,16 +917,28 @@ def run_scoreboard(
     split = load_split_file(split_path)
     eval_a_videos = set(split["eval_a"])
 
+    # D2 gate: the v11 leg is only valid if the live engine still matches the
+    # pre-fork tree the vendored legacy arch was written against. Assert parity UP
+    # FRONT — before any v̂ is computed or persisted — mirroring
+    # cross_arch.cross_arch_h2h, so a drifted engine aborts the run rather than
+    # silently writing an invalid vhat_cache.json to data/human (errors compound).
+    from catan_rl.eval.engine_parity import assert_engine_parity
+
+    assert_engine_parity(strict=True)
+
     records = load_records(corpus_path)
     elig = eligible_records(records)
     eval_a_records = [r for r in elig if r.video_id in eval_a_videos]
     if limit is not None:
         eval_a_records = eval_a_records[:limit]
-    n = len(eval_a_records)
+    n_eligible = len(eval_a_records)
 
     scorer = PairedScorer(str(new_ckpt_path), str(V11_CKPT_PATH), device=device)
     adapter = RecordAdapter()
-    cache = compute_vhat_cache(eval_a_records, scorer, adapter)
+    cache, skipped = compute_vhat_cache(eval_a_records, scorer, adapter)
+    # n reflects the games actually scored (some eligible games fail to bridge and
+    # are skipped in compute_vhat_cache); the floor/verdict must key off scored n.
+    n = len(cache)
     _validate_write_path(output_dir / VHAT_CACHE_NAME)
     (output_dir / VHAT_CACHE_NAME).write_text(json.dumps(cache, indent=2, sort_keys=True) + "\n")
 
@@ -903,6 +952,9 @@ def run_scoreboard(
     report: dict[str, Any] = {
         "banner": banner,
         "n_eval_a": n,
+        "n_eval_a_eligible": n_eligible,
+        "n_skipped_unbridgeable": len(skipped),
+        "skipped_unbridgeable": skipped,
         "below_floor": verdict_suppressed(n),
         "verdict": the_verdict,
         "pre_registration": PRE_REGISTRATION.to_dict(),
@@ -959,11 +1011,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Write the by-video split file and exit (COMMIT 1; run before any metric).",
     )
+    parser.add_argument(
+        "--force-emit-split",
+        action="store_true",
+        help="Allow --emit-split to overwrite an existing committed split (re-pre-register).",
+    )
     args = parser.parse_args(argv)
 
     if args.emit_split:
         out = _validate_write_path(args.output_dir) / SPLIT_FILE_NAME
-        payload = write_split_file(args.corpus, out)
+        payload = write_split_file(args.corpus, out, force=args.force_emit_split)
         print(f"wrote split file: {out} ({payload['n_eligible_videos']} eligible videos)")
         return 0
 
