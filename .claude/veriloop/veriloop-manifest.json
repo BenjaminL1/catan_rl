@@ -1,9 +1,9 @@
 {
-  "veriloop_version": "0.3.7",
-  "generated_at": "2026-07-17T08:00:43.092Z",
+  "veriloop_version": "0.3.20",
+  "generated_at": "2026-07-25T10:59:57.839Z",
   "repo_name": "catan-rl-v2",
   "repo_root": ".",
-  "repo_sha": "aad09c2b9f360a7ac704510d7b505888bdada6ed",
+  "repo_sha": "eddfae6a285526c4fe77bc50ddcff607d60ff549",
   "stack": [
     "python",
     "rust"
@@ -35,7 +35,7 @@
         "high"
       ],
       "evidence": [
-        "parity/golden files: scripts/dev/probe_oracle_sprt.py, scripts/record_conformance.py, src/catan_rl/selfplay/snapshot_opponent.py",
+        "parity/golden files: scripts/dev/probe_oracle_sprt.py, scripts/record_conformance.py, src/catan_rl/eval/engine_parity.py",
         "docs describe an oracle / source-of-truth / byte-parity contract"
       ],
       "file": ".claude/veriloop/experts/drift.md"
@@ -240,12 +240,12 @@
     {
       "path": ".claude/commands/dev-loop.md",
       "ownership": "machine",
-      "status": "written"
+      "status": "unchanged"
     },
     {
       "path": ".claude/commands/advise.md",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/commands/review.md",
@@ -270,7 +270,7 @@
     {
       "path": ".claude/veriloop/experts/baseline-reviewer.md",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/veriloop/experts/baseline-reviewer.overrides.md",
@@ -280,7 +280,7 @@
     {
       "path": ".claude/veriloop/experts/drift.md",
       "ownership": "machine",
-      "status": "unchanged"
+      "status": "written"
     },
     {
       "path": ".claude/veriloop/experts/drift.overrides.md",
