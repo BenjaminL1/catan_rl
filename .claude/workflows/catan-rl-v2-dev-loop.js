@@ -197,6 +197,7 @@ const VERILOOP = {
     },
     "effort": {}
   },
+  "questionCap": null,
   "uiAreas": [
     "ui",
     "component",
