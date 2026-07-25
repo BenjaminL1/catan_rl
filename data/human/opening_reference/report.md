@@ -96,15 +96,15 @@ The pooled gap is only readable if it is not an average of offsetting signs, so 
 
 **All 3 primary CIs straddle zero: there is NO DETECTABLE DIFFERENCE between the policy's picks and ThePhantom's on his own contested-middle / denial axes, on his own boards, at his own decision points.** Under D4 that is the refutation direction: this instrument found no support for "the openings are weak" on the axes the owner named. It is NOT evidence of superiority, it is not a win-probability, and 'no detectable difference' at this `n` is not 'identical'.
 
-**How tight is the null? (D4's refutation logic rests entirely on this.)** A null only licenses closing a thread if it EXCLUDES gaps big enough to matter, so here is the precision, as the CI half-width expressed against the human's own level on the same metric:
+**How tight is the null? (D4's refutation logic rests entirely on this.)** A null only licenses closing a thread if it EXCLUDES gaps big enough to matter, so here is the precision, as the **two-sided exclusion bound** `max(|CI_lo|, |CI_hi|)` expressed against the human's own level on the same metric. It is deliberately NOT the CI half-width: these CIs are not centred on zero, and a half-width would understate the magnitude the interval actually still admits — in the direction that flatters the refutation.
 
-| metric | human mean | CI half-width | excludes gaps larger than |
+| metric | human mean | exclusion bound `max(\|CI_lo\|, \|CI_hi\|)` | excludes gaps larger than |
 |---|---:|---:|---:|
-| `contested_race_count` | 4.572 | 0.240 | ~5% of the human level |
-| `contested_race_pips` | 32.489 | 1.546 | ~5% of the human level |
-| `denial` | 3.594 | 0.097 | ~3% of the human level |
+| `contested_race_count` | 4.572 | 0.313 | ~6.8% of the human level |
+| `contested_race_pips` | 32.489 | 2.184 | ~6.7% of the human level |
+| `denial` | 3.594 | 0.147 | ~4.1% of the human level |
 
-So this run rules out gaps of roughly that size or larger on these axes; anything SMALLER than that is inside the noise and would need a bigger corpus (more videos, i.e. more bootstrap clusters — not more port samples, which do not add independent information).
+So this run rules out gaps whose MAGNITUDE is at or above the bound in the last column (here 4.1% to 6.8% of the human's own level on the axis); anything SMALLER than that is inside the noise and would need a bigger corpus (more videos, i.e. more bootstrap clusters — not more port samples, which do not add independent information).
 
 Primary rows verbatim: `contested_race_count` +0.070 [-0.167, +0.313] (n=180); `contested_race_pips` -0.656 [-2.184, +0.908] (n=180); `denial` -0.050 [-0.147, +0.048] (n=180).
 
@@ -159,7 +159,7 @@ The feature was commissioned because of a suspected **opening ore/city blind spo
 
 ## Exploratory — road decisions
 
-**`cut_vulnerability` came out IDENTICALLY ZERO on every decision in this run — an EMPIRICAL null, not a theorem.** All 268 human evaluations and all their policy counterparts are exactly 0.0, so the column carries no variance to compare here. It is NOT structurally impossible: the distance rule forbids ADJACENT settlements, but two of my settlements may sit at graph distance 2 sharing a middle vertex, and if both setup roads point at that shared vertex the road subgraph is a 3-vertex PATH whose middle IS an articulation point. That double-back is legal and available — verified against the engine masks on corpus row `b_NXNI-l0kI` g6 (agent settlements 15 and 14, shared neighbour 13, recorded first road 13-15, and edge 13-14 a legal second-road candidate; scoring that pair returns `cut_vulnerability` = 1.0). So the reading is: **neither ThePhantom nor the policy ever built a self-cuttable road pair**, which is a finding about both choosers, and the articulation-point family is NOT shown to be incapable of signal outside the setup regime. Note separately that this definition (articulation points of MY OWN roads) cannot express the 'plow' the owner described — an OPPONENT road severing my longest path — which would need the opponent's road network and a longest-trail recomputation.
+**`cut_vulnerability` came out IDENTICALLY ZERO on every decision in this run.** All 268 human evaluations and all their policy counterparts are exactly 0.0, so the column carries no variance to compare here — but that denominator is **not all empirical**: 134 of the 268 are the FIRST-road decision, where the chooser owns no prior road, the induced subgraph is the single candidate edge, and 0.0 is true **BY CONSTRUCTION** (a 1-edge graph has no articulation point; the module's own unit test pins it). The honest empirical denominator is the **134 SECOND-road decisions**, where a self-cuttable pair was reachable and neither chooser built one. On those the null is genuinely EMPIRICAL, not a theorem: the distance rule forbids ADJACENT settlements, but two of my settlements may sit at graph distance 2 sharing a middle vertex, and if both setup roads point at that shared vertex the road subgraph is a 3-vertex PATH whose middle IS an articulation point. That double-back is legal and available — verified against the engine masks on corpus row `b_NXNI-l0kI` g6 (agent settlements 15 and 14, shared neighbour 13, recorded first road 13-15, and edge 13-14 a legal second-road candidate; scoring that pair returns `cut_vulnerability` = 1.0). So the reading is: **on the 134 decisions where a self-cut was even expressible, neither ThePhantom nor the policy ever built a self-cuttable road pair**, which is a finding about both choosers, and the articulation-point family is NOT shown to be incapable of signal outside the setup regime. Note separately that this definition (articulation points of MY OWN roads) cannot express the 'plow' the owner described — an OPPONENT road severing my longest path — which would need the opponent's road network and a longest-trail recomputation.
 
 | metric | decisions used | of kind | human undef | policy undef | partial k | videos | human mean | policy mean | gap (policy - human) | 95% CI (cluster) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
@@ -206,7 +206,11 @@ The feature was commissioned because of a suspected **opening ore/city blind spo
 | `AruQxi1X_PQ` | 1 | True | `glyph_only` | replay_error: recorded settlement 23 is ILLEGAL at decision 2 |
 | `EE7OCzgz0Ws` | 1 | True | `glyph_only` | replay_error: scripted opponent settlement 22 is ILLEGAL at placement #1 |
 
-**Finding, not just bookkeeping:** 5 order-established rows fail replay because a RECORDED placement is geometrically illegal (mutually adjacent settlements), and 5 of them carry `passed_crosscheck: true`. The corpus cross-check therefore does NOT validate mutual legality of the recorded placements — `passed_crosscheck` is a weaker guarantee than its name suggests. That matters for anything downstream (e.g. an outcome-anchored scoreboard) that reads the flag as 'this row is consistent'.
+**Replay exclusions by CAUSE** (5 order-established rows failed replay). `CorpusReplayError` is raised from several structurally different places, so the causes are reported as observed rather than assumed:
+
+* `illegal_recorded_placement` — 5 row(s), 5 with `passed_crosscheck: true`: a RECORDED placement (the agent's own or the scripted opponent's) is geometrically illegal at the point it is replayed.
+
+**Finding, not just bookkeeping:** 5 of those rows fail because a RECORDED placement is geometrically illegal (mutually adjacent settlements), and 5 of them carry `passed_crosscheck: true`. The corpus cross-check therefore does NOT validate mutual legality of the recorded placements — `passed_crosscheck` is a weaker guarantee than its name suggests. That matters for anything downstream (e.g. an outcome-anchored scoreboard) that reads the flag as 'this row is consistent'.
 
 
 ## Metric definitions (D3)

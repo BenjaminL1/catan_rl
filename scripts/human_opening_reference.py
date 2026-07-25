@@ -97,7 +97,14 @@ rule, ``BoardScorer.bfs``); ``pip(u)`` = ``BoardScorer.pip_sum[u]``.
     The number of articulation points of my own road subgraph (the vertex-induced
     graph of the roads I own, including the candidate road) — vertices whose
     removal disconnects it. It came out **identically 0.0 on every decision in
-    this run, for both choosers** — an EMPIRICAL null, not a theorem. It is *not*
+    this run, for both choosers** — but that column is **half STRUCTURAL and half
+    EMPIRICAL, and the two must not be pooled**. Exactly half of the road
+    decisions are the FIRST-road decision (``decision_index == 1``), where the
+    chooser owns no prior road, the subgraph is a single edge, and 0.0 is forced
+    BY CONSTRUCTION (a 1-edge graph has no articulation point — pinned by
+    ``test_cut_vulnerability_counts_articulation_points``). Only the SECOND-road
+    decisions — 134 of the 268 evaluations in this run — carry information, and
+    it is on those, not on all 268, that the null is empirical. There it is *not*
     structurally impossible: the distance rule forbids ADJACENT settlements but
     permits two of mine at graph distance 2 sharing a middle vertex, and if both
     setup roads point at that shared vertex the subgraph is a 3-vertex path whose
@@ -1130,6 +1137,12 @@ def _missingness_warnings(summaries: list[GapSummary]) -> list[str]:
     This is the artifact class that killed the previous direction: a denominator
     chosen by the outcome. The reader must not be left to notice a silent ``n``
     drop on their own.
+
+    ``build_report`` calls this on three DISJOINT metric groups (primary,
+    battery, road), so the ``pair_exp_rolls_to_city`` paragraph below is gated on
+    that metric actually being one of the warned rows in *this* group — it is a
+    claim about that specific row and its `pair_city_self_sufficient` neighbour
+    "in the same table", and it is nonsense attached to any other group.
     """
     hits = [s for s in summaries if s.has_informative_missingness]
     if not hits:
@@ -1153,18 +1166,21 @@ def _missingness_warnings(summaries: list[GapSummary]) -> list[str]:
             f"{s.n_partial_policy_undefined} averaged over a partial k -> "
             f"n = {s.n_decisions}."
         )
-    out.append(">")
-    out.append(
-        "> `pair_exp_rolls_to_city` is the load-bearing case. It is undefined "
-        "unless the pair produces both ore and wheat, and "
-        "`docs/plans/opening_sweep_results.md:456` already declares it NOT "
-        "comparable across slices with different self-sufficiency rates. The "
-        "`pair_city_self_sufficient` row in the same table is exactly that "
-        "difference (the policy is materially LESS often self-sufficient), so its "
-        "gap is computed on the subset where the policy did not fail. The honest "
-        "reading of the pair is the `pair_city_self_sufficient` row, not the "
-        "`pair_exp_rolls_to_city` row."
-    )
+    if any(s.metric == "pair_exp_rolls_to_city" for s in hits) and any(
+        s.metric == "pair_city_self_sufficient" for s in summaries
+    ):
+        out.append(">")
+        out.append(
+            "> `pair_exp_rolls_to_city` is the load-bearing case. It is undefined "
+            "unless the pair produces both ore and wheat, and "
+            "`docs/plans/opening_sweep_results.md:456` already declares it NOT "
+            "comparable across slices with different self-sufficiency rates. The "
+            "`pair_city_self_sufficient` row in the same table is exactly that "
+            "difference (the policy is materially LESS often self-sufficient), so "
+            "its gap is computed on the subset where the policy did not fail. The "
+            "honest reading of the pair is the `pair_city_self_sufficient` row, "
+            "not the `pair_exp_rolls_to_city` row."
+        )
     return out
 
 
@@ -1254,7 +1270,7 @@ def build_report(
     lines.append("## Exploratory — road decisions")
     lines.append("")
     road_sums = [s for m in ROAD_METRICS + CUT_METRICS if (s := summarise(dec, m, "road"))]
-    lines.extend(_cut_vulnerability_note(road_sums))
+    lines.extend(_cut_vulnerability_note(road_sums, road))
     lines.append("")
     lines.extend(_gap_table(road_sums))
     lines.extend(_missingness_warnings(road_sums))
@@ -1471,23 +1487,40 @@ def _bottom_line_section(dec: list[PairedDecision], primary: list[GapSummary]) -
         lines.append(
             "**How tight is the null? (D4's refutation logic rests entirely on "
             "this.)** A null only licenses closing a thread if it EXCLUDES gaps big "
-            "enough to matter, so here is the precision, as the CI half-width "
-            "expressed against the human's own level on the same metric:"
+            "enough to matter, so here is the precision, as the **two-sided "
+            "exclusion bound** `max(|CI_lo|, |CI_hi|)` expressed against the human's "
+            "own level on the same metric. It is deliberately NOT the CI half-width: "
+            "these CIs are not centred on zero, and a half-width would understate "
+            "the magnitude the interval actually still admits — in the direction "
+            "that flatters the refutation."
         )
         lines.append("")
-        lines.append("| metric | human mean | CI half-width | excludes gaps larger than |")
-        lines.append("|---|---:|---:|---:|")
-        for s in primary:
-            half = (s.ci_hi - s.ci_lo) / 2.0
-            frac = abs(half / s.mean_human) if s.mean_human else float("nan")
-            pct = "n/a" if math.isnan(frac) else f"~{100 * frac:.0f}% of the human level"
-            lines.append(f"| `{s.metric}` | {s.mean_human:.3f} | {half:.3f} | {pct} |")
-        lines.append("")
         lines.append(
-            "So this run rules out gaps of roughly that size or larger on these "
-            "axes; anything SMALLER than that is inside the noise and would need a "
-            "bigger corpus (more videos, i.e. more bootstrap clusters — not more "
-            "port samples, which do not add independent information)."
+            "| metric | human mean | exclusion bound `max(\\|CI_lo\\|, \\|CI_hi\\|)` | "
+            "excludes gaps larger than |"
+        )
+        lines.append("|---|---:|---:|---:|")
+        fracs: list[float] = []
+        for s in primary:
+            bound = max(abs(s.ci_lo), abs(s.ci_hi))
+            frac = abs(bound / s.mean_human) if s.mean_human else float("nan")
+            if not math.isnan(frac):
+                fracs.append(frac)
+            pct = "n/a" if math.isnan(frac) else f"~{100 * frac:.1f}% of the human level"
+            lines.append(f"| `{s.metric}` | {s.mean_human:.3f} | {bound:.3f} | {pct} |")
+        lines.append("")
+        span = (
+            f"here {100 * min(fracs):.1f}% to {100 * max(fracs):.1f}% of the human's "
+            "own level on the axis"
+            if fracs
+            else "see the last column"
+        )
+        lines.append(
+            "So this run rules out gaps whose MAGNITUDE is at or above the bound in "
+            f"the last column ({span}); anything SMALLER than that is inside the "
+            "noise and would need a bigger corpus (more videos, i.e. more bootstrap "
+            "clusters — not more port samples, which do not add independent "
+            "information)."
         )
     else:
         named = ", ".join(f"`{s.metric}` {_fmt(s.mean_gap)}" for s in primary)
@@ -1585,18 +1618,37 @@ def _pair_self_sufficiency_section(settle: list[PairedDecision]) -> list[str]:
     ]
 
 
-def _cut_vulnerability_note(road_sums: list[GapSummary]) -> list[str]:
-    """Say what `cut_vulnerability` actually measured, without hedging."""
+def _cut_vulnerability_note(road_sums: list[GapSummary], road: list[PairedDecision]) -> list[str]:
+    """Say what `cut_vulnerability` actually measured, without hedging.
+
+    Half of the zero column is a STRUCTURAL zero, not an empirical one: the setup
+    loop is a fixed (settlement, road, settlement, road) sequence, so
+    ``decision_index == 1`` IS the first road decision, where the agent owns no
+    prior road, the induced subgraph is the single candidate edge, and 0.0 is
+    true by construction (pinned by
+    ``test_cut_vulnerability_counts_articulation_points``). Reporting the full
+    denominator as empirical would overstate the evidence.
+    """
     cut = next((s for s in road_sums if s.metric == "cut_vulnerability"), None)
     if cut is None:
         return []
+    n_structural = sum(1 for d in road if d.decision_index == 1)
+    n_empirical = len(road) - n_structural
     if cut.mean_human == 0.0 and cut.mean_policy == 0.0 and cut.mean_gap == 0.0:
         return [
             "**`cut_vulnerability` came out IDENTICALLY ZERO on every decision in "
-            f"this run — an EMPIRICAL null, not a theorem.** All {cut.n_decisions} "
-            "human evaluations and all their policy counterparts are exactly 0.0, so "
-            "the column carries no variance to compare here. It is NOT structurally "
-            "impossible: the distance rule forbids ADJACENT settlements, but two of "
+            f"this run.** All {cut.n_decisions} human evaluations and all their "
+            "policy counterparts are exactly 0.0, so the column carries no variance "
+            "to compare here — but that denominator is **not all empirical**: "
+            f"{n_structural} of the {cut.n_decisions} are the FIRST-road decision, "
+            "where the chooser owns no prior road, the induced subgraph is the "
+            "single candidate edge, and 0.0 is true **BY CONSTRUCTION** (a "
+            "1-edge graph has no articulation point; the module's own unit test "
+            "pins it). The honest empirical denominator is the "
+            f"**{n_empirical} SECOND-road decisions**, where a self-cuttable pair "
+            "was reachable and neither chooser built one. On those the null is "
+            "genuinely EMPIRICAL, not a theorem: the distance rule forbids "
+            "ADJACENT settlements, but two of "
             "my settlements may sit at graph distance 2 sharing a middle vertex, and "
             "if both setup roads point at that shared vertex the road subgraph is a "
             "3-vertex PATH whose middle IS an articulation point. That double-back "
@@ -1604,7 +1656,8 @@ def _cut_vulnerability_note(road_sums: list[GapSummary]) -> list[str]:
             "row `b_NXNI-l0kI` g6 (agent settlements 15 and 14, shared neighbour 13, "
             "recorded first road 13-15, and edge 13-14 a legal second-road "
             "candidate; scoring that pair returns `cut_vulnerability` = 1.0). So the "
-            "reading is: **neither ThePhantom nor the policy ever built a "
+            f"reading is: **on the {n_empirical} decisions where a self-cut was even "
+            "expressible, neither ThePhantom nor the policy ever built a "
             "self-cuttable road pair**, which is a finding about both choosers, and "
             "the articulation-point family is NOT shown to be incapable of signal "
             "outside the setup regime. Note separately that this definition "
@@ -1616,7 +1669,10 @@ def _cut_vulnerability_note(road_sums: list[GapSummary]) -> list[str]:
     return [
         "`cut_vulnerability` is measured over setup road decisions only (at most "
         "two owned roads), and it scores MY OWN articulation points — it does not "
-        "express the opponent-road 'plow'. Read it as descriptive colour."
+        f"express the opponent-road 'plow'. Note that {n_structural} of the "
+        f"{cut.n_decisions} evaluations are FIRST-road decisions, where 0.0 is "
+        f"forced by construction; only the {n_empirical} second-road decisions "
+        "carry information. Read it as descriptive colour."
     ]
 
 
@@ -1665,25 +1721,116 @@ def _multiplicity_section(primary: list[GapSummary], exploratory: list[GapSummar
     ]
 
 
+def _classify_replay_error(reason: str) -> str:
+    """Bucket one ``CorpusReplayError`` message into its CAUSE.
+
+    ``CorpusReplayError`` is raised from several structurally different places
+    (malformed hex block, non-snake ``draft_order``, scripted-opponent
+    exhaustion / main-turn leak, an illegal recorded placement, a policy argmax
+    outside the legal set, a port-invariance violation). Only the ILLEGAL
+    RECORDED PLACEMENT bucket says anything about what ``passed_crosscheck``
+    does or does not validate, so the report must not publish one hardcoded
+    diagnosis for whatever a future corpus happens to fail on.
+    """
+    if "ILLEGAL" in reason:
+        return "illegal_recorded_placement"
+    if "hex" in reason or "port assignment" in reason or "missing-seam" in reason:
+        return "malformed_board_layout"
+    if "draft_order" in reason or "not found in draft_order" in reason:
+        return "malformed_draft_order"
+    if "opening is not 2 settlements + 2 roads" in reason:
+        return "malformed_opening_script"
+    if "exhausted" in reason or "main-turn leak" in reason:
+        return "opponent_script_exhausted"
+    if "policy argmax" in reason:
+        return "policy_argmax_outside_legal_set"
+    if "across port samples" in reason:
+        return "port_invariance_violation"
+    return "other"
+
+
+#: Human-readable gloss per ``_classify_replay_error`` bucket.
+_REPLAY_ERROR_CAUSES = {
+    "illegal_recorded_placement": (
+        "a RECORDED placement (the agent's own or the scripted opponent's) is "
+        "geometrically illegal at the point it is replayed"
+    ),
+    "malformed_board_layout": "the row's hex/port block is not a well-formed layout",
+    "malformed_draft_order": "the row's `draft_order` is not a 1v1 snake draft",
+    "malformed_opening_script": "the row's opening is not 2 settlements + 2 roads",
+    "opponent_script_exhausted": ("the scripted opponent ran out of placements (a main-turn leak)"),
+    "policy_argmax_outside_legal_set": (
+        "the policy's argmax fell outside the legal set (an INSTRUMENT bug, not a corpus defect)"
+    ),
+    "port_invariance_violation": (
+        "the candidate set or the human's metrics moved across port samples (an "
+        "INSTRUMENT bug, not a corpus defect)"
+    ),
+    "other": "an unclassified replay fidelity violation",
+}
+
+
 def _crosscheck_finding(result: RunResult) -> list[str]:
-    """The ledger's own finding: the corpus cross-check misses illegal pairs."""
+    """Report the replay-exclusion causes ACTUALLY observed, and only conclude
+    about ``passed_crosscheck`` when an observed cause supports it.
+
+    The corpus-integrity conclusion below is specifically about mutual LEGALITY
+    of recorded placements, so it is emitted only for the
+    ``illegal_recorded_placement`` bucket, and only when such rows carry
+    ``passed_crosscheck: true``. Every other observed cause is stated plainly
+    with no conclusion attached.
+    """
     replay_errors = [
         e for e in result.excluded if str(e.get("reason", "")).startswith("replay_error")
     ]
     if not replay_errors:
         return []
-    crosschecked = [e for e in replay_errors if e.get("passed_crosscheck")]
-    return [
+    by_cause: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for e in replay_errors:
+        by_cause[_classify_replay_error(str(e.get("reason", "")))].append(e)
+
+    out = [
         "",
-        f"**Finding, not just bookkeeping:** {len(replay_errors)} order-established "
-        "rows fail replay because a RECORDED placement is geometrically illegal "
-        f"(mutually adjacent settlements), and {len(crosschecked)} of them carry "
-        "`passed_crosscheck: true`. The corpus cross-check therefore does NOT "
-        "validate mutual legality of the recorded placements — `passed_crosscheck` "
-        "is a weaker guarantee than its name suggests. That matters for anything "
-        "downstream (e.g. an outcome-anchored scoreboard) that reads the flag as "
-        "'this row is consistent'.",
+        f"**Replay exclusions by CAUSE** ({len(replay_errors)} order-established "
+        "rows failed replay). `CorpusReplayError` is raised from several "
+        "structurally different places, so the causes are reported as observed "
+        "rather than assumed:",
+        "",
     ]
+    for cause in sorted(by_cause, key=lambda c: (-len(by_cause[c]), c)):
+        rows = by_cause[cause]
+        n_cc = sum(1 for e in rows if e.get("passed_crosscheck"))
+        out.append(
+            f"* `{cause}` — {len(rows)} row(s), {n_cc} with "
+            f"`passed_crosscheck: true`: {_REPLAY_ERROR_CAUSES[cause]}."
+        )
+    out.append("")
+
+    illegal = by_cause.get("illegal_recorded_placement", [])
+    crosschecked = [e for e in illegal if e.get("passed_crosscheck")]
+    if crosschecked:
+        out.append(
+            f"**Finding, not just bookkeeping:** {len(illegal)} of those rows fail "
+            "because a RECORDED placement is geometrically illegal (mutually "
+            f"adjacent settlements), and {len(crosschecked)} of them carry "
+            "`passed_crosscheck: true`. The corpus cross-check therefore does NOT "
+            "validate mutual legality of the recorded placements — "
+            "`passed_crosscheck` is a weaker guarantee than its name suggests. "
+            "That matters for anything downstream (e.g. an outcome-anchored "
+            "scoreboard) that reads the flag as 'this row is consistent'."
+        )
+    elif illegal:
+        out.append(
+            f"{len(illegal)} row(s) fail on an illegal recorded placement, but none "
+            "of them carry `passed_crosscheck: true`, so this run says nothing "
+            "about what the cross-check does or does not validate."
+        )
+    else:
+        out.append(
+            "No row failed on an illegal recorded placement in this run, so this "
+            "run draws NO conclusion about what `passed_crosscheck` validates."
+        )
+    return out
 
 
 def _definitions_section() -> list[str]:

@@ -826,6 +826,123 @@ def test_summarise_counts_informative_missingness() -> None:
     assert s.has_informative_missingness
     warnings = hor._missingness_warnings([s])
     assert any("dropped because EVERY port sample" in line for line in warnings)
+    # The `pair_exp_rolls_to_city` paragraph is about ONE specific row; it must
+    # not be appended to a group that does not contain it.
+    assert not any("pair_exp_rolls_to_city" in line for line in warnings)
+
+
+def _gap(metric: str, **kw: Any) -> hor.GapSummary:
+    """A ``GapSummary`` with report-irrelevant fields defaulted."""
+    base: dict[str, Any] = {
+        "kind": "settlement",
+        "n_decisions": 10,
+        "n_videos": 5,
+        "mean_gap": 0.0,
+        "ci_lo": 0.0,
+        "ci_hi": 0.0,
+        "mean_human": 1.0,
+        "mean_policy": 1.0,
+    }
+    base.update(kw)
+    return hor.GapSummary(metric=metric, **base)
+
+
+def test_the_equivalence_bound_is_two_sided_not_the_ci_half_width() -> None:
+    """A CI that is NOT centred on zero excludes ``max(|lo|, |hi|)``, not the
+    half-width.
+
+    Publishing the half-width understates the magnitude the interval still
+    admits, always in the direction that flatters the refutation -- the exact
+    class of statistical reading error that killed the previous direction.
+    """
+    primary = [
+        _gap("contested_race_count", ci_lo=-0.167, ci_hi=0.313, mean_human=4.572),
+        _gap("denial", ci_lo=-0.147, ci_hi=0.048, mean_human=3.594),
+    ]
+    text = "\n".join(hor._bottom_line_section([], primary))
+    assert "exclusion bound" in text
+    # The column is relabelled; "half-width" survives only in the disclaimer
+    # explaining why the bound is NOT the half-width.
+    assert "| CI half-width |" not in text
+    # max(|-0.167|, |+0.313|) = 0.313, NOT (0.313 - -0.167)/2 = 0.240.
+    assert "| 0.313 |" in text and "| 0.240 |" not in text
+    assert "~6.8% of the human level" in text
+    # max(|-0.147|, |+0.048|) = 0.147, NOT 0.097.
+    assert "| 0.147 |" in text and "| 0.097 |" not in text
+    assert "~4.1% of the human level" in text
+
+
+def test_cut_vulnerability_note_splits_structural_from_empirical_zeros() -> None:
+    """Half the all-zero column is 0.0 BY CONSTRUCTION, so it is not evidence.
+
+    ``decision_index == 1`` is the first road decision: no prior road, so the
+    induced subgraph is a single edge and has no articulation point.
+    """
+
+    def road(d_idx: int) -> hor.PairedDecision:
+        return hor.PairedDecision(
+            video_id="v",
+            game_index=1,
+            agent_seat=0,
+            decision_index=d_idx,
+            kind="road",
+            human_id=0,
+            policy_ids=[0],
+            n_candidates=1,
+            opp_settlements=1,
+            human_metrics={"cut_vulnerability": 0.0},
+            policy_metrics={"cut_vulnerability": [0.0]},
+        )
+
+    roads = [road(1), road(3), road(1), road(3), road(1), road(3)]
+    cut = _gap("cut_vulnerability", kind="road", n_decisions=6, mean_human=0.0, mean_policy=0.0)
+    text = "\n".join(hor._cut_vulnerability_note([cut], roads))
+    assert "BY CONSTRUCTION" in text
+    assert "3 of the 6 are the FIRST-road decision" in text
+    assert "3 SECOND-road decisions" in text
+    # The whole denominator must never again be presented as empirical.
+    assert "All 6 human evaluations" in text and "an EMPIRICAL null, not a theorem.**" not in text
+
+
+def test_crosscheck_finding_reports_the_causes_it_actually_observed() -> None:
+    """``CorpusReplayError`` has many causes; the report may publish only the
+    observed ones, and may draw the corpus-integrity conclusion only when an
+    observed cause supports it.
+    """
+    illegal = hor.RunResult(
+        decisions=[],
+        excluded=[
+            {
+                "video_id": "a",
+                "passed_crosscheck": True,
+                "reason": "replay_error: recorded settlement 23 is ILLEGAL at decision 2",
+            }
+        ],
+    )
+    text = "\n".join(hor._crosscheck_finding(illegal))
+    assert "`illegal_recorded_placement` — 1 row(s), 1 with" in text
+    assert "Finding, not just bookkeeping" in text
+
+    # A DIFFERENT cause must not inherit the illegality diagnosis.
+    leaked = hor.RunResult(
+        decisions=[],
+        excluded=[
+            {
+                "video_id": "b",
+                "passed_crosscheck": True,
+                "reason": (
+                    "replay_error: scripted opponent exhausted: the env asked for "
+                    "action #5 but only 4 setup placements were scripted (a "
+                    "main-turn leak)"
+                ),
+            }
+        ],
+    )
+    other = "\n".join(hor._crosscheck_finding(leaked))
+    assert "`opponent_script_exhausted` — 1 row(s)" in other
+    assert "Finding, not just bookkeeping" not in other
+    assert "geometrically illegal" not in other
+    assert "draws NO conclusion about what `passed_crosscheck` validates" in other
 
 
 def test_a_silently_ignored_injection_is_caught_at_runtime(
