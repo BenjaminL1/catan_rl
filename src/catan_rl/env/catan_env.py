@@ -344,6 +344,25 @@ class CatanEnv(gym.Env):
         self.game = catanGame(render_mode=None)
         board = self.game.board
 
+        # Optional board injection (additive; measurement-only seam). When
+        # ``options["board_layout"]`` is absent NOTHING below runs, so the
+        # default reset path is byte-identical to the pre-seam build. Must
+        # land BEFORE ``ObsEncoder(board)`` is constructed further down,
+        # because the encoder caches per-vertex port statics at __init__.
+        # Keys: ``resources`` / ``numbers`` / ``robber_hex`` (forwarded to
+        # ``catanBoard.inject_hex_layout``) and the optional
+        # ``port_assignment`` (forwarded to ``catanBoard.updatePorts``).
+        board_layout = options.get("board_layout")
+        if board_layout is not None:
+            board.inject_hex_layout(
+                board_layout["resources"],
+                board_layout["numbers"],
+                board_layout["robber_hex"],
+            )
+            port_assignment = board_layout.get("port_assignment")
+            if port_assignment is not None:
+                board.updatePorts(port_assignment=port_assignment)
+
         self.agent_player = PlainPlayer("Agent", "black")
         self.agent_player.game = self.game
         self.agent_player.isAI = False
