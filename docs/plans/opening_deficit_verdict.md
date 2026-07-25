@@ -72,3 +72,42 @@ table is within ~4x of the observed gap.** n=1.
    n~2000 pairs ~= 1.4 CPU-core-hours. This is the ExIt STEP-2 design that correctly killed
    distillation (overrides fired at 7.3% and were individually WIN-NEUTRAL). A confirmed rate with
    zero value is the same trap.
+
+---
+
+## 2026-07-25 — TRACK B FALSIFIED + the opening-composition thesis KILLED
+
+**Self-play v3 (`pfsp_k` 1.0→2.0 arm) auto-stopped SOFT at update 200**: 0 promotions,
+`updates_since_promotion=200`, anchor-window recent_median **0.5233** vs bar 0.58, `setup_head_entropy`
+0.249 (healthy), heuristic eval 0.99 (saturated). Clean exit, final ckpt saved. The fail-fast soft
+threshold (lowered 300→150 for this arm) stopped it at u200 instead of u500.
+
+**Two independent runs now agree the lineage has plateaued at `ckpt_500`**: v2 at u500 (median 0.50),
+v3 at u200 (0.52). A league-mix recipe knob is NOT the lever. No funded training hypothesis remains;
+the M1 is deliberately idle.
+
+**The opening resource-composition thesis is DEAD — three independent kills, each verified:**
+1. The pre-registered gate had ALREADY fired CLOSE: ore-substitution 0.2662 [0.2452, 0.2884] vs the
+   ≥40% bar set at `:63-66`. Continuing the thread was gate-shopping.
+2. The flagship metric measured BOARD SUPPLY, not policy choice: "75.6% below random on
+   `pair_max_ore_lump`" is arithmetically identical to "a strictly-higher-lump alternative existed"
+   (605/800); the metric is 3-valued {0,1,2} = 67/694/39.
+3. "Below random" was a MEDIAN-vs-MEAN reading error. Mid-rank percentile has E[pct]=50 (a MEAN
+   property); on tied discrete metrics a uniform chooser's MEDIAN is far below 50. Simulated on
+   identical candidate sets: `pair_max_ore_lump` random median 46.5 vs policy 46.7; `ore_pips` random
+   38.4 vs policy 41.9; policy MEANS 54.5 / 61.6 vs random 50.1 / 49.9. **Everything called "below
+   random" is at or ABOVE random.**
+
+Also verified: **the policy DOES condition on what it already holds** — settlement #1 without ore ⇒
+2nd-settlement ore percentile 83.7, P(touch ore) 0.672; with ore ⇒ 40.2 and 0.391 (596/800 already
+hold ore, so the pooled 41.9 is a Simpson artifact).
+
+**What survives: the REFERENCE-CLASS problem.** Every judgement has been made against a baseline that
+is unreadable ("vs random"), mirror-contaminated ("vs v11"), or saturated ("vs heuristic" ≈1.00). The
+axes the owner actually named — contested middle, denial, road-cut vulnerability — have ZERO metrics
+(the sweep's own limitations 7-8 disclaim jurisdiction). 140 corpus games with BOTH players' openings
+sit unused. Direction: `.claude/veriloop/specs/human-opening-reference.md`.
+
+**Ranked next after that (cross-exam ruling): aggregate midgame instrumentation** — cities-built,
+bank-trade composition, VP-rate over existing self-play/eval corpora, n in the thousands, zero new
+games, no baseline problem. Above any further opening metric.
