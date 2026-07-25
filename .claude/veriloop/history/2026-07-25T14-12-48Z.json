@@ -1,0 +1,214 @@
+{
+  "ts": "2026-07-25T14-12-48Z",
+  "feature": "Build the HUMAN OPENING REFERENCE per the delegated spec at .claude/veriloop/specs/human-opening-reference.md (committed 0e6fa78). Replay ThePhantom's 140 parsed corpus games on their REAL hex layouts, ask the champion policy what it would place at each of HIS decision points, and score both choices with the existing opening battery PLUS new territory/denial metrics — producing a PAIRED policy-vs-human metric gap on identical positions. Deliverables: (1) an additive env seam so CatanEnv.reset can accept options['board_layout'] and inject a corpus hex layout via the EXISTING catanBoard.inject_hex_layout (board.py:469-518) between the catanGame build (catan_env.py:344) and the ObsEncoder/_build_index_maps step (:374-383) — default (non-injected) path MUST stay byte-identical; (2) a new analysis script that replays each corpus row's draft order with the OPPONENT's placements scripted from the corpus, records the policy's choice at each of ThePhantom's decision points, and scores both with the existing BoardScorer battery (scripts/opening_sweep.py:313-487, board-pure, reusable) plus three NEW metrics — contested_race, denial, cut_vulnerability (defined in spec D3); (3) K=8 port-marginal handling (spec D2 — ports are 'OMITTED in v1' in ALL 140 rows; do NOT harvest, marginalise with deterministic per-(row,k) sha256 seeds, weld via board.updatePorts(port_assignment=...)); (4) a numbers-first report + raw JSON. HARD CONSTRAINTS: read-only w.r.t. the LIVE training run selfplay_pointer_arch_v3 on the M1 — CPU only (--device cpu), nice -n 19, <=4 workers, write ONLY under data/human/** or runs/analysis/**, NEVER runs/train/**, read only numbered/immutable checkpoints (champion = runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt). Additive only: no engine RULE change (inject_hex_layout already exists), no obs-schema change, no training-config change, glyph_anchor.py untouched. Skip the 1 row lacking placement_order_established rather than guessing. opponent_strength is a hardcoded CONSTANT across all 140 rows — never stratify/weight/cite it. Report must carry the refutation-scope header (spec D4: this can REFUTE the 'openings are weak' thesis but can NEVER confirm superiority and measures NO win-probability), the port-marginal limitation, and the constant-opponent_strength warning. Metric GAP is the deliverable; exact-match agreement rate is descriptive colour only and NOT a gate (step6 §6 lists move-agreement as a non-goal). RESOLVE BOTH BLOCKERS AND SHOULD-FIXES — this is a measurement instrument and measurement errors compound (the previous direction died of exactly that). Unattended overnight run: build -> gate -> resolve every blocker AND should-fix -> RUN the instrument and produce the actual report -> push a preview branch, stop before merge.",
+  "repo": "catan-rl-v2",
+  "tier": "high",
+  "baseSha": "01abbee53bb8be7703f1963d261f1225abc41f33",
+  "headSha": "bbdba35c689f9f8aec630abf206c6ca9ce1b67eb",
+  "verdict": "CONCERNS",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "exit": 0,
+      "tail": "mypy src\nSuccess: no issues found in 147 source files"
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "exit": 0,
+      "tail": "ruff check src tests scripts\nAll checks passed!"
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "tail": "(no output)"
+    },
+    {
+      "name": "test",
+      "command": "make test-unit",
+      "exit": 2,
+      "tail": "FAILED tests/unit/human_data/test_vlm_spike.py::test_file_semaphore_caps_concurrency - AssertionError: download concurrency must never exceed n\nassert 3 <= 2\n===== 1 failed, 2876 passed, 6 skipped, 105 warnings in 383.65s (0:06:23) ======\nmake: *** [test-unit] Error 1"
+    }
+  ],
+  "baselineProbe": [
+    {
+      "name": "test",
+      "baseResult": "fail",
+      "newFailures": [],
+      "evidence": "Ran `make test-unit` on a detached probe worktree at main (01abbee), with dev+gui extras installed and the Rust extension built via `make rust-build`. Full run: 2826 passed, 17 skipped, 0 failed (exit 0) — the suite is fully green on base overall. However, targeted re-run of tests/unit/human_data/test_vlm_spike.py (the file containing the reported failure) confirms it exists unchanged on base and all 22 tests including test_file_semaphore_caps_concurrency pass there too. This is a timing-sensitive thread-concurrency assertion (asserts observed concurrency <=2 against a semaphore cap) with no relationship to the feature branch's diff (src/catan_rl/env/catan_env.py only) or to this test file. It is a pre-existing flaky test that can fail under timing pressure on either branch — not introduced by this change. No new failure units were found; the single failing unit is not a newFailure."
+    }
+  ],
+  "screenshots": [],
+  "screenshotVerdict": null,
+  "fixPasses": 2,
+  "blockers": [],
+  "concerns": [
+    "[pre-existing] check: test was already RED on the base tree — not caused by this change (`make test-unit`)",
+    "[baseline-reviewer (code-review) — MODE: REVIEW] The report asserts `cut_vulnerability` \"came out IDENTICALLY ZERO on every decision in this run — an EMPIRICAL null, not a theorem. All 268 human evaluations...\". Half of that denominator is a theorem, not an observation. `raw.json` shows the 268 road decisions split exactly 134 at `decision_index=1` and 134 at `decision_index=3`; at decision 1 the agent owns ZERO prior roads, so `road_extra_metrics([candidate])` builds a single-edge graph, which can never have an articulation point — the module's own test pins this (`road_extra_metrics([(\"a\",\"b\")])['cut_vulnerability'] == 0.0`). So the honest empirical denominator is 134 (the second-road decisions), not 268. This is the same structural-vs-empirical distinction the rest of the report is scrupulous about (it separates `n_human_undefined` \"structural\" from `n_dropped_policy_undefined` \"informative\" everywhere else), and it inflates the apparent strength of a null the report explicitly reasons from.",
+    "[baseline-reviewer (code-review) — MODE: REVIEW] The `pair_exp_rolls_to_city` explanatory paragraph is appended unconditionally whenever ANY metric in the passed group has informative missingness — it is not gated on `pair_exp_rolls_to_city` actually being in `hits`. `build_report` calls this helper three times, on disjoint groups: `_missingness_warnings(primary)` (:1221), `(battery)` (:1253) and `(road_sums)` (:1262). It happens not to fire in the shipped run only because `primary` and `road_sums` both have zero missingness. If a primary or road metric ever drops a decision, the PRIMARY section would carry a paragraph explaining a metric that appears nowhere in its table — a wrong attribution in the deliverable's most load-bearing section.",
+    "[drift] The \"How tight is the null?\" table — which the report itself calls the section \"D4's refutation logic rests entirely on\" — uses the CI HALF-WIDTH `half = (s.ci_hi - s.ci_lo) / 2.0` as the equivalence bound, then states \"this run rules out gaps of roughly that size or larger\". For a CI that is not centred on zero the two-sided exclusion bound is `max(|ci_lo|, |ci_hi|)`, not the half-width, so the report OVERSTATES the tightness of the null in every primary row: `contested_race_count` CI [-0.167, +0.313] is reported as ruling out gaps ≥ 0.240 (~5% of the human level) when a true gap of +0.30 is still inside the interval (real bound 0.313 ≈ 6.8%); `contested_race_pips` [-2.184, +0.908] reported 1.546 (~5%) vs real 2.184 (~6.7%); `denial` [-0.147, +0.048] reported 0.097 (~3%) vs real 0.147 (~4.1%). The error is 30–51% and it runs in the direction that makes the refutation look stronger than the data supports — exactly the class of measurement error the spec's own \"why the previous direction died\" section is about.",
+    "[drift] `_crosscheck_finding` fires on ANY excluded row whose reason starts with `replay_error`, but the emitted prose asserts a single unverified cause: \"N order-established rows fail replay because a RECORDED placement is geometrically illegal (mutually adjacent settlements)\" and then concludes `passed_crosscheck` \"does NOT validate mutual legality\". `CorpusReplayError` is raised from at least five distinct causes (`layout_from_row` hex-block malformation, non-snake `draft_order`, opponent-script exhaustion / main-turn leak, illegal recorded placement, policy argmax outside the legal set). In THIS run all 5 happen to be illegality (verified against the ledger), so the shipped report is accurate, but the report generator will publish the same causal claim — and the same corpus-integrity finding — for a future corpus whose failures are order-parse or schema errors. A measurement instrument must not hard-code a diagnosis it did not check."
+  ],
+  "waived": [],
+  "filesChanged": [
+    "%REPO%/src/catan_rl/env/catan_env.py",
+    "%REPO%/scripts/human_opening_reference.py",
+    "%REPO%/tests/unit/scripts/test_human_opening_reference.py",
+    "%REPO%/data/human/opening_reference/report.md",
+    "%REPO%/data/human/opening_reference/summary.json"
+  ],
+  "implSummary": "Built the paired policy-vs-ThePhantom opening instrument per the binding spec. Nothing committed, pushed, or reviewed.\n\nWHAT LANDED\n1. Env seam (`src/catan_rl/env/catan_env.py`, +19 lines, the ONLY edit to existing code). `reset()` now honours an optional `options[\"board_layout\"]` = {resources, numbers, robber_hex, port_assignment?}, forwarding to the existing `catanBoard.inject_hex_layout` / `updatePorts(port_assignment=...)`. Placed immediately after `board = self.game.board` and BEFORE `ObsEncoder(board)`, because the encoder caches `_vertex_port_static` at __init__ — an injection landing after it would be invisible to the policy. When the key is absent zero new statements execute, so the default path is byte-identical (pinned by test).\n2. `scripts/human_opening_reference.py` (1026 lines incl. a long design docstring). Teacher-forced corpus replay: opponent seat driven by a `ScriptedSetupOpponent` that duck-types the snapshot protocol and raises `CorpusReplayError` on an illegal or 5th action (main-turn leak impossible); the agent seat is stepped with ThePhantom's ACTUAL corpus action while the policy's argmax is recorded but never applied — so the pairing is exact by construction at all 4 decisions. K=8 port assignments per board from `sha256(video_id|game_index|k)`, derived through the ratified `updatePorts(rng=...)` shuffle so slots stay real geometry. D3 metrics `contested_race_count`/`contested_race_pips`/`denial` (settlement decisions) + `cut_vulnerability` (road decisions), composed from the existing bfs/legal_sites/pip primitives; the existing battery is imported wholesale from `scripts/opening_sweep.py` (sibling-script importlib, same mechanism `ladder_gate.py` uses). Cluster-bootstrap CIs over `video_id`. Report header carries D4 refutation scope, D2 port limitation, D6 zero-bits `opponent_strength` warning, the multiplicity statement, the NOT-A-GATE label on agreement, and an exclusion ledger.\n3. `tests/unit/scripts/test_human_opening_reference.py` — 16 tests, ~3s, no checkpoint needed (a mask-respecting stub replaces `setup_logp`). Covers AC2 (injection fidelity + default-path byte identity + a dedicated pin that a welded port assignment actually reaches the obs cache), AC3 (index maps + all-rows-legal replay across both draft seats + illegal-placement raises), AC4 (bit-identical reruns + seed-consumption negative control), AC5 (port_seed stability, distinctness, pinned literal), AC6 (spy asserts the agent seat holds exactly ThePhantom's own prefix at each decision, and that contested metrics are None not 0 when the opponent has not placed), AC7 (the unordered row skipped by id).\n4. Instrument RUN (D7-compliant: --device cpu, nice -n 19, OMP_NUM_THREADS=1, torch.set_num_threads(1), single process, read-only on the immutable `ckpt_000000500.pt` in the owner's checkout). 134/140 rows replayed, 536 paired decisions, 113 video clusters. Deliverable committed-path outputs at `data/human/opening_reference/{report.md,summary.json}`; raw candidate-level dump at `runs/analysis/human_opening_reference/raw.json` (gitignored). Nothing written under `runs/train/**`.\n\nTHINGS I WOULD HAVE ASKED ABOUT (spec is owner-DELEGATED, not ratified)\nA. `cut_vulnerability` is STRUCTURALLY IDENTICALLY ZERO in the setup phase — measured 0.000 on all 268 road decisions for both choosers. The agent's two setup roads attach to two different settlements, so its road subgraph is always two disjoint single edges, which has no articulation point. D3's third metric therefore carries zero information as specified. I implemented it faithfully anyway and labelled it as degenerate in the report rather than silently redefining it. If you want a live version, the natural repair is \"opponent-takeable cut vertices in my network\" evaluated in the midgame, not at setup.\nB. 5 rows (beyond the 1 D6-mandated skip) failed replay because a recorded placement is ILLEGAL on the injected board (3 opponent settlements, 2 ThePhantom settlements). These are corpus parse conflicts, not code faults; I fail-closed and ledgered them (`IfgsXjBbtfQ`, `U4MIRMDbFeI`, `lCsB4X60YhQ`, `AruQxi1X_PQ`, `EE7OCzgz0Ws`) rather than force-placing. They are worth a look from the glyph-parsing side.\nC. D3's `denial` says \"reduction in the OPPONENT'S legal future-settlement set\". An unrestricted count of the shared legal set would literally be \"how many neighbours does v have\" — i.e. board supply, not policy choice, which is failure mode #2 that killed the prior direction. I therefore restricted it to sites within the opponent's road-reach (depth 4) and emit `null` (never 0) when the opponent has not yet placed. Flagging because it is an interpretive choice, documented in the module docstring.\nD. I initially also corrected a now-false sentence in `engine/board.py`'s `get_port_assignment` docstring (\"ports are engine state only, never in the obs\" — contradicted by `obs_encoder.py:280`) for CLAUDE.md §6 docs-sync. That tripped `tests/unit/eval/test_cross_arch.py::test_engine_parity_holds_at_head`, which pins the whole `src/catan_rl/engine` tree SHA and fires on ANY uncommitted change there — a re-vendor + re-pin is far out of scope for a measurement instrument. I REVERTED the edit; the stale sentence remains and is flagged here instead. No other doc in `docs/`/`README.md` mentions `board_layout`, `inject_hex_layout`, or reset options, so no other docs-sync was required.\n\nHEADLINE NUMBERS (read only with the D4 header in mind — divergence is UNSIGNED and no win-probability is measured)\n- PRIMARY (D3, settlement decisions, n=180 of 268 — the rest are seat-0 decision-0 where the race is undefined): `contested_race_count` +0.070 [-0.167,+0.313]; `contested_race_pips` -0.656 [-2.184,+0.908]; `denial` -0.116 [-0.299,+0.057]. All three intervals cover zero.\n- Port-marginal churn is small and now quantified rather than merely disclaimed: mean 0.018 on settlements (8.6% of decisions moved at all), 0.010 on roads. The D2 limitation is largely inert for this checkpoint.\n- Exploratory colour only: the policy sits ABOVE ThePhantom on immediate production (`pip_sum` +0.698, `ore_pips` +0.579, `robber_robustness` +0.698, `pair_ore_pips` +0.645) and BELOW him on longer-range expansion room (`exp_d4` -0.582, `exp_d3_pip` -2.801, `pair_city_self_sufficient` -0.165). Descriptive agreement (NOT a gate) 0.301 settlements / 0.513 roads.",
+  "lenses": [
+    {
+      "lens": "baseline-reviewer (code-review) — MODE: REVIEW",
+      "summary": "No BLOCKERs. The full exit-code gate is green in the worktree (typecheck 0, lint 0, cargo fmt 0, test-unit 0 / 2877 passed, 6 skipped) and every acceptance criterion AC1-AC9 is met by real pins, not prose. The env seam (catan_env.py:347-365) is a clean additive guard with no RNG consumed on the default path, correctly placed before `ObsEncoder(board)` so a welded port assignment reaches the obs cache; `assert_layout_applied` turning a silently-ignored `options` key into a loud per-reset failure is exactly the right paranoia for an instrument run against a possibly-stale installed `catan_rl`. I independently confirmed the three assumptions the whole deliverable rests on: the corpus interleaving (road[i] incident to settlement[i]) holds 278/278; all 5 replay exclusions are genuine mutually-adjacent settlement pairs in the corpus, not instrument bugs, so the report's `passed_crosscheck`-is-weak finding is sound; and the port-marginal churn is entirely port-driven (patching PortSampler to a constant drops mean churn 0.3438 -> 0.0000, nonzero 15/24 -> 0/24), so the per-k env-seed variation does not confound K=8. The report's factual claims spot-check clean (b_NXNI-l0kI g6 geometry, census, 3+21+9=33 rows, 12 up + 6 down = 18, CI half-width percentages). The two SHOULD-FIXes are both in the reporting layer: (1) `cut_vulnerability`'s all-zero column is presented as an empirical null over 268 decisions when 134 of them (the first-road decisions, zero prior roads, single-edge graph) are zero by construction — the report's own structural-vs-empirical standard applied to itself; (2) `_missingness_warnings` appends a `pair_exp_rolls_to_city`-specific paragraph to whatever group it is handed, latent today only because primary and road have zero missingness. Neither changes a reported number; both are cheap and worth fixing before this becomes the project's reference instrument.",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "scripts/human_opening_reference.py:1596-1621 (`_cut_vulnerability_note`), reinforced at :96-109 (module docstring)",
+          "issue": "The report asserts `cut_vulnerability` \"came out IDENTICALLY ZERO on every decision in this run — an EMPIRICAL null, not a theorem. All 268 human evaluations...\". Half of that denominator is a theorem, not an observation. `raw.json` shows the 268 road decisions split exactly 134 at `decision_index=1` and 134 at `decision_index=3`; at decision 1 the agent owns ZERO prior roads, so `road_extra_metrics([candidate])` builds a single-edge graph, which can never have an articulation point — the module's own test pins this (`road_extra_metrics([(\"a\",\"b\")])['cut_vulnerability'] == 0.0`). So the honest empirical denominator is 134 (the second-road decisions), not 268. This is the same structural-vs-empirical distinction the rest of the report is scrupulous about (it separates `n_human_undefined` \"structural\" from `n_dropped_policy_undefined` \"informative\" everywhere else), and it inflates the apparent strength of a null the report explicitly reasons from.",
+          "fix": "Either (a) restrict the `cut_vulnerability` row to `decision_index == 3` decisions, or (b) keep n=268 and add one clause to the note: \"134 of these 268 are the FIRST road decision, where the agent owns no prior road and the metric is 0 by construction; the empirical null is over the 134 second-road decisions.\" Same correction belongs in the docstring at :99 (\"identically 0.0 on every decision in this run\")."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "scripts/human_opening_reference.py:1158-1169 (`_missingness_warnings`)",
+          "issue": "The `pair_exp_rolls_to_city` explanatory paragraph is appended unconditionally whenever ANY metric in the passed group has informative missingness — it is not gated on `pair_exp_rolls_to_city` actually being in `hits`. `build_report` calls this helper three times, on disjoint groups: `_missingness_warnings(primary)` (:1221), `(battery)` (:1253) and `(road_sums)` (:1262). It happens not to fire in the shipped run only because `primary` and `road_sums` both have zero missingness. If a primary or road metric ever drops a decision, the PRIMARY section would carry a paragraph explaining a metric that appears nowhere in its table — a wrong attribution in the deliverable's most load-bearing section.",
+          "fix": "Guard the tail: `if any(s.metric == \"pair_exp_rolls_to_city\" for s in hits): out.append(...)`. Verified reproducible — feeding a single fabricated `GapSummary(metric=\"road_breadth\", kind=\"road\", n_dropped_policy_undefined=1)` emits the `pair_exp_rolls_to_city` paragraph verbatim."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/human_opening_reference.py:1438-1443 (`_within_regime_primary_gaps`)",
+          "issue": "The regime table prints a single `n` per row computed as `n_used = max(n_used, len(vals))` across the primary metrics. That is correct only because all three primary metrics share identical definedness today; if they ever diverge (e.g. a future primary metric with its own precondition) the printed `n` silently overstates the sample for the narrower columns. Separately, `d.gaps()` is recomputed once per (metric, decision) inside the comprehension rather than once per decision.",
+          "fix": "Emit per-metric `n` in each cell (e.g. `+0.178 (n=88)`), or drop the shared `n` column; hoist `d.gaps()` out of the metric loop."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/human_data/engine_bridge.py:214-252 (`rebuild_env`) vs src/catan_rl/env/catan_env.py:347-365 (new seam)",
+          "issue": "`rebuild_env` is a hand-rolled re-implementation of `CatanEnv.reset` that already performs exactly the sequence the new seam introduces — `catanGame(...)` → `board.inject_hex_layout(...)` → `board.updatePorts(port_assignment=...)` → `ObsEncoder(board)` → `_build_index_maps(board)`. There are now two board-injection paths that must stay in agreement (obs-encoder ordering above all). Not touching it was the right surgical call, but it is a drift surface worth the owner's attention.",
+          "fix": "No change in this branch. Note as follow-up: `rebuild_env` could route its board build through `env.reset(options={\"board_layout\": {...}})` and keep only its placement replay + post-conditions, collapsing the two paths to one."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/engine/board.py:540-541 and src/catan_rl/human_data/engine_bridge.py:8",
+          "issue": "Both docstrings state that ports are \"engine state only, never in the obs\". Spec D2 and this very build refute that (`obs_encoder.py` encodes a per-vertex 7-way port one-hot; the new `test_injection_lands_before_the_obs_encoder_port_cache` asserts a welded assignment reaches `ObsEncoder._vertex_port_static`, and `test_real_policy_path_is_deterministic` asserts two port assignments produce different logits). `updatePorts`/`get_port_assignment` are directly exercised by the new seam, so CLAUDE.md §6 (docs-sync on touched code) applies. Pre-existing text, not introduced here.",
+          "fix": "Amend both lines to \"ports are NOT in the serialized corpus record (out-of-band), but they ARE in the policy obs — see `obs_encoder`\"."
+        },
+        {
+          "severity": "NIT",
+          "location": "data/human/opening_reference/summary.json (\"checkpoint\") and data/human/opening_reference/report.md \"Provenance\"",
+          "issue": "",
+          "fix": "In `build_report`/`summary_json`, print `ckpt.relative_to(REPO)` when the checkpoint lies under REPO, falling back to the absolute path otherwise."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/human_opening_reference.py:1816-1821 (`main`)",
+          "issue": "Two of D7's three read-only constraints are self-enforcing in-process (`check_device` rejects non-CPU, `check_write_target` rejects anything outside the two roots, both before any mkdir). The third — `nice -n 19` — is left entirely to the caller and only documented in the module docstring at :151. An unattended relaunch that forgets the prefix contends with the live `selfplay_pointer_arch_v3` run with no warning.",
+          "fix": "Add `os.nice(19)` (guarded with `contextlib.suppress(OSError)`) next to `torch.set_num_threads(1)`, so the niceness constraint is enforced by the same block as the other two."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/human_opening_reference.py:220-232 (`CONTESTED_METRICS` / `PRIMARY_METRICS`)",
+          "issue": "Spec D3 names three new metrics; four ship (`denial_reach` added). The handling is correct — it is labelled EXPLORATORY, reported alongside rather than instead of the literal pre-registered `denial`, excluded from `PRIMARY_METRICS`, and surfaced as \"OWNER DECISION PENDING\" in both the report and `summary.json.owner_decisions_pending` — so this is disclosed scope-addition, not silent substitution. Flagging only so the owner rules on it, since the spec is owner-DELEGATED and not ratified.",
+          "fix": "No code change. Owner decides whether `denial_reach` is promoted (one-line `PRIMARY_METRICS` edit, which would also drop the exploratory family from 30 to 29 in the multiplicity accounting) or retired."
+        }
+      ]
+    },
+    {
+      "lens": "drift",
+      "summary": "GO. No BLOCKER. Full gate verified by real exit codes in the worktree: `make typecheck` 0 (147 files), `make lint` 0, `cargo fmt --all -- --check` 0, `make test-unit` 0 (2877 passed / 6 skipped), and `tests/unit/scripts/test_human_opening_reference.py` 40 passed. No constitution invariant is violated.\\n\\nThe change is exactly three files: a 19-line additive `options[\\\"board_layout\\\"]` seam in `CatanEnv.reset` (correctly placed between the `catanGame` build at :344 and `ObsEncoder(board)` at :397 — I confirmed `ObsEncoder._build_static_caches` caches both tile statics and the per-vertex port one-hot at construction, so any later injection would be invisible to the policy), the 1862-line instrument, and an 867-line test module. Engine, obs schema, training config and `glyph_anchor.py` are untouched; `git status --porcelain` confirms no other tracked file moved.\\n\\nSpec compliance verified against the binding file, not from memory. D1 pairing: `replay_row` steps the env with the HUMAN's action only and re-scores the policy's pick at the same board state (the AC6 test spies on `agent.buildGraph` at all four decisions and additionally pins that the opponent placed on the CORPUS ids, not a heuristic's). D2: `port_seed` = sha256(video|game|k), welded via `updatePorts(port_assignment=...)`, verified deterministic and verified to actually reach the network (`test_real_policy_path_is_deterministic` asserts two assignments give different logits); the human's metrics are asserted port-invariant across all 8 k at runtime, which is what licenses storing them once. D3: three named metrics present; the fourth, `denial_reach`, is an addition but it is loudly flagged, kept OUT of `PRIMARY_METRICS`, and the literal spec-D3 `denial` stays pre-registered — additive and disclosed, not a substitution. D6: `opponent_strength` is never read anywhere (grep-verified), `winner` is used only for the census, the one non-order-established row is skipped and pinned by id. D7/AC8: `check_device` and `check_write_target` both run before any mkdir or checkpoint load, `torch.set_num_threads(1)`, and the tests pin that `runs/train/**` is refused without creating anything.\\n\\nI independently reproduced the deliverable rather than trusting it: every headline number in report.md recomputes from raw.json (denial gap -0.050 n=180, contested_race_count +0.070, contested_race_pips -0.656, pair_city_self_sufficient -0.165 n=134, exp_d4 -0.582, settlement agreement 0.3013), the ore-no-wheat mechanism table (1 vs 22.2) reproduces, the regime table is internally consistent with the A,B,B,A snake (88+46+46=180), the cited `docs/plans/opening_sweep_results.md:456` really is the `pair_exp_rolls_to_city` non-comparability limitation, and the `cut_vulnerability` counterexample is real — corpus row `b_NXNI-l0kI` g6 has ThePhantom settlements 15/14 with recorded roads 25/27, and `topology.json` confirms edge 25 = (13,15) and edge 24 = (13,14), so the double-back was legally available and neither chooser took it. The K=8 port samples are averaged WITHIN a decision before differencing, so the cluster bootstrap over video_id is not pseudo-replicated — that is the right call and worth crediting.\\n\\nThe two SHOULD-FIXes are both in the reporting layer, and both matter for the stated reason that this is a measurement instrument. The load-bearing one is the equivalence-bound arithmetic: the \\\"How tight is the null?\\\" table uses the CI half-width where the two-sided exclusion bound is max(|lo|,|hi|), overstating the tightness of the primary null by 30–51% in the exact section the report says D4's refutation logic rests on. The second is a hard-coded causal diagnosis in the exclusion-ledger finding that happens to be true for this corpus and would be published unchanged for a corpus whose failures are a different class.",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "%REPO%/scripts/human_opening_reference.py:1485",
+          "issue": "The \"How tight is the null?\" table — which the report itself calls the section \"D4's refutation logic rests entirely on\" — uses the CI HALF-WIDTH `half = (s.ci_hi - s.ci_lo) / 2.0` as the equivalence bound, then states \"this run rules out gaps of roughly that size or larger\". For a CI that is not centred on zero the two-sided exclusion bound is `max(|ci_lo|, |ci_hi|)`, not the half-width, so the report OVERSTATES the tightness of the null in every primary row: `contested_race_count` CI [-0.167, +0.313] is reported as ruling out gaps ≥ 0.240 (~5% of the human level) when a true gap of +0.30 is still inside the interval (real bound 0.313 ≈ 6.8%); `contested_race_pips` [-2.184, +0.908] reported 1.546 (~5%) vs real 2.184 (~6.7%); `denial` [-0.147, +0.048] reported 0.097 (~3%) vs real 0.147 (~4.1%). The error is 30–51% and it runs in the direction that makes the refutation look stronger than the data supports — exactly the class of measurement error the spec's own \"why the previous direction died\" section is about.",
+          "fix": "Replace `half = (s.ci_hi - s.ci_lo) / 2.0` with `bound = max(abs(s.ci_lo), abs(s.ci_hi))` and rename the column to \"largest gap still inside the CI\" / \"excludes gaps larger than\". Regenerate report.md and summary.json (the raw per-decision JSON is unaffected)."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "%REPO%/scripts/human_opening_reference.py:1682-1692",
+          "issue": "`_crosscheck_finding` fires on ANY excluded row whose reason starts with `replay_error`, but the emitted prose asserts a single unverified cause: \"N order-established rows fail replay because a RECORDED placement is geometrically illegal (mutually adjacent settlements)\" and then concludes `passed_crosscheck` \"does NOT validate mutual legality\". `CorpusReplayError` is raised from at least five distinct causes (`layout_from_row` hex-block malformation, non-snake `draft_order`, opponent-script exhaustion / main-turn leak, illegal recorded placement, policy argmax outside the legal set). In THIS run all 5 happen to be illegality (verified against the ledger), so the shipped report is accurate, but the report generator will publish the same causal claim — and the same corpus-integrity finding — for a future corpus whose failures are order-parse or schema errors. A measurement instrument must not hard-code a diagnosis it did not check.",
+          "fix": "Bucket `replay_errors` by an explicit reason tag (raise `CorpusReplayError` with a machine-readable `kind`, or classify on the message prefix), emit the counts per bucket, and gate the `passed_crosscheck` conclusion on the illegal-placement bucket only."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/human_opening_reference.py:1658-1669",
+          "issue": "The multiplicity section states \"the pre-registered family is the only one this run is entitled to interpret\" and, in the very next bullet, interprets the exploratory block as \"the policy buys immediate pips AT THE COST OF expansion room and city complementarity\". \"at the cost of\" is a signed, valuative reading of a divergence that the D4 header declares UNSIGNED (ThePhantom is not an oracle, so a lower `exp_d4` is not established as worse). The hedge that follows is real, but the two bullets read as self-contradicting within one list.",
+          "fix": "Restate descriptively — \"higher immediate-production rows and lower expansion-room / pair-complementarity rows\" — and drop the \"only family this run is entitled to interpret\" absolute, or scope it to \"entitled to treat as a result\"."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/human_opening_reference.py:207-209",
+          "issue": "`DEFAULT_CKPT` is built from `REPO = Path(__file__).resolve().parents[1]`, so inside the veriloop worktree it resolves to `<worktree>/runs/train/selfplay_pointer_arch_v2/...` — and `runs/train` does not exist there (`ls runs/` → only `analysis`, `preflight`; `runs/` is gitignored). A bare `python scripts/human_opening_reference.py` in a worktree therefore fails deep inside `load_policy`/`torch.load` rather than with a clear message. The shipped run passed `--ckpt` explicitly (summary.json records the main-checkout absolute path), so the deliverable is unaffected.",
+          "fix": "Add an early `if not args.ckpt.exists(): raise SystemExit(f\"checkpoint not found: {args.ckpt} (pass --ckpt; runs/ is gitignored and absent in worktrees)\")` next to the existing `check_device` / `check_write_target` guards."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/data/human/opening_reference/report.md:43",
+          "issue": "",
+          "fix": "Store the checkpoint as a repo-relative path when it is under a known root (falling back to the absolute path otherwise), and note in Provenance that it was read read-only from the main checkout."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/human_opening_reference.py:237",
+          "issue": "`ALLOWED_WRITE_ROOTS` includes `REPO/data/human`, which CONTAINS the input corpus `data/human/corpus/provisional_openings.jsonl`. AC8 is satisfied (runs/train is refused, and the tests pin that), but `--out-dir data/human/corpus` would pass the guard and let the instrument clobber its own input.",
+          "fix": "Also refuse any target that is `data/human/corpus` or a parent/child of it, or narrow the allowed root to `data/human/opening_reference`."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%",
+          "issue": "The branch is one commit behind `main` (`merge-base` = 0e6fa78, `main` = 01abbee). `git diff main` consequently shows `docs/plans/opening_deficit_verdict.md | 39 ------` — 39 deleted doc lines that this feature did not touch. A merge preserves main's version so nothing is actually reverted, but anyone reviewing the pushed preview branch against main will see spurious doc deletions mixed into the change.",
+          "fix": "Rebase `feat/human-opening-reference` onto `main` before pushing the preview so the preview diff is exactly the three new/changed files."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/Makefile:typecheck",
+          "issue": "`make typecheck` runs `mypy src` only, so the 1862-line instrument in `scripts/` is never typechecked even though the gate is 'green'. This is pre-existing repo-wide (`scripts/opening_sweep.py` is in the same position) and NOT introduced here — flagged, not to be fixed as part of this change.",
+          "fix": "None required for this change. If the owner wants coverage later, extend the target to `mypy src scripts` in a separate commit (it will surface pre-existing errors)."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/src/catan_rl/env/catan_env.py:167",
+          "issue": "Pre-existing doc drift adjacent to the edit: the `CatanEnv` class docstring still says \"The agent always plays as player 0 (first to act)\", which `agent_seat` already falsified on main and which this feature now depends on being false (46 of 134 replayed rows run at seat 1). The new `board_layout` seam is documented inline, matching how `agent_seat`/`opponent_seed` are documented, so the seam itself is convention-consistent.",
+          "fix": "Not this change's mess — mention only. If touched later, update the sentence to reference `options['agent_seat']`."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/human_opening_reference.py:1439-1443",
+          "issue": "`_within_regime_primary_gaps` prints ONE `n` column computed as `max` over the three metrics' defined counts. For the primary family the three are defined together so the printed n is correct today, but a metric that becomes partially undefined would be silently reported under another metric's n.",
+          "fix": "Emit per-metric n (e.g. `+0.178 (n=88)`) or drop the shared n column."
+        }
+      ]
+    }
+  ],
+  "gateHistory": [
+    {
+      "verdict": "FAIL",
+      "blockers": 5,
+      "concerns": 16,
+      "waived": 0
+    },
+    {
+      "verdict": "FAIL",
+      "blockers": 2,
+      "concerns": 11,
+      "waived": 0
+    },
+    {
+      "verdict": "CONCERNS",
+      "blockers": 0,
+      "concerns": 5,
+      "waived": 0
+    }
+  ],
+  "crossModel": null,
+  "missingGateJobs": [],
+  "implPreflight": "typecheck exit 0 (`mypy src`, 147 files clean), lint exit 0 (`ruff check src tests scripts`), and additionally verified `cargo fmt --all -- --check` exit 0 and `pytest tests/unit` = 2853 passed / 6 skipped / 0 failed. One lint cycle was needed: ruff flagged 7 findings, ALL in my two new files (2 unused `# noqa: E402`, 3 E501, 1 RUF001 ambiguous MINUS SIGN, 1 more E501); all fixed by hand-editing my own code — no formatter, no `--fix`, no file outside my change touched. The untracked `scripts/export_dice_vectors.py` that fails lint in the owner's checkout does not exist in this worktree, so it is not in these results.",
+  "dryRun": false,
+  "land": {
+    "sha": "bbdba35c689f9f8aec630abf206c6ca9ce1b67eb",
+    "pushed": true,
+    "branch": "feat/human-opening-reference"
+  }
+}
