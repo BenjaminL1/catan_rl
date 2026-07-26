@@ -67,6 +67,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -83,7 +84,9 @@ from catan_rl.human_data.record import (
     GameRecord,
     OpponentStrength,
     PlayerOpening,
+    derive_opponent_strength,
 )
+from catan_rl.human_data.segment import load_strength_manifest, manifest_entry
 from catan_rl.human_data.topology import Topology, load_topology
 from catan_rl.human_data.validate import CrossCheckResult, cross_check
 
@@ -869,6 +872,36 @@ def _unlocalizable_reason(loc_path: Path) -> str | None:
     return None
 
 
+_UNKNOWN_STRENGTH = OpponentStrength(tier="unknown", source="rank_badge", confidence=0.0)
+
+
+@lru_cache(maxsize=1)
+def _strength_manifest() -> dict[str, Any]:
+    """The committed strength manifest, read once per process."""
+    return load_strength_manifest(REPO / "data/human/strength_manifest.json")
+
+
+def _strength_for_video(video_id: str) -> OpponentStrength:
+    """The video's :class:`OpponentStrength` from the committed manifest (§5.5).
+
+    Both call sites previously hardcoded ``(high, tournament, 0.8)``, which is FALSE
+    for this corpus: the manifest classifies the overwhelming majority of these
+    videos as ``ranked_rank`` (-> ``rank_badge``), and ``tournament`` is the only
+    bucket where both seats are verifiably strong (``derive_opponent_strength``
+    warning). The uniform stamp made ``is_strong_opponent_scoreboard_eligible`` —
+    the "primary, defensible scoreboard" — true for every row, so the mandated
+    source-split robustness check compared the corpus to itself.
+
+    A manifest-absent video (a spike fixture) or an ``excluded`` one yields
+    ``tier="unknown"``, which is scoreboard-INELIGIBLE: never a confident stamp on a
+    video the manifest does not vouch for.
+    """
+    entry = manifest_entry(_strength_manifest(), video_id)
+    if entry is None:
+        return _UNKNOWN_STRENGTH
+    return derive_opponent_strength(entry) or _UNKNOWN_STRENGTH
+
+
 def _rejected_spike(
     meta: Mapping[str, Any],
     board: BoardRead,
@@ -879,7 +912,7 @@ def _rejected_spike(
     """Build a fail-closed rejected :class:`SpikeResult` for a game with no localizable
     opening, routing an ``OpeningResult(None, reason)`` through the EXISTING gate so the
     reject is a real :class:`CrossCheckResult` (identical machinery to the CV path)."""
-    strength = OpponentStrength(tier="high", source="tournament", confidence=0.8)
+    strength = _strength_for_video(str(meta.get("video", "vlm_spike")))
     result = cross_check(
         video_id=str(meta.get("video", "vlm_spike")),
         game_index=int(meta.get("game_index", 1)),
@@ -944,9 +977,7 @@ def localize_game(
     setup_events = build_setup_events(meta.get("log_setup_sequence", []), handles)
     winner = meta.get("winner")
     dice_log = tuple(int(d) for d in meta.get("dice_log", []))
-    # A tournament-source high strength keeps a real winner scoreboard-eligible; the
-    # spike only counts complete-valid openings, so the exact tier is immaterial.
-    strength = OpponentStrength(tier="high", source="tournament", confidence=0.8)
+    strength = _strength_for_video(str(meta.get("video", "vlm_spike")))
     return snap_and_validate(
         localized=localized,
         board=board,
