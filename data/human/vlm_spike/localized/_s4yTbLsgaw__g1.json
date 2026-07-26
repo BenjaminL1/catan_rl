@@ -1,0 +1,27 @@
+{
+  "video_id": "_s4yTbLsgaw",
+  "game_index": 1,
+  "vlm_note": "Recovered by the 4h-timeout retry (was TimeoutExpired at the 90-min cap). meta colour WRONG for dutsy (meta says WHITE; pieces are RED). Grant self-check: {BRICK,SHEEP,SHEEP} = v23 (red) -> dutsy=RED; ThePhantom=BLACK (meta correct). Grant-locked 2nds: ThePhantom {ORE,WHEAT,WOOD}==v7 [1,7,8]; dutsy {BRICK,SHEEP,SHEEP}==v23 [6,16,17] (unique). 1st settlements: ThePhantom v19 [5,6,16]={BRICK,BRICK,SHEEP}, dutsy v10 [2,3,10]={WOOD,SHEEP,WHEAT}. Roads: black v7-v24 & v19-v20 (sat 2); red v10-v11 (224) & v23-v22 (226; crop-confirmed, v23-v48 was brick-tile).",
+  "players": {
+    "ThePhantom": {
+      "settlements": [
+        {"hexes": [1, 7, 8]},
+        {"hexes": [5, 6, 16]}
+      ],
+      "roads": [
+        {"endpoints": [[1, 7, 8], [7, 8]]},
+        {"endpoints": [[5, 6, 16], [5, 15, 16]]}
+      ]
+    },
+    "dutsy": {
+      "settlements": [
+        {"hexes": [6, 16, 17]},
+        {"hexes": [2, 3, 10]}
+      ],
+      "roads": [
+        {"endpoints": [[6, 16, 17], [6, 17, 18]]},
+        {"endpoints": [[2, 3, 10], [2, 9, 10]]}
+      ]
+    }
+  }
+}
