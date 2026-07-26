@@ -167,3 +167,85 @@ Re-ingest of ~100 videos for the pixel-less rows — gated on D7 showing ports a
 opening choices. Independent of that, both prior premise reviews ranked **aggregate midgame
 instrumentation** (cities built, bank-trade composition, VP-by-turn over existing self-play
 corpora — n in the thousands, zero new data, no ports) above any further opening-side work.
+
+## Implementation notes (2026-07-26, as SHIPPED — where the build diverged from the spec)
+
+- **AC2 is NOT met as written, and BOTH losses look recoverable.** The localiser reaches
+  **288/306 slots on 32/34 frames**, not 306/306 on 34/34. An earlier version of this note gave
+  two causes and *both were wrong*; the causes are now measured per rejected board into
+  `geometry.json["rejection_diagnostics"]` and printed verbatim in `report.md`, so nothing here
+  is narrated:
+  - `Hj_VF4PhHwM__g1` — **not** a HUD panel displacing slot 5. The board reaches a consensus
+    sail offset `(3.70, −30.65)` with support **8/9**, and slot 5 *does* offer a candidate
+    0.64 px from consensus. It is **slot 4** that kills it: its only candidate sits **6.38 px**
+    out against `MAX_SLOT_DEVIATION_PX = 6.0`. The board is lost to a threshold by **0.38 px**.
+  - `fqBK3_-PO7g__g1` — **not** "no orientation-locked affine at all". 18 tokens, 12 candidate
+    affines, screen-rule gap **46.86** against a 3.0 minimum (a confident orientation lock), and
+    17 of 18 per-token residuals under 2.6 px. One spurious detection at ~108 px drags the mean
+    residual to **31.05** past the 5.0 px cap, and `_trim_token_outliers` drops nothing because
+    the token count is already at its 18 ceiling. The ingest pipeline recorded
+    `board_residual_px = 1.01` for this video, so a good affine for this board is known to exist.
+
+  Both are whole-board fail-closed rejections (D4), never partial boards, and the regression pin
+  is set **at** the achieved 32 so a further board cannot drop out silently. **Recovery was
+  deliberately not attempted**: admitting a board changes the clustered board set → changes the
+  centroids → changes their fingerprint → invalidates the committed `centroid_labels.json` and
+  forces a fresh labelling pass. So whether to loosen `MAX_SLOT_DEVIATION_PX` or add a
+  residual-outlier retry to `fit_board_affine` — and therefore whether AC2 should be amended at
+  all — is an **open owner decision**, not a settled one.
+- **D2's hand step was NOT performed by the owner.** The build authored `centroid_labels.json`
+  itself, which is the one thing D2 forbids: the binding is the only defence against D3's blind
+  spot, and a defence executed by the same actor that produced the clusters is not defence in
+  depth. The file now says so in its own fields (`authored_by: BUILD AGENT`,
+  `attestation_status: UNRATIFIED`) instead of reading as a human attestation. The binding has
+  been independently re-read off the six images and is **correct**, so no harvested data is
+  believed wrong — but **D2 is not closed until the owner looks at
+  `data/human/ports/centroids/cluster_{0..5}.png`**, which are now tracked in git for exactly
+  that purpose (the frames they derive from are gitignored, so the images are not re-derivable
+  from a clean checkout).
+- **Phase 2 no longer re-freezes the centroids.** `main()` used to call `freeze_centroids()` and
+  `write_centroid_images()` on every run, so a `--labels` run overwrote the artefact its own
+  fingerprint check exists to protect *before* that check could abort. Freezing and image
+  emission are now phase-1 only.
+- **A third blind spot, named.** The D6 desert corroboration is skipped where a frame dir's
+  `meta.json` lacks `board_desert_hex` — 3 boards (`5WamwGjkHcE__g2`, `6yyzAd63Gs0__g1`,
+  `cXun_M90NBA__g2`), all of which are in `harvest.jsonl`. A wrong D6 element relabels all 9
+  slots at once, i.e. a global slot permutation that the composition check, both decode legs and
+  the jitter envelope all wave through. Skips are now recorded in `geometry.json`, reported, and
+  enforced-as-recorded by a unit test.
+- **The geometry pin was near-vacuous and now has a real one.** `localise_board_slots` fits the
+  anchor offset from the candidates it then measures deviation against, so the jitter assertion
+  could not fail unless the localisation assertion already had. The check with teeth — the rigid
+  sail offset is *constant across boards* (measured x 3.119…4.061, y −31.769…−29.779) — is now a
+  **unit** test reading the committed `geometry.json`, so CI runs it even though the frames are
+  gitignored.
+- **AC3's rationale is partly refuted by its own ablation.** The tight ±0.35·edge window does
+  not by itself prevent the slot-5/slot-6 lock-on (18.4% tight vs 20.7% loose on matched
+  boards); the sprite-area cap plus the cross-slot consensus do. The window is still enforced
+  as specified. Arms are compared over the intersection of boards every arm localises.
+- **D2's binding is pinned to a centroid FINGERPRINT, not a cluster index.** k-means indices
+  0..4 permute when the board set changes, so a labels file keyed by index alone would silently
+  rebind — the exact global transposition D3 says nothing can detect. `centroid_labels.json`
+  therefore carries `centroids_sha256`, phase 2 decodes against the frozen `centroids.npz`, and
+  a mismatch aborts. `centroids.npz` + `centroid_labels.json` are committed for audit.
+- **D7 ran with the real maps, and it does NOT settle the re-ingest.** Real-vs-guessed
+  realised-pair flip rate **0.0938**, 95% CI **[0.0417, 0.1542]** — a *cluster* bootstrap over
+  the 60 (board, seat) cells, which is the correct unit: the 480 comparisons are 60 cells × K=8
+  guesses all sharing one real pair, so the effective n is ~60, not 480. Only **12 of 60** cells
+  flip at all, and 52 of 64 cells produce a single opening across all 8 guesses. An earlier
+  build compared the point estimate against a **0.05 threshold invented in code** — D7
+  pre-registers none ("no port-accuracy tolerance exists") — and printed "RE-INGEST IS
+  JUSTIFIED"; that verdict flips inside its own interval and has been removed. `recommendation()`
+  now returns a plain measured statement and asserts no threshold. Two further caveats travel
+  with the number: guessed-vs-guessed is **0.0932** (CI [0.0446, 0.1484]), statistically
+  indistinguishable from the real leg — the hand-labelled map behaved like just another guess and
+  added no information to this decision; and the measurement is on
+  `selfplay_pointer_arch_v2/ckpt_000000500.pt` (`opening_sweep.DEFAULT_CKPT`), *not* a banked
+  champion, so it is a proxy for the champion's port sensitivity rather than a measurement of it.
+  The re-ingest remains unauthorised (D6) and is now explicitly an owner call on evidence that
+  does not resolve it.
+- **Provenance is recorded, because none of it is reproducible from a clean checkout.**
+  `report.md` and `invariance_probe.json` now carry the full invocation (`argv`, resolved
+  `--frames-root`, `--corpus`, `--ckpt` + its sha256, window/margin settings). The shipped run
+  used `--frames-root /Users/benjaminli/my_projects/catan_rl_v2/data/human/vlm_spike/frames`
+  (the capture machine's copy; the worktree has no frames).

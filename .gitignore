@@ -101,6 +101,14 @@ data/human/pregate0_games.jsonl
 # `localized/*.json` adjacency inputs (the VLM's output the FileLocalizer reads).
 data/human/vlm_spike/frames/
 data/human/vlm_spike/records/
+# Port harvest (scripts/harvest_ports.py): the six per-cluster exemplar PNGs under
+# data/human/ports/centroids/ are TRACKED (~1.7 MB). They are the images the
+# class->name binding was read off, and the code itself calls that binding the ONLY
+# defence against D3's global transposition — so an auditor must be able to see them
+# from a clean checkout. They are NOT re-derivable there: the frames they come from
+# are gitignored above and exist only on the capture machine. Only the montage — a
+# concatenation of those same six files — is ignored, as pure duplication.
+data/human/ports/centroid_montage.png
 
 # <<< veriloop:auto:start >>>
 .claude/veriloop/.backups/

@@ -73,7 +73,17 @@ stack. Resources are **string literals** (`"WOOD"`, `"BRICK"`, `"WHEAT"`, `"ORE"
   "ruleset": {"num_players": 2, "win_vp": 15},
   "board": {
     "hexes": [{"hex_id": 0, "resource": "ORE", "number": 8}, /* …19; desert: number=null */],
-    "ports": "OMITTED in v1"   // never extracted in spikes — see §5
+    "ports": "OMITTED in v1"   // never extracted in spikes — see §5. Ports ARE now
+                               // read from the retained frames, but out of band into
+                               // the sidecar data/human/ports/harvest.jsonl keyed
+                               // (video_id, game_index) — see
+                               // .claude/veriloop/specs/port-harvest.md D5 and
+                               // src/catan_rl/human_data/ports.py. This field stays
+                               // "OMITTED in v1" ON PURPOSE: writing into
+                               // board.ports would let any adapter reading `board`
+                               // inherit ports for free and turn the
+                               // "training-only, measurement keeps K=8" fence into a
+                               // convention instead of a mechanism.
   },
   "draft_order": ["ThePhantom", "rayman147", "rayman147", "ThePhantom"],
   "openings": {
