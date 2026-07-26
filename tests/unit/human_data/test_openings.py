@@ -392,8 +392,12 @@ _SURVEY_PATH = Path(__file__).resolve().parents[3] / "data" / "human" / "color_s
 #: seat holds v3/v4 with roads on edges 5 (2,3) / 10 (4,19). All four are interior
 #: vertices (>18px from every hex centre, deep inside the hull), so the head-vote and
 #: hex-centre guards behave exactly as on a real board.
-_SYN_TOP = {"settle": (0, 1), "roads": {0: (0, 5), 1: (1, 10)}}  # settlement roads -> edges 1, 4
-_SYN_BOT = {"settle": (3, 4), "roads": {3: (2, 3), 4: (4, 19)}}  # settlement roads -> edges 5, 10
+# The four settlements are mutually NON-ADJACENT: a synthetic opening must satisfy the
+# 2-away spacing rule, else ``detect_openings_result``'s cross-seat legality guard
+# rejects the frame before any colour assertion is reached. (The former (0,1)/(3,4)
+# plan painted two adjacent pairs — a board that cannot legally exist.)
+_SYN_TOP = {"settle": (0, 4), "roads": {0: (0, 1), 4: (4, 3)}}  # settlement roads -> edges 0, 7
+_SYN_BOT = {"settle": (18, 21), "roads": {18: (18, 16), 21: (21, 17)}}  # -> edges 29, 32
 
 #: Paint HSV (inside each colour's PALETTE piece range) and ring HSV (inside its
 #: _HUD_RING range). RED's are on the wrap side of the 0/180 seam (hue ~0-3).
@@ -553,10 +557,10 @@ def test_new_palette_colour_roundtrips(top_color: str, bot_color: str) -> None:
     )
     assert res.rejection_reason is None, res.rejection_reason
     assert res.openings is not None
-    assert set(res.openings["top_handle"].settlements) == {0, 1}
-    assert set(res.openings["top_handle"].roads) == {1, 4}
-    assert set(res.openings["bot_handle"].settlements) == {3, 4}
-    assert set(res.openings["bot_handle"].roads) == {5, 10}
+    assert set(res.openings["top_handle"].settlements) == {0, 4}
+    assert set(res.openings["top_handle"].roads) == {0, 7}
+    assert set(res.openings["bot_handle"].settlements) == {18, 21}
+    assert set(res.openings["bot_handle"].roads) == {29, 32}
 
 
 def test_green_roundtrip_exercises_tile_subtraction() -> None:
@@ -579,8 +583,8 @@ def test_green_roundtrip_exercises_tile_subtraction() -> None:
     )
     assert res.rejection_reason is None, res.rejection_reason
     assert res.openings is not None
-    assert set(res.openings["top_handle"].settlements) == {0, 1}
-    assert set(res.openings["bot_handle"].settlements) == {3, 4}
+    assert set(res.openings["top_handle"].settlements) == {0, 4}
+    assert set(res.openings["bot_handle"].settlements) == {18, 21}
 
 
 def test_out_of_gamut_colour_still_rejects_fail_closed() -> None:

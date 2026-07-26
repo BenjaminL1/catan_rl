@@ -824,6 +824,22 @@ def detect_openings_result(
             used.add(edge_id)
             roads.append(edge_id)
         openings[handle] = PlayerOpening(settlements=tuple(settlements), roads=tuple(roads))
+    # Cross-seat legality. The ``double_snap`` guard above compares a seat's own two
+    # heads only, so two SEATS snapping to the same or to adjacent vertices is
+    # invisible to every check so far — and that is exactly the shape of the illegal
+    # openings found in the corpus (all 5 were cross-player adjacent pairs). They
+    # persisted because ``record.py`` deliberately scopes 2-away spacing OUT of its
+    # pure value contract and delegates it to the engine bridge, so a mis-snapped
+    # head reaches disk with ``passed_crosscheck=True``. Reject fail-closed here,
+    # matching the seat-local guards, rather than emit a confidently-wrong opening.
+    placed = [(handle, int(v)) for handle, op in openings.items() for v in op.settlements]
+    occupied = {v for _handle, v in placed}
+    if len(occupied) != len(placed):
+        return OpeningResult(None, "settlement_cross_seat_double_snap")
+    for _handle, v in placed:
+        adjacent = occupied.intersection(topology.vertex_neighbors[v])
+        if adjacent:
+            return OpeningResult(None, f"settlement_distance_rule:{v}-{min(adjacent)}")
     return OpeningResult(openings, None)
 
 
