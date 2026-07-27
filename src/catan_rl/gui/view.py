@@ -70,29 +70,27 @@ def broadcast_message(event, *, name_display=None, blind_player=None):
     Pure (no pygame): :meth:`catanGameView.displayBroadcastMessage` only draws
     the result.
 
-    ``blind_player`` is the RAW ``player.name`` whose resource TYPES must stay
-    hidden (the bot, unless ``--reveal-bot``). ``DISCARD`` / ``YOP`` name the
-    exact cards leaving or entering a hand, which is the same leak the blind
-    hand panel exists to close — so for that player the banner reports a COUNT
-    instead. ``None`` (the engine's own ``playCatan``, and any revealed
-    session) keeps the full, unchanged message for everyone.
+    ``blind_player`` is accepted for signature stability but no longer changes any
+    banner: **DISCARD and YOP resource TYPES are PUBLIC and are never blinded.**
+    The engine says so itself — ``tracker.track_steal``: "It is Public Information
+    relative to the two players" — and the bot reads this same broadcast stream
+    through a ``BroadcastHandTracker`` that does perfect opponent hand-tracking
+    (``env/catan_env.py``). Hiding these from the human while the bot tracks them
+    would make the playtest HARDER than the real game and bias every result in the
+    bot's favour. The leak the blind hand panel closes is the bot's HAND CONTENTS,
+    which are private; public events stay public.
     """
     name_display = name_display or {}
     event_type = event.get("type", "")
     raw_name = event.get("player", "")
     player_name = name_display.get(raw_name, raw_name)
-    blind = blind_player is not None and raw_name == blind_player
 
     if event_type == "DICE_ROLL":
         return f"Dice: {player_name} rolled {event.get('value', 0)}", (0, 0, 0)
     if event_type == "DISCARD":
-        resources = event.get("resources", [])
-        shown = f"{len(resources)} card(s)" if blind else f"{resources}"
-        return f"DISCARD: {player_name} lost {shown}", (255, 0, 0)
+        return f"DISCARD: {player_name} lost {event.get('resources', [])}", (255, 0, 0)
     if event_type == "YOP":
-        resources = event.get("resources", [])
-        shown = f"{len(resources)} card(s)" if blind else f"{resources}"
-        return f"YOP: {player_name} gained {shown}", (0, 100, 0)
+        return f"YOP: {player_name} gained {event.get('resources', [])}", (0, 100, 0)
     return None
 
 

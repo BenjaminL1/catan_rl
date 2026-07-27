@@ -104,28 +104,32 @@ class TestRevealedPanel:
 
 
 class TestBroadcastBanner:
-    """The banner is the SECOND on-screen channel carrying resource types.
+    """The banner carries resource types — and for DISCARD/YOP that is CORRECT.
 
-    ``DISCARD`` fires once per discarded card on every 7 where the bot holds
-    >9 cards, and ``displayGameScreen`` renders the last event unconditionally
-    — so without a blind gate the human reads the bot's discarded types one by
-    one, the same leak the blind panel closes."""
+    These events are PUBLIC. The engine says so itself (``tracker.track_steal``:
+    "It is Public Information relative to the two players"), and the bot reads
+    this same broadcast stream through a ``BroadcastHandTracker`` that does
+    perfect opponent hand-tracking (``env/catan_env.py``). Blinding the human to
+    the bot's discards while the bot tracks the human's would make the playtest
+    HARDER than the real game and bias every result in the bot's favour.
 
-    def test_bot_discard_shows_a_count_not_the_types(self) -> None:
+    What the blind gate closes is the bot's HAND CONTENTS (``hand_panel_lines``),
+    which are private. Public events stay public."""
+
+    def test_bot_discard_types_stay_public_even_when_blinded(self) -> None:
         text, _color = broadcast_message(
             {"type": "DISCARD", "player": "Agent", "resources": ["ORE", "WHEAT"]},
             blind_player="Agent",
         )
-        assert "ORE" not in text and "WHEAT" not in text
-        assert "2 card(s)" in text
+        assert "ORE" in text and "WHEAT" in text
 
-    def test_bot_yop_shows_a_count_not_the_types(self) -> None:
+    def test_bot_yop_types_stay_public_even_when_blinded(self) -> None:
+        """Year-of-Plenty picks are taken openly from the bank — public, like discards."""
         text, _color = broadcast_message(
             {"type": "YOP", "player": "Agent", "resources": ["ORE", "ORE"]},
             blind_player="Agent",
         )
-        assert "ORE" not in text
-        assert "2 card(s)" in text
+        assert "ORE" in text
 
     def test_the_humans_own_discard_is_unchanged(self) -> None:
         text, _color = broadcast_message(

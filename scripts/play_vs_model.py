@@ -481,7 +481,11 @@ def _build_human_env_class() -> type:
 
 
 def _load_search_agent(ckpt: str, sims: int, seed: int) -> SearchAgent:
-    """Load champion v8 on CPU and wrap it in determinized PUCT-MCTS."""
+    """Load the checkpoint named by ``ckpt`` on CPU, wrapped in determinized PUCT-MCTS.
+
+    Loads whatever ``--ckpt`` names (defaulting to :data:`DEFAULT_CKPT`, the
+    pointer-arch champion) — NOT "v8", which is a stale lineage label.
+    """
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
     from catan_rl.search.agent import SearchAgent
     from catan_rl.search.config import SearchConfig
@@ -513,10 +517,13 @@ class _RawPolicyAgent:
     de-clairvoyant determinization lands.
     """
 
-    def __init__(self, actor: Any) -> None:
+    def __init__(self, actor: Any, *, capture_internals: bool = True) -> None:
         self._actor = actor
         #: Internals of the MOST RECENT decision, for the replay recorder.
         self.last_internals: Any = None
+        #: Off when nothing is recording — capture costs a second policy forward.
+        self.capture_internals = capture_internals
+        self._capture_warned = False
 
     def choose_action(self, env: Any) -> np.ndarray:
         # Same pairing the eval harness uses: obs + legal-action masks straight
@@ -524,7 +531,22 @@ class _RawPolicyAgent:
         obs = env._get_obs()
         masks = env.get_action_masks()
         action = self._actor.select_action(obs, masks)
-        self.last_internals = capture_policy_internals(self._actor, obs, masks, action)
+        # Recording is a SIDE CHANNEL: a capture fault must never kill the game it
+        # observes (an hour of human play). capture_policy_internals reaches into
+        # private head state (``heads._corner_context``, ``_corner_mask``,
+        # ``out["_node_v"]`` ...), so drift in policy/heads.py or a checkpoint with
+        # a different head set would otherwise raise mid-game and destroy the
+        # session. Skip when nothing records; degrade to None on any fault.
+        if not self.capture_internals:
+            self.last_internals = None
+            return action
+        try:
+            self.last_internals = capture_policy_internals(self._actor, obs, masks, action)
+        except Exception as exc:
+            self.last_internals = None
+            if not self._capture_warned:
+                self._capture_warned = True
+                print(f"\n[recorder] policy-internals capture disabled: {exc}", flush=True)
         return action
 
 
