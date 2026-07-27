@@ -12,6 +12,88 @@ from catan_rl.gui import render_constants as RC
 
 pygame.init()
 
+#: Hidden-dev-card key -> short label used by the REVEALED hand panel.
+_DEV_CARD_DISPLAY = {
+    "KNIGHT": "Knight",
+    "VP": "VP",
+    "MONOPOLY": "Mono",
+    "ROADBUILDER": "RB",
+    "YEAROFPLENTY": "YOP",
+}
+
+
+def hand_panel_lines(player, *, reveal: bool = True) -> list[str]:
+    """Return the text lines of a hand panel for ``player``.
+
+    Pure (no pygame): the rendering in :meth:`catanGameView._draw_hand_panel`
+    only lays these out. An empty string is a blank spacer line.
+
+    ``reveal=True`` is the OMNISCIENT view (every resource type, the
+    VP-card-inclusive total, and hidden dev cards by type). It is correct for
+    the panel showing a player their OWN hand, and is opt-in analysis output
+    for anyone else's.
+
+    ``reveal=False`` is what an opponent may legally see in Catan: the hand
+    SIZE, the number of unplayed dev cards, and the VISIBLE victory points
+    ``victoryPoints - devCards["VP"]``. There is no ``newDevCards`` term —
+    a bought VP card scores immediately and never passes through that bucket
+    (``engine/player.py``), which is also how ``policy/obs_encoder.py``
+    computes it. ``player.visibleVictoryPoints`` is deliberately NOT used:
+    it is a stale cache refreshed only at init + VP-card buy.
+    """
+    if not reveal:
+        visible_vp = player.victoryPoints - player.devCards.get("VP", 0)
+        n_dev = sum(player.devCards.values()) + len(player.newDevCards)
+        return [
+            f"Cards: {sum(player.resources.values())}",
+            "",
+            f"Victory Points: {visible_vp}",
+            "",
+            f"Dev Cards: {n_dev}",
+        ]
+
+    lines = [f"{resource}: {count}" for resource, count in player.resources.items()]
+    lines += ["", f"Victory Points: {player.victoryPoints}", "", "Dev Cards:"]
+    total_dev_cards = dict(player.devCards)
+    for card in player.newDevCards:
+        total_dev_cards[card] = total_dev_cards.get(card, 0) + 1
+    lines += [
+        f"{display_name}: {total_dev_cards.get(card_type, 0)}"
+        for card_type, display_name in _DEV_CARD_DISPLAY.items()
+    ]
+    return lines
+
+
+def broadcast_message(event, *, name_display=None, blind_player=None):
+    """Return ``(text, rgb)`` for the last broadcast event, or ``None``.
+
+    Pure (no pygame): :meth:`catanGameView.displayBroadcastMessage` only draws
+    the result.
+
+    ``blind_player`` is accepted for signature stability but no longer changes any
+    banner: **DISCARD and YOP resource TYPES are PUBLIC and are never blinded.**
+    The engine says so itself — ``tracker.track_steal``: "It is Public Information
+    relative to the two players" — and the bot reads this same broadcast stream
+    through a ``BroadcastHandTracker`` that does perfect opponent hand-tracking
+    (``env/catan_env.py``). Hiding these from the human while the bot tracks them
+    would make the playtest HARDER than the real game and bias every result in the
+    bot's favour. The leak the blind hand panel closes is the bot's HAND CONTENTS,
+    which are private; public events stay public.
+    """
+    name_display = name_display or {}
+    event_type = event.get("type", "")
+    raw_name = event.get("player", "")
+    player_name = name_display.get(raw_name, raw_name)
+
+    if event_type == "DICE_ROLL":
+        return f"Dice: {player_name} rolled {event.get('value', 0)}", (0, 0, 0)
+    if event_type == "DISCARD":
+        return f"DISCARD: {player_name} lost {event.get('resources', [])}", (255, 0, 0)
+    if event_type == "YOP":
+        return f"YOP: {player_name} gained {event.get('resources', [])}", (0, 100, 0)
+    return None
+
+
 # Class to handle catan board display
 
 
@@ -48,9 +130,17 @@ class catanGameView:
         self.human_player = None
 
         # Optional: the bot/opponent player object. When set, displayPlayerStats
-        # also shows the OPPONENT's hand SIZE (resource + dev card counts only, not
-        # types — mirrors real Catan visibility). Engine playCatan leaves it None.
+        # also shows the OPPONENT's panel. BLIND by default (hand SIZE, unplayed
+        # dev-card COUNT and VISIBLE VP only — real Catan visibility); set
+        # ``reveal_bot`` to show the full hand for post-hoc analysis. Engine
+        # playCatan leaves both untouched.
         self.bot_player = None
+
+        # Optional: reveal the bot's FULL hand (resources by type, hidden dev
+        # cards by type, VP-card-inclusive VP). OFF by default — a revealed game
+        # is not a valid strength read, so harnesses that flip this must record
+        # the fact alongside the game.
+        self.reveal_bot: bool = False
 
         # Optional: friendly display-name overrides keyed by player.name (e.g.
         # {"Opponent": "You", "Agent": "Bot"}). Used by displayPlayerStats and
@@ -314,22 +404,33 @@ class catanGameView:
         title = f"YOUR HAND ({label})" if self.human_player is not None else f"Player: {label}"
         self._draw_hand_panel(player, self.board.width - 160, 15, title)
 
-        # vs-bot ANALYSIS view: reveal the BOT's FULL hand (resources by type +
-        # hidden dev cards by type + VP) so the human can judge its decisions.
-        # Only shown when the harness sets bot_player; engine playCatan leaves it
-        # None (so normal play keeps the opponent's hand hidden).
+        # vs-bot view: the OPPONENT's panel. BLIND by default (hand size, unplayed
+        # dev-card count, VISIBLE VP) so playing against the bot is a fair game;
+        # ``reveal_bot`` opts into the omniscient ANALYSIS view. Only shown when
+        # the harness sets bot_player; engine playCatan leaves it None (so normal
+        # play keeps the opponent's hand hidden either way).
         if self.bot_player is not None:
             bot_label = self.name_display.get(self.bot_player.name, self.bot_player.name)
+            suffix = "FULL HAND (REVEALED)" if self.reveal_bot else "HAND"
             self._draw_hand_panel(
-                self.bot_player, self.board.width - 160, 460, f"{bot_label} — FULL HAND"
+                self.bot_player,
+                self.board.width - 160,
+                460,
+                f"{bot_label} — {suffix}",
+                reveal=self.reveal_bot,
             )
 
-    def _draw_hand_panel(self, player, x, y, title):
-        """Render a full hand panel (resources by type, VP, dev cards by type) for
-        ``player`` at (x, y) with a readable backdrop. The dev-card counts include
-        hidden / just-bought cards (devCards + newDevCards)."""
+    def _draw_hand_panel(self, player, x, y, title, *, reveal=True):
+        """Render a hand panel for ``player`` at (x, y) with a readable backdrop.
+
+        ``reveal`` is forwarded to :func:`hand_panel_lines`, which owns the
+        content (and the reveal/blind distinction); this method only lays it out.
+        Defaults to ``True`` so existing call sites (a player's OWN hand) are
+        unchanged."""
+        lines = hand_panel_lines(player, reveal=reveal)
         line_height = 20
-        panel = pygame.Rect(x - 12, y - 8, 156, line_height * 15 + 12)
+        panel_lines = len(lines) + 2  # title + a trailing margin line
+        panel = pygame.Rect(x - 12, y - 8, 156, line_height * panel_lines + 12)
         backdrop = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
         backdrop.fill((245, 245, 235, 222))
         self.screen.blit(backdrop, (panel.x, panel.y))
@@ -337,34 +438,9 @@ class catanGameView:
 
         self.screen.blit(self.font_resource.render(title, False, (0, 0, 0)), (x, y))
         y += line_height * 1.5
-        for resource, count in player.resources.items():
-            self.screen.blit(
-                self.font_resource.render(f"{resource}: {count}", False, (0, 0, 0)), (x, y)
-            )
-            y += line_height
-        y += line_height * 0.5
-        self.screen.blit(
-            self.font_resource.render(f"Victory Points: {player.victoryPoints}", False, (0, 0, 0)),
-            (x, y),
-        )
-        y += line_height * 1.5
-        self.screen.blit(self.font_resource.render("Dev Cards:", False, (0, 0, 0)), (x, y))
-        y += line_height
-        total_dev_cards = player.devCards.copy()
-        for card in player.newDevCards:
-            total_dev_cards[card] += 1
-        dev_map = {
-            "KNIGHT": "Knight",
-            "VP": "VP",
-            "MONOPOLY": "Mono",
-            "ROADBUILDER": "RB",
-            "YEAROFPLENTY": "YOP",
-        }
-        for card_type, display_name in dev_map.items():
-            count = total_dev_cards.get(card_type, 0)
-            self.screen.blit(
-                self.font_resource.render(f"{display_name}: {count}", False, (0, 0, 0)), (x, y)
-            )
+        for line in lines:
+            if line:
+                self.screen.blit(self.font_resource.render(line, False, (0, 0, 0)), (x, y))
             y += line_height
 
     # Function to display the gameState board - use to display intermediate build screens
@@ -423,27 +499,15 @@ class catanGameView:
         """Display the last broadcast event on the screen"""
         if not self.game.last_broadcast_event:
             return
-        event = self.game.last_broadcast_event
-        event_type = event.get("type", "")
-        player_name = event.get("player", "")
-        player_name = self.name_display.get(player_name, player_name)
-
-        msg_text = ""
-        text_color = (0, 0, 0)
-
-        if event_type == "DICE_ROLL":
-            value = event.get("value", 0)
-            msg_text = f"Dice: {player_name} rolled {value}"
-        elif event_type == "DISCARD":
-            resources = event.get("resources", [])
-            msg_text = f"DISCARD: {player_name} lost {resources}"
-            text_color = (255, 0, 0)  # Red
-        elif event_type == "YOP":
-            resources = event.get("resources", [])
-            msg_text = f"YOP: {player_name} gained {resources}"
-            text_color = (0, 100, 0)  # Dark Green
-
-        if msg_text:
+        rendered = broadcast_message(
+            self.game.last_broadcast_event,
+            name_display=self.name_display,
+            blind_player=(
+                None if (self.bot_player is None or self.reveal_bot) else self.bot_player.name
+            ),
+        )
+        if rendered is not None:
+            msg_text, text_color = rendered
             text_surface = self.font_broadcast.render(msg_text, True, text_color)
             text_rect = text_surface.get_rect(center=(self.board.width // 2, 60))
             bg_rect = text_rect.inflate(20, 10)

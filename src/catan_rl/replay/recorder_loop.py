@@ -39,8 +39,8 @@ from typing import Any
 import numpy as np
 
 from catan_rl.engine.broadcast import BroadcastEventType
+from catan_rl.replay.player_factory import HumanPlayerNotActorError, build_actor
 from catan_rl.replay.player_factory import PlayerSpec as RecorderPlayerSpec
-from catan_rl.replay.player_factory import build_actor
 from catan_rl.replay.recorder import (
     EventCollector,
     classify_step_events,
@@ -79,8 +79,18 @@ def _resolve_seat_and_opp(
     Returns ``(agent_seat, opp_kind)`` where ``opp_kind`` is one of
     ``"random" | "heuristic"`` (the env only supports those two
     opponent types). Raises :class:`NotImplementedError` for matchups
-    that the current env cannot host.
+    that the current env cannot host, and
+    :class:`~catan_rl.replay.player_factory.HumanPlayerNotActorError` for
+    any spec naming a ``"human"`` seat — ``record_game`` cannot host an
+    interactive game (see ``scripts/play_vs_model.py``).
     """
+    if spec_a.kind == "human" or spec_b.kind == "human":
+        raise HumanPlayerNotActorError(
+            "record_game cannot host a human seat: it builds its OWN CatanEnv "
+            "and drives a fixed setup loop. Human games are recorded by "
+            "scripts/play_vs_model.py, which reuses the main-loop primitives "
+            "(setup_steps_seat_0/1, consume_main_event_block) directly."
+        )
     if spec_a.kind == "policy" and spec_b.kind == "policy":
         raise NotImplementedError(
             "(policy, policy) recording is not supported in v1. The v2 "
@@ -315,7 +325,7 @@ def _replay_step(
     )
 
 
-def _setup_steps_seat_0(
+def setup_steps_seat_0(
     *,
     agent_actions: list[tuple[int, int]],  # [(s1, r1), (s2, r2)] in idx terms
     snap_after_step1: StepStateSnapshot,  # agent.s1+r1, opp full burst
@@ -435,7 +445,7 @@ def _setup_steps_seat_0(
     return steps, log_lines
 
 
-def _setup_steps_seat_1(
+def setup_steps_seat_1(
     *,
     agent_actions: list[tuple[int, int]],  # [(s1, r1), (s2, r2)]
     snap_after_reset: StepStateSnapshot,  # opp.s1+r1 already placed
@@ -645,6 +655,32 @@ def _zero_actor_in_snapshot(snap: StepStateSnapshot, actor: str) -> StepStateSna
     )
 
 
+#: Broadcast events whose ``player`` field names the ACTING seat. A
+#: ``STEAL`` names it in ``robber`` instead and is handled separately.
+_ACTOR_SIGNAL_TYPES: frozenset[str] = frozenset(
+    {
+        BroadcastEventType.DICE_ROLL.value,
+        BroadcastEventType.BUILD.value,
+        BroadcastEventType.MOVE_ROBBER.value,
+        BroadcastEventType.MONOPOLY.value,
+        BroadcastEventType.YOP.value,
+    }
+)
+
+
+def _acting_seat_for(event: dict, *, seat_to_actor: dict[str, str]) -> str | None:
+    """Return the JSON actor label of the seat that PERFORMED ``event``,
+    or ``None`` when the event carries no acting-seat evidence."""
+    from catan_rl.replay.recorder import _actor_for  # local import to keep module slim
+
+    etype = event.get("type")
+    if etype in _ACTOR_SIGNAL_TYPES:
+        return _actor_for(event.get("player"), seat_to_actor)
+    if etype == BroadcastEventType.STEAL.value:
+        return _actor_for(event.get("robber"), seat_to_actor)
+    return None
+
+
 def _partition_main_events_by_actor(
     raw_events: list[dict],
     *,
@@ -653,9 +689,29 @@ def _partition_main_events_by_actor(
 ) -> list[tuple[str, list[dict]]]:
     """Split a stream of broadcast events into per-actor groups.
 
-    The boundary marker is ``DICE_ROLL`` — each dice roll starts a
-    new player's turn and the event's ``player`` field names them.
-    Events before the first dice roll are attributed to
+    Attribution is by **acting seat**, not by dice-roll boundary alone.
+    ``DICE_ROLL`` still unconditionally opens a new group (it is the
+    turn boundary), but any other event that names its actor — ``BUILD``,
+    ``MOVE_ROBBER``, ``MONOPOLY``, ``YOP`` (all via ``player``) and
+    ``STEAL`` (via ``robber``) — also switches the current actor when it
+    disagrees with the running one.
+
+    That extra signal fixes a real mis-attribution: a **pre-roll dev
+    card** (``scripts/play_vs_model.py::_human_pre_roll`` lets the human
+    play a Knight BEFORE rolling) emits ``MOVE_ROBBER`` / ``STEAL`` /
+    ``LARGEST_ARMY_CHANGE`` ahead of that player's ``DICE_ROLL``. Under
+    the old dice-only rule those landed in the PREVIOUS group and were
+    credited to the previous player — "what the bot did" would list moves
+    the human made.
+
+    Events that are NOT actor evidence and therefore stay with the
+    current actor: ``RESOURCE_CHANGE`` (fires for the victim of a steal
+    and for BOTH seats on dice production), ``LONGEST_ROAD_CHANGE`` /
+    ``LARGEST_ARMY_CHANGE`` (bookkeeping, keyed by owner not actor),
+    ``GAME_END`` and ``SETUP_COMPLETE``. ``DISCARD`` keeps its own
+    special case below (a forced discard by the non-acting player).
+
+    Events before the first actor signal are attributed to
     ``initial_actor`` (the agent or opp, depending on context).
 
     Returns a list of ``(actor, events)`` tuples in temporal order.
@@ -670,6 +726,19 @@ def _partition_main_events_by_actor(
     current_events: list[dict] = []
     for event in raw_events:
         etype = event.get("type")
+        signalled = _acting_seat_for(event, seat_to_actor=seat_to_actor)
+        if (
+            signalled is not None
+            and signalled != current_actor
+            and etype != BroadcastEventType.DICE_ROLL.value
+        ):
+            # An acting-seat signal from someone other than the running
+            # actor: close the group and open theirs.
+            if current_events:
+                groups.append((current_actor, current_events))
+            current_actor = signalled
+            current_events = [event]
+            continue
         if etype == BroadcastEventType.DICE_ROLL.value:
             if current_events:
                 groups.append((current_actor, current_events))
@@ -697,7 +766,7 @@ def _partition_main_events_by_actor(
     return [(a, evs) for a, evs in groups if evs]
 
 
-def _split_at_setup_complete(raw_events: list[dict]) -> list[dict]:
+def split_at_setup_complete(raw_events: list[dict]) -> list[dict]:
     """Return only events that occur AFTER the ``SETUP_COMPLETE``
     marker in ``raw_events``. Used to peel out opp's first main turn
     (seat=1 case) from the trailing portion of env.step #3."""
@@ -707,7 +776,7 @@ def _split_at_setup_complete(raw_events: list[dict]) -> list[dict]:
     return []
 
 
-def _consume_main_event_block(
+def consume_main_event_block(
     *,
     raw_events: list[dict],
     prev_snap: StepStateSnapshot,
@@ -720,7 +789,10 @@ def _consume_main_event_block(
 ) -> tuple[list[ReplayStep], StepStateSnapshot, int]:
     """Turn a stream of main-phase broadcast events from a single
     env.step (or a residual buffer) into one or more :class:`ReplayStep`
-    instances, partitioned by per-actor DICE_ROLL boundaries.
+    instances, partitioned by ACTING SEAT — see
+    :func:`_partition_main_events_by_actor`: a ``DICE_ROLL`` opens a new
+    group, but so does any other event naming a different actor (which
+    is what keeps a PRE-ROLL knight with the player who played it).
 
     The state_after for each emitted ReplayStep is ``post_snap`` — the
     granularity of the engine's snapshot accessor only resolves at
@@ -900,7 +972,7 @@ def record_game(
 
     if agent_seat == 0:
         assert snap_after_step1 is not None, "seat=0 needs snap_after_step1"
-        setup_steps, _setup_log_lines = _setup_steps_seat_0(
+        setup_steps, _setup_log_lines = setup_steps_seat_0(
             agent_actions=setup_action_pairs,
             snap_after_step1=snap_after_step1,
             setup_complete_snap=setup_complete_snap,
@@ -911,7 +983,7 @@ def record_game(
         # opp's two placements come from snapshots (one at reset, one
         # from the setup_complete snap minus snap_after_step1).
         assert snap_after_step1 is not None, "seat=1 needs snap_after_step1"
-        setup_steps, _setup_log_lines = _setup_steps_seat_1(
+        setup_steps, _setup_log_lines = setup_steps_seat_1(
             agent_actions=setup_action_pairs,
             snap_after_reset=snap_after_reset,
             snap_after_step1=snap_after_step1,
@@ -935,14 +1007,14 @@ def record_game(
     # those are main-phase events (opp's first turn in the seat=1
     # case). Emit ReplaySteps for them now, BEFORE the agent's
     # first main env.step.
-    post_setup_residual = _split_at_setup_complete(setup_residual_events)
+    post_setup_residual = split_at_setup_complete(setup_residual_events)
     if post_setup_residual:
         snap_after_setup_loop = _snap_now()
         # Initial actor for residual: the agent's seat is the one
         # that just acted to finalise setup; the residual events are
         # opp's auto-started turn, so the first DICE_ROLL will tag
         # opp. Fallback initial_actor = seat_to_actor["Opponent"].
-        new_steps, last_snap, main_step_idx = _consume_main_event_block(
+        new_steps, last_snap, main_step_idx = consume_main_event_block(
             raw_events=post_setup_residual,
             prev_snap=prev_snap,
             post_snap=snap_after_setup_loop,
@@ -971,9 +1043,10 @@ def record_game(
         post_snap = _snap_now()
         raw_events = event_collector.drain()
 
-        # Partition events by actor (DICE_ROLL boundaries). The
-        # agent always acts first, so initial_actor is the agent.
-        new_steps, last_snap, main_step_idx = _consume_main_event_block(
+        # Partition events by ACTING SEAT (a DICE_ROLL opens a group, and
+        # so does any event naming another actor). The agent always acts
+        # first, so initial_actor is the agent.
+        new_steps, last_snap, main_step_idx = consume_main_event_block(
             raw_events=raw_events,
             prev_snap=prev_snap,
             post_snap=post_snap,
@@ -1036,3 +1109,19 @@ def record_game(
         board_static=board_static,
         steps=tuple(replay_steps),
     )
+
+
+# ---------------------------------------------------------------------------
+# Back-compat aliases
+# ---------------------------------------------------------------------------
+#
+# These four helpers were module-private until the human-play recorder
+# (``scripts/play_vs_model.py``) needed them: ``record_game`` builds its OWN
+# ``CatanEnv`` and cannot host an interactive game, so the human harness has to
+# reuse the primitives directly. The underscore names are kept as aliases so
+# existing importers (e.g. ``tests/unit/replay/test_recorder_loop_seat1.py``)
+# keep working.
+_setup_steps_seat_0 = setup_steps_seat_0
+_setup_steps_seat_1 = setup_steps_seat_1
+_split_at_setup_complete = split_at_setup_complete
+_consume_main_event_block = consume_main_event_block

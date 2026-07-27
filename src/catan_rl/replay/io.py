@@ -33,6 +33,7 @@ from catan_rl.replay.schema import (
     Metadata,
     PlayerSpec,
     PlayerStateSnapshot,
+    PolicyInternals,
     PortStatic,
     Replay,
     ReplaySchemaError,
@@ -89,6 +90,25 @@ def _replay_to_dict(replay: Replay) -> dict[str, Any]:
             "events": [event_to_dict(e) for e in step.events],
             "log_lines": list(step.log_lines),
             "state_after": _state_after_to_dict(step.state_after),
+            "policy_internals": [_policy_internals_to_dict(p) for p in step.policy_internals],
+        }
+
+    def _policy_internals_to_dict(p: PolicyInternals) -> dict[str, Any]:
+        # Explicit float()/int()/bool() casts: the capture site may hand us
+        # numpy scalars, which json.dumps cannot serialise.
+        return {
+            "type_mask": [bool(b) for b in p.type_mask],
+            "type_probs": [float(x) for x in p.type_probs],
+            "chosen_action": [int(x) for x in p.chosen_action],
+            "value": float(p.value),
+            "corner_top": [[int(i), float(x)] for i, x in p.corner_top],
+            "edge_top": [[int(i), float(x)] for i, x in p.edge_top],
+            "tile_top": [[int(i), float(x)] for i, x in p.tile_top],
+            "res1_probs": [float(x) for x in p.res1_probs],
+            "res2_probs": [float(x) for x in p.res2_probs],
+            "belief_logits": (
+                None if p.belief_logits is None else [float(x) for x in p.belief_logits]
+            ),
         }
 
     def _state_after_to_dict(s: StepStateSnapshot) -> dict[str, Any]:
@@ -139,6 +159,10 @@ def _replay_to_dict(replay: Replay) -> dict[str, Any]:
             "final_vp": list(replay.metadata.final_vp),
             "total_steps": replay.metadata.total_steps,
             "partial": replay.metadata.partial,
+            "mode": replay.metadata.mode,
+            "sims": replay.metadata.sims,
+            "clairvoyant": replay.metadata.clairvoyant,
+            "reveal_bot": replay.metadata.reveal_bot,
         },
         "board_static": _board_static_to_dict(replay.board_static),
         "steps": [_step_to_dict(s) for s in replay.steps],
@@ -194,7 +218,7 @@ def save_replay(replay: Replay, path: str | Path, *, force: bool = False) -> Pat
 
 
 def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
-    """Reconstruct a :class:`Replay` instance from a v1 payload dict.
+    """Reconstruct a :class:`Replay` instance from a current-version payload dict.
 
     Caller responsibility: ``payload`` is already migrated to the
     current schema version (:func:`apply_migrations` was run upstream
@@ -222,6 +246,12 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             final_vp=tuple(d["final_vp"]),
             total_steps=int(d["total_steps"]),
             partial=bool(d.get("partial", False)),
+            # v2 provenance flags — ``.get`` defaults keep migrated v1
+            # payloads (which carry none of them) loading unchanged.
+            mode=str(d.get("mode", "raw_policy")),
+            sims=None if d.get("sims") is None else int(d["sims"]),
+            clairvoyant=bool(d.get("clairvoyant", False)),
+            reveal_bot=bool(d.get("reveal_bot", False)),
         )
 
     def _board_static(d: dict[str, Any]) -> BoardStatic:
@@ -287,6 +317,21 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             last_seven_roller=d.get("last_seven_roller"),
         )
 
+    def _policy_internals(d: dict[str, Any]) -> PolicyInternals:
+        belief = d.get("belief_logits")
+        return PolicyInternals(
+            type_mask=tuple(bool(b) for b in d["type_mask"]),
+            type_probs=tuple(float(x) for x in d["type_probs"]),
+            chosen_action=tuple(int(x) for x in d["chosen_action"]),
+            value=float(d["value"]),
+            corner_top=tuple((int(i), float(x)) for i, x in d.get("corner_top", ())),
+            edge_top=tuple((int(i), float(x)) for i, x in d.get("edge_top", ())),
+            tile_top=tuple((int(i), float(x)) for i, x in d.get("tile_top", ())),
+            res1_probs=tuple(float(x) for x in d.get("res1_probs", ())),
+            res2_probs=tuple(float(x) for x in d.get("res2_probs", ())),
+            belief_logits=None if belief is None else tuple(float(x) for x in belief),
+        )
+
     def _step(d: dict[str, Any]) -> ReplayStep:
         dice = d.get("dice_roll")
         return ReplayStep(
@@ -300,6 +345,8 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             events=tuple(event_from_dict(e, strict=strict) for e in d["events"]),
             log_lines=tuple(d.get("log_lines", [])),
             state_after=_state_after(d["state_after"]),
+            # v2, optional: absent in migrated v1 payloads.
+            policy_internals=tuple(_policy_internals(p) for p in d.get("policy_internals", ())),
         )
 
     return Replay(

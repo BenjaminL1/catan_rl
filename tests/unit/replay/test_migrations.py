@@ -48,25 +48,26 @@ class TestRegistry:
         assert out["extra_field"] == "added_by_v0_to_v1"
 
     def test_chain_two_migrations(self) -> None:
+        # v1 -> v2 is the PRODUCTION no-op migration, registered at import
+        # time by ``catan_rl.replay.migrations``; only the v0 -> v1 link is
+        # faked here (registering a second v1 upgrader would — correctly —
+        # be rejected as a duplicate).
         def v0_to_v1(p):  # type: ignore[no-untyped-def]
             return {**p, "schema_version": 1, "a": "first"}
 
-        def v1_to_v2(p):  # type: ignore[no-untyped-def]
-            return {**p, "schema_version": 2, "b": "second"}
-
         register_migration(0, v0_to_v1)
-        register_migration(1, v1_to_v2)
         out = apply_migrations({"schema_version": 0}, target_version=2)
         assert out["schema_version"] == 2
         assert out["a"] == "first"
-        assert out["b"] == "second"
 
     def test_missing_step_raises(self) -> None:
         def v0_to_v1(p):  # type: ignore[no-untyped-def]
             return {**p, "schema_version": 1}
 
+        # 0 -> 1 is faked and 1 -> 2 is the production migration, so the
+        # chain dies at the missing 2 -> 3 step.
         register_migration(0, v0_to_v1)
-        with pytest.raises(MigrationError, match="no migration registered from v1"):
+        with pytest.raises(MigrationError, match="no migration registered from v2"):
             apply_migrations({"schema_version": 0}, target_version=3)
 
     def test_duplicate_registration_raises(self) -> None:

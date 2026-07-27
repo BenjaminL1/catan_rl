@@ -2,7 +2,7 @@
 
 Two side panels (one per actor) showing:
 
-* Name + kind (random / heuristic / policy) + a color swatch.
+* Name + kind (random / heuristic / policy / human) + a color swatch.
 * Victory points (cap = 15 for 1v1 Colonist).
 * Resource counts (5 columns: wood, brick, wheat, ore, sheep).
 * Dev cards — hand (omniscient) + played, in 5 columns matching the

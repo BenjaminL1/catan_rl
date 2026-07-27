@@ -8,7 +8,7 @@ otherwise fully decoupled — the JSON schema is the only contract.
 Schema layout (top level)::
 
     {
-      "schema_version": 1,
+      "schema_version": 2,
       "metadata": { ... },
       "board_static": { ... },
       "steps": [ {...}, {...}, ... ]
@@ -24,7 +24,8 @@ Per-step (``ReplayStep``)::
       "actions": [ {"kind": "...", "args": {...}}, ... ],
       "events":  [ {"kind": "...", ...}, ... ],
       "log_lines": ["...", "..."],
-      "state_after": { ... }
+      "state_after": { ... },
+      "policy_internals": [ {...}, ... ]      # v2, may be []
     }
 
 The discriminator key on every event variant is **``kind``**, not
@@ -50,7 +51,12 @@ from typing import Any, ClassVar, Literal
 #: :mod:`catan_rl.replay.migrations` at the same time. Named
 #: ``REPLAY_SCHEMA_VERSION`` (not ``SCHEMA_VERSION``) so it doesn't
 #: collide with :data:`catan_rl.checkpoint.SCHEMA_VERSION`.
-REPLAY_SCHEMA_VERSION = 1
+#:
+#: v1 → v2 (2026-07-27): added the optional ``ReplayStep.policy_internals``
+#: list and the ``Metadata`` provenance flags (``mode`` / ``sims`` /
+#: ``clairvoyant`` / ``reveal_bot``). Both default to empty/False, so the
+#: v1 → v2 migration in :mod:`catan_rl.replay.migrations` is a no-op bump.
+REPLAY_SCHEMA_VERSION = 2
 
 
 class ReplaySchemaError(RuntimeError):
@@ -90,7 +96,13 @@ STATE_DEV_CARD_ORDER: tuple[str, ...] = (
 class PlayerSpec:
     """Identity of one of the two players in this game."""
 
-    kind: Literal["random", "heuristic", "policy"]
+    kind: Literal["random", "heuristic", "policy", "human"]
+    """``"human"`` marks a seat played by a person through the GUI
+    harness (``scripts/play_vs_model.py``). It is NOT constructible as
+    an actor — :func:`catan_rl.replay.player_factory.build_actor`
+    rejects it — but it must be a legal *record* value so a human game
+    is never mislabelled as ``"heuristic"``."""
+
     ckpt_path: str | None
     """Filesystem path to the checkpoint file when ``kind="policy"``;
     ``None`` for random/heuristic players."""
@@ -447,6 +459,63 @@ class StepStateSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyInternals:
+    """What the policy was weighing at ONE decision (v2).
+
+    Recorded only for steps a neural policy chose; human / heuristic /
+    random steps carry none. Every value is a plain Python ``int`` /
+    ``float`` / ``bool`` — tensors are converted at the capture
+    boundary so the viewer's no-torch import contract holds.
+
+    **Interpretation warning.** ``type_probs`` is a 13-way softmax over
+    action TYPES. At most steps it reads roughly ``0.97 END_TURN``; it
+    is a hypothesis generator for contested decisions (build-vs-trade,
+    robber placement), never a verdict, and the policy grading its own
+    homework is a known failure mode."""
+
+    type_mask: tuple[bool, ...]
+    """Legality of each of the 13 action types at this decision."""
+
+    type_probs: tuple[float, ...]
+    """DENSE masked-softmax probabilities over the 13 action types."""
+
+    chosen_action: tuple[int, ...]
+    """The sampled 6-tuple ``[type, corner, edge, tile, res1, res2]``."""
+
+    value: float
+    """The value head's scalar estimate for the pre-action state."""
+
+    corner_top: tuple[tuple[int, float], ...] = ()
+    """``(index, prob)`` pairs for the TOP-8 corner-head entries only.
+    Dense 54/72/19 distributions roughly double the file for no human-
+    review value, so the pointer heads are truncated.
+
+    EMPTY when the chosen action type does not consult this head (per
+    ``MultiActionHeads.head_relevance``): an ``END_TURN`` never looked
+    at a corner, and its all-False mask would otherwise be recorded as
+    ``masked_log_softmax``'s uniform safe fallback — pure noise wearing
+    the shape of an opinion. Empty means "not consulted", NOT
+    "undecided"."""
+
+    edge_top: tuple[tuple[int, float], ...] = ()
+    tile_top: tuple[tuple[int, float], ...] = ()
+
+    res1_probs: tuple[float, ...] = ()
+    """DENSE 5-wide masked-softmax over the FIRST resource argument
+    (Charlesworth order) — the card given / taken / monopolised /
+    discarded. Only 5 floats, so no truncation. Empty unless the type
+    consults it (YoP, Monopoly, BankTrade, Discard)."""
+
+    res2_probs: tuple[float, ...] = ()
+    """DENSE 5-wide masked-softmax over the SECOND resource argument
+    (YoP's 2nd card, BankTrade's receive). Empty for every other type."""
+
+    belief_logits: tuple[float, ...] | None = None
+    """Raw aux belief-head logits over the opponent's hidden dev-card
+    types, or ``None`` when the policy has no belief head."""
+
+
+@dataclass(frozen=True, slots=True)
 class ReplayStep:
     """One step of the replay — corresponds to one player turn under
     the agreed step semantics (see module docstring for details)."""
@@ -459,6 +528,12 @@ class ReplayStep:
     events: tuple[StepEvent, ...]
     log_lines: tuple[str, ...]
     state_after: StepStateSnapshot
+
+    policy_internals: tuple[PolicyInternals, ...] = ()
+    """v2, optional. Empty for every step not chosen by a neural policy
+    (human, heuristic, random, and any policy step recorded before the
+    capture landed). Appended LAST so v1 positional construction of
+    :class:`ReplayStep` is unchanged."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -492,6 +567,25 @@ class Metadata:
     """``True`` if the recorder bailed out mid-game (e.g., crash).
     Currently always ``False`` because the recorder writes only at
     end-of-game; reserved for a future incremental-write mode."""
+
+    mode: str = "raw_policy"
+    """v2. ``"raw_policy"`` or ``"search"`` — how the policy seat chose
+    its moves."""
+
+    sims: int | None = None
+    """v2. MCTS sims/move when ``mode == "search"``; ``None`` otherwise."""
+
+    clairvoyant: bool = False
+    """v2. ``True`` when the mover had access to information a real
+    opponent would not. The deployed determinized search deep-copies the
+    env, so its simulated worlds share the opponent's true hidden dev
+    cards AND the true future dice — a game recorded with
+    ``clairvoyant=True`` is NOT a valid strength read."""
+
+    reveal_bot: bool = False
+    """v2. ``True`` when the human could see the policy's full hand
+    (``play_vs_model.py --reveal-bot``). Also not a valid strength read;
+    recorded so a revealed analysis game can never be misfiled as one."""
 
 
 @dataclass(frozen=True, slots=True)

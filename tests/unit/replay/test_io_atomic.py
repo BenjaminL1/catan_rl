@@ -427,4 +427,6 @@ class TestMigrationChainOnRead:
 
         register_migration(0, v0_to_v1)
         loaded = load_replay(path, strict=True)
-        assert loaded.schema_version == 1
+        # The chain continues through the production v1 -> v2 no-op, so the
+        # loaded replay lands on the CURRENT version, not on v1.
+        assert loaded.schema_version == REPLAY_SCHEMA_VERSION

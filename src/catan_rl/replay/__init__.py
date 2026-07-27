@@ -52,6 +52,7 @@ from catan_rl.replay.schema import (
     Monopoly,
     PlayerSpec,
     PlayerStateSnapshot,
+    PolicyInternals,
     PortStatic,
     Replay,
     ReplaySchemaError,
@@ -71,7 +72,12 @@ from catan_rl.replay.schema import (
 # ``__getattr__`` below. The names appear in ``__all__`` so static
 # tools still see them, but the actual module import is deferred.
 if TYPE_CHECKING:
-    from catan_rl.replay.player_factory import Actor, PlayerKind, build_actor
+    from catan_rl.replay.player_factory import (
+        Actor,
+        HumanPlayerNotActorError,
+        PlayerKind,
+        build_actor,
+    )
     from catan_rl.replay.player_factory import PlayerSpec as RecorderPlayerSpec
     from catan_rl.replay.recorder import (
         EventCollector,
@@ -82,11 +88,21 @@ if TYPE_CHECKING:
         split_burst_two_placements,
         synthesize_intermediate_setup_snapshot,
     )
-    from catan_rl.replay.recorder_loop import record_game
+    from catan_rl.replay.recorder_loop import (
+        consume_main_event_block,
+        record_game,
+        setup_steps_seat_0,
+        setup_steps_seat_1,
+        split_at_setup_complete,
+    )
 
 # Map of lazy attribute name → (module path, attribute name in that module).
 _LAZY_ATTRS: dict[str, tuple[str, str]] = {
     "Actor": ("catan_rl.replay.player_factory", "Actor"),
+    "HumanPlayerNotActorError": (
+        "catan_rl.replay.player_factory",
+        "HumanPlayerNotActorError",
+    ),
     "PlayerKind": ("catan_rl.replay.player_factory", "PlayerKind"),
     "RecorderPlayerSpec": ("catan_rl.replay.player_factory", "PlayerSpec"),
     "build_actor": ("catan_rl.replay.player_factory", "build_actor"),
@@ -107,6 +123,16 @@ _LAZY_ATTRS: dict[str, tuple[str, str]] = {
         "synthesize_intermediate_setup_snapshot",
     ),
     "record_game": ("catan_rl.replay.recorder_loop", "record_game"),
+    "consume_main_event_block": (
+        "catan_rl.replay.recorder_loop",
+        "consume_main_event_block",
+    ),
+    "split_at_setup_complete": (
+        "catan_rl.replay.recorder_loop",
+        "split_at_setup_complete",
+    ),
+    "setup_steps_seat_0": ("catan_rl.replay.recorder_loop", "setup_steps_seat_0"),
+    "setup_steps_seat_1": ("catan_rl.replay.recorder_loop", "setup_steps_seat_1"),
 }
 
 
@@ -140,6 +166,7 @@ __all__ = [
     "EventCollector",
     "GameEnd",
     "HexStatic",
+    "HumanPlayerNotActorError",
     "LargestArmyChange",
     "LongestRoadChange",
     "Metadata",
@@ -148,6 +175,7 @@ __all__ = [
     "PlayerKind",
     "PlayerSpec",
     "PlayerStateSnapshot",
+    "PolicyInternals",
     "PortStatic",
     "RecorderPlayerSpec",
     "Replay",
@@ -163,6 +191,7 @@ __all__ = [
     "apply_migrations",
     "build_actor",
     "classify_step_events",
+    "consume_main_event_block",
     "event_from_dict",
     "event_to_dict",
     "extract_sub_actions",
@@ -171,7 +200,10 @@ __all__ = [
     "register_migration",
     "registered_versions",
     "save_replay",
+    "setup_steps_seat_0",
+    "setup_steps_seat_1",
     "snapshot_step_state",
+    "split_at_setup_complete",
     "split_burst_one_placement",
     "split_burst_two_placements",
     "synthesize_intermediate_setup_snapshot",
