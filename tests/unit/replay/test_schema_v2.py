@@ -40,6 +40,8 @@ def _internals(seed: int = 0) -> PolicyInternals:
         corner_top=((17, 0.6), (18, 0.4)),
         edge_top=((2, 1.0),),
         tile_top=((9, 0.5), (10, 0.5)),
+        res1_probs=(0.5, 0.5, 0.0, 0.0, 0.0),
+        res2_probs=(0.0, 0.0, 1.0, 0.0, 0.0),
         belief_logits=(0.1, -0.2, 0.3, 0.0),
     )
 

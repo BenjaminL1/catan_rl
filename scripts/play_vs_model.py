@@ -556,6 +556,15 @@ def capture_policy_internals(actor: Any, obs: Any, masks: Any, action: np.ndarra
     distributions are deterministic given the obs + masks, so re-running the
     forward cannot disagree with it.
 
+    **Only the heads the chosen type actually CONSULTS are stored.** The
+    per-type relevance table (``MultiActionHeads.head_relevance``) is the same
+    one PPO weights the joint log-prob with: on ``END_TURN`` the corner / edge /
+    tile / resource heads contribute nothing, their masks are all-False, and
+    ``masked_log_softmax`` deliberately returns the UNIFORM safe fallback
+    (``heads.py``) — so recording them would attach a confident-looking pointer
+    distribution to a decision that never looked at a pointer. An empty tuple
+    means "this head was irrelevant here", never "the policy was undecided".
+
     Every value is converted to a plain Python float/int/bool: the replay
     schema and IO must stay torch-free (the viewer imports them).
     """
@@ -591,25 +600,53 @@ def capture_policy_internals(actor: Any, obs: Any, masks: Any, action: np.ndarra
         # chosen — that is the branch whose sub-argument distribution is
         # meaningful for review.
         type_idx = torch.as_tensor([int(action[0])], dtype=torch.int64, device=device)
-        corner_ctx = heads._corner_context(type_idx, out.get("_is_setup"))
-        corner_logits = heads.corner_head(trunk, out["_node_v"], corner_ctx)
-        corner_mask = heads._corner_mask(type_idx, masks_t)
-        corner_probs = masked_log_softmax(corner_logits, corner_mask).exp()[0]
-        edge_probs = masked_log_softmax(
-            heads.edge_head(trunk, out["_node_e"]), masks_t["edge"]
-        ).exp()[0]
-        tile_probs = masked_log_softmax(
-            heads.tile_head(trunk, out["_node_h"]), masks_t["tile"]
-        ).exp()[0]
+        # Which of the 6 heads this type actually consults — the SAME table PPO
+        # weights the joint log-prob with. Irrelevant heads are skipped entirely
+        # (their masks are all-False and would yield a uniform safe fallback).
+        relevance = heads.head_relevance[type_idx][0]
+        corner_top: tuple[tuple[int, float], ...] = ()
+        edge_top: tuple[tuple[int, float], ...] = ()
+        tile_top: tuple[tuple[int, float], ...] = ()
+        res1_probs: tuple[float, ...] = ()
+        res2_probs: tuple[float, ...] = ()
+        if relevance[1] > 0:
+            corner_ctx = heads._corner_context(type_idx, out.get("_is_setup"))
+            corner_logits = heads.corner_head(trunk, out["_node_v"], corner_ctx)
+            corner_mask = heads._corner_mask(type_idx, masks_t)
+            corner_top = _top_k_pairs(masked_log_softmax(corner_logits, corner_mask).exp()[0])
+        if relevance[2] > 0:
+            edge_top = _top_k_pairs(
+                masked_log_softmax(heads.edge_head(trunk, out["_node_e"]), masks_t["edge"]).exp()[0]
+            )
+        if relevance[3] > 0:
+            tile_top = _top_k_pairs(
+                masked_log_softmax(heads.tile_head(trunk, out["_node_h"]), masks_t["tile"]).exp()[0]
+            )
+        # The resource heads are only 5 wide, so they are stored DENSELY (~10
+        # floats) — a BankTrade / Monopoly / YoP / Discard is unreadable without
+        # the argument it was weighing.
+        res1_idx = torch.as_tensor([int(action[4])], dtype=torch.int64, device=device)
+        if relevance[4] > 0:
+            res1_logits = heads.resource1_head(trunk, heads._resource1_context(type_idx))
+            res1_lp = masked_log_softmax(res1_logits, heads._resource1_mask(type_idx, masks_t))
+            res1_probs = tuple(float(x) for x in res1_lp.exp()[0].tolist())
+        if relevance[5] > 0:
+            res2_logits = heads.resource2_head(trunk, heads._resource2_context(type_idx, res1_idx))
+            res2_lp = masked_log_softmax(
+                res2_logits, heads._resource2_mask(type_idx, res1_idx, masks_t)
+            )
+            res2_probs = tuple(float(x) for x in res2_lp.exp()[0].tolist())
         belief = out.get("belief_logits")
         return PolicyInternals(
             type_mask=tuple(bool(b) for b in np.asarray(masks["type"]).reshape(-1)),
             type_probs=tuple(float(x) for x in type_probs.tolist()),
             chosen_action=tuple(int(x) for x in action),
             value=float(out["value"].reshape(-1)[0].item()),
-            corner_top=_top_k_pairs(corner_probs),
-            edge_top=_top_k_pairs(edge_probs),
-            tile_top=_top_k_pairs(tile_probs),
+            corner_top=corner_top,
+            edge_top=edge_top,
+            tile_top=tile_top,
+            res1_probs=res1_probs,
+            res2_probs=res2_probs,
             belief_logits=(
                 None if belief is None else tuple(float(x) for x in belief.reshape(-1).tolist())
             ),
@@ -668,11 +705,40 @@ def _describe_bot_move(action: Sequence[int] | np.ndarray) -> str:
 # ---------------------------------------------------------------------------
 
 
-class _DetachedRecorder:
-    """Inert stand-in a search clone gets instead of the real recorder."""
+class _DetachedSubscriber:
+    """Inert broadcast subscriber a search clone gets instead of the real one.
 
-    def _on_event(self, event: dict) -> None:
+    Callable, and does nothing: events emitted inside a throwaway MCTS world
+    land here and never reach the record."""
+
+    def __call__(self, event: dict[str, Any]) -> None:
         return None
+
+
+class _RecorderSubscriber:
+    """Broadcast subscriber that refuses to be cloned.
+
+    A BOUND METHOD cannot carry this guard. ``copy._deepcopy_method`` rebuilds
+    it as ``MethodType(x.__func__, deepcopy(x.__self__))`` — it keeps the
+    ORIGINAL function and only swaps the instance — so a ``__deepcopy__`` on the
+    recorder itself would hand the clone ``_HumanGameRecorder.on_event`` bound
+    to a stand-in that has none of its attributes, and the FIRST broadcast
+    inside any MCTS simulation would raise ``AttributeError``. A standalone
+    callable object IS routed through its own ``__deepcopy__``, so the clone
+    gets an inert stand-in instead — and the recorder, unreachable from the env
+    by any other path, is never deep-copied (its ``steps`` list would otherwise
+    be copied once per simulation, at 400 sims/move)."""
+
+    def __init__(self, recorder: _HumanGameRecorder) -> None:
+        self._recorder = recorder
+
+    def __call__(self, event: dict[str, Any]) -> None:
+        self._recorder.on_event(event)
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        detached = _DetachedSubscriber()
+        memo[id(self)] = detached
+        return detached
 
 
 class _HumanGameRecorder:
@@ -712,6 +778,12 @@ class _HumanGameRecorder:
       class the reviewer wants to inspect, and the class an offline "legal vs
       chosen" query needs. A DECISION-ONLY step (no actions, no events,
       ``state_after`` = end of this ``env.step``) is emitted for them instead.
+    * **An empty pointer/resource distribution means "not consulted".** Only
+      the heads the chosen action type actually uses are stored (per
+      ``MultiActionHeads.head_relevance``): an ``END_TURN`` carries no
+      ``corner_top`` / ``edge_top`` / ``tile_top`` / ``res*_probs`` at all,
+      because its masks are all-False and ``masked_log_softmax`` would hand
+      back the uniform safe fallback — noise wearing the shape of an opinion.
     * **Under ``--search`` no internals are captured at all.** ``SearchAgent``
       exposes no per-decision distribution, so every step carries an empty
       tuple; ``metadata.mode == "search"`` is what marks that record as
@@ -739,7 +811,10 @@ class _HumanGameRecorder:
         self._collector = EventCollector()
         self._collector.subscribe(env.game.broadcast)
         self._setup_complete_snaps: list[Any] = []
-        env.game.broadcast.subscribe(self._on_event)
+        # NOT ``self.on_event``: a bound method survives ``deepcopy`` as the
+        # original function rebound to a copy of this recorder, which would put
+        # the whole record inside every MCTS clone. See _RecorderSubscriber.
+        env.game.broadcast.subscribe(_RecorderSubscriber(self))
 
         # Snapshot right after reset. When the HUMAN drafts first the env has
         # already placed their first settlement inside reset(); those events are
@@ -759,21 +834,11 @@ class _HumanGameRecorder:
         self.n_bot_decisions = 0
         self.n_internals_recorded = 0
 
-    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
-        """Never clone the record itself.
-
-        Both broadcast subscribers are BOUND METHODS of this recorder, so
-        ``mcts.clone_env`` -> ``deepcopy(env)`` -> ``game.broadcast`` would copy
-        the whole accumulated ``steps`` list once per simulation (O(len(steps))
-        per sim, at 400 sims/move). A search clone is a throwaway world whose
-        events must never enter the record, so it gets an inert stand-in."""
-        detached = _DetachedRecorder()
-        memo[id(self)] = detached
-        return detached
-
     # -- plumbing ----------------------------------------------------------
 
-    def _on_event(self, event: dict) -> None:
+    def on_event(self, event: dict) -> None:
+        """Broadcast callback. Invoked through :class:`_RecorderSubscriber`,
+        never subscribed directly — see that class for why."""
         if event.get("type") == self._setup_complete_type:
             self._setup_complete_snaps.append(self._snap_now())
 

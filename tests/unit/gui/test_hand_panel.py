@@ -1,18 +1,29 @@
-"""Leak pins for the opponent hand panel (``gui/view.hand_panel_lines``).
+"""Leak pins for the opponent hand panel (``gui/view.hand_panel_lines``) and
+for the on-screen broadcast banner (``gui/view.broadcast_message``).
 
 Every human-vs-policy game played while the bot's FULL hand was rendered on
 screen is uninterpretable as a strength read, so the blind default is pinned
 here rather than left to the harness.
 
-``hand_panel_lines`` is deliberately pygame-free and duck-typed, so these tests
-need neither a display nor a real engine ``player``.
+``hand_panel_lines`` and ``broadcast_message`` are deliberately pygame-free and
+duck-typed, so most of these tests need neither a display nor a real engine
+``player``. ``TestPanelRendering`` is the exception: it boots a headless dummy
+surface to exercise the box-sizing path in ``_draw_hand_panel``, which the pure
+line tests cannot reach.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
-from catan_rl.gui.view import hand_panel_lines
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
+from catan_rl.gui.view import (
+    broadcast_message,
+    catanGameView,
+    hand_panel_lines,
+)
 
 _RESOURCE_NAMES = ("WOOD", "BRICK", "WHEAT", "ORE", "SHEEP")
 _DEV_TYPE_LABELS = ("Knight", "VP", "Mono", "RB", "YOP")
@@ -90,3 +101,82 @@ class TestRevealedPanel:
     def test_reveal_is_the_default(self) -> None:
         # ``_draw_hand_panel`` relies on this default for a player's OWN hand.
         assert hand_panel_lines(_FakePlayer()) == hand_panel_lines(_FakePlayer(), reveal=True)
+
+
+class TestBroadcastBanner:
+    """The banner is the SECOND on-screen channel carrying resource types.
+
+    ``DISCARD`` fires once per discarded card on every 7 where the bot holds
+    >9 cards, and ``displayGameScreen`` renders the last event unconditionally
+    — so without a blind gate the human reads the bot's discarded types one by
+    one, the same leak the blind panel closes."""
+
+    def test_bot_discard_shows_a_count_not_the_types(self) -> None:
+        text, _color = broadcast_message(
+            {"type": "DISCARD", "player": "Agent", "resources": ["ORE", "WHEAT"]},
+            blind_player="Agent",
+        )
+        assert "ORE" not in text and "WHEAT" not in text
+        assert "2 card(s)" in text
+
+    def test_bot_yop_shows_a_count_not_the_types(self) -> None:
+        text, _color = broadcast_message(
+            {"type": "YOP", "player": "Agent", "resources": ["ORE", "ORE"]},
+            blind_player="Agent",
+        )
+        assert "ORE" not in text
+        assert "2 card(s)" in text
+
+    def test_the_humans_own_discard_is_unchanged(self) -> None:
+        text, _color = broadcast_message(
+            {"type": "DISCARD", "player": "Opponent", "resources": ["ORE"]},
+            blind_player="Agent",
+        )
+        assert "ORE" in text
+
+    def test_no_blind_player_keeps_the_engine_message(self) -> None:
+        # engine playCatan sets no bot_player -> nothing is hidden from anyone.
+        text, _color = broadcast_message(
+            {"type": "DISCARD", "player": "Agent", "resources": ["ORE"]}
+        )
+        assert "ORE" in text
+
+    def test_display_names_and_dice_still_work(self) -> None:
+        text, _color = broadcast_message(
+            {"type": "DICE_ROLL", "player": "Agent", "value": 8},
+            name_display={"Agent": "Bot"},
+            blind_player="Agent",
+        )
+        assert text == "Dice: Bot rolled 8"
+
+    def test_unknown_event_renders_nothing(self) -> None:
+        assert broadcast_message({"type": "BUILD", "player": "Agent"}) is None
+
+
+class TestPanelRendering:
+    """The box-sizing path (``panel_lines = len(lines) + 2``) is the only part
+    of the blind panel the pure line tests cannot reach: the blind panel has 5
+    lines where the revealed one has 12, so the backdrop must shrink with it."""
+
+    def _view(self):  # type: ignore[no-untyped-def]
+        import pygame
+
+        pygame.init()
+        pygame.display.set_mode((320, 240))
+        view = catanGameView.__new__(catanGameView)
+        view.screen = pygame.display.get_surface()
+        view.font_resource = pygame.font.SysFont("cambria", 15)
+        return view
+
+    def test_blind_and_revealed_panels_both_render(self) -> None:
+        view = self._view()
+        player = _FakePlayer()
+        # No assertion on pixels (font rendering is platform-dependent); this
+        # pins that the sizing arithmetic and the blit calls actually run.
+        view._draw_hand_panel(player, 20, 20, "Bot — HAND", reveal=False)
+        view._draw_hand_panel(player, 20, 140, "YOUR HAND", reveal=True)
+
+    def test_the_blind_backdrop_is_shorter_than_the_revealed_one(self) -> None:
+        blind = len(hand_panel_lines(_FakePlayer(), reveal=False)) + 2
+        revealed = len(hand_panel_lines(_FakePlayer(), reveal=True)) + 2
+        assert blind < revealed

@@ -104,6 +104,8 @@ def _replay_to_dict(replay: Replay) -> dict[str, Any]:
             "corner_top": [[int(i), float(x)] for i, x in p.corner_top],
             "edge_top": [[int(i), float(x)] for i, x in p.edge_top],
             "tile_top": [[int(i), float(x)] for i, x in p.tile_top],
+            "res1_probs": [float(x) for x in p.res1_probs],
+            "res2_probs": [float(x) for x in p.res2_probs],
             "belief_logits": (
                 None if p.belief_logits is None else [float(x) for x in p.belief_logits]
             ),
@@ -325,6 +327,8 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             corner_top=tuple((int(i), float(x)) for i, x in d.get("corner_top", ())),
             edge_top=tuple((int(i), float(x)) for i, x in d.get("edge_top", ())),
             tile_top=tuple((int(i), float(x)) for i, x in d.get("tile_top", ())),
+            res1_probs=tuple(float(x) for x in d.get("res1_probs", ())),
+            res2_probs=tuple(float(x) for x in d.get("res2_probs", ())),
             belief_logits=None if belief is None else tuple(float(x) for x in belief),
         )
 

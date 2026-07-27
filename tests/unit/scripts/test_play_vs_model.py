@@ -140,3 +140,111 @@ class TestPolicyInternals:
             assert type(b) is bool
         # np scalars are float subclasses in some versions — pin explicitly.
         assert not any(isinstance(x, np.generic) for x in flat)
+
+
+class TestRelevanceGatedHeads:
+    """Only the heads the chosen TYPE consults may be recorded.
+
+    When a head is irrelevant its mask is all-False and
+    ``masked_log_softmax`` returns the uniform safe fallback — so recording it
+    stores 1/54 across every corner and dresses noise up as an opinion."""
+
+    def test_irrelevant_heads_are_empty_for_end_turn(self) -> None:
+        torch = pytest.importorskip("torch")
+        from catan_rl.env.catan_env import ActionType, CatanEnv
+        from catan_rl.policy.board_geometry import build_geometry
+        from catan_rl.policy.network import CatanPolicy
+        from catan_rl.replay.player_factory import _PolicyActor
+
+        mod = _load_module()
+        policy = CatanPolicy()
+        policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+        policy.eval()
+        actor = _PolicyActor(
+            kind="policy", ckpt_path="<fresh>", policy=policy, device=torch.device("cpu")
+        )
+        env = CatanEnv(opponent_type="heuristic", max_turns=50)
+        obs, _info = env.reset(seed=3, options={"agent_seat": 0})
+        masks = env.get_action_masks()
+        # END_TURN consults NO pointer head and NO resource head.
+        action = np.array([int(ActionType.END_TURN), 0, 0, 0, 0, 0], dtype=np.int64)
+        internals = mod.capture_policy_internals(actor, obs, masks, action)
+        assert internals.corner_top == ()
+        assert internals.edge_top == ()
+        assert internals.tile_top == ()
+        assert internals.res1_probs == ()
+        assert internals.res2_probs == ()
+        # The type distribution is always relevant and stays dense.
+        assert len(internals.type_probs) == 13
+
+    def test_bank_trade_records_both_resource_arguments(self) -> None:
+        torch = pytest.importorskip("torch")
+        from catan_rl.env.catan_env import ActionType, CatanEnv
+        from catan_rl.policy.board_geometry import build_geometry
+        from catan_rl.policy.network import CatanPolicy
+        from catan_rl.replay.player_factory import _PolicyActor
+
+        mod = _load_module()
+        policy = CatanPolicy()
+        policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+        policy.eval()
+        actor = _PolicyActor(
+            kind="policy", ckpt_path="<fresh>", policy=policy, device=torch.device("cpu")
+        )
+        env = CatanEnv(opponent_type="heuristic", max_turns=50)
+        obs, _info = env.reset(seed=3, options={"agent_seat": 0})
+        masks = env.get_action_masks()
+        action = np.array([int(ActionType.BANK_TRADE), 0, 0, 0, 0, 1], dtype=np.int64)
+        internals = mod.capture_policy_internals(actor, obs, masks, action)
+        # "gave 0.62 to BankTrade" is unreadable without the give/get weights.
+        assert len(internals.res1_probs) == 5
+        assert len(internals.res2_probs) == 5
+        assert all(type(x) is float for x in internals.res1_probs + internals.res2_probs)
+        assert internals.corner_top == ()
+
+
+class TestRecorderIsNeverCloned:
+    """``--search`` deep-copies the live env once per MCTS simulation.
+
+    A bound method cannot carry a ``__deepcopy__`` guard (``copy`` rebuilds it
+    as the ORIGINAL function bound to a copied instance), so the recorder
+    subscribes a standalone callable that returns an inert stand-in. Without
+    it the first broadcast inside any clone raised ``AttributeError`` and
+    ``python scripts/play_vs_model.py --search`` aborted mid-game."""
+
+    def _env_and_recorder(self):  # type: ignore[no-untyped-def]
+        pytest.importorskip("torch")
+        from catan_rl.env.catan_env import CatanEnv
+
+        mod = _load_module()
+        env = CatanEnv(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=5, options={"agent_seat": 0})
+        return mod, env, mod._HumanGameRecorder(env, bot_seat=0)
+
+    def test_a_clone_emits_without_touching_the_recorder(self) -> None:
+        import copy
+
+        _mod, env, recorder = self._env_and_recorder()
+        clone = copy.deepcopy(env)
+        before = len(recorder._setup_complete_snaps)
+        # Any broadcast inside a simulated world must be a no-op for the record.
+        clone.game.broadcast.dice_roll("Agent", 8)
+        clone.game.broadcast.emit(recorder._setup_complete_type)
+        assert len(recorder._setup_complete_snaps) == before
+        assert recorder.steps == []
+
+    def test_the_clone_gets_an_inert_subscriber(self) -> None:
+        import copy
+
+        mod, env, recorder = self._env_and_recorder()
+        clone = copy.deepcopy(env)
+        subs = clone.game.broadcast._subscribers
+        assert any(isinstance(s, mod._DetachedSubscriber) for s in subs)
+        # The real recorder must not be reachable from the clone at all.
+        assert not any(getattr(s, "__self__", None) is recorder for s in subs)
+
+    def test_the_live_recorder_still_sees_events(self) -> None:
+        _mod, env, recorder = self._env_and_recorder()
+        before = len(recorder._setup_complete_snaps)
+        env.game.broadcast.emit(recorder._setup_complete_type)
+        assert len(recorder._setup_complete_snaps) == before + 1

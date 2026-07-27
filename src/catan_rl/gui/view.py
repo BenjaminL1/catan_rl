@@ -64,6 +64,38 @@ def hand_panel_lines(player, *, reveal: bool = True) -> list[str]:
     return lines
 
 
+def broadcast_message(event, *, name_display=None, blind_player=None):
+    """Return ``(text, rgb)`` for the last broadcast event, or ``None``.
+
+    Pure (no pygame): :meth:`catanGameView.displayBroadcastMessage` only draws
+    the result.
+
+    ``blind_player`` is the RAW ``player.name`` whose resource TYPES must stay
+    hidden (the bot, unless ``--reveal-bot``). ``DISCARD`` / ``YOP`` name the
+    exact cards leaving or entering a hand, which is the same leak the blind
+    hand panel exists to close — so for that player the banner reports a COUNT
+    instead. ``None`` (the engine's own ``playCatan``, and any revealed
+    session) keeps the full, unchanged message for everyone.
+    """
+    name_display = name_display or {}
+    event_type = event.get("type", "")
+    raw_name = event.get("player", "")
+    player_name = name_display.get(raw_name, raw_name)
+    blind = blind_player is not None and raw_name == blind_player
+
+    if event_type == "DICE_ROLL":
+        return f"Dice: {player_name} rolled {event.get('value', 0)}", (0, 0, 0)
+    if event_type == "DISCARD":
+        resources = event.get("resources", [])
+        shown = f"{len(resources)} card(s)" if blind else f"{resources}"
+        return f"DISCARD: {player_name} lost {shown}", (255, 0, 0)
+    if event_type == "YOP":
+        resources = event.get("resources", [])
+        shown = f"{len(resources)} card(s)" if blind else f"{resources}"
+        return f"YOP: {player_name} gained {shown}", (0, 100, 0)
+    return None
+
+
 # Class to handle catan board display
 
 
@@ -469,27 +501,15 @@ class catanGameView:
         """Display the last broadcast event on the screen"""
         if not self.game.last_broadcast_event:
             return
-        event = self.game.last_broadcast_event
-        event_type = event.get("type", "")
-        player_name = event.get("player", "")
-        player_name = self.name_display.get(player_name, player_name)
-
-        msg_text = ""
-        text_color = (0, 0, 0)
-
-        if event_type == "DICE_ROLL":
-            value = event.get("value", 0)
-            msg_text = f"Dice: {player_name} rolled {value}"
-        elif event_type == "DISCARD":
-            resources = event.get("resources", [])
-            msg_text = f"DISCARD: {player_name} lost {resources}"
-            text_color = (255, 0, 0)  # Red
-        elif event_type == "YOP":
-            resources = event.get("resources", [])
-            msg_text = f"YOP: {player_name} gained {resources}"
-            text_color = (0, 100, 0)  # Dark Green
-
-        if msg_text:
+        rendered = broadcast_message(
+            self.game.last_broadcast_event,
+            name_display=self.name_display,
+            blind_player=(
+                None if (self.bot_player is None or self.reveal_bot) else self.bot_player.name
+            ),
+        )
+        if rendered is not None:
+            msg_text, text_color = rendered
             text_surface = self.font_broadcast.render(msg_text, True, text_color)
             text_rect = text_surface.get_rect(center=(self.board.width // 2, 60))
             bg_rect = text_rect.inflate(20, 10)

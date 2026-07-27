@@ -789,7 +789,10 @@ def consume_main_event_block(
 ) -> tuple[list[ReplayStep], StepStateSnapshot, int]:
     """Turn a stream of main-phase broadcast events from a single
     env.step (or a residual buffer) into one or more :class:`ReplayStep`
-    instances, partitioned by per-actor DICE_ROLL boundaries.
+    instances, partitioned by ACTING SEAT — see
+    :func:`_partition_main_events_by_actor`: a ``DICE_ROLL`` opens a new
+    group, but so does any other event naming a different actor (which
+    is what keeps a PRE-ROLL knight with the player who played it).
 
     The state_after for each emitted ReplayStep is ``post_snap`` — the
     granularity of the engine's snapshot accessor only resolves at
@@ -1040,8 +1043,9 @@ def record_game(
         post_snap = _snap_now()
         raw_events = event_collector.drain()
 
-        # Partition events by actor (DICE_ROLL boundaries). The
-        # agent always acts first, so initial_actor is the agent.
+        # Partition events by ACTING SEAT (a DICE_ROLL opens a group, and
+        # so does any event naming another actor). The agent always acts
+        # first, so initial_actor is the agent.
         new_steps, last_snap, main_step_idx = consume_main_event_block(
             raw_events=raw_events,
             prev_snap=prev_snap,

@@ -488,10 +488,27 @@ class PolicyInternals:
     corner_top: tuple[tuple[int, float], ...] = ()
     """``(index, prob)`` pairs for the TOP-8 corner-head entries only.
     Dense 54/72/19 distributions roughly double the file for no human-
-    review value, so the pointer heads are truncated."""
+    review value, so the pointer heads are truncated.
+
+    EMPTY when the chosen action type does not consult this head (per
+    ``MultiActionHeads.head_relevance``): an ``END_TURN`` never looked
+    at a corner, and its all-False mask would otherwise be recorded as
+    ``masked_log_softmax``'s uniform safe fallback — pure noise wearing
+    the shape of an opinion. Empty means "not consulted", NOT
+    "undecided"."""
 
     edge_top: tuple[tuple[int, float], ...] = ()
     tile_top: tuple[tuple[int, float], ...] = ()
+
+    res1_probs: tuple[float, ...] = ()
+    """DENSE 5-wide masked-softmax over the FIRST resource argument
+    (Charlesworth order) — the card given / taken / monopolised /
+    discarded. Only 5 floats, so no truncation. Empty unless the type
+    consults it (YoP, Monopoly, BankTrade, Discard)."""
+
+    res2_probs: tuple[float, ...] = ()
+    """DENSE 5-wide masked-softmax over the SECOND resource argument
+    (YoP's 2nd card, BankTrade's receive). Empty for every other type."""
 
     belief_logits: tuple[float, ...] | None = None
     """Raw aux belief-head logits over the opponent's hidden dev-card
