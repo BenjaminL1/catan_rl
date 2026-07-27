@@ -73,7 +73,7 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
 - `src/catan_rl/selfplay/` — `league.py` (snapshot pool).
 - `src/catan_rl/eval/` — `harness.py` (symmetric-seat WR), `wilson.py`, `rules_invariants.py`.
 - `src/catan_rl/{bc,setup_phase,replay,agents,augmentation,checkpoint,cli}/` — BC, setup pretrain, replay/player_factory, heuristic agent, symmetry aug, checkpoint mgr, CLI entry.
-- `scripts/` — `train.py` (→ `catan_rl.cli.train`), `train_bc.py`, `generate_bc_dataset.py`, `migrate_checkpoint.py`, replay/record tools. (No v1 `evaluate.py`/`play_vs_model.py`.)
+- `scripts/` — `train.py` (→ `catan_rl.cli.train`), `train_bc.py`, `generate_bc_dataset.py`, `migrate_checkpoint.py`, replay/record tools, `play_vs_model.py` (the v2 human-vs-policy GUI harness — bot panel is BLIND unless `--reveal-bot`). (No v1 `evaluate.py`.)
 - `configs/` — `ppo_default.yaml`, `bc.yaml`. `docs/plans/v2/` — current roadmap.
 
 ## Action space (6 autoregressive heads)

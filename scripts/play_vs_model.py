@@ -15,18 +15,30 @@ inflates the number; against a HUMAN the tree is literally reading your hand and
 your next rolls. ``--search`` still exists for bot-vs-bot work and prints a loud
 warning, but any human game played with it is uninterpretable.
 
-Each finished game appends a JSON record (result, VP, and the bot's move list) to
-``runs/human_playtest/games.jsonl`` so playtests accumulate into evidence instead
-of vanishing.
+**The bot's hand is HIDDEN by default.** Its panel shows hand SIZE, unplayed
+dev-card COUNT and VISIBLE VP (``victoryPoints - devCards["VP"]``) — real Catan
+visibility. ``--reveal-bot`` restores the omniscient analysis view and is
+recorded in BOTH logs, because a revealed game is not a strength read.
+
+Each finished game appends a four-field JSON line to
+``runs/human_playtest/games.jsonl`` (its ``bot_vp`` / ``human_vp`` keys stay
+TOTAL VP and are never re-pointed) plus the new ``reveal_bot`` key.
+
+* Every line already in ``games.jsonl`` predates the blind default and was
+  therefore played with the bot's FULL hand on screen. Those lines carry no
+  ``reveal_bot`` key; treat a missing key as ``reveal_bot=true``, not as a
+  clean result. They are NOT rewritten.
+* The binding constraint on this harness is **games played**, not bytes per
+  game. One recorded game is not evidence of anything.
 
 Run it (a display is required for the real game)::
 
-    python scripts/play_vs_v8.py                 # champion, raw policy, logged
+    python scripts/play_vs_model.py                 # champion, raw policy, logged
 
 Headless smoke (no display, no pygame window — auto-plays a legal human move so
 the full turn flow + win detection are exercised end-to-end)::
 
-    python scripts/play_vs_v8.py --self-test
+    python scripts/play_vs_model.py --self-test
 
 ARCHITECTURE (why this shape)
 -----------------------------
@@ -106,6 +118,9 @@ def _build_human_env_class() -> type:
             self._view_factory: Any = None
             # In self-test we have no GUI; auto-pick a legal action for the human.
             self._auto_human: bool = False
+            # Analysis opt-in: show the BOT's full hand in the GUI panel + the
+            # console line. OFF by default — see ``--reveal-bot``.
+            self._reveal_bot: bool = False
 
         def attach_human_view(self, view: Any) -> None:
             self._human_view = view
@@ -129,8 +144,12 @@ def _build_human_env_class() -> type:
                 bot: Any = self.agent_player
                 # The human sits in the opponent seat — show THEIR hand always.
                 self._human_view.human_player = human
-                # The bot sits in the agent seat — show its hand SIZE (counts only).
+                # The bot sits in the agent seat. Its panel is BLIND by default —
+                # hand SIZE, unplayed dev-card COUNT and VISIBLE VP only (real
+                # Catan visibility). ``--reveal-bot`` flips it to the omniscient
+                # analysis view; view.hand_panel_lines owns that distinction.
                 self._human_view.bot_player = bot
+                self._human_view.reveal_bot = self._reveal_bot
                 # Friendly names in the stats panel + broadcast banner.
                 self._human_view.name_display = {human.name: "You", bot.name: "Bot"}
             return self._human_view
@@ -481,7 +500,9 @@ class _RawPolicyAgent:
     def choose_action(self, env: Any) -> np.ndarray:
         # Same pairing the eval harness uses: obs + legal-action masks straight
         # from the live env, sampled by the policy (no tree, no env clone).
-        return self._actor.select_action(env._get_obs(), env.get_action_masks())
+        obs = env._get_obs()
+        masks = env.get_action_masks()
+        return self._actor.select_action(obs, masks)
 
 
 def _load_raw_agent(ckpt: str, seed: int) -> _RawPolicyAgent:
@@ -490,6 +511,16 @@ def _load_raw_agent(ckpt: str, seed: int) -> _RawPolicyAgent:
 
     actor = build_actor(PlayerSpec(kind="policy", ckpt_path=ckpt), seed=seed, device="cpu")
     return _RawPolicyAgent(actor)
+
+
+def _visible_vp(player: Any) -> int:
+    """Publicly VISIBLE victory points: total minus hidden VP cards.
+
+    Mirrors :func:`catan_rl.gui.view.hand_panel_lines` and
+    ``policy/obs_encoder.py``. Deliberately does NOT read
+    ``player.visibleVictoryPoints`` — that cache is stale (refreshed only at
+    init + VP-card buy)."""
+    return int(player.victoryPoints) - int(player.devCards.get("VP", 0))
 
 
 def _describe_bot_move(action: np.ndarray) -> str:
@@ -534,11 +565,17 @@ def play_interactive(
     *,
     use_search: bool = False,
     log_path: str | None = None,
+    reveal_bot: bool = False,
 ) -> None:
     """Run an interactive human-vs-bot game with the pygame GUI.
 
     ``use_search=False`` (the DEFAULT) plays the RAW policy — see
     :class:`_RawPolicyAgent` for why search is not valid against a human.
+
+    ``reveal_bot=False`` (the DEFAULT) keeps the bot's hand HIDDEN — see
+    :func:`catan_rl.gui.view.hand_panel_lines`. Revealing it makes the game an
+    analysis session, not a strength read, so the flag is written into the
+    JSONL record.
     """
     from catan_rl.gui.view import catanGameView as _catanGameView
 
@@ -570,11 +607,17 @@ def play_interactive(
     print("   - Your turn: dice auto-roll; use the on-screen buttons. Click END", flush=True)
     print("     TURN to pass to the bot. The bot then moves.", flush=True)
     print("   - On a 7: discard menu pops up (>9 cards); then move robber + steal.", flush=True)
+    if reveal_bot:
+        print("-" * 70, flush=True)
+        print("  --reveal-bot: the bot's FULL hand is shown. This is an ANALYSIS", flush=True)
+        print("  session, NOT a strength read — recorded as such in both logs.", flush=True)
     print("=" * 70, flush=True)
 
     agent: Any = _load_search_agent(ckpt, sims, seed) if use_search else _load_raw_agent(ckpt, seed)
     move_log: list[dict[str, Any]] = []
     env: Any = HumanVsBotEnv(opponent_type="heuristic", max_turns=400)
+    # Must be set BEFORE reset: reset() can build the view (human drafts first).
+    env._reveal_bot = reveal_bot
     # Register the view builder BEFORE reset. When the human drafts first
     # (bot_seat==1), the env places the human's FIRST settlement inside reset();
     # the lazy factory makes that placement use the GUI instead of auto-picking,
@@ -605,9 +648,14 @@ def play_interactive(
         _obs, _r, terminated, truncated, _info = env.step(action)
         view.displayGameScreen()
         assert env.agent_player is not None and env.opponent_player is not None
+        # The bot's VP-card count is HIDDEN information: print its VISIBLE VP
+        # unless --reveal-bot. Your own total is your own information.
+        bot_vp_label = "Bot VP" if reveal_bot else "Bot visible VP"
+        bot_vp_shown = (
+            int(env.agent_player.victoryPoints) if reveal_bot else _visible_vp(env.agent_player)
+        )
         print(
-            f"  Bot VP={env.agent_player.victoryPoints} | "
-            f"You VP={env.opponent_player.victoryPoints}",
+            f"  {bot_vp_label}={bot_vp_shown} | You VP={env.opponent_player.victoryPoints}",
             flush=True,
         )
         # Replayable record: the bot's action tuple + the VP state after it. The
@@ -639,6 +687,10 @@ def play_interactive(
         print(f"  Game ended (truncated). Bot {bot_vp} - {you_vp} You", flush=True)
     print("=" * 70, flush=True)
 
+    # ---- legacy four-field JSONL (DUAL-WRITE, never rewritten) ------------
+    # ``bot_vp`` / ``human_vp`` stay TOTAL VP: the single most-cited artifact in
+    # the project is this file, and re-pointing an existing key would silently
+    # change the meaning of every line already written. New facts are NEW keys.
     if log_path:
         import json
         import time
@@ -663,6 +715,10 @@ def play_interactive(
             "n_bot_moves": n_steps,
             "truncated": bool(truncated),
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            # New keys (additive). A revealed game is an analysis session, not a
+            # strength read; games recorded before this key existed were played
+            # with the bot's FULL hand on screen and must be read that way.
+            "reveal_bot": bool(reveal_bot),
             "moves": move_log,
         }
         out = Path(log_path)
@@ -778,13 +834,16 @@ def self_test(sims: int, seed: int, *, ckpt: str | None = None) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Play 1v1 Catan as a human vs champion v8 + PUCT-MCTS search.",
+        description=(
+            "Play 1v1 Catan (Colonist.io ruleset) as a human against a v2 policy "
+            "checkpoint. Raw policy by default; the bot's hand is HIDDEN by default."
+        ),
     )
     parser.add_argument(
         "--sims", type=int, default=DEFAULT_SIMS, help="MCTS sims/move (default 400)."
     )
     parser.add_argument(
-        "--ckpt", type=str, default=DEFAULT_CKPT, help="Bot checkpoint (default: champion)."
+        "--ckpt", type=str, default=DEFAULT_CKPT, help=f"Bot checkpoint (default: {DEFAULT_CKPT})."
     )
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (reproducible search).")
     parser.add_argument(
@@ -808,6 +867,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Snake-draft seat for YOU: 0 = you go first (default), 1 = bot first.",
     )
     parser.add_argument(
+        "--reveal-bot",
+        action="store_true",
+        help="Show the bot's FULL hand (resources + hidden dev cards by type + "
+        "VP-card-inclusive VP). OFF by default. A revealed game is an ANALYSIS "
+        "session, not a strength read — the flag is recorded in the JSONL "
+        "record so it can never be misfiled later.",
+    )
+    parser.add_argument(
         "--self-test",
         action="store_true",
         help="Headless smoke (no display): verify load + legal bot moves + a full game.",
@@ -829,6 +896,7 @@ def main(argv: list[str] | None = None) -> int:
         args.human_seat,
         use_search=args.search,
         log_path=args.log or None,
+        reveal_bot=args.reveal_bot,
     )
     return 0
 
