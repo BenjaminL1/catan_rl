@@ -1,0 +1,2906 @@
+{
+  "checkpoint": "/Users/benjaminli/my_projects/catan_rl_v2/runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt",
+  "checkpoint_sha256": "508e5dc9fb6ac5948508023c53f4b24e17d4d2e5694908cfbe9e0f8d21530e37",
+  "checkpoint_caveat": "This is opening_sweep.DEFAULT_CKPT, NOT a banked champion (runs/anchors/*.pt). Port sensitivity is exactly the kind of quantity that can move as the value function matures, so this flip rate is a proxy for the champion's, not a measurement of it.",
+  "invocation": {
+    "argv": [
+      "scripts/port_invariance_probe.py",
+      "--frames-root",
+      "/Users/benjaminli/my_projects/catan_rl_v2/data/human/vlm_spike/frames",
+      "--ckpt",
+      "/Users/benjaminli/my_projects/catan_rl_v2/runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt"
+    ],
+    "frames_root": "/Users/benjaminli/my_projects/catan_rl_v2/data/human/vlm_spike/frames",
+    "corpus": "/Users/benjaminli/my_projects/.catan-rl-v2-veriloop/port-harvest/data/human/corpus/provisional_openings.jsonl",
+    "sidecar": "/Users/benjaminli/my_projects/.catan-rl-v2-veriloop/port-harvest/data/human/ports/harvest.jsonl",
+    "seats": [
+      0,
+      1
+    ]
+  },
+  "boards": 32,
+  "board_seat_cells": 64,
+  "cells_with_real_map": 60,
+  "K": 8,
+  "obs_l1_delta_between_two_port_maps": 24.0,
+  "real_vs_guessed": {
+    "comparisons": 480,
+    "cells": 60,
+    "settlement_1_flip_rate": 0.0479,
+    "settlement_2_flip_rate": 0.0938,
+    "realised_pair_flip_rate": 0.0938,
+    "realised_pair_flip_rate_ci95": [
+      0.0417,
+      0.1542
+    ],
+    "ci_method": "cluster bootstrap over 60 (board, seat) cells, 20000 draws",
+    "cells_with_any_flip": 12
+  },
+  "guessed_vs_guessed": {
+    "comparisons": 1792,
+    "cells": 64,
+    "settlement_1_flip_rate": 0.0441,
+    "settlement_2_flip_rate": 0.0893,
+    "realised_pair_flip_rate": 0.0932,
+    "realised_pair_flip_rate_ci95": [
+      0.0446,
+      0.1484
+    ],
+    "ci_method": "cluster bootstrap over 64 (board, seat) cells, 20000 draws",
+    "cells_with_any_flip": 12
+  },
+  "distinct_guessed_pairs_histogram": {
+    "1": 52,
+    "2": 8,
+    "3": 4
+  },
+  "metric_spread": {
+    "pair_city_self_sufficient": {
+      "mean": 0.0156,
+      "max": 1.0,
+      "zero_spread_boards": 63
+    },
+    "pair_exp_rolls_to_city": {
+      "mean": 1.0021,
+      "max": 24.0,
+      "zero_spread_boards": 59
+    },
+    "pair_max_ore_lump": {
+      "mean": 0.0625,
+      "max": 1.0,
+      "zero_spread_boards": 60
+    },
+    "pair_ore_pips": {
+      "mean": 0.375,
+      "max": 7.0,
+      "zero_spread_boards": 58
+    },
+    "pair_pip_sum": {
+      "mean": 0.5156,
+      "max": 8.0,
+      "zero_spread_boards": 54
+    },
+    "pair_robber_robustness": {
+      "mean": 0.5156,
+      "max": 8.0,
+      "zero_spread_boards": 54
+    },
+    "pair_spread": {
+      "mean": 0.2997,
+      "max": 4.354,
+      "zero_spread_boards": 54
+    },
+    "pair_wheat_pips": {
+      "mean": 0.5938,
+      "max": 8.0,
+      "zero_spread_boards": 55
+    }
+  },
+  "per_board": [
+    {
+      "video_id": "0EtcbG16kHA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ],
+        [
+          20,
+          12
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        20,
+        12
+      ]
+    },
+    {
+      "video_id": "0EtcbG16kHA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ],
+        [
+          23,
+          6
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        23,
+        6
+      ]
+    },
+    {
+      "video_id": "33KR75rhTgo",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ],
+        [
+          17,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        17,
+        22
+      ]
+    },
+    {
+      "video_id": "33KR75rhTgo",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ],
+        [
+          8,
+          15
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        8,
+        15
+      ]
+    },
+    {
+      "video_id": "33KR75rhTgo",
+      "game_index": 2,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ],
+        [
+          23,
+          15
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        23,
+        15
+      ]
+    },
+    {
+      "video_id": "33KR75rhTgo",
+      "game_index": 2,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ],
+        [
+          23,
+          7
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        23,
+        7
+      ]
+    },
+    {
+      "video_id": "5WamwGjkHcE",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          13,
+          8
+        ],
+        [
+          13,
+          9
+        ],
+        [
+          13,
+          9
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          8
+        ],
+        [
+          13,
+          9
+        ]
+      ],
+      "distinct_guessed_pairs": 3,
+      "real_pair": [
+        13,
+        8
+      ]
+    },
+    {
+      "video_id": "5WamwGjkHcE",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        13,
+        22
+      ]
+    },
+    {
+      "video_id": "6yyzAd63Gs0",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          20,
+          32
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          32
+        ],
+        [
+          20,
+          16
+        ],
+        [
+          20,
+          16
+        ]
+      ],
+      "distinct_guessed_pairs": 3,
+      "real_pair": [
+        20,
+        16
+      ]
+    },
+    {
+      "video_id": "6yyzAd63Gs0",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          20,
+          32
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          31
+        ],
+        [
+          20,
+          32
+        ],
+        [
+          20,
+          16
+        ],
+        [
+          20,
+          16
+        ]
+      ],
+      "distinct_guessed_pairs": 3,
+      "real_pair": [
+        20,
+        16
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        11,
+        23
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        20,
+        8
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 2,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        21,
+        8
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 2,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ],
+        [
+          21,
+          8
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        21,
+        8
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 3,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        7,
+        20
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 3,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ],
+        [
+          7,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        7,
+        20
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 4,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          17,
+          42
+        ],
+        [
+          8,
+          42
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          17,
+          42
+        ],
+        [
+          17,
+          42
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        8,
+        40
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 4,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          42
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          42
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          4
+        ],
+        [
+          8,
+          42
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        8,
+        4
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 5,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          11,
+          16
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        13,
+        11
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 5,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        13,
+        11
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 6,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        13,
+        11
+      ]
+    },
+    {
+      "video_id": "9Sm86ml04aI",
+      "game_index": 6,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ],
+        [
+          13,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        13,
+        11
+      ]
+    },
+    {
+      "video_id": "AoOXWyxaTkA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ],
+        [
+          12,
+          19
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        12,
+        19
+      ]
+    },
+    {
+      "video_id": "AoOXWyxaTkA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ],
+        [
+          12,
+          18
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        12,
+        18
+      ]
+    },
+    {
+      "video_id": "HT10Xj1mkkA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        22,
+        13
+      ]
+    },
+    {
+      "video_id": "HT10Xj1mkkA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        22,
+        13
+      ]
+    },
+    {
+      "video_id": "HT10Xj1mkkA",
+      "game_index": 2,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        22,
+        13
+      ]
+    },
+    {
+      "video_id": "HT10Xj1mkkA",
+      "game_index": 2,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        22,
+        13
+      ]
+    },
+    {
+      "video_id": "Hj_VF4PhHwM",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": null
+    },
+    {
+      "video_id": "Hj_VF4PhHwM",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ],
+        [
+          7,
+          18
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": null
+    },
+    {
+      "video_id": "I4Xw7dYDXYc",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ],
+        [
+          17,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        17,
+        11
+      ]
+    },
+    {
+      "video_id": "I4Xw7dYDXYc",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ],
+        [
+          8,
+          19
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        8,
+        19
+      ]
+    },
+    {
+      "video_id": "KvH76fJI4f0",
+      "game_index": 2,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        12
+      ]
+    },
+    {
+      "video_id": "KvH76fJI4f0",
+      "game_index": 2,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        20
+      ]
+    },
+    {
+      "video_id": "KvH76fJI4f0",
+      "game_index": 3,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ],
+        [
+          18,
+          12
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        12
+      ]
+    },
+    {
+      "video_id": "KvH76fJI4f0",
+      "game_index": 3,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ],
+        [
+          18,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        20
+      ]
+    },
+    {
+      "video_id": "YK-AAv-Brn0",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ],
+        [
+          9,
+          14
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        9,
+        14
+      ]
+    },
+    {
+      "video_id": "YK-AAv-Brn0",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ],
+        [
+          23,
+          17
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        23,
+        17
+      ]
+    },
+    {
+      "video_id": "cXun_M90NBA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        16,
+        20
+      ]
+    },
+    {
+      "video_id": "cXun_M90NBA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        16,
+        20
+      ]
+    },
+    {
+      "video_id": "cXun_M90NBA",
+      "game_index": 3,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ],
+        [
+          16,
+          3
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        16,
+        3
+      ]
+    },
+    {
+      "video_id": "cXun_M90NBA",
+      "game_index": 3,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ],
+        [
+          16,
+          20
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        16,
+        20
+      ]
+    },
+    {
+      "video_id": "cf-wYBSp3pM",
+      "game_index": 2,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ],
+        [
+          18,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        23
+      ]
+    },
+    {
+      "video_id": "cf-wYBSp3pM",
+      "game_index": 2,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ],
+        [
+          18,
+          10
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        18,
+        10
+      ]
+    },
+    {
+      "video_id": "eHIdnu4NjEA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          10,
+          21
+        ],
+        [
+          22,
+          10
+        ],
+        [
+          10,
+          21
+        ],
+        [
+          22,
+          10
+        ],
+        [
+          10,
+          21
+        ],
+        [
+          10,
+          21
+        ],
+        [
+          22,
+          10
+        ],
+        [
+          10,
+          21
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        10,
+        21
+      ]
+    },
+    {
+      "video_id": "eHIdnu4NjEA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ],
+        [
+          10,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        10,
+        22
+      ]
+    },
+    {
+      "video_id": "fqBK3_-PO7g",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ],
+        [
+          20,
+          14
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": null
+    },
+    {
+      "video_id": "fqBK3_-PO7g",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": null
+    },
+    {
+      "video_id": "game1",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        11,
+        23
+      ]
+    },
+    {
+      "video_id": "game1",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ],
+        [
+          20,
+          8
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        20,
+        8
+      ]
+    },
+    {
+      "video_id": "l-3s-xPwyIs",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        21,
+        22
+      ]
+    },
+    {
+      "video_id": "l-3s-xPwyIs",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ],
+        [
+          21,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        21,
+        22
+      ]
+    },
+    {
+      "video_id": "lCsB4X60YhQ",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          6,
+          16
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          6,
+          16
+        ],
+        [
+          6,
+          16
+        ],
+        [
+          16,
+          7
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        16,
+        7
+      ]
+    },
+    {
+      "video_id": "lCsB4X60YhQ",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ],
+        [
+          16,
+          7
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        16,
+        7
+      ]
+    },
+    {
+      "video_id": "lMCemfE1bDY",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        14,
+        23
+      ]
+    },
+    {
+      "video_id": "lMCemfE1bDY",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          14,
+          23
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          14,
+          23
+        ],
+        [
+          23,
+          14
+        ],
+        [
+          14,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 2,
+      "real_pair": [
+        14,
+        23
+      ]
+    },
+    {
+      "video_id": "nmk59XWFRBU",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        12,
+        22
+      ]
+    },
+    {
+      "video_id": "nmk59XWFRBU",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ],
+        [
+          12,
+          22
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        12,
+        22
+      ]
+    },
+    {
+      "video_id": "qO9brR8chOE",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ],
+        [
+          20,
+          15
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        20,
+        15
+      ]
+    },
+    {
+      "video_id": "qO9brR8chOE",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ],
+        [
+          20,
+          11
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        20,
+        11
+      ]
+    },
+    {
+      "video_id": "taiiYTBfVJA",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        11,
+        23
+      ]
+    },
+    {
+      "video_id": "taiiYTBfVJA",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ],
+        [
+          11,
+          23
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        11,
+        23
+      ]
+    },
+    {
+      "video_id": "yQ4GZloiG08",
+      "game_index": 1,
+      "seat": 0,
+      "guessed_pairs": [
+        [
+          22,
+          14
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          22,
+          14
+        ],
+        [
+          13,
+          22
+        ],
+        [
+          8,
+          13
+        ],
+        [
+          22,
+          14
+        ],
+        [
+          22,
+          14
+        ]
+      ],
+      "distinct_guessed_pairs": 3,
+      "real_pair": [
+        13,
+        22
+      ]
+    },
+    {
+      "video_id": "yQ4GZloiG08",
+      "game_index": 1,
+      "seat": 1,
+      "guessed_pairs": [
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ],
+        [
+          22,
+          13
+        ]
+      ],
+      "distinct_guessed_pairs": 1,
+      "real_pair": [
+        22,
+        13
+      ]
+    }
+  ],
+  "reingest_recommendation": "MEASURED, NOT DECIDED. Real-vs-guessed realised-pair flip rate 0.0938 (95% CI [0.0417, 0.1542], cluster bootstrap over 60 (board, seat) cells, 20000 draws); 12 of 60 board-seat cells flip at all, so on 48 cells the policy's opening is identical under every port map tried. The label-free guessed-vs-guessed rate is 0.0932 (CI [0.0446, 0.1484]), statistically indistinguishable from the real-vs-guessed leg -- i.e. the hand-labelled REAL map behaves like just another guess, and it added no information to this decision. D7 pre-registers no threshold and this script deliberately asserts none: the ~100-video re-ingest is an owner call, and the honest input to it is that ports move the opening on a small minority of boards, with an interval wide enough that 'rarely' and 'often enough to matter' are both inside it. Caveat: the env's heuristic opponent also reads ports, so a flip rate measured this way bounds the policy's own port sensitivity from ABOVE rather than isolating it."
+}

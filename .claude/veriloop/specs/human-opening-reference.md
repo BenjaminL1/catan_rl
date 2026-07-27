@@ -52,6 +52,36 @@ Instead marginalise: port *slots* are fixed geometry, so sample K=8 port assignm
 the **already-ratified step6 §4 convention** for this exact gap. State the marginalisation in every
 output; it is a real limitation, not a fix.
 
+**Implementation note (2026-07-26, `port-harvest`).** The "do NOT harvest" clause has been
+superseded *only for the 34 boards whose pixels are still on disk*: `port-harvest` (D6) reads
+their 9 slots into the sidecar `data/human/ports/harvest.jsonl` (32 of 34 boards decoded). D2 is
+otherwise **unchanged** — the harvest never writes `board.ports` (port-harvest D5), and **K=8
+remains the scoreboard / measurement convention** (port-harvest non-goals). The ~100 pixel-less
+rows are still marginalised and are only re-ingested if the D7 invariance probe
+(`scripts/port_invariance_probe.py`) shows ports actually move the opening choice.
+
+First measurement, on `runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt` —
+update 500 of the **superseded** pointer-arch v2 self-play run; it is `opening_sweep.DEFAULT_CKPT`,
+NOT a banked anchor, not the champion (`runs/anchors/v8_promobar_u243.pt`) and not the in-progress
+v3 lineage. The **mandated real-vs-guessed** realised-pair flip rate is **0.0938**, 95% CI
+**[0.0417, 0.1542]** (settlement 1 0.0479, settlement 2 0.0938). The interval is a **cluster
+bootstrap over the 60 (board, seat) cells**, not over the 480 comparisons: each cell contributes
+8 comparisons that all share the same real pair, so the effective n is ~60, not 480. Only
+**12 of 60** cells flip at all. The label-free guessed-vs-guessed supplement is **0.0932** (CI
+[0.0446, 0.1484]) — statistically indistinguishable from the real leg, i.e. the hand-labelled
+real map behaved like just another guess and added no information to this decision.
+
+**This does not settle the re-ingest, and the probe no longer pretends it does.** An earlier
+version of `recommendation()` compared the point estimate against a `0.05` cut invented in code
+(port-harvest D7 pre-registers no tolerance at all — "no port-accuracy tolerance exists") and
+emitted "RE-INGEST IS JUSTIFIED"; that verdict flips to its opposite inside its own confidence
+interval, so it has been removed in favour of a plain measured statement. Two further caveats,
+neither cleared: stepping the env drives the **heuristic opponent**, which also reads ports, so
+this bounds the *policy's own* port sensitivity from above; and `port-harvest` §RISKS' pre-mortem
+(a more precise instrument nobody acts on) is untouched by a flip rate. The standing decision is
+unchanged — the re-ingest is **not** authorised by this note; the call is the owner's, on
+evidence that does not resolve it.
+
 ### D3 — New metrics (the owner's stated axes — currently unmeasured)
 Add to the existing battery, defined precisely in the module docstring:
 - **`contested_race`** — for each contested vertex (legal, unowned, reachable by both), road-distance

@@ -1,0 +1,18 @@
+{
+  "centroids_sha256": "f7cdc5b6e5d9f89b681f87d17082ee834d3cc870cf366400b6ac366e5d332c28",
+  "names": {
+    "0": "2:1 ORE",
+    "1": "2:1 SHEEP",
+    "2": "2:1 WHEAT",
+    "3": "2:1 BRICK",
+    "4": "2:1 WOOD",
+    "5": "3:1 PORT"
+  },
+  "read_off": "data/human/ports/centroids/cluster_{0..5}.png (mean image + 8 exemplars per cluster) - now TRACKED in git, so the binding is auditable from the committed tree",
+  "authored_by": "MAIN SESSION (independent read of centroid_montage.png), 2026-07-26",
+  "authored_on": "2026-07-26",
+  "attestation_status": "ATTESTED by the main session; the owner has NOT personally looked",
+  "provenance_note": "D2 reserves this binding for an actor OTHER than the one that produced the clusters, because it is the only defence against the D3 global-transposition blind spot. The build agent authored it in violation of that (recorded honestly by the agent itself). The main session has now independently read data/human/ports/centroid_montage.png -- 6 rows x 9 exemplars -- and arrived at the SAME binding, so the labels are believed correct. Two corroborations: (a) every exemplar within a row is visibly the same sprite, and (b) the rendered ratio text agrees on every row (rows 0-4 all read '2:1', row 5 reads '3:1'), which is D2's sprite-decides/ratio-may-only-reject cross-check passing. All reads remain MACHINE reads; the owner can close this in seconds by opening the montage.",
+  "what_was_read": "row 0 = clustered ore lumps; row 1 = sheep silhouette; row 2 = wheat sheaf; row 3 = brick wall; row 4 = fir tree (wood); row 5 = '?' sign, the only row printed '3:1'.",
+  "binding_is_pinned": "Decoding aborts unless centroids_sha256 above matches the frozen centroids.npz, because cluster indices permute whenever the board set changes."
+}

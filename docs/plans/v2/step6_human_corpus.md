@@ -287,6 +287,17 @@ therefore **kills the seeded arm for succeeding** (it promotes first → its WR 
 ## 6. Non-goals — inline, unchanged from v4 (no BC/piKL; no move-agreement metrics;
 no engine/obs/action changes; no 4-player; no harvest-v1 port extraction).
 
+> **AMENDED 2026-07-26 — the port-extraction non-goal is NARROWED, not kept.**
+> `.claude/veriloop/specs/port-harvest.md` (owner-delegated draft) reads the 9 port
+> slots off the **34 boards whose frames are already on disk** and writes them to the
+> sidecar `data/human/ports/harvest.jsonl`. What survives of the non-goal: no
+> re-ingest of the ~100 pixel-less videos (port-harvest D6 — that is the real cost
+> pole, funded only by the D7 invariance probe), no write to `board.ports` and no
+> corpus re-hash (D5), and **K=8 marginalisation stays the scoreboard / measurement
+> convention** — the harvest feeds no paired measurement path. The other non-goals on
+> this line are unchanged. See `.claude/veriloop/specs/human-opening-reference.md` D2,
+> amended the same day.
+
 ## 7. Sequencing
 
 ```
