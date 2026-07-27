@@ -20,16 +20,33 @@ dev-card COUNT and VISIBLE VP (``victoryPoints - devCards["VP"]``) — real Cata
 visibility. ``--reveal-bot`` restores the omniscient analysis view and is
 recorded in BOTH logs, because a revealed game is not a strength read.
 
-Each finished game appends a four-field JSON line to
-``runs/human_playtest/games.jsonl`` (its ``bot_vp`` / ``human_vp`` keys stay
-TOTAL VP and are never re-pointed) plus the new ``reveal_bot`` key.
+Each finished game is written TWICE (dual-write, deliberately):
 
+* the legacy four-field JSON line in ``runs/human_playtest/games.jsonl`` (its
+  ``bot_vp`` / ``human_vp`` keys stay TOTAL VP and are never re-pointed), plus
+  the new ``reveal_bot`` / ``replay_path`` keys; and
+* a full-fidelity ``Replay`` JSON under ``runs/human_playtest/replays/``,
+  carrying BOTH players' move streams and the policy's per-decision internals,
+  openable in the existing ``replay/viewer``.
+
+FIDELITY CAVEATS on that replay (do not discover these later):
+
+* The four SETUP steps are **SYNTHESIZED, not observed** — ``setup_steps_seat_0/1``
+  reconstruct the placements from action tuples and hardcode
+  ``longest_road_holder=None``. The OPENING is the least faithful part of the
+  record, which is exactly the phase under suspicion.
+* ``state_after`` is **shared** across every sub-step produced by one
+  ``env.step`` (the human's whole turn is folded inside the bot's step). Actions
+  and events ARE attributed per acting seat; only the board snapshot is shared.
+* The recorded per-decision softmax reads roughly ``0.97 END_TURN`` at most
+  steps. It is a hypothesis generator for contested decisions, **never a
+  verdict** — and it is the policy grading its own homework.
+* The binding constraint on this harness is **games played**, not bytes per
+  game. One recorded game is not evidence of anything.
 * Every line already in ``games.jsonl`` predates the blind default and was
   therefore played with the bot's FULL hand on screen. Those lines carry no
   ``reveal_bot`` key; treat a missing key as ``reveal_bot=true``, not as a
-  clean result. They are NOT rewritten.
-* The binding constraint on this harness is **games played**, not bytes per
-  game. One recorded game is not evidence of anything.
+  clean result. They are not rewritten — see the dual-write note above.
 
 Run it (a display is required for the real game)::
 
@@ -67,7 +84,9 @@ the 9-card discard menu. The full game is playable through the existing GUI.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -496,13 +515,105 @@ class _RawPolicyAgent:
 
     def __init__(self, actor: Any) -> None:
         self._actor = actor
+        #: Internals of the MOST RECENT decision, for the replay recorder.
+        self.last_internals: Any = None
 
     def choose_action(self, env: Any) -> np.ndarray:
         # Same pairing the eval harness uses: obs + legal-action masks straight
         # from the live env, sampled by the policy (no tree, no env clone).
         obs = env._get_obs()
         masks = env.get_action_masks()
-        return self._actor.select_action(obs, masks)
+        action = self._actor.select_action(obs, masks)
+        self.last_internals = capture_policy_internals(self._actor, obs, masks, action)
+        return action
+
+
+def _top_k_pairs(probs: Any, k: int = 8) -> tuple[tuple[int, float], ...]:
+    """Return the ``k`` largest ``(index, probability)`` pairs of a 1-D tensor.
+
+    The pointer heads are 54 / 72 / 19 wide; storing them densely is ~168 floats
+    per decision (roughly DOUBLING the replay file) and adds nothing a human
+    reviewer reads. Zero-probability (illegal) entries are dropped."""
+    import torch
+
+    n = int(probs.shape[-1])
+    values, indices = torch.topk(probs, k=min(k, n))
+    pairs = zip(values.tolist(), indices.tolist(), strict=True)
+    return tuple((int(i), float(v)) for v, i in pairs if v > 0.0)
+
+
+def capture_policy_internals(actor: Any, obs: Any, masks: Any, action: np.ndarray) -> Any:
+    """Recompute what the policy was weighing at ONE decision, script-side.
+
+    ``MultiActionHeads.sample`` computes all six masked log-softmaxes and then
+    DISCARDS everything but the chosen-index log-probs, and ``network.sample``
+    already hands back ``trunk`` / ``_node_v`` / ``_node_e`` / ``_node_h`` /
+    ``_is_setup`` / ``value`` / ``belief_logits``. Rather than change the PPO
+    hot path to keep them, we re-run the (deterministic) forward here and read
+    the head modules directly — **zero change to the training path**.
+
+    ``chosen_action`` is the action that was actually applied; the
+    distributions are deterministic given the obs + masks, so re-running the
+    forward cannot disagree with it.
+
+    Every value is converted to a plain Python float/int/bool: the replay
+    schema and IO must stay torch-free (the viewer imports them).
+    """
+    import torch
+
+    from catan_rl.policy.heads import masked_log_softmax
+    from catan_rl.replay.player_factory import _DISCRETE_OBS_KEYS
+    from catan_rl.replay.schema import PolicyInternals
+
+    policy = actor.policy
+    device = actor.device
+    # Same dtype discipline as ``_PolicyActor.select_action`` — imported, not
+    # re-declared, so a new discrete obs key cannot make this forward differ
+    # from the one that produced the action.
+    obs_t = {
+        k: torch.as_tensor(
+            v, dtype=torch.int64 if k in _DISCRETE_OBS_KEYS else torch.float32, device=device
+        ).unsqueeze(0)
+        for k, v in obs.items()
+    }
+    masks_t = {
+        k: torch.as_tensor(
+            np.ascontiguousarray(v, dtype=bool), dtype=torch.bool, device=device
+        ).unsqueeze(0)
+        for k, v in masks.items()
+    }
+    heads = policy.action_heads
+    with torch.no_grad():
+        out = policy.forward(obs_t)
+        trunk = out["trunk"]
+        type_probs = masked_log_softmax(heads.type_head(trunk), masks_t["type"]).exp()[0]
+        # Condition the autoregressive heads on the type that was ACTUALLY
+        # chosen — that is the branch whose sub-argument distribution is
+        # meaningful for review.
+        type_idx = torch.as_tensor([int(action[0])], dtype=torch.int64, device=device)
+        corner_ctx = heads._corner_context(type_idx, out.get("_is_setup"))
+        corner_logits = heads.corner_head(trunk, out["_node_v"], corner_ctx)
+        corner_mask = heads._corner_mask(type_idx, masks_t)
+        corner_probs = masked_log_softmax(corner_logits, corner_mask).exp()[0]
+        edge_probs = masked_log_softmax(
+            heads.edge_head(trunk, out["_node_e"]), masks_t["edge"]
+        ).exp()[0]
+        tile_probs = masked_log_softmax(
+            heads.tile_head(trunk, out["_node_h"]), masks_t["tile"]
+        ).exp()[0]
+        belief = out.get("belief_logits")
+        return PolicyInternals(
+            type_mask=tuple(bool(b) for b in np.asarray(masks["type"]).reshape(-1)),
+            type_probs=tuple(float(x) for x in type_probs.tolist()),
+            chosen_action=tuple(int(x) for x in action),
+            value=float(out["value"].reshape(-1)[0].item()),
+            corner_top=_top_k_pairs(corner_probs),
+            edge_top=_top_k_pairs(edge_probs),
+            tile_top=_top_k_pairs(tile_probs),
+            belief_logits=(
+                None if belief is None else tuple(float(x) for x in belief.reshape(-1).tolist())
+            ),
+        )
 
 
 def _load_raw_agent(ckpt: str, seed: int) -> _RawPolicyAgent:
@@ -523,7 +634,7 @@ def _visible_vp(player: Any) -> int:
     return int(player.victoryPoints) - int(player.devCards.get("VP", 0))
 
 
-def _describe_bot_move(action: np.ndarray) -> str:
+def _describe_bot_move(action: Sequence[int] | np.ndarray) -> str:
     from catan_rl.env.catan_env import RESOURCES_CW, ActionType
 
     names = {
@@ -553,6 +664,366 @@ def _describe_bot_move(action: np.ndarray) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Replay recording for the interactive game
+# ---------------------------------------------------------------------------
+
+
+class _DetachedRecorder:
+    """Inert stand-in a search clone gets instead of the real recorder."""
+
+    def _on_event(self, event: dict) -> None:
+        return None
+
+
+class _HumanGameRecorder:
+    """Assemble a real :class:`catan_rl.replay.schema.Replay` from an
+    INTERACTIVE human-vs-policy game.
+
+    ``recorder_loop.record_game`` cannot host this game: it builds its OWN
+    ``CatanEnv`` and drives a fixed 4-step setup loop against a non-interactive
+    actor surface. So only the main-loop primitives are reused —
+    ``EventCollector``, ``snapshot_step_state``, ``setup_steps_seat_0/1``,
+    ``split_at_setup_complete`` and ``consume_main_event_block`` — wrapped
+    around the live interactive loop. The bookkeeping below deliberately
+    mirrors ``record_game`` step for step so the two records stay comparable.
+
+    FIDELITY CAVEATS — read these before drawing conclusions from a record:
+
+    * **The four SETUP steps are SYNTHESIZED, not observed.**
+      ``setup_steps_seat_0/1`` reconstruct the placements from the action
+      tuples and hardcode ``longest_road_holder=None``. The OPENING is
+      therefore the LEAST faithful part of the record — which is unfortunate,
+      because the opening is exactly the phase under suspicion.
+    * **``state_after`` is SHARED across every sub-step produced by one
+      ``env.step``.** The human's whole turn is folded inside the bot's
+      ``env.step``, so a human step and the bot step that contains it carry the
+      same end-of-``env.step`` board. Per-step ``actions`` / ``events`` ARE
+      correctly attributed (per-actor diff + acting-seat partition); only the
+      board snapshot is a shared tail.
+    * **``policy_internals`` is a hypothesis generator, never a verdict.** The
+      13-way type softmax reads roughly ``0.97 END_TURN`` at most steps and is
+      informative only at contested decisions; and a policy explaining its own
+      choices is the agent grading its own homework.
+    * **Every bot decision carries its internals, including the ones that
+      change nothing on the board.** ``END_TURN`` (and a knight that steals
+      nothing) emits no broadcast events, so the event partition yields no
+      bot-attributed step for it; those decisions would otherwise vanish
+      together with their internals — which is exactly the ``END_TURN``-heavy
+      class the reviewer wants to inspect, and the class an offline "legal vs
+      chosen" query needs. A DECISION-ONLY step (no actions, no events,
+      ``state_after`` = end of this ``env.step``) is emitted for them instead.
+    * **Under ``--search`` no internals are captured at all.** ``SearchAgent``
+      exposes no per-decision distribution, so every step carries an empty
+      tuple; ``metadata.mode == "search"`` is what marks that record as
+      "not captured", NOT "the policy had no opinion".
+    """
+
+    def __init__(self, env: Any, *, bot_seat: int) -> None:
+        from catan_rl.engine.broadcast import BroadcastEventType
+        from catan_rl.replay.recorder import EventCollector, snapshot_step_state
+
+        # ``_seat_to_actor`` / ``_build_board_static_from_dict`` stay private in
+        # recorder_loop; importing them beats duplicating a mapping that must
+        # never drift from the one record_game uses.
+        from catan_rl.replay.recorder_loop import _seat_to_actor
+
+        assert env.game is not None, "recorder must be attached AFTER env.reset"
+        self._env = env
+        self._bot_seat = bot_seat
+        self._setup_complete_type = BroadcastEventType.SETUP_COMPLETE.value
+        self._snapshot_step_state = snapshot_step_state
+        self.seat_to_actor = _seat_to_actor(bot_seat)
+        self._vertex_pixel_to_idx = dict(env._vertex_to_idx)
+        self._edge_key_to_idx = dict(env._edge_to_idx)
+
+        self._collector = EventCollector()
+        self._collector.subscribe(env.game.broadcast)
+        self._setup_complete_snaps: list[Any] = []
+        env.game.broadcast.subscribe(self._on_event)
+
+        # Snapshot right after reset. When the HUMAN drafts first the env has
+        # already placed their first settlement inside reset(); those events are
+        # reconstructed from snapshots, exactly as record_game does.
+        self._snap_after_reset = self._snap_now()
+        self._collector.drain()
+
+        self.steps: list[Any] = []
+        self._step_idx = 0
+        self._env_step_idx = 0
+        self._setup_sub_idx: dict[int, int] = {}
+        self._setup_internals: dict[int, Any] = {}
+        self._snap_after_step1: Any = None
+        self._prev_snap: Any = self._snap_after_reset
+        #: Bot decisions seen vs decisions whose internals reached a step. Equal
+        #: whenever the agent supplies internals at all; a gap means silent loss.
+        self.n_bot_decisions = 0
+        self.n_internals_recorded = 0
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Any:
+        """Never clone the record itself.
+
+        Both broadcast subscribers are BOUND METHODS of this recorder, so
+        ``mcts.clone_env`` -> ``deepcopy(env)`` -> ``game.broadcast`` would copy
+        the whole accumulated ``steps`` list once per simulation (O(len(steps))
+        per sim, at 400 sims/move). A search clone is a throwaway world whose
+        events must never enter the record, so it gets an inert stand-in."""
+        detached = _DetachedRecorder()
+        memo[id(self)] = detached
+        return detached
+
+    # -- plumbing ----------------------------------------------------------
+
+    def _on_event(self, event: dict) -> None:
+        if event.get("type") == self._setup_complete_type:
+            self._setup_complete_snaps.append(self._snap_now())
+
+    def _snap_now(self) -> Any:
+        return self._snapshot_step_state(
+            self._env.game,
+            seat_to_actor=self.seat_to_actor,
+            vertex_pixel_to_idx=self._vertex_pixel_to_idx,
+            edge_key_to_idx=self._edge_key_to_idx,
+        )
+
+    # -- driver ------------------------------------------------------------
+
+    def after_env_step(
+        self,
+        action: np.ndarray,
+        internals: Any,
+        *,
+        terminated: bool,
+        truncated: bool,
+    ) -> None:
+        """Call once after every ``env.step``, in order."""
+        i = self._env_step_idx
+        self._env_step_idx += 1
+        if internals is not None:
+            self.n_bot_decisions += 1
+        if i < 4:
+            # Setup: corner head for the settlements (steps 0, 2), edge head for
+            # the roads (steps 1, 3).
+            self._setup_sub_idx[i] = int(action[1]) if i % 2 == 0 else int(action[2])
+            # The opening is the phase under suspicion: keep the internals for
+            # the four setup decisions too (they are attached to the two
+            # synthesized agent setup steps in _finish_setup).
+            self._setup_internals[i] = internals
+            if i == 1:
+                self._snap_after_step1 = self._snap_now()
+            if i == 3:
+                self._finish_setup()
+            return
+        self._consume_main(internals, terminated=terminated, truncated=truncated)
+
+    def _finish_setup(self) -> None:
+        from catan_rl.replay.recorder_loop import (
+            consume_main_event_block,
+            setup_steps_seat_0,
+            setup_steps_seat_1,
+            split_at_setup_complete,
+        )
+
+        if len(self._setup_complete_snaps) != 1:
+            raise RuntimeError(
+                f"recorder: expected exactly 1 SETUP_COMPLETE event, got "
+                f"{len(self._setup_complete_snaps)}. Engine drift suspected."
+            )
+        setup_complete_snap = self._setup_complete_snaps[0]
+        pairs = [
+            (self._setup_sub_idx[0], self._setup_sub_idx[1]),
+            (self._setup_sub_idx[2], self._setup_sub_idx[3]),
+        ]
+        assert self._snap_after_step1 is not None
+        if self._bot_seat == 0:
+            setup_steps, _lines = setup_steps_seat_0(
+                agent_actions=pairs,
+                snap_after_step1=self._snap_after_step1,
+                setup_complete_snap=setup_complete_snap,
+                seat_to_actor=self.seat_to_actor,
+            )
+        else:
+            setup_steps, _lines = setup_steps_seat_1(
+                agent_actions=pairs,
+                snap_after_reset=self._snap_after_reset,
+                snap_after_step1=self._snap_after_step1,
+                setup_complete_snap=setup_complete_snap,
+                seat_to_actor=self.seat_to_actor,
+            )
+        # Each agent setup step folds ONE settlement + ONE road decision
+        # (env.steps 0/1, then 2/3), in order.
+        bot_actor = self.seat_to_actor["Agent"]
+        pending = [
+            (self._setup_internals.get(0), self._setup_internals.get(1)),
+            (self._setup_internals.get(2), self._setup_internals.get(3)),
+        ]
+        for j, step in enumerate(setup_steps):
+            if step.actor != bot_actor or not pending:
+                continue
+            got = tuple(x for x in pending.pop(0) if x is not None)
+            if got:
+                setup_steps[j] = dataclasses.replace(step, policy_internals=got)
+                self.n_internals_recorded += len(got)
+        self.steps.extend(setup_steps)
+        self._step_idx = len(self.steps)
+        self._prev_snap = setup_complete_snap
+
+        # When the human drafts first the env runs their FIRST MAIN TURN inside
+        # env.step #3; those events sit after SETUP_COMPLETE in this buffer and
+        # must not be dropped, or the replay silently loses the human's opener.
+        residual = split_at_setup_complete(self._collector.drain())
+        if residual:
+            post_snap = self._snap_now()
+            new_steps, last_snap, self._step_idx = consume_main_event_block(
+                raw_events=residual,
+                prev_snap=self._prev_snap,
+                post_snap=post_snap,
+                initial_actor=self.seat_to_actor["Opponent"],
+                seat_to_actor=self.seat_to_actor,
+                start_idx=self._step_idx,
+                terminated=False,
+                truncated=False,
+            )
+            self.steps.extend(new_steps)
+            self._prev_snap = last_snap
+
+    def _consume_main(self, internals: Any, *, terminated: bool, truncated: bool) -> None:
+        from catan_rl.replay.recorder_loop import _replay_step, consume_main_event_block
+
+        post_snap = self._snap_now()
+        block_start = self._step_idx
+        new_steps, last_snap, self._step_idx = consume_main_event_block(
+            raw_events=self._collector.drain(),
+            prev_snap=self._prev_snap,
+            post_snap=post_snap,
+            initial_actor=self.seat_to_actor["Agent"],
+            seat_to_actor=self.seat_to_actor,
+            start_idx=block_start,
+            terminated=terminated,
+            truncated=truncated,
+        )
+        if internals is not None:
+            # One env.step = exactly one bot decision, so the internals belong
+            # to the FIRST step attributed to the bot in this block. Human steps
+            # in the same block keep an empty tuple.
+            bot_actor = self.seat_to_actor["Agent"]
+            attached = False
+            for j, step in enumerate(new_steps):
+                if step.actor == bot_actor:
+                    new_steps[j] = dataclasses.replace(step, policy_internals=(internals,))
+                    attached = True
+                    break
+            if not attached:
+                # The decision produced NO broadcast events (END_TURN, a knight
+                # that steals nothing, ...), so the partition emitted no
+                # bot-attributed step and both the decision and its internals
+                # would be dropped. Emit a DECISION-ONLY step at the head of the
+                # block — chronologically the bot acts first inside its own
+                # env.step — and renumber the rest.
+                decision = dataclasses.replace(
+                    _replay_step(
+                        step_idx=block_start,
+                        # The terminal flag stays on the LAST step of the block;
+                        # only an otherwise-empty block makes this one last.
+                        kind=(
+                            "terminal" if (terminated or truncated) and not new_steps else "main"
+                        ),
+                        actor=bot_actor,
+                        dice_roll=None,
+                        actions=(),
+                        events=(),
+                        log_lines=(
+                            f"{_describe_bot_move(internals.chosen_action)}"
+                            " (no board change; decision-only step)",
+                        ),
+                        state_after=post_snap,
+                    ),
+                    policy_internals=(internals,),
+                )
+                new_steps.insert(0, decision)
+                for j, step in enumerate(new_steps):
+                    new_steps[j] = dataclasses.replace(step, step_idx=block_start + j)
+                self._step_idx = block_start + len(new_steps)
+                last_snap = post_snap
+            self.n_internals_recorded += 1
+        self.steps.extend(new_steps)
+        self._prev_snap = last_snap
+
+    # -- finish ------------------------------------------------------------
+
+    def finish(
+        self,
+        *,
+        ckpt: str,
+        seed: int,
+        mode: str,
+        sims: int | None,
+        clairvoyant: bool,
+        reveal_bot: bool,
+    ) -> Any:
+        import datetime as _dt
+
+        from catan_rl.replay.recorder_loop import _build_board_static_from_dict
+        from catan_rl.replay.schema import REPLAY_SCHEMA_VERSION, Metadata, PlayerSpec, Replay
+
+        env = self._env
+        game = env.game
+        bot_vp = int(env.agent_player.victoryPoints)
+        human_vp = int(env.opponent_player.victoryPoints)
+        if bot_vp >= game.maxPoints:
+            winner_seat: int | None = self._bot_seat
+            winner: str | None = self.seat_to_actor["Agent"]
+        elif human_vp >= game.maxPoints:
+            winner_seat = 1 - self._bot_seat
+            winner = self.seat_to_actor["Opponent"]
+        else:
+            winner_seat = None
+            winner = None
+
+        bot_spec = PlayerSpec(
+            kind="policy",
+            ckpt_path=ckpt,
+            color="black" if self._bot_seat == 0 else "darkslateblue",
+            seat_index=self._bot_seat,
+        )
+        # kind="human" is a first-class record value; labelling the person
+        # "heuristic" to fit the old enum would poison every consumer.
+        human_spec = PlayerSpec(
+            kind="human",
+            ckpt_path=None,
+            color="darkslateblue" if self._bot_seat == 0 else "black",
+            seat_index=1 - self._bot_seat,
+        )
+        player_a, player_b = (
+            (bot_spec, human_spec) if self._bot_seat == 0 else (human_spec, bot_spec)
+        )
+        final_vp = (bot_vp, human_vp) if self._bot_seat == 0 else (human_vp, bot_vp)
+
+        metadata = Metadata(
+            player_a=player_a,
+            player_b=player_b,
+            seed=seed,
+            max_turns=int(env.max_turns),
+            intended_hex_size=(1000, 800),
+            recorded_at_utc=_dt.datetime.now(_dt.UTC).isoformat(timespec="seconds"),
+            winner=winner,
+            winner_seat=winner_seat,
+            final_vp=final_vp,
+            total_steps=len(self.steps),
+            partial=False,
+            mode=mode,
+            sims=sims,
+            clairvoyant=clairvoyant,
+            reveal_bot=reveal_bot,
+        )
+        return Replay(
+            schema_version=REPLAY_SCHEMA_VERSION,
+            metadata=metadata,
+            board_static=_build_board_static_from_dict(game.board.board_static()),
+            steps=tuple(self.steps),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Interactive game (real GUI)
 # ---------------------------------------------------------------------------
 
@@ -566,6 +1037,7 @@ def play_interactive(
     use_search: bool = False,
     log_path: str | None = None,
     reveal_bot: bool = False,
+    replay_dir: str | None = None,
 ) -> None:
     """Run an interactive human-vs-bot game with the pygame GUI.
 
@@ -574,8 +1046,8 @@ def play_interactive(
 
     ``reveal_bot=False`` (the DEFAULT) keeps the bot's hand HIDDEN — see
     :func:`catan_rl.gui.view.hand_panel_lines`. Revealing it makes the game an
-    analysis session, not a strength read, so the flag is written into the
-    JSONL record.
+    analysis session, not a strength read, so the flag is written into both the
+    JSONL record and the replay metadata.
     """
     from catan_rl.gui.view import catanGameView as _catanGameView
 
@@ -632,6 +1104,10 @@ def play_interactive(
     view: Any = env._ensure_view()
     view.displayGameScreen()
 
+    # Full-fidelity record of BOTH players' streams (see _HumanGameRecorder for
+    # the fidelity caveats — the synthesized opening especially).
+    recorder = _HumanGameRecorder(env, bot_seat=bot_seat) if replay_dir else None
+
     terminated = truncated = False
     safety_cap = env.max_turns * 50
     n_steps = 0
@@ -646,6 +1122,20 @@ def play_interactive(
         action = agent.choose_action(env)
         print(f"\n[BOT] {_describe_bot_move(action)}", flush=True)
         _obs, _r, terminated, truncated, _info = env.step(action)
+        if recorder is not None:
+            # Recording is a SIDE CHANNEL: a recorder fault must never kill or
+            # erase the game it is observing (an hour of human play), so it is
+            # detached on the first failure and the game plays on.
+            try:
+                recorder.after_env_step(
+                    action,
+                    getattr(agent, "last_internals", None),
+                    terminated=terminated,
+                    truncated=truncated,
+                )
+            except Exception as exc:  # never abort the game over a recorder fault
+                print(f"[WARN] replay recorder disabled after error: {exc!r}", flush=True)
+                recorder = None
         view.displayGameScreen()
         assert env.agent_player is not None and env.opponent_player is not None
         # The bot's VP-card count is HIDDEN information: print its VISIBLE VP
@@ -687,6 +1177,38 @@ def play_interactive(
         print(f"  Game ended (truncated). Bot {bot_vp} - {you_vp} You", flush=True)
     print("=" * 70, flush=True)
 
+    # ---- full-fidelity replay (new format) --------------------------------
+    replay_path: str | None = None
+    if recorder is not None:
+        import time
+        from pathlib import Path
+
+        from catan_rl.replay.io import save_replay
+
+        # Same reason as above: a failed replay write must not take the legacy
+        # JSONL line (and with it the whole record of the game) down with it.
+        try:
+            replay = recorder.finish(
+                ckpt=ckpt,
+                seed=seed,
+                mode="search" if use_search else "raw_policy",
+                sims=sims if use_search else None,
+                clairvoyant=bool(use_search),
+                reveal_bot=bool(reveal_bot),
+            )
+            stem = f"{time.strftime('%Y%m%dT%H%M%S')}_seed{seed}"
+            dest = Path(replay_dir) / f"{stem}.json"
+            # save_replay refuses to overwrite; two games can share a
+            # (second, seed) stem, and losing the second one is not acceptable.
+            n = 1
+            while dest.exists():
+                dest = Path(replay_dir) / f"{stem}_{n}.json"
+                n += 1
+            replay_path = str(save_replay(replay, dest))
+            print(f"  replay written -> {replay_path}", flush=True)
+        except Exception as exc:  # never lose the game record over a write fault
+            print(f"[WARN] replay could not be written: {exc!r}", flush=True)
+
     # ---- legacy four-field JSONL (DUAL-WRITE, never rewritten) ------------
     # ``bot_vp`` / ``human_vp`` stay TOTAL VP: the single most-cited artifact in
     # the project is this file, and re-pointing an existing key would silently
@@ -719,6 +1241,7 @@ def play_interactive(
             # strength read; games recorded before this key existed were played
             # with the bot's FULL hand on screen and must be read that way.
             "reveal_bot": bool(reveal_bot),
+            "replay_path": replay_path,
             "moves": move_log,
         }
         out = Path(log_path)
@@ -871,8 +1394,15 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Show the bot's FULL hand (resources + hidden dev cards by type + "
         "VP-card-inclusive VP). OFF by default. A revealed game is an ANALYSIS "
-        "session, not a strength read — the flag is recorded in the JSONL "
-        "record so it can never be misfiled later.",
+        "session, not a strength read — the flag is recorded in both the JSONL "
+        "record and the replay metadata so it can never be misfiled later.",
+    )
+    parser.add_argument(
+        "--replay-dir",
+        type=str,
+        default="runs/human_playtest/replays",
+        help="Write a full-fidelity Replay JSON per game here (set empty to "
+        "disable). NOTE: the four SETUP steps are SYNTHESIZED, not observed.",
     )
     parser.add_argument(
         "--self-test",
@@ -897,6 +1427,7 @@ def main(argv: list[str] | None = None) -> int:
         use_search=args.search,
         log_path=args.log or None,
         reveal_bot=args.reveal_bot,
+        replay_dir=args.replay_dir or None,
     )
     return 0
 

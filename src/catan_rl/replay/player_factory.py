@@ -40,7 +40,18 @@ _LOG = logging.getLogger("catan_rl.replay")
 # ---------------------------------------------------------------------------
 
 
-PlayerKind = Literal["random", "heuristic", "policy"]
+PlayerKind = Literal["random", "heuristic", "policy", "human"]
+
+
+class HumanPlayerNotActorError(ValueError):
+    """Raised when something tries to BUILD an actor for a ``"human"``
+    seat.
+
+    ``"human"`` is a legal *record* value — mirrored in
+    :class:`catan_rl.replay.schema.PlayerSpec` so a human game is never
+    mislabelled ``"heuristic"``, which would poison every downstream
+    consumer — but there is nothing to construct: the moves come from the
+    GUI in ``scripts/play_vs_model.py``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -251,10 +262,19 @@ def build_actor(
         FileNotFoundError: if ``kind="policy"`` and ``ckpt_path``
             doesn't exist on disk.
         ValueError: if ``kind="policy"`` but ``ckpt_path`` is None.
+        HumanPlayerNotActorError: if ``kind="human"`` — a human seat is
+            recordable but not constructible.
 
     Returns an :class:`Actor`. The recorder owns the actor for the
     lifetime of one game.
     """
+    if spec.kind == "human":
+        raise HumanPlayerNotActorError(
+            "kind='human' has no actor to build — a human seat is driven by "
+            "the GUI in scripts/play_vs_model.py. Do NOT substitute "
+            "kind='heuristic' to get past this."
+        )
+
     if spec.kind in ("random", "heuristic"):
         rng = np.random.default_rng(seed)
         return _EngineDrivenActor(kind=spec.kind, _rng=rng)

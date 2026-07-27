@@ -10,11 +10,16 @@ ordered; :func:`apply_migrations` walks the chain until it reaches
 the target.
 
 The current schema is :data:`catan_rl.replay.schema.REPLAY_SCHEMA_VERSION`
-== 1. No pre-v1 replays exist in the wild (the replay system shipped
-*after* this module), so the registry is empty by design — the
-plumbing is in place for the first real migration when one is
-needed. The test suite exercises the chain by registering a temporary
-fake migration.
+== 2. Exactly one migration is registered at import time:
+:func:`_v1_to_v2`, a no-op version bump. v2 only ADDED fields that all
+carry defaults (``ReplayStep.policy_internals`` and the ``Metadata``
+provenance flags ``mode`` / ``sims`` / ``clairvoyant`` / ``reveal_bot``),
+so nothing inside a v1 payload needs rewriting — but the bump still
+needs a registered step, or :func:`apply_migrations` would raise on
+every replay written before it.
+
+No pre-v1 replays exist in the wild (the replay system shipped *after*
+this module), so there is no v0 → v1 entry.
 """
 
 from __future__ import annotations
@@ -94,3 +99,22 @@ def apply_migrations(payload: dict[str, Any], *, target_version: int) -> dict[st
             )
         current = next_version
     return out
+
+
+# ---------------------------------------------------------------------------
+# Registered migrations
+# ---------------------------------------------------------------------------
+
+
+def _v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
+    """v1 → v2: a pure version bump.
+
+    v2 added ``ReplayStep.policy_internals`` and the ``Metadata``
+    provenance flags, all of which default to empty/``False`` in
+    :mod:`catan_rl.replay.schema` and are read with ``.get`` defaults in
+    :mod:`catan_rl.replay.io`. A v1 payload is therefore already a valid
+    v2 payload — the only thing to change is the stamped version."""
+    return {**payload, "schema_version": 2}
+
+
+register_migration(1, _v1_to_v2)
