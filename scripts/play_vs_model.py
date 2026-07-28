@@ -16,15 +16,21 @@ your next rolls. ``--search`` still exists for bot-vs-bot work and prints a loud
 warning, but any human game played with it is uninterpretable.
 
 **The bot's hand is HIDDEN by default.** Its panel shows hand SIZE, unplayed
-dev-card COUNT and VISIBLE VP (``victoryPoints - devCards["VP"]``) — real Catan
-visibility. ``--reveal-bot`` restores the omniscient analysis view and is
-recorded in BOTH logs, because a revealed game is not a strength read.
+dev-card COUNT, VISIBLE VP (``victoryPoints - devCards["VP"]``), KNIGHTS PLAYED
+and current LONGEST-ROAD length — real Catan visibility. The last two are
+PUBLIC facts (knights are played face-up, roads are on the board), so
+withholding them would bias the playtest toward the bot. ``--reveal-bot``
+restores the omniscient analysis view and is recorded in BOTH logs, because a
+revealed game is not a strength read.
 
 Each finished game is written TWICE (dual-write, deliberately):
 
 * the legacy four-field JSON line in ``runs/human_playtest/games.jsonl`` (its
   ``bot_vp`` / ``human_vp`` keys stay TOTAL VP and are never re-pointed), plus
-  the new ``reveal_bot`` / ``replay_path`` keys; and
+  the ``reveal_bot`` / ``replay_path`` keys and ``"hud": 2`` — the information
+  regime the game was played under. A MISSING ``hud`` key means regime 1 (no
+  knights/longest-road HUD, no on-screen move log), the same read-a-missing-key
+  convention as ``reveal_bot`` below; and
 * a full-fidelity ``Replay`` JSON under ``runs/human_playtest/replays/``,
   carrying BOTH players' move streams and the policy's per-decision internals,
   openable in the existing ``replay/viewer``.
@@ -209,6 +215,31 @@ def _build_human_env_class() -> type:
             # The HUMAN is the env's "opponent" seat.
             return self.opponent_player
 
+        def _log_move(self, text: str | None) -> None:
+            """Append one line to the on-screen move log, if one is attached.
+
+            The log is owned by the harness and reached ONLY through the live
+            view (``view.move_log``); the env holds no reference of its own. That
+            is what makes an MCTS search clone structurally unable to log:
+            ``__deepcopy__`` already drops ``_human_view``, so a clone's turns
+            never reach a log. It is also why this is a plain bounded deque and
+            NOT the recorder's ``EventCollector`` — that drain is destructive and
+            single-consumer, and a second consumer would silently strip events
+            out of the Replay."""
+            if not text:
+                return
+            view = self._human_view
+            if view is None:
+                return
+            log = getattr(view, "move_log", None)
+            if log is not None:
+                log.append(text)
+
+        def _log_human_action(self, before: dict[str, Any]) -> None:
+            """Log what the human's last click actually changed (or nothing)."""
+            after = _human_snapshot(self._human_player())
+            self._log_move(_describe_human_delta(before, after, self))
+
         class _ViewWindow:
             """Context manager: swap the real pygame view onto ``game.boardView``
             for a human input window, restoring the headless view on exit so the
@@ -254,17 +285,21 @@ def _build_human_env_class() -> type:
                 return
             prev_setup = game.gameSetup
             game.gameSetup = True  # makes the view's setup-mode click loop apply
+            before = _human_snapshot(human)
             try:
                 with self._ViewWindow(self) as view:
                     print("\n[SETUP] Your move: place a SETTLEMENT (click a circle).", flush=True)
                     v = view.buildSettlement_display(human, board.get_setup_settlements(human))
                     if v is not None:
                         human.build_settlement(v, board, is_free=True)
+                    self._log_human_action(before)
+                    before = _human_snapshot(human)
                     view.displayGameScreen()
                     print("[SETUP] Now place an adjacent ROAD (click a line).", flush=True)
                     r = view.buildRoad_display(human, board.get_setup_roads(human))
                     if r is not None:
                         human.build_road(r[0], r[1], board, is_free=True)
+                    self._log_human_action(before)
                     view.displayGameScreen()
             finally:
                 game.gameSetup = prev_setup
@@ -288,6 +323,7 @@ def _build_human_env_class() -> type:
                 )
                 hex_i, victim = view.moveRobber_display(human, board.get_robber_spots())
                 human.move_robber(hex_i, board, victim)
+                self._log_move(f"You moved the robber to hex{hex_i}")
             game.check_largest_army(human)
 
         def _opponent_discard(self) -> None:
@@ -312,6 +348,9 @@ def _build_human_env_class() -> type:
                 # with no GUI. Call the BASE player.discardResources, which drives
                 # game.boardView.get_resource_selection so the discard menu shows.
                 base_player.discardResources(human, game)
+            n_after = sum(human.resources.values())
+            if n_after != n_before:
+                self._log_move(f"You discarded {n_before - n_after} cards")
 
         def _run_opponent_turn(self) -> None:
             """Run the human's whole turn, with a pre-roll dev-card window.
@@ -336,6 +375,7 @@ def _build_human_env_class() -> type:
             self._human_pre_roll()  # NEW: pre-roll dev-card window
             dice = game.rollDice()
             self.last_dice_roll = dice
+            self._log_move(f"You rolled {dice}")
             if dice != 7:
                 game.update_playerResources(dice, opp)
             else:
@@ -383,12 +423,14 @@ def _build_human_env_class() -> type:
                             sys.exit(0)
                         if e.type != pygame.MOUSEBUTTONDOWN:
                             continue
+                        before = _human_snapshot(human)
                         if view.rollDice_button.collidepoint(e.pos):
                             rolled = True
                         elif view.playDevCard_button.collidepoint(e.pos):
                             human.play_devCard(game)
                             game.check_largest_army(human)
                             game.check_longest_road(human)
+                        self._log_human_action(before)
                         view.displayGameScreen()
                     pygame.display.update()
 
@@ -445,6 +487,7 @@ def _build_human_env_class() -> type:
                         sys.exit(0)
                     if e.type != pygame.MOUSEBUTTONDOWN:
                         continue
+                    before = _human_snapshot(human)
                     if view.buildRoad_button.collidepoint(e.pos):
                         game.build(human, "ROAD")
                         game.check_longest_road(human)
@@ -463,6 +506,8 @@ def _build_human_env_class() -> type:
                         human.initiate_trade(game, "BANK")
                     elif view.endTurn_button.collidepoint(e.pos):
                         turn_over = True
+                        self._log_move("You ended your turn")
+                    self._log_human_action(before)
                     if human.victoryPoints >= game.maxPoints:
                         turn_over = True  # win ends the turn at once (cf. game.py playCatan)
                     view.displayGameScreen()
@@ -693,7 +738,67 @@ def _visible_vp(player: Any) -> int:
     return int(player.victoryPoints) - int(player.devCards.get("VP", 0))
 
 
-def _describe_bot_move(action: Sequence[int] | np.ndarray) -> str:
+def _game_over_log_line(bot_player: Any, you_vp: int, *, reveal_bot: bool) -> str:
+    """The terminal move-log line — the ONE place a VP-card-inclusive bot total
+    could reach the screen (spec D4's single gate).
+
+    Blind by default: the bot's score is rendered through :func:`_visible_vp`
+    unless ``--reveal-bot`` was passed. Extracted from ``main`` purely so the
+    leak can be pinned by a test."""
+    bot_shown = int(bot_player.victoryPoints) if reveal_bot else _visible_vp(bot_player)
+    return f"GAME OVER — Bot {bot_shown} - {you_vp} You"
+
+
+#: Seconds the finished board is held on screen before the window closes itself.
+FINAL_SCREEN_HOLD_S = 120.0
+
+
+def _hold_final_screen(timeout_s: float = FINAL_SCREEN_HOLD_S) -> None:
+    """Keep the finished board on screen until the player dismisses it.
+
+    Without this, ``play_interactive`` returns, ``main`` returns and
+    ``raise SystemExit(main())`` tears the window down within milliseconds — so
+    the terminal result line, the final board and the last log entries are never
+    actually readable. This feature is the first to put content on screen
+    AFTER the last human interaction, which is what makes the instant close a
+    defect rather than a cosmetic quirk.
+
+    Dismissed by a click, any key, or the window's close button. The timeout is
+    a liveness guard so an unattended run can never hang forever, and the
+    no-surface early return keeps every headless path (self-test, CI) untouched."""
+    import time
+
+    import pygame
+
+    if not pygame.get_init() or pygame.display.get_surface() is None:
+        return
+    print("  (click the window or press any key to close)", flush=True)
+    clock = pygame.time.Clock()
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        for e in pygame.event.get():
+            if e.type in (pygame.QUIT, pygame.MOUSEBUTTONDOWN, pygame.KEYDOWN):
+                return
+        pygame.display.update()
+        clock.tick(30)
+
+
+def _describe_bot_move(action: Sequence[int] | np.ndarray, *, with_location: bool = False) -> str:
+    """Human-readable label for one bot action tuple.
+
+    The DEFAULT string is frozen: it is written into ``games.jsonl`` as
+    ``bot_action_label`` and into the replay's step note, so changing it would
+    silently re-point content in the project's most-cited artifact.
+
+    ``with_location=True`` is the on-screen HUD variant and additionally names
+    the vertex / edge / hex index the action targets. It reads the index off the
+    ACTION TUPLE — the broadcast ``BUILD`` event carries ``location=-1`` as a
+    documented sentinel, and PLAY_KNIGHT / PLAY_ROAD_BUILDER emit no event at
+    all, which is why the log is fed from actions rather than the broadcast.
+
+    Neither variant can name a bot resource TYPE it holds privately: the only
+    resources rendered are the ones the acted move makes public (a bank trade's
+    two sides, a Year-of-Plenty pick, a Monopoly call)."""
     from catan_rl.env.catan_env import RESOURCES_CW, ActionType
 
     names = {
@@ -719,7 +824,102 @@ def _describe_bot_move(action: Sequence[int] | np.ndarray) -> str:
         label += f" ({RESOURCES_CW[int(action[4])]} + {RESOURCES_CW[int(action[5])]})"
     elif t == ActionType.PLAY_MONOPOLY:
         label += f" ({RESOURCES_CW[int(action[4])]})"
+    if with_location:
+        if t in (ActionType.BUILD_SETTLEMENT, ActionType.BUILD_CITY):
+            label += f" at v{int(action[1])}"
+        elif t == ActionType.BUILD_ROAD:
+            label += f" at e{int(action[2])}"
+        elif t == ActionType.MOVE_ROBBER:
+            label += f" to hex{int(action[3])}"
+        # PLAY_KNIGHT deliberately names NO hex. It does not consume head 3:
+        # `_apply_main_action` (env/catan_env.py) only decrements the card,
+        # bumps `knightsPlayed` and sets `robber_placement_pending`; the
+        # destination arrives in a SEPARATE MOVE_ROBBER action on the next
+        # step. During a main turn `masks.py` leaves `tile_mask` all-False, so
+        # `action[3]` is a uniformly random index — naming it would assert a
+        # false public fact and contradict the MOVE_ROBBER line that follows.
     return label
+
+
+#: Dev-card key -> the name shown for the HUMAN's own play in the move log.
+_HUMAN_DEV_LABEL = {
+    "KNIGHT": "Knight",
+    "MONOPOLY": "Monopoly",
+    "ROADBUILDER": "Road Builder",
+    "YEAROFPLENTY": "Year of Plenty",
+}
+
+
+def _human_snapshot(player: Any) -> dict[str, Any]:
+    """Capture the facts ``_describe_human_delta`` diffs across one button click."""
+    build_graph = player.buildGraph
+    return {
+        "settlements": list(build_graph["SETTLEMENTS"]),
+        "cities": list(build_graph["CITIES"]),
+        "roads": list(build_graph["ROADS"]),
+        "knights": int(player.knightsPlayed),
+        "dev": dict(player.devCards),
+        "new_dev": len(player.newDevCards),
+        "cards": sum(player.resources.values()),
+    }
+
+
+def _describe_human_delta(
+    before: dict[str, Any], after: dict[str, Any], env: Any = None
+) -> str | None:
+    """One move-log line for what the human just did, or ``None`` if nothing did.
+
+    Pure apart from the two index maps it reads off ``env``
+    (``_vertex_to_idx`` / ``_edge_to_idx``, both already built by ``CatanEnv``),
+    so a cancelled click — the common case, since every build button can be
+    backed out of — produces no entry at all.
+
+    This is the HUMAN's own information, so naming the dev card they played
+    leaks nothing about the bot."""
+    vertex_to_idx = getattr(env, "_vertex_to_idx", None) or {}
+    edge_to_idx = getattr(env, "_edge_to_idx", None) or {}
+
+    def vertex_label(coord: Any) -> str:
+        return f"v{vertex_to_idx[coord]}" if coord in vertex_to_idx else "v?"
+
+    def edge_label(edge: Any) -> str:
+        # Use the env's OWN key builder rather than re-deriving it here: the
+        # lookup fails silently ("e?"), so a drift between the two would degrade
+        # every human build line without tripping anything.
+        from catan_rl.env.catan_env import CatanEnv
+
+        key = CatanEnv._edge_key(edge[0], edge[1])
+        return f"e{edge_to_idx[key]}" if key in edge_to_idx else "e?"
+
+    parts: list[str] = []
+    for coord in after["settlements"]:
+        if coord not in before["settlements"]:
+            parts.append(f"built settlement at {vertex_label(coord)}")
+    for coord in after["cities"]:
+        if coord not in before["cities"]:
+            parts.append(f"upgraded to city at {vertex_label(coord)}")
+    for edge in after["roads"]:
+        if edge not in before["roads"]:
+            parts.append(f"built road at {edge_label(edge)}")
+    if after["knights"] > before["knights"]:
+        parts.append("played Knight")
+    for card, count in before["dev"].items():
+        if card in ("VP", "KNIGHT"):  # VP is never "played"; Knight is counted above
+            continue
+        if after["dev"].get(card, 0) < count:
+            parts.append(f"played {_HUMAN_DEV_LABEL.get(card, card)}")
+    # A VP card is applied IMMEDIATELY by ``draw_devCard`` — it bumps
+    # ``devCards['VP']`` and never lands in ``newDevCards`` — so a VP draw
+    # (5 of the 25 cards) shows up only here. Without this arm the buy fell
+    # through to the bank-trade fallback and was logged as a false statement.
+    bought_vp = after["dev"].get("VP", 0) > before["dev"].get("VP", 0)
+    if after["new_dev"] > before["new_dev"] or bought_vp:
+        parts.append("bought a dev card")
+    if not parts and after["cards"] != before["cards"]:
+        parts.append("traded with the bank")
+    if not parts:
+        return None
+    return "You " + ", ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -1136,6 +1336,9 @@ def play_interactive(
     analysis session, not a strength read, so the flag is written into both the
     JSONL record and the replay metadata.
     """
+    from collections import deque
+
+    from catan_rl.gui.view import MOVE_LOG_LINES
     from catan_rl.gui.view import catanGameView as _catanGameView
 
     catanGameView: Any = _catanGameView
@@ -1183,7 +1386,19 @@ def play_interactive(
     # so NOTHING is auto-placed for either player (the bot's placements always
     # come from search via the loop). The view is never stored on game.boardView
     # except inside a human input window (deepcopy-safe for MCTS).
-    env.set_view_factory(lambda game: catanGameView(game.board, game))
+    # On-screen recent-move log. OWNED HERE and reached only through the view, so
+    # the env stores no reference and an MCTS clone (which drops ``_human_view``)
+    # cannot log. Deliberately NOT the recorder's EventCollector: that drain is
+    # destructive and single-consumer, and sharing it would silently strip events
+    # out of the Replay.
+    hud_log: Any = deque(maxlen=MOVE_LOG_LINES)
+
+    def _make_view(game: Any) -> Any:
+        built = catanGameView(game.board, game)
+        built.move_log = hud_log
+        return built
+
+    env.set_view_factory(_make_view)
     env.reset(seed=seed, options={"agent_seat": bot_seat})
     # Ensure a view exists for rendering (already built during reset if the human
     # drafted first; built here otherwise — board is fixed at reset).
@@ -1208,6 +1423,8 @@ def play_interactive(
         # human's whole turn internally via the overridden _opponent_* hooks.
         action = agent.choose_action(env)
         print(f"\n[BOT] {_describe_bot_move(action)}", flush=True)
+        # HUD variant names the target index; the stdout/ledger label is frozen.
+        hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
         _obs, _r, terminated, truncated, _info = env.step(action)
         if recorder is not None:
             # Recording is a SIDE CHANNEL: a recorder fault must never kill or
@@ -1263,6 +1480,10 @@ def play_interactive(
     else:
         print(f"  Game ended (truncated). Bot {bot_vp} - {you_vp} You", flush=True)
     print("=" * 70, flush=True)
+    # Terminal HUD line. The bot's VP-card count stays HIDDEN unless --reveal-bot
+    # (this is the one place a VP-card-inclusive total could reach the screen).
+    hud_log.append(_game_over_log_line(env.agent_player, you_vp, reveal_bot=reveal_bot))
+    view.displayGameScreen()
 
     # ---- full-fidelity replay (new format) --------------------------------
     replay_path: str | None = None
@@ -1328,6 +1549,11 @@ def play_interactive(
             # strength read; games recorded before this key existed were played
             # with the bot's FULL hand on screen and must be read that way.
             "reveal_bot": bool(reveal_bot),
+            # Information-regime marker. Games before this key were played
+            # WITHOUT the knights / longest-road panel facts and without the
+            # on-screen move log, i.e. with strictly less public information than
+            # a real table gives — a missing key means regime 1, not this one.
+            "hud": 2,
             "replay_path": replay_path,
             "moves": move_log,
         }
@@ -1336,6 +1562,11 @@ def play_interactive(
         with out.open("a", encoding="utf-8") as fh:  # append: one JSON per game
             fh.write(json.dumps(record) + "\n")
         print(f"  game logged -> {out}", flush=True)
+
+    # Hold the finished board (and the terminal result line) on screen. LAST,
+    # after every artifact is on disk, so dismissing the window can never cost
+    # the replay or the JSONL line.
+    _hold_final_screen()
 
 
 # ---------------------------------------------------------------------------

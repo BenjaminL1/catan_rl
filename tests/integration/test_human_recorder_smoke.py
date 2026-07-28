@@ -139,3 +139,82 @@ def test_provenance_flags_are_recorded(recorded) -> None:  # type: ignore[no-unt
     assert meta.sims is None
     assert meta.clairvoyant is False
     assert meta.reveal_bot is False
+
+
+def _play_recorded_game(mod, *, hud_log):  # type: ignore[no-untyped-def]
+    """Play one deterministic headless game, optionally with a HUD log attached.
+
+    ``hud_log`` is the harness-owned bounded deque the on-screen move log uses.
+    It is reached exactly the way the live game reaches it — through
+    ``view.move_log`` — and is appended to on every step, so if the log had any
+    contention with the recorder's ``EventCollector`` this run would diverge."""
+    import types
+
+    import torch
+
+    from catan_rl.policy.board_geometry import build_geometry
+    from catan_rl.policy.network import CatanPolicy
+    from catan_rl.replay.player_factory import _PolicyActor
+
+    torch.manual_seed(1234)
+    policy = CatanPolicy()
+    policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+    policy.eval()
+    agent = mod._RawPolicyAgent(
+        _PolicyActor(kind="policy", ckpt_path="<fresh>", policy=policy, device=torch.device("cpu"))
+    )
+
+    env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=25)
+    env._auto_human = True  # no GUI: the human seat auto-plays legal moves
+    env.reset(seed=17, options={"agent_seat": 0})
+    if hud_log is not None:
+        # The log lives on the VIEW, never on the env (see _log_move).
+        env._human_view = types.SimpleNamespace(move_log=hud_log)
+    recorder = mod._HumanGameRecorder(env, bot_seat=0)
+
+    terminated = truncated = False
+    steps = 0
+    torch.manual_seed(99)
+    while not terminated and not truncated and steps < env.max_turns * 20:
+        action = agent.choose_action(env)
+        _obs, _r, terminated, truncated, _info = env.step(action)
+        if hud_log is not None:
+            hud_log.append(f"Bot: {mod._describe_bot_move(action, with_location=True)}")
+            env._log_move("You did something")
+        recorder.after_env_step(
+            action, agent.last_internals, terminated=terminated, truncated=truncated
+        )
+        steps += 1
+
+    return recorder.finish(
+        ckpt="<fresh>",
+        seed=17,
+        mode="raw_policy",
+        sims=None,
+        clairvoyant=False,
+        reveal_bot=False,
+    )
+
+
+def test_the_hud_log_does_not_steal_the_recorders_events() -> None:
+    """D5 / AC7: the on-screen log must not drain the recorder's collector.
+
+    ``EventCollector.drain()`` replaces its buffer with an empty one and is
+    single-consumer. Had the HUD reused it, some frames would drain first and the
+    recorder would bank an empty list — the Replay losing a scatter of events
+    nobody notices, since the replay is what you consult AFTER you stop trusting
+    your memory. Same seed, same policy, log on vs log off: identical streams."""
+    from collections import deque
+
+    mod = _load_module()
+    hud_log: deque[str] = deque(maxlen=6)
+    with_log = _play_recorded_game(mod, hud_log=hud_log)
+    without_log = _play_recorded_game(mod, hud_log=None)
+
+    assert hud_log, "the HUD log recorded nothing — the test would prove nothing"
+    assert any(s.events for s in with_log.steps), "no events at all — nothing to lose"
+    assert len(with_log.steps) == len(without_log.steps)
+    for a, b in zip(with_log.steps, without_log.steps, strict=True):
+        assert a.actor == b.actor and a.kind == b.kind
+        assert a.events == b.events
+    assert with_log.metadata.total_steps == without_log.metadata.total_steps

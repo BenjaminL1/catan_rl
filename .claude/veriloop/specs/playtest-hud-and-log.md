@@ -1,6 +1,6 @@
 # Spec: playtest-hud-and-log — show the public facts the real game shows
 
-**Status: DRAFT (2026-07-27) — awaiting owner ratification.**
+**Status: RATIFIED (2026-07-27) — implemented on `feat/playtest-hud-and-log`.**
 
 **Feature in one line.** Show knights-played and longest-road length for both players, and
 add an on-screen move log, so the playtest stops being *harder than real Catan* by
@@ -148,3 +148,86 @@ you *play better in the moment*, which is the owner's stated need.
 8. **Leak pin:** no bot resource type or hidden dev-card type is reachable in the log, and
    `GAME_END` VP is rendered visible-VP-only.
 9. Read-only w.r.t. training: nothing under `runs/train/**`; no engine or schema change.
+
+## Implementation notes (what actually shipped)
+
+Built as specified (D1-D7). Two additive deviations, both flagged rather than
+substituted for a decision:
+
+1. **Hand-panel leading 20px -> 18px** (`HAND_PANEL_LINE_HEIGHT`, `gui/view.py`).
+   D1's layout analysis checked only the human panel against BANK TRADE and
+   missed the BOT panel, which is drawn at y=460: a REVEALED 16-line bot panel
+   (`--reveal-bot`) would have run to y=824 in an 800px window and been clipped.
+   At 18px the human panel bottoms out at y=343 (57px of clearance under BANK
+   TRADE at y=400) and the revealed bot panel at y=788. Pinned as arithmetic in
+   `TestPanelLayout`, not eyeballed.
+2. **`test_no_dev_card_type_is_reachable`'s allow-list is left INTACT.** D1 said
+   to update it deliberately; the chosen wording (`Knights played: N`) clears it
+   unchanged, so the leak pin is preserved rather than weakened, and a positive
+   assertion (`test_the_knights_line_is_not_a_dev_card_type_leak`) was added
+   beside it instead.
+
+Also added, beyond the spec's letter, against the "third incomparable regime"
+risk the spec carries UNCLEARED: an additive `"hud": 2` key on the `games.jsonl`
+record, alongside the existing `reveal_bot` precedent, so a game played under
+this information regime stays legible as such. No reader breaks (`pregate0.py`
+reads by key) and the Replay schema is untouched.
+
+Concrete surface:
+- `gui/view.py`: `_public_progress_lines`, `hand_panel_lines(..., board=None)`,
+  `catanGameView.move_log` + `displayMoveLog()` (drawn BEFORE `displayPorts()`
+  and the buildings loop: the strip overlaps the lower hexes, three real vertices
+  at y=720 AND two of the nine ports, so drawing it last hid placed pieces and
+  port access — a new withholding of a public fact, the exact failure this
+  feature exists to fix; pinned by
+  `test_the_strip_is_drawn_before_the_buildings_loop`),
+  `displayPorts()`, `HAND_PANEL_LINE_HEIGHT`, `MOVE_LOG_*`.
+- `scripts/play_vs_model.py`: `_describe_bot_move(..., with_location=False)`
+  (the DEFAULT string is byte-frozen — it is `bot_action_label` on disk),
+  `_human_snapshot` / `_describe_human_delta`, `_game_over_log_line` (D4's one
+  gate, extracted from `main` so `TestGameOverLine` can pin it),
+  `HumanVsBotEnv._log_move` /
+  `_log_human_action`, and a `deque(maxlen=MOVE_LOG_LINES)` owned by `main` and
+  attached through the view factory (so the env holds no reference and an MCTS
+  clone, which already drops `_human_view`, structurally cannot log), plus
+  `_hold_final_screen()` / `FINAL_SCREEN_HOLD_S`.
+
+### Review fixes (pass 2)
+
+3. **`PLAY_KNIGHT` names no hex.** The HUD variant originally appended
+   `to hex{action[3]}` for `PLAY_KNIGHT` as well as `MOVE_ROBBER`. `PLAY_KNIGHT`
+   does not consume head 3 — `_apply_main_action` only decrements the card,
+   bumps `knightsPlayed` and sets `robber_placement_pending`; the destination
+   arrives in the SEPARATE `MOVE_ROBBER` action one step later, and `masks.py`
+   leaves `tile_mask` all-False during a main turn, so `action[3]` is a
+   uniformly RANDOM index. The log therefore printed two contradictory hexes for
+   one knight, one of them invented — asserting a false public fact, which is
+   worse than withholding one. Pinned by
+   `test_a_knight_play_never_names_a_hex`.
+4. **The strip no longer erases two ports.** Ports are drawn inside
+   `displayInitialBoard`, which runs BEFORE `displayMoveLog()`; only the
+   buildings loop redrew afterwards. The 2:1 WHEAT ship at (541, 759) and a 3:1
+   generic at (296, 751) sit inside `MOVE_LOG_RECT`, so the backdrop hid them for
+   the whole game — the same regression the buildings redraw already guarded
+   against. The port loop is now `displayPorts()`, repainted after the strip in
+   `displayGameScreen` exactly like the buildings. Pinned by a pixel test
+   (`test_the_ports_are_repainted_after_the_strip`) plus the premise measurement
+   `test_the_strip_really_does_overlap_two_ports`.
+5. **Harness wiring is pinned** (`TestHarnessWiring`): `_log_move` behaviourally
+   (view-only path, no-op without a view or a log, no blank lines) and the two
+   harness-only statements at the source, the technique `TestGameOverLine`
+   already used. Deleting either previously left an empty strip with the full
+   suite green.
+6. **The final screen is held** until a click / key / window-close (120s
+   liveness cap, `_hold_final_screen`). This feature is the first to put content
+   on screen after the last human interaction, so the pre-existing instant
+   window teardown made the terminal result line unreadable. Called last, after
+   every artifact is on disk.
+
+Out of feature scope, fixed because it blocked the gate: `_FileSemaphore`
+(`scripts/vlm_spike.py`) created its slot file EMPTY and wrote the pid
+afterwards, so a rival could read pid 0 from the gap, judge a genuinely-held
+slot stale and unlink it — letting concurrency exceed `n`
+(`test_file_semaphore_caps_concurrency` failed ~1 run in 3). The pid is now
+written to a temp file and hard-LINKED into place, which is atomic and carries
+the pid from the moment the slot exists. 12/12 clean runs after.

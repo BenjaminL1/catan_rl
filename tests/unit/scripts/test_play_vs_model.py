@@ -248,3 +248,302 @@ class TestRecorderIsNeverCloned:
         before = len(recorder._setup_complete_snaps)
         env.game.broadcast.emit(recorder._setup_complete_type)
         assert len(recorder._setup_complete_snaps) == before + 1
+
+
+class TestMoveLogLines:
+    """The on-screen move log is fed from the ACTION TUPLE, not the broadcast.
+
+    Two broadcast facts force this: ``PLAY_KNIGHT`` / ``PLAY_ROAD_BUILDER`` emit
+    NO event at all (the counters are incremented directly in the env), and
+    ``BUILD`` events carry ``location=-1`` as a documented sentinel. A
+    broadcast-fed log would therefore omit knights entirely and could never name
+    a build's index."""
+
+    def test_the_default_label_is_byte_identical(self) -> None:
+        """FROZEN: this string is written into ``games.jsonl`` (``bot_action_label``)
+        and into the replay's step note. Re-pointing it would silently change the
+        meaning of content already on disk."""
+        mod = _load_module()
+        cases = {
+            (0, 7, 0, 0, 0, 0): "Build settlement",
+            (1, 7, 0, 0, 0, 0): "Build city",
+            (2, 0, 31, 0, 0, 0): "Build road",
+            (3, 0, 0, 0, 0, 0): "End turn",
+            (4, 0, 0, 12, 0, 0): "Move robber",
+            (5, 0, 0, 0, 0, 0): "Buy dev card",
+            (6, 0, 0, 12, 0, 0): "Play Knight",
+            (12, 0, 0, 0, 0, 0): "Roll dice",
+        }
+        for action, expected in cases.items():
+            assert mod._describe_bot_move(np.array(action, dtype=np.int64)) == expected
+
+    def test_a_knight_play_reaches_the_log(self) -> None:
+        mod = _load_module()
+        line = mod._describe_bot_move(np.array([6, 0, 0, 12, 0, 0]), with_location=True)
+        assert "Knight" in line
+
+    def test_a_knight_play_never_names_a_hex(self) -> None:
+        """PLAY_KNIGHT does not consume head 3, so head 3 is MEANINGLESS here.
+
+        The robber destination arrives in the SEPARATE MOVE_ROBBER action on the
+        next step; during a main turn `tile_mask` is all-False, so `action[3]`
+        is a uniformly random index. Printing it would assert a false public
+        fact AND contradict the MOVE_ROBBER line logged one step later.
+        """
+        mod = _load_module()
+        for tile in (0, 7, 12, 18):
+            line = mod._describe_bot_move(np.array([6, 0, 0, tile, 0, 0]), with_location=True)
+            assert line == "Play Knight"
+            assert "hex" not in line
+        robber = mod._describe_bot_move(np.array([4, 0, 0, 12, 0, 0]), with_location=True)
+        assert robber == "Move robber to hex12"
+
+    def test_a_build_names_its_index_not_the_sentinel(self) -> None:
+        mod = _load_module()
+        settle = mod._describe_bot_move(np.array([0, 23, 0, 0, 0, 0]), with_location=True)
+        road = mod._describe_bot_move(np.array([2, 0, 31, 0, 0, 0]), with_location=True)
+        city = mod._describe_bot_move(np.array([1, 5, 0, 0, 0, 0]), with_location=True)
+        assert settle.endswith("v23") and "-1" not in settle
+        assert road.endswith("e31") and "-1" not in road
+        assert city.endswith("v5") and "-1" not in city
+
+    def test_no_bot_hand_content_is_reachable_from_any_line(self) -> None:
+        """LEAK PIN: only PUBLIC resource facts may appear.
+
+        A bot BUY_DEV_CARD must never name the card drawn, and no action label
+        may enumerate resources the bot merely HOLDS. The only resource names a
+        line may carry belong to the acted move itself (bank-trade sides, a YoP
+        pick, a Monopoly call) — all public the moment they happen."""
+        from catan_rl.env.catan_env import RESOURCES_CW
+
+        mod = _load_module()
+        private = ("BUY_DEV_CARD", 5), ("PLAY_KNIGHT", 6), ("BUILD_SETTLEMENT", 0)
+        for _name, type_id in private:
+            for res_idx in range(5):
+                action = np.array([type_id, 3, 4, 12, res_idx, res_idx], dtype=np.int64)
+                line = mod._describe_bot_move(action, with_location=True)
+                assert not any(r in line for r in RESOURCES_CW), line
+        # And no dev-card TYPE name can appear on a buy.
+        buy = mod._describe_bot_move(np.array([5, 0, 0, 0, 0, 0]), with_location=True)
+        for card in ("KNIGHT", "MONOPOLY", "ROADBUILDER", "YEAROFPLENTY", "VP"):
+            assert card not in buy.upper().replace(" ", "")
+
+
+class TestGameOverLine:
+    """D4's ONE gate: ``GAME_END`` carries a VP-card-inclusive total, and the
+    terminal move-log line is the only place it could reach the screen.
+
+    The blind default must render the bot's score through ``_visible_vp``. This
+    pin exists so that dropping the gate re-opens a hidden-VP leak loudly rather
+    than silently — the same leak class already fixed and pinned in the obs."""
+
+    class _Bot:
+        victoryPoints = 14
+        devCards = {"VP": 3, "KNIGHT": 1}
+
+    def test_blind_by_default_shows_visible_vp_only(self) -> None:
+        mod = _load_module()
+        line = mod._game_over_log_line(self._Bot(), 9, reveal_bot=False)
+        assert line == "GAME OVER — Bot 11 - 9 You"
+        assert "14" not in line
+
+    def test_reveal_bot_restores_the_total(self) -> None:
+        mod = _load_module()
+        assert mod._game_over_log_line(self._Bot(), 9, reveal_bot=True) == (
+            "GAME OVER — Bot 14 - 9 You"
+        )
+
+    def test_the_harness_routes_the_line_through_the_helper(self) -> None:
+        # Guards against the ternary being re-inlined (and then dropped) at the
+        # call site, which would leave the helper pinned but unused.
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert src.count("GAME OVER") == 1, "the string must live only in the helper"
+        assert "_game_over_log_line(env.agent_player" in src
+
+
+class TestHarnessWiring:
+    """The two lines that make the log EXIST are otherwise untested.
+
+    Every other pin in this file targets the pure label helpers, so deleting
+    ``built.move_log = hud_log`` (the view factory) or the bot append in
+    ``play_interactive`` would leave a permanently-empty strip with the whole
+    suite still green. ``_log_move`` is pinned behaviourally; the two
+    harness-only statements are pinned at the source, the same technique
+    ``TestGameOverLine.test_the_harness_routes_the_line_through_the_helper``
+    already uses for the terminal line."""
+
+    def test_log_move_reaches_the_deque_only_through_the_view(self) -> None:
+        from collections import deque
+        from types import SimpleNamespace
+
+        mod = _load_module()
+        cls = mod._build_human_env_class()
+
+        # No view (e.g. an MCTS clone, whose __deepcopy__ drops _human_view):
+        # logging must be a silent no-op, never an AttributeError.
+        clone = SimpleNamespace(_human_view=None)
+        cls._log_move(clone, "You rolled 8")
+
+        # A view with no log attached (engine playCatan) is also a no-op.
+        cls._log_move(SimpleNamespace(_human_view=SimpleNamespace(move_log=None)), "x")
+
+        log: deque[str] = deque(maxlen=6)
+        env = SimpleNamespace(_human_view=SimpleNamespace(move_log=log))
+        cls._log_move(env, "You rolled 8")
+        assert list(log) == ["You rolled 8"]
+        # Empty / None deltas (a cancelled click) must not add a blank line.
+        cls._log_move(env, None)
+        cls._log_move(env, "")
+        assert list(log) == ["You rolled 8"]
+
+    def test_the_view_factory_attaches_the_harness_deque(self) -> None:
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert "built.move_log = hud_log" in src, "the strip would render nothing"
+        assert src.count("hud_log: Any = deque(maxlen=MOVE_LOG_LINES)") == 1
+
+    def test_every_bot_move_is_appended_to_the_log(self) -> None:
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert 'hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")' in src
+
+    def test_the_human_input_loops_still_log(self) -> None:
+        # AC5/D7: the log is BOTH players'. If these call sites vanish the strip
+        # silently becomes bot-only, which reads as a working feature.
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert src.count("self._log_human_action(before)") >= 4
+        assert 'self._log_move(f"You rolled {dice}")' in src
+        assert 'self._log_move(f"You moved the robber to hex{hex_i}")' in src
+
+
+class TestHumanMoveDelta:
+    """The human's own moves are logged by diffing their state across one click.
+
+    A cancelled click (every build button can be backed out of) must produce no
+    entry at all, and a build must name its index — the same requirement the
+    ``location=-1`` sentinel makes impossible from the broadcast."""
+
+    class _FakeEnv:
+        _vertex_to_idx = {"vA": 7, "vB": 9}
+        _edge_to_idx = {("vA", "vB"): 31}
+
+    def _snapshot(self, **over):  # type: ignore[no-untyped-def]
+        base = {
+            "settlements": [],
+            "cities": [],
+            "roads": [],
+            "knights": 0,
+            "dev": {"KNIGHT": 1, "MONOPOLY": 1, "VP": 2, "ROADBUILDER": 0, "YEAROFPLENTY": 0},
+            "new_dev": 0,
+            "cards": 10,
+        }
+        base.update(over)
+        return base
+
+    def test_a_cancelled_click_logs_nothing(self) -> None:
+        mod = _load_module()
+        snap = self._snapshot()
+        assert mod._describe_human_delta(snap, self._snapshot(), self._FakeEnv()) is None
+
+    def test_a_settlement_names_its_vertex(self) -> None:
+        mod = _load_module()
+        line = mod._describe_human_delta(
+            self._snapshot(), self._snapshot(settlements=["vA"]), self._FakeEnv()
+        )
+        assert line == "You built settlement at v7"
+
+    def test_a_road_names_its_edge(self) -> None:
+        mod = _load_module()
+        line = mod._describe_human_delta(
+            self._snapshot(), self._snapshot(roads=[("vA", "vB")]), self._FakeEnv()
+        )
+        assert line == "You built road at e31"
+
+    def test_a_knight_play_is_named_once(self) -> None:
+        mod = _load_module()
+        after = self._snapshot(knights=1, dev={"KNIGHT": 0, "MONOPOLY": 1, "VP": 2})
+        line = mod._describe_human_delta(self._snapshot(), after, self._FakeEnv())
+        assert line == "You played Knight"
+
+    def test_a_monopoly_play_is_named(self) -> None:
+        mod = _load_module()
+        after = self._snapshot(dev={"KNIGHT": 1, "MONOPOLY": 0, "VP": 2})
+        line = mod._describe_human_delta(self._snapshot(), after, self._FakeEnv())
+        assert line == "You played Monopoly"
+
+    def test_a_dev_card_buy_is_named_without_its_type(self) -> None:
+        mod = _load_module()
+        after = self._snapshot(new_dev=1, cards=7)
+        line = mod._describe_human_delta(self._snapshot(), after, self._FakeEnv())
+        assert line == "You bought a dev card"
+
+    def test_a_vp_dev_card_buy_is_not_mislabelled_as_a_bank_trade(self) -> None:
+        # ``draw_devCard`` applies a VP card IMMEDIATELY: devCards['VP'] goes up
+        # and newDevCards does NOT. Roughly one buy in five draws a VP card, so
+        # falling through to the bank-trade fallback would make the log lie.
+        mod = _load_module()
+        after = self._snapshot(dev={"KNIGHT": 1, "MONOPOLY": 1, "VP": 3}, cards=7)
+        line = mod._describe_human_delta(self._snapshot(), after, self._FakeEnv())
+        assert line == "You bought a dev card"
+
+    def test_a_resource_only_change_reads_as_a_bank_trade(self) -> None:
+        mod = _load_module()
+        line = mod._describe_human_delta(self._snapshot(), self._snapshot(cards=8), self._FakeEnv())
+        assert line == "You traded with the bank"
+
+    def test_a_real_engine_road_resolves_against_the_real_index_map(self) -> None:
+        """The hand-made string coords above cannot catch a drift between the
+        label's key and ``CatanEnv._edge_key`` — the lookup fails SILENTLY to
+        "e?". This exercises real engine ``Point`` objects end to end."""
+        from catan_rl.engine.board import catanBoard
+        from catan_rl.env.catan_env import CatanEnv
+
+        mod = _load_module()
+        board = catanBoard()
+        env = CatanEnv.__new__(CatanEnv)
+        env._build_index_maps(board)
+        v1 = next(iter(board.boardGraph))
+        v2 = board.boardGraph[v1].neighbors[0]
+        line = mod._describe_human_delta(self._snapshot(), self._snapshot(roads=[(v1, v2)]), env)
+        assert line is not None and line.startswith("You built road at e")
+        assert "e?" not in line
+
+
+class TestHudLogIsNotTheRecordersCollector:
+    """D5 structural pin (the integration behavioural pin lives in
+    ``tests/integration/test_human_recorder_smoke.py``, which ``make test-unit``
+    does not run).
+
+    ``EventCollector.drain()`` is destructive and single-consumer and the replay
+    recorder already owns the only one. A second consumer would silently strip
+    events out of the Replay — the artifact built specifically to be trusted."""
+
+    def test_the_harness_uses_a_bounded_deque_and_never_the_collector(self) -> None:
+        import ast
+
+        tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+        calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+        deques = [
+            c
+            for c in calls
+            if getattr(c.func, "id", None) == "deque" or getattr(c.func, "attr", None) == "deque"
+        ]
+        assert deques, "the HUD log must be a collections.deque"
+        assert all(any(k.arg == "maxlen" for k in c.keywords) for c in deques), "must be bounded"
+        # EXACTLY ONE EventCollector exists in the harness — the recorder's. The
+        # HUD must neither construct a second one nor share that one.
+        collectors = [c for c in calls if getattr(c.func, "id", None) == "EventCollector"]
+        assert len(collectors) == 1, "a second EventCollector would race the recorder's drain"
+
+    def test_the_env_holds_no_reference_to_the_hud_log(self) -> None:
+        """The log is reached ONLY through the view, which ``__deepcopy__``
+        already drops — so an MCTS clone structurally cannot log."""
+        pytest.importorskip("torch")
+        import copy
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=20)
+        env._auto_human = True
+        env.reset(seed=5, options={"agent_seat": 0})
+        assert not [k for k in vars(env) if "log" in k.lower()]
+        clone = copy.deepcopy(env)
+        assert clone._human_view is None
+        clone._log_move("this must go nowhere")  # no view -> no log, no error

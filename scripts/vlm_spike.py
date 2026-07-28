@@ -65,6 +65,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
@@ -681,19 +682,28 @@ class _FileSemaphore:
         lock_dir.mkdir(parents=True, exist_ok=True)
 
     def __enter__(self) -> _FileSemaphore:
-        while True:
-            for i in range(self._n):
-                slot = self._dir / f"slot{i}.lock"
-                try:
-                    fd = os.open(slot, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                except FileExistsError:
-                    self._reclaim_if_stale(slot)
-                    continue
-                os.write(fd, str(os.getpid()).encode())
-                os.close(fd)
-                self._held = slot
-                return self
-            time.sleep(self._poll)
+        # The pid is written to a private temp file and hard-LINKED into place.
+        # os.link is atomic and fails with FileExistsError when the slot is
+        # taken, and the slot it creates ALREADY carries the pid. Creating the
+        # slot empty and writing the pid afterwards leaves a window in which a
+        # rival sees a 0-byte slot, parses pid 0, judges it stale and unlinks a
+        # slot that is genuinely HELD — letting concurrency exceed n.
+        tmp = self._dir / f".claim.{os.getpid()}.{uuid.uuid4().hex}"
+        tmp.write_text(str(os.getpid()))
+        try:
+            while True:
+                for i in range(self._n):
+                    slot = self._dir / f"slot{i}.lock"
+                    try:
+                        os.link(tmp, slot)
+                    except FileExistsError:
+                        self._reclaim_if_stale(slot)
+                        continue
+                    self._held = slot
+                    return self
+                time.sleep(self._poll)
+        finally:
+            tmp.unlink(missing_ok=True)
 
     def _reclaim_if_stale(self, slot: Path) -> None:
         try:

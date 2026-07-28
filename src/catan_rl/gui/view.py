@@ -12,6 +12,21 @@ from catan_rl.gui import render_constants as RC
 
 pygame.init()
 
+#: Leading (px) between hand-panel lines. 18, not 20: the revealed panel is 16
+#: lines and at 20px a REVEALED bot panel (drawn at y=460) would run past the
+#: 800px window bottom.
+HAND_PANEL_LINE_HEIGHT = 18
+
+#: Recent-move log strip along the bottom of the board, as (x, y, w, h): the
+#: right rail is fully allocated, so the log goes here. x=115 clears the END TURN
+#: button (x 20-100) and 705px of width fits "Bot: Build settlement at v23".
+MOVE_LOG_RECT = (115, 695, 705, 100)
+MOVE_LOG_LINE_HEIGHT = 15
+#: How many log lines the strip can show. The window is 1000x800 and the right
+#: rail is fully allocated, so the ~12 lines originally wished for do not fit;
+#: 6 wide lines covers a typical bot turn (roll, 1-3 actions, end turn).
+MOVE_LOG_LINES = 6
+
 #: Hidden-dev-card key -> short label used by the REVEALED hand panel.
 _DEV_CARD_DISPLAY = {
     "KNIGHT": "Knight",
@@ -22,7 +37,38 @@ _DEV_CARD_DISPLAY = {
 }
 
 
-def hand_panel_lines(player, *, reveal: bool = True) -> list[str]:
+def _public_progress_lines(player, board) -> list[str]:
+    """Knights played + current longest-road length — PUBLIC in BOTH panels.
+
+    Knights are played face up and roads sit on the board, so an opponent at a
+    real table sees both. Withholding them from the human while the bot reads
+    them straight off the state makes the playtest HARDER than real Catan and
+    biases every result toward the bot — the same error as over-blinding
+    DISCARD/YOP. They are therefore emitted in the blind panel too.
+
+    The road length is computed LIVE from ``board`` when one is supplied
+    (``player.get_road_length(board)``) instead of read off the
+    ``maxRoadLength`` cache. That cache is in fact fresh on every traced
+    mutating path, so this is belt-and-braces rather than a bug fix; it is
+    affordable because the panel renders once per pick, not once per frame
+    (``_animated_pick`` caches the base surface). ``board=None`` (pure /
+    duck-typed callers) falls back to the cache.
+
+    ``Knights played:`` deliberately avoids the ``Knight:`` label used by the
+    REVEALED dev-card block, so the blind panel still exposes no dev-card TYPE
+    string (pinned in ``tests/unit/gui/test_hand_panel.py``).
+    """
+    if board is not None:
+        road_length = player.get_road_length(board)
+    else:
+        road_length = getattr(player, "maxRoadLength", 0)
+    return [
+        f"Knights played: {player.knightsPlayed}",
+        f"Longest road: {road_length}",
+    ]
+
+
+def hand_panel_lines(player, *, reveal: bool = True, board=None) -> list[str]:
     """Return the text lines of a hand panel for ``player``.
 
     Pure (no pygame): the rendering in :meth:`catanGameView._draw_hand_panel`
@@ -40,6 +86,11 @@ def hand_panel_lines(player, *, reveal: bool = True) -> list[str]:
     (``engine/player.py``), which is also how ``policy/obs_encoder.py``
     computes it. ``player.visibleVictoryPoints`` is deliberately NOT used:
     it is a stale cache refreshed only at init + VP-card buy.
+
+    BOTH branches also carry the PUBLIC progress facts (knights played, current
+    longest-road length) — see :func:`_public_progress_lines`. ``board`` is an
+    OPTIONAL, backwards-compatible kwarg: pass it to compute the road length
+    live, omit it to fall back to ``player.maxRoadLength``.
     """
     if not reveal:
         visible_vp = player.victoryPoints - player.devCards.get("VP", 0)
@@ -48,12 +99,15 @@ def hand_panel_lines(player, *, reveal: bool = True) -> list[str]:
             f"Cards: {sum(player.resources.values())}",
             "",
             f"Victory Points: {visible_vp}",
+            *_public_progress_lines(player, board),
             "",
             f"Dev Cards: {n_dev}",
         ]
 
     lines = [f"{resource}: {count}" for resource, count in player.resources.items()]
-    lines += ["", f"Victory Points: {player.victoryPoints}", "", "Dev Cards:"]
+    lines += ["", f"Victory Points: {player.victoryPoints}"]
+    lines += _public_progress_lines(player, board)
+    lines += ["", "Dev Cards:"]
     total_dev_cards = dict(player.devCards)
     for card in player.newDevCards:
         total_dev_cards[card] = total_dev_cards.get(card, 0) + 1
@@ -115,6 +169,7 @@ class catanGameView:
         self.font_Robber = pygame.font.SysFont("arialblack", 50)  # robber font
         self.font_menu = pygame.font.SysFont("cambria", 20)
         self.font_broadcast = pygame.font.SysFont("cambria", 18)  # broadcast font
+        self.font_movelog = pygame.font.SysFont("cambria", 13)  # recent-move strip
 
         self.diceRoll = 0  # Initialize dice roll
 
@@ -147,6 +202,15 @@ class catanGameView:
         # displayBroadcastMessage. Engine playCatan leaves it empty -> raw names.
         self.name_display: dict[str, str] = {}
 
+        # Optional: recent-move log rendered in the bottom strip. A sequence of
+        # plain strings, OLDEST FIRST — the harness owns it (see
+        # ``scripts/play_vs_model.py``), typically a
+        # ``collections.deque(maxlen=MOVE_LOG_LINES)``. Deliberately NOT an
+        # ``EventCollector``: that drain is destructive and single-consumer, and
+        # the replay recorder already owns the only one. Engine playCatan leaves
+        # this None -> nothing is drawn.
+        self.move_log = None
+
         return None
 
     # Function to display the initial board
@@ -177,6 +241,22 @@ class catanGameView:
                     num,
                 )
 
+        self.displayPorts()
+
+        pygame.display.update()
+
+        return None
+
+    def displayPorts(self):
+        """Draw all nine ports (planks + ship + ratio badge).
+
+        Split out of ``displayInitialBoard`` so ``displayGameScreen`` can repaint
+        the ports AFTER the move-log strip, exactly as it repaints the buildings
+        loop: two ports anchor inside ``MOVE_LOG_RECT`` (the 2:1 WHEAT ship at
+        (541, 759) and a 3:1 generic at (296, 751)), and their planks run to
+        vertices at y=720. Port access is a first-order PUBLIC planning fact, so
+        the strip must not erase it. Idempotent — the seven ports outside the
+        strip redraw identically."""
         board_cx = self.board.width / 2.0
         board_cy = self.board.height / 2.0
         vertex_pixel = self.board.vertex_index_to_pixel_dict
@@ -200,8 +280,6 @@ class catanGameView:
                 (int(v2_px.x), int(v2_px.y)),
             )
             render.draw_port_ship(self.screen, ratio, resource, (ax, ay))
-
-        pygame.display.update()
 
         return None
 
@@ -426,9 +504,15 @@ class catanGameView:
         ``reveal`` is forwarded to :func:`hand_panel_lines`, which owns the
         content (and the reveal/blind distinction); this method only lays it out.
         Defaults to ``True`` so existing call sites (a player's OWN hand) are
-        unchanged."""
-        lines = hand_panel_lines(player, reveal=reveal)
-        line_height = 20
+        unchanged. ``self.board`` is forwarded so the longest-road figure is
+        computed live. Returns the panel ``Rect`` so the layout arithmetic is
+        testable; no caller reads it.
+
+        The 18px leading is load-bearing, not cosmetic: the revealed panel is 16
+        lines, and at the old 20px a REVEALED BOT panel (``--reveal-bot``, drawn
+        at y=460) would extend to y=824 in an 800px window."""
+        lines = hand_panel_lines(player, reveal=reveal, board=self.board)
+        line_height = HAND_PANEL_LINE_HEIGHT
         panel_lines = len(lines) + 2  # title + a trailing margin line
         panel = pygame.Rect(x - 12, y - 8, 156, line_height * panel_lines + 12)
         backdrop = pygame.Surface((panel.width, panel.height), pygame.SRCALPHA)
@@ -442,6 +526,36 @@ class catanGameView:
             if line:
                 self.screen.blit(self.font_resource.render(line, False, (0, 0, 0)), (x, y))
             y += line_height
+        return panel
+
+    def displayMoveLog(self):
+        """Draw the recent-move strip along the bottom of the board.
+
+        No-op unless a harness populated ``self.move_log`` (engine playCatan
+        never does). Entries are plain strings, OLDEST FIRST; only the last
+        ``MOVE_LOG_LINES`` are drawn, newest at the bottom. Long lines are
+        truncated to the strip width rather than wrapped.
+
+        Called BEFORE ``displayPorts`` and the buildings loop in
+        ``displayGameScreen``: the strip covers three real vertices (y=720), the
+        bottom of hexes 13/14/15, and two of the nine ports (the 2:1 WHEAT ship
+        at (541, 759) and a 3:1 generic at (296, 751)), so drawing it last would
+        hide pieces and port access placed there — public facts both."""
+        if not self.move_log:
+            return
+        x, y, w, h = MOVE_LOG_RECT
+        backdrop = pygame.Surface((w, h), pygame.SRCALPHA)
+        backdrop.fill((245, 245, 235, 222))
+        self.screen.blit(backdrop, (x, y))
+        panel = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(self.screen, (0, 0, 0), panel, 2, border_radius=6)
+
+        lines = list(self.move_log)[-MOVE_LOG_LINES:]
+        text_y = y + 5
+        for line in lines:
+            surf = self.font_movelog.render(str(line), False, (0, 0, 0))
+            self.screen.blit(surf, (x + 8, text_y), pygame.Rect(0, 0, w - 16, h))
+            text_y += MOVE_LOG_LINE_HEIGHT
 
     # Function to display the gameState board - use to display intermediate build screens
     # gameScreenState specifies which type of screen is to be shown
@@ -461,6 +575,21 @@ class catanGameView:
             )  # blue background
             diceNum = self.font_diceRoll.render(str(self.diceRoll), False, (0, 0, 0))
             self.screen.blit(diceNum, (110, 20))
+
+        # Recent-move strip. Drawn BEFORE the buildings loop on purpose: the strip
+        # overlaps the board's lower hexes and three real vertices (v42/v44/v47 at
+        # y=720), so drawing it last would HIDE placed settlements/cities/roads on
+        # the bottom row — withholding a public fact, which is exactly what this
+        # feature exists to stop. Losing a few characters of log text behind at
+        # most three small markers is the cheaper side of the trade.
+        self.displayMoveLog()
+
+        # Repaint the ports for the same reason, and in the same place, as the
+        # buildings loop below: the strip's backdrop covers the 2:1 WHEAT ship
+        # at (541, 759) and a 3:1 generic at (296, 751), plus the planks running
+        # to the y=720 vertices. Port access is a PUBLIC planning fact; hiding
+        # two of nine for the whole game biases the playtest toward the bot.
+        self.displayPorts()
 
         # Loop through and display all existing buildings from players build graphs
         # Build Settlements and roads of each player
