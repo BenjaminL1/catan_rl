@@ -33,6 +33,51 @@ from catan_rl.gui.view import (
     hand_panel_lines,
 )
 
+
+def _window_size() -> tuple[int, int]:
+    """The live window size, read from the board rather than hardcoded.
+
+    Every pixel coordinate in the GUI derives from ``catanBoard.size``, so a
+    window change translates the whole lattice. These layout pins must move with
+    it instead of pinning a size that is allowed to change.
+    """
+    from catan_rl.engine.board import catanBoard
+
+    board = catanBoard()
+    return int(board.width), int(board.height)
+
+
+def _port_anchors_in_strip() -> list[tuple[int, int]]:
+    """Port anchor pixels that fall inside ``MOVE_LOG_RECT``, measured live.
+
+    Replicates ``displayPorts``' anchor arithmetic (midpoint of the port edge,
+    pushed radially outward from the board centre) so the repaint pin below
+    tests real port pixels at whatever window size is in force.
+    """
+    import math
+
+    from catan_rl.engine.board import catanBoard
+    from catan_rl.gui import render
+    from catan_rl.gui import render_constants as RC
+
+    x, y, w, h = MOVE_LOG_RECT
+    board = catanBoard()
+    vertex_pixel = board.vertex_index_to_pixel_dict
+    bcx, bcy = board.width / 2.0, board.height / 2.0
+    inside: list[tuple[int, int]] = []
+    for v1_idx, v2_idx, _ratio, _res in render.collect_port_edges(board):
+        p1, p2 = vertex_pixel[v1_idx], vertex_pixel[v2_idx]
+        mx = (float(p1.x) + float(p2.x)) / 2.0
+        my = (float(p1.y) + float(p2.y)) / 2.0
+        dx, dy = mx - bcx, my - bcy
+        d = math.hypot(dx, dy) or 1.0
+        ax = int(mx + dx * RC.PORT_PUSH_DISTANCE / d)
+        ay = int(my + dy * RC.PORT_PUSH_DISTANCE / d)
+        if x <= ax <= x + w and y <= ay <= y + h:
+            inside.append((ax, ay))
+    return inside
+
+
 _RESOURCE_NAMES = ("WOOD", "BRICK", "WHEAT", "ORE", "SHEEP")
 _DEV_TYPE_LABELS = ("Knight", "VP", "Mono", "RB", "YOP")
 
@@ -273,9 +318,9 @@ class TestPanelRendering:
 class TestPanelLayout:
     """Arithmetic, not eyeballing: two extra lines per panel must not push the
     human panel into the BANK TRADE button, nor the REVEALED bot panel off the
-    bottom of the 1000x800 window. Coordinates mirror ``displayPlayerStats``."""
+    bottom of the window. Coordinates mirror ``displayPlayerStats``; the window
+    size is read from the board (``_window_size``) rather than restated."""
 
-    _WINDOW_H = 800
     _BANK_TRADE_Y = 400
     _HUMAN_PANEL_Y = 15
     _BOT_PANEL_Y = 460
@@ -288,17 +333,20 @@ class TestPanelLayout:
         assert self._panel_bottom(self._HUMAN_PANEL_Y, reveal=True) < self._BANK_TRADE_Y
 
     def test_the_revealed_bot_panel_stays_inside_the_window(self) -> None:
-        # --reveal-bot draws the FULL 16-line panel at y=460; at the old 20px
-        # leading it ran to y=824 and was clipped.
-        assert self._panel_bottom(self._BOT_PANEL_Y, reveal=True) <= self._WINDOW_H
+        # --reveal-bot draws the FULL 16-line panel at y=460; this is the
+        # constraint that sizes the window, so it is read from the board rather
+        # than restated as a literal.
+        assert self._panel_bottom(self._BOT_PANEL_Y, reveal=True) <= _window_size()[1]
 
     def test_the_blind_bot_panel_stays_inside_the_window(self) -> None:
-        assert self._panel_bottom(self._BOT_PANEL_Y, reveal=False) <= self._WINDOW_H
+        assert self._panel_bottom(self._BOT_PANEL_Y, reveal=False) <= _window_size()[1]
 
     def test_the_move_log_strip_fits_and_clears_the_end_turn_button(self) -> None:
+        width, height = _window_size()
         x, y, w, h = MOVE_LOG_RECT
         assert x >= 115, "must clear the END TURN button (x 20-100)"
-        assert x + w <= 1000 and y + h <= self._WINDOW_H
+        assert y >= 745, "must clear the END TURN button (y 700-740)"
+        assert x + w <= width and y + h <= height
         assert h >= MOVE_LOG_LINES * MOVE_LOG_LINE_HEIGHT
 
 
@@ -323,7 +371,7 @@ class TestMoveLogSurface:
         assert "EventCollector" not in names | attrs
 
     def test_no_log_draws_nothing(self) -> None:
-        view = TestPanelRendering()._view((1000, 800))
+        view = TestPanelRendering()._view(_window_size())
         view.move_log = None
         view.displayMoveLog()  # must be a no-op, not an AttributeError
         view.move_log = []
@@ -331,8 +379,8 @@ class TestMoveLogSurface:
 
     def test_the_strip_really_does_overlap_board_vertices(self) -> None:
         # The premise of the draw-order pin below, measured against the real
-        # board rather than asserted: three of the 54 vertices sit at y=720,
-        # inside MOVE_LOG_RECT.
+        # board rather than asserted: three of the 54 vertices (v42/v44/v47) sit
+        # on the board's bottom row, inside MOVE_LOG_RECT.
         from catan_rl.engine.board import catanBoard
 
         x, y, w, h = MOVE_LOG_RECT
@@ -374,27 +422,7 @@ class TestMoveLogSurface:
         # Same premise-first measurement as the vertex case above: two of the
         # nine port ANCHORS fall inside MOVE_LOG_RECT, so the strip's backdrop
         # would erase them for the whole game.
-        import math
-
-        from catan_rl.engine.board import catanBoard
-        from catan_rl.gui import render
-        from catan_rl.gui import render_constants as RC
-
-        x, y, w, h = MOVE_LOG_RECT
-        board = catanBoard()
-        vertex_pixel = board.vertex_index_to_pixel_dict
-        bcx, bcy = board.width / 2.0, board.height / 2.0
-        inside = []
-        for v1_idx, v2_idx, _ratio, _res in render.collect_port_edges(board):
-            p1, p2 = vertex_pixel[v1_idx], vertex_pixel[v2_idx]
-            mx = (float(p1.x) + float(p2.x)) / 2.0
-            my = (float(p1.y) + float(p2.y)) / 2.0
-            dx, dy = mx - bcx, my - bcy
-            d = math.hypot(dx, dy) or 1.0
-            ax = int(mx + dx * RC.PORT_PUSH_DISTANCE / d)
-            ay = int(my + dy * RC.PORT_PUSH_DISTANCE / d)
-            if x <= ax <= x + w and y <= ay <= y + h:
-                inside.append((ax, ay))
+        inside = _port_anchors_in_strip()
         assert len(inside) == 2, inside
 
     def test_the_ports_are_repainted_after_the_strip(self) -> None:
@@ -407,12 +435,15 @@ class TestMoveLogSurface:
 
         from catan_rl.engine.board import catanBoard
 
-        view = TestPanelRendering()._view((1000, 800))
+        view = TestPanelRendering()._view(_window_size())
         view.board = catanBoard()
         view.move_log = deque(["Bot: Roll dice", "Bot: Play Knight"], maxlen=MOVE_LOG_LINES)
 
         sentinel = (255, 0, 0)
-        anchors = [(541, 759), (296, 751)]
+        # Measured live: hardcoded pixels would silently stop testing ports the
+        # moment the window size (and hence the whole lattice) moves.
+        anchors = _port_anchors_in_strip()
+        assert len(anchors) == 2, anchors
         view.screen.fill(sentinel)
         view.displayMoveLog()
         # Premise: the backdrop really did paint over both anchors.
@@ -429,7 +460,7 @@ class TestMoveLogSurface:
     def test_only_the_last_lines_are_drawn(self) -> None:
         from collections import deque
 
-        view = TestPanelRendering()._view((1000, 800))
+        view = TestPanelRendering()._view(_window_size())
         log: deque[str] = deque(maxlen=MOVE_LOG_LINES)
         for i in range(MOVE_LOG_LINES * 3):
             log.append(f"line {i}")

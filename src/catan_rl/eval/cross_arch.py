@@ -224,9 +224,10 @@ def cross_arch_h2h(
     check; the ratified accept gate runs the same call at ``n_games=600``.
 
     Before doing anything, :func:`~catan_rl.eval.engine_parity.assert_engine_parity`
-    refuses to run if the live engine has drifted from the pre-fork tree the
-    vendored legacy encoder was written against (``strict_engine_parity=False``
-    bypasses — untrusted).
+    refuses to run if the live engine has drifted from the pinned tree the
+    vendored legacy encoder is validated against (the pre-fork tree plus any
+    logged, re-validated re-pin; ``strict_engine_parity=False`` bypasses —
+    untrusted).
 
     Returns an :class:`EvalMatchupResult`: the NEW arch's seat-symmetrized win
     rate + Wilson CI over ``2 * (n_games // 2)`` games. Bit-for-bit reproducible
@@ -235,8 +236,9 @@ def cross_arch_h2h(
     """
     if old_arch not in ("legacy", "new"):
         raise ValueError(f"old_arch must be 'legacy' or 'new'; got {old_arch!r}")
-    # Guard 3: the whole in-process method rests on the engine being byte-
-    # identical across the fork — refuse (or warn, if unverifiable) up front.
+    # Guard 3: the whole in-process method rests on the engine matching the tree
+    # the vendored encoder was validated against — refuse (or warn, if
+    # unverifiable) up front.
     assert_engine_parity(strict=strict_engine_parity)
 
     np_state = np.random.get_state()

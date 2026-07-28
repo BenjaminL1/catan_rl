@@ -576,3 +576,156 @@ class TestFinalScreenHold:
         """The hold is dismissible; the timeout only bounds an unattended run."""
         mod = _load_module()
         assert mod.FINAL_SCREEN_HOLD_S > 0
+
+
+def _first_true(mask) -> int:  # type: ignore[no-untyped-def]
+    idx = int(np.argmax(mask))
+    assert bool(mask[idx]), "no legal index in mask"
+    return idx
+
+
+def _first_legal_action(env):  # type: ignore[no-untyped-def]
+    """First-legal action for ``env`` (mirrors tests/unit/env/test_snapshot_opponent)."""
+    from catan_rl.env.catan_env import ActionType
+
+    m = env.get_action_masks()
+    action = [0, 0, 0, 0, 0, 0]
+    if bool(m["type"][ActionType.END_TURN]):
+        return np.asarray([ActionType.END_TURN, 0, 0, 0, 0, 0], dtype=np.int64)
+    atype = _first_true(m["type"])
+    action[0] = atype
+    if atype == ActionType.BUILD_SETTLEMENT:
+        action[1] = _first_true(m["corner_settlement"])
+    elif atype == ActionType.BUILD_CITY:
+        action[1] = _first_true(m["corner_city"])
+    elif atype == ActionType.BUILD_ROAD:
+        action[2] = _first_true(m["edge"])
+    elif atype == ActionType.MOVE_ROBBER:
+        action[3] = _first_true(m["tile"])
+    elif atype == ActionType.DISCARD:
+        action[4] = _first_true(m["resource1_discard"])
+    return np.asarray(action, dtype=np.int64)
+
+
+class TestHumanSeatIsNotAI:
+    """The human seat is flagged ``isAI=False`` PERMANENTLY, and search is unaffected.
+
+    ``CatanEnv.reset`` stamps ``opp.isAI = True``, which routed a human Monopoly
+    / Year of Plenty through ``np.random.choice`` instead of the GUI picker. The
+    harness flips it back on every reset. The flip is only safe because no
+    deep-copied MCTS clone can reach the branch it changes: ``play_devCard`` has
+    exactly three call sites (the engine's ``playCatan`` human loop — unreachable
+    because the env builds ``render_mode=None`` — plus this script's two GUI
+    sites), so a clone rollout never executes it. The pin for that is
+    ``test_play_devcard_has_only_the_three_audited_call_sites``: unreachability
+    is a STRUCTURAL property, and a runtime sentinel dropped into a scripted
+    clone rollout could only ever re-confirm it (nothing under ``src/`` calls the
+    method, so the sentinel is unreachable by construction regardless of the
+    ``isAI`` value) — it would pass identically on a tree where the flip was
+    wrong, so it is not written here.
+    """
+
+    def _env(self):  # type: ignore[no-untyped-def]
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=11, options={"agent_seat": 0})
+        return env
+
+    def test_the_human_seat_is_not_flagged_as_ai(self) -> None:
+        env = self._env()
+        assert env.opponent_player.isAI is False
+        assert env.agent_player.isAI is False
+
+    def test_the_flip_survives_a_second_reset(self) -> None:
+        env = self._env()
+        env.reset(seed=12, options={"agent_seat": 1})
+        assert env.opponent_player.isAI is False
+
+    def test_a_clone_never_drives_the_gui(self) -> None:
+        import copy
+
+        env = self._env()
+        env.set_view_factory(lambda game: object())
+        clone = copy.deepcopy(env)
+        assert clone._human_view is None
+        assert clone._view_factory is None
+        assert clone._use_gui() is False
+
+    def test_play_devcard_has_only_the_three_audited_call_sites(self) -> None:
+        out = subprocess.run(
+            ["git", "grep", "--untracked", "-n", r"\.play_devCard(", "--", "src", "scripts"],
+            cwd=_REPO,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.split("\n")
+        sites = sorted(line.split(":")[0] for line in out if line.strip())
+        assert sites == [
+            "scripts/play_vs_model.py",
+            "scripts/play_vs_model.py",
+            "src/catan_rl/engine/game.py",
+        ], sites
+
+
+class TestBankConservationGuard:
+    """D3: the human driver asserts the finite-bank invariant it never had.
+
+    The guard is the only thing standing between a GUI accounting slip and a
+    corrupted global feature in the bot's observation, so its call sites are
+    pinned at the source the same way the move-log ones are.
+    """
+
+    def test_the_helper_holds_on_a_fresh_game(self) -> None:
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=13, options={"agent_seat": 0})
+        mod._assert_bank_conservation(env)  # setup grants are metered
+        for _ in range(30):
+            _o, _r, term, trunc, _i = env.step(_first_legal_action(env))
+            mod._assert_bank_conservation(env)
+            if term or trunc:
+                break
+
+    def test_a_broken_bank_is_caught(self) -> None:
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=14, options={"agent_seat": 0})
+        env.opponent_player.resources["WOOD"] += 1  # a mint, exactly as the picker did
+        with pytest.raises(AssertionError):
+            mod._assert_bank_conservation(env)
+
+    def test_the_driver_calls_the_guard_after_every_step(self) -> None:
+        src = _SCRIPT.read_text(encoding="utf-8")
+        # The interactive loop goes through the non-fatal reporter (reset + step);
+        # the self-test asserts directly, in both of its loops.
+        assert src.count("check_bank(env)") >= 2
+        assert "_assert_bank_conservation(env)" in src
+        assert "_assert_bank_conservation(env2)" in src
+
+    def test_the_interactive_reporter_does_not_kill_the_game(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A broken bank must NOT raise out of the interactive loop: the replay is
+        written only after the loop ends, so raising would destroy an hour of human
+        play AND the recording that is the evidence of the break. Report, detach,
+        play on — the same side-channel rule the recorder already follows."""
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=15, options={"agent_seat": 0})
+        hud_log: list[str] = []
+        check = mod._make_bank_conservation_reporter(hud_log)
+
+        check(env)  # healthy: silent, nothing logged
+        assert hud_log == []
+
+        env.opponent_player.resources["WOOD"] += 1  # a mint
+        check(env)  # must not raise
+        assert len(hud_log) == 1 and "BANK INVARIANT BROKEN" in hud_log[0]
+        assert "finite-bank invariant BROKEN" in capsys.readouterr().out
+
+        check(env)  # detached after the first report — no repeat spam
+        assert len(hud_log) == 1

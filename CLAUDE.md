@@ -52,7 +52,9 @@ eval).
   bank is still read via **read-only accessors** (no mutation path near
   `bank_recirculate`/`bank_draw`, conservation untouched). All mutation paths
   (engine, env, recorder, heuristic, random_ai, bc.dataset,
-  labeling) route through `bank_recirculate` / `bank_draw`. Mirrors the Torevan
+  labeling, and the human GUI pickers in `gui/view.py` — YoP draw + its
+  cancel/revert, discard recirculate) route through `bank_recirculate` /
+  `bank_draw`. Mirrors the Torevan
   TS `resourceBank`; the conformance harness pins parity (seeds 7/8/15 are a
   no-op; depletion is exercised by a dedicated fixture + cross-engine tests).
 - `BroadcastHandTracker` (`engine/broadcast.py` / `tracker.py`) does **perfect** opponent hand-tracking — valid only in 1v1 with no P2P trade.

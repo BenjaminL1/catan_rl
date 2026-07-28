@@ -12,17 +12,25 @@ from catan_rl.gui import render_constants as RC
 
 pygame.init()
 
-#: Leading (px) between hand-panel lines. 18, not 20: the revealed panel is 16
-#: lines and at 20px a REVEALED bot panel (drawn at y=460) would run past the
-#: 800px window bottom.
-HAND_PANEL_LINE_HEIGHT = 18
+#: Leading (px) between hand-panel lines. Back to a comfortable 20: the revealed
+#: panel is 16 lines, so a REVEALED bot panel (drawn at y=460) runs to y=824 —
+#: which the 900px window (``board.size``) holds. The previous 18px was a
+#: workaround for the old 800px window, where 20px overflowed.
+HAND_PANEL_LINE_HEIGHT = 20
 
 #: Recent-move log strip along the bottom of the board, as (x, y, w, h): the
 #: right rail is fully allocated, so the log goes here. x=115 clears the END TURN
 #: button (x 20-100) and 705px of width fits "Bot: Build settlement at v23".
-MOVE_LOG_RECT = (115, 695, 705, 100)
+#: y=745 sits below that button (y 700-740). It does NOT clear the board: the
+#: bottom vertex row (v42/v44/v47) is at y=770, i.e. INSIDE the strip, exactly as
+#: before the window grew (both moved down 50px together). The draw-order hack in
+#: ``displayGameScreen`` — strip first, then ``displayPorts`` and the buildings
+#: loop — is therefore still load-bearing; deleting it re-hides placed pieces and
+#: two of nine ports. ``test_the_strip_really_does_overlap_board_vertices`` pins
+#: the overlap.
+MOVE_LOG_RECT = (115, 745, 705, 100)
 MOVE_LOG_LINE_HEIGHT = 15
-#: How many log lines the strip can show. The window is 1000x800 and the right
+#: How many log lines the strip can show. The window is 1200x900 and the right
 #: rail is fully allocated, so the ~12 lines originally wished for do not fit;
 #: 6 wide lines covers a typical bot turn (roll, 1-3 actions, end turn).
 MOVE_LOG_LINES = 6
@@ -252,9 +260,11 @@ class catanGameView:
 
         Split out of ``displayInitialBoard`` so ``displayGameScreen`` can repaint
         the ports AFTER the move-log strip, exactly as it repaints the buildings
-        loop: two ports anchor inside ``MOVE_LOG_RECT`` (the 2:1 WHEAT ship at
-        (541, 759) and a 3:1 generic at (296, 751)), and their planks run to
-        vertices at y=720. Port access is a first-order PUBLIC planning fact, so
+        loop: two ports on the board's bottom edge anchor inside
+        ``MOVE_LOG_RECT`` (at (641, 809) and (396, 801) on the 1200x900 board;
+        which RATIOS land there varies, ports are shuffled per board), and their
+        planks run to the bottom-row vertices (v42/v44/v47, y=770 — inside the
+        strip). Port access is a first-order PUBLIC planning fact, so
         the strip must not erase it. Idempotent — the seven ports outside the
         strip redraw identically."""
         board_cx = self.board.width / 2.0
@@ -508,9 +518,10 @@ class catanGameView:
         computed live. Returns the panel ``Rect`` so the layout arithmetic is
         testable; no caller reads it.
 
-        The 18px leading is load-bearing, not cosmetic: the revealed panel is 16
-        lines, and at the old 20px a REVEALED BOT panel (``--reveal-bot``, drawn
-        at y=460) would extend to y=824 in an 800px window."""
+        The leading is load-bearing, not cosmetic: the revealed panel is 16
+        lines, so a REVEALED BOT panel (``--reveal-bot``, drawn at y=460) extends
+        to y=824 at the 20px leading. That is why the window is 900px tall — the
+        old 800px one forced an 18px compression to avoid clipping it."""
         lines = hand_panel_lines(player, reveal=reveal, board=self.board)
         line_height = HAND_PANEL_LINE_HEIGHT
         panel_lines = len(lines) + 2  # title + a trailing margin line
@@ -537,10 +548,11 @@ class catanGameView:
         truncated to the strip width rather than wrapped.
 
         Called BEFORE ``displayPorts`` and the buildings loop in
-        ``displayGameScreen``: the strip covers three real vertices (y=720), the
-        bottom of hexes 13/14/15, and two of the nine ports (the 2:1 WHEAT ship
-        at (541, 759) and a 3:1 generic at (296, 751)), so drawing it last would
-        hide pieces and port access placed there — public facts both."""
+        ``displayGameScreen``: the strip covers the three bottom-row vertices
+        (v42/v44/v47, y=770), the bottom of hexes 13/14/15, and two of the nine
+        port anchors ((641, 809) and (396, 801) on the 1200x900 board), so
+        drawing it last would hide pieces and port access placed there — public
+        facts both."""
         if not self.move_log:
             return
         x, y, w, h = MOVE_LOG_RECT
@@ -577,17 +589,17 @@ class catanGameView:
             self.screen.blit(diceNum, (110, 20))
 
         # Recent-move strip. Drawn BEFORE the buildings loop on purpose: the strip
-        # overlaps the board's lower hexes and three real vertices (v42/v44/v47 at
-        # y=720), so drawing it last would HIDE placed settlements/cities/roads on
+        # overlaps the board's lower hexes and three real vertices (v42/v44/v47 on
+        # the bottom row), so drawing it last would HIDE placed settlements/cities/roads on
         # the bottom row — withholding a public fact, which is exactly what this
         # feature exists to stop. Losing a few characters of log text behind at
         # most three small markers is the cheaper side of the trade.
         self.displayMoveLog()
 
         # Repaint the ports for the same reason, and in the same place, as the
-        # buildings loop below: the strip's backdrop covers the 2:1 WHEAT ship
-        # at (541, 759) and a 3:1 generic at (296, 751), plus the planks running
-        # to the y=720 vertices. Port access is a PUBLIC planning fact; hiding
+        # buildings loop below: the strip's backdrop covers two of the nine port
+        # anchors (a 2:1 and a 3:1 on the board's bottom edge) plus the planks
+        # running to the bottom-row vertices. Port access is a PUBLIC planning fact; hiding
         # two of nine for the whole game biases the playtest toward the bot.
         self.displayPorts()
 
@@ -771,6 +783,8 @@ class catanGameView:
                 title_text = f"Discard {num_to_select - len(selected_resources)} cards"
             elif mode == "YOP":
                 title_text = f"Select {num_to_select - len(selected_resources)} resources"
+                if any(not self.board.bank_can_supply({r: 1}) for r in resources):
+                    title_text += "  (greyed = bank empty)"
             elif mode == "MONOPOLY":
                 title_text = "Select resource to monopolize"
             elif mode == "BANK":
@@ -789,6 +803,17 @@ class catanGameView:
                 count = player.resources[res]
                 count_text = self.font_button.render(str(count), True, (0, 0, 0))
                 self.screen.blit(count_text, (rect.centerx - 5, rect.centery - 5))
+
+                # Year of Plenty DRAWS from the finite bank, so a resource the
+                # bank cannot supply is not grantable below. The count drawn
+                # above is the PLAYER's holding, so without this an empty-bank
+                # resource looks identically pickable and the click just does
+                # nothing — grey it out instead of failing silently.
+                if mode == "YOP" and not self.board.bank_can_supply({res: 1}):
+                    shade = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+                    shade.fill((40, 40, 40, 190))
+                    self.screen.blit(shade, rect.topleft)
+                    pygame.draw.rect(self.screen, (90, 90, 90), rect, 4)
 
                 # Draw Outlines based on state
                 if mode == "MONOPOLY":
@@ -813,9 +838,13 @@ class catanGameView:
                     menu_rect = pygame.Rect(menu_x, menu_y, menu_width, menu_height)
                     if not menu_rect.collidepoint(e.pos) and mode != "DISCARD":
                         if mode == "YOP":
-                            # Revert resources added so far
+                            # Revert resources added so far. Each was DRAWN from
+                            # the finite bank below, so the revert must put it
+                            # back (spec 009) — otherwise cancelling a partly
+                            # picked YoP leaks the supply the other way.
                             for res in selected_resources:
                                 player.resources[res] -= 1
+                                self.board.bank_recirculate({res: 1})
 
                         result = None
                         running = False
@@ -830,14 +859,28 @@ class catanGameView:
                     if mode == "DISCARD":
                         if clicked_res and player.resources[clicked_res] > 0:
                             player.resources[clicked_res] -= 1
+                            # Discards RECIRCULATE into the finite bank (spec
+                            # 009), exactly as every non-GUI discard path does
+                            # (heuristic.py, random_ai.py, env/catan_env.py).
+                            self.board.bank_recirculate({clicked_res: 1})
                             selected_resources.append(clicked_res)
                             if len(selected_resources) >= num_to_select:
                                 result = selected_resources
                                 running = False
 
                     elif mode == "YOP":
-                        if clicked_res:
+                        # Year of Plenty DRAWS from the finite bank and is gated
+                        # on availability, matching the AI branch in
+                        # player.play_devCard: a resource the bank cannot supply
+                        # is simply not grantable (the click does not register;
+                        # the swatch is greyed above so that is visible). The AI
+                        # branch instead burns the pick on an unsupplied choice,
+                        # because it picks blind at random — a human reading a
+                        # greyed swatch is not making that choice, so declining
+                        # the click is the honest equivalent, not a favour.
+                        if clicked_res and self.board.bank_can_supply({clicked_res: 1}):
                             player.resources[clicked_res] += 1
+                            self.board.bank_draw({clicked_res: 1})
                             selected_resources.append(clicked_res)
                             if len(selected_resources) >= num_to_select:
                                 result = selected_resources

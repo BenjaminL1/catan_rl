@@ -110,7 +110,10 @@ Shipped:
   opponent's obs-build seam `_sample_snapshot_action` to build a legacy-schema obs; every other path
   is the unmodified parent) + `cross_arch_h2h(...)` returning a seat-symmetrized `EvalMatchupResult`.
 - `src/catan_rl/eval/engine_parity.py` — guard (c): refuses to run if the live engine/board-geometry
-  drifted from the pinned pre-fork tree (keys off HEAD's tree SHA so it works in shallow CI).
+  drifted from the pinned, cross-arch-validated engine tree (keys off the WORKING-TREE tree SHA —
+  content-derived, so the answer is identical before and after a commit, and it still works in
+  shallow CI). The pin started as the pre-fork tree; re-pins are logged in the module docstring
+  (2026-07-28: the 1000x800 -> 1200x900 window change, a pure lattice translation).
 - `scripts/eval_cross_arch.py` — the CLI (`--new --old --n-games 100 --seed 0`;
   `--old-arch new` for the equivalence self-check; `--skip-engine-parity-check` to override).
 

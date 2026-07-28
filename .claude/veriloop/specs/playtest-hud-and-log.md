@@ -155,6 +155,12 @@ Built as specified (D1-D7). Two additive deviations, both flagged rather than
 substituted for a decision:
 
 1. **Hand-panel leading 20px -> 18px** (`HAND_PANEL_LINE_HEIGHT`, `gui/view.py`).
+   **SUPERSEDED 2026-07-28** by `human-devcard-picker-and-bank.md`: the window grew to
+   1200x900, so the leading is back to 20px and the revealed bot panel fits uncompressed.
+   The pixel figures in this section (vertices at y=720, ports at (541, 759) / (296, 751),
+   `MOVE_LOG_RECT` y 695-795) are the 1000x800 values and have all moved down 50px; the
+   *reasoning* — the strip overlaps board vertices and two ports, so the draw order is
+   load-bearing — holds unchanged.
    D1's layout analysis checked only the human panel against BANK TRADE and
    missed the BOT panel, which is drawn at y=460: a REVEALED 16-line bot panel
    (`--reveal-bot`) would have run to y=824 in an 800px window and been clipped.

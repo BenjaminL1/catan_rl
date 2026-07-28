@@ -136,7 +136,20 @@ class catanBoard:
         self.boardGraph = {}  # Dict to store the vertex objects with the pixelCoordinates as keys
 
         self.edgeLength = 80  # Specify for hex size
-        self.size = self.width, self.height = 1000, 800
+        # Window size. 1200x900 (was 1000x800): the HUD was over budget — a
+        # REVEALED bot panel drawn at y=460 with the comfortable 20px leading
+        # runs to y=824, which an 800px window could not hold (the 18px leading
+        # shipped as a workaround for exactly that overflow).
+        # ``edgeLength`` is independent of ``size`` and the layout origin is
+        # ``(width/2, height/2)``, so the enlargement is a pure INTEGER
+        # TRANSLATION of the hex lattice by (+100, +50): every vertex/edge pixel
+        # moves by the same amount, the 2dp rounding is unchanged, and the
+        # first-occurrence dedup that assigns vertex/edge INDICES is
+        # translation-invariant. That is pinned, not assumed — see
+        # ``tests/unit/engine/test_topology_stability.py``: a renumber would
+        # silently invalidate the committed topology tables and every
+        # vertex-keyed human-corpus record.
+        self.size = self.width, self.height = 1200, 900
         # specify Layout
         self.flat = HexLayout(
             Point(self.edgeLength, self.edgeLength), Point(self.width / 2, self.height / 2)

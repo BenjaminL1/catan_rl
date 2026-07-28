@@ -854,7 +854,11 @@ def record_game(
     *,
     seed: int,
     max_turns: int = 400,
-    intended_hex_size: tuple[int, int] = (1000, 800),
+    # Recommended viewer canvas (``Metadata.intended_hex_size``), tracking the
+    # live GUI window ``catanBoard.size`` — 1200x900 since 2026-07-28. Replays
+    # recorded before that carry the old 1000x800 and stay valid: the field is a
+    # viewer hint and no pixel coordinate is derived from it.
+    intended_hex_size: tuple[int, int] = (1200, 900),
     device: str = "cpu",
     log: logging.Logger | None = None,
     agent_actor: Any | None = None,

@@ -132,3 +132,44 @@ defensible **only if D2 ships with it**.
 7. **Layout pin:** at the new window size, neither hand panel nor the move log overflows,
    and board geometry (topology export / pixel-space tests) still passes.
 8. Read-only w.r.t. training: nothing under `runs/train/**`; no game-rule change.
+
+## Implementation notes (what actually shipped)
+
+Built as specified (D1-D5). Deviations and consequences worth recording:
+
+1. **D4's window is `1200x900`** (`engine/board.py`), and the leading went back to
+   `HAND_PANEL_LINE_HEIGHT = 20` — the 18px compression was a workaround for the old
+   800px window and is now unnecessary (a revealed bot panel at y=460 runs to y=824,
+   which 900px holds). `MOVE_LOG_RECT` moved to `(115, 745, 705, 100)`. This
+   **supersedes** the "Hand-panel leading 20px -> 18px" implementation note in
+   `playtest-hud-and-log.md`.
+   The geometry risk D4 flagged resolved to a **pure integer translation** of the hex
+   lattice by (+100, +50): `edgeLength` is independent of `size`, the layout origin is
+   `(width/2, height/2)`, and the first-occurrence dedup that assigns vertex/edge
+   indices is translation-invariant — so **nothing renumbers**. Pinned, not assumed, by
+   the new `tests/unit/engine/test_topology_stability.py` (committed topology tables +
+   lattice-matches-CV-template-up-to-translation).
+   The strip still overlaps the board (bottom-row vertices v42/v44/v47 at y=770, two of
+   nine port anchors), so the `displayMoveLog` -> `displayPorts` -> buildings draw order
+   remains load-bearing.
+2. **Engine-parity guard re-pinned** (`eval/engine_parity.py`). The window change is an
+   engine-tree change, so the cross-arch guard fired. It was re-validated (the vendored
+   legacy encoder consumes board pixels only as dict keys / index lookups, never as
+   feature values) and re-pinned `261098d190c8 -> 3388b69026cb`, with an append-only
+   **re-pin log** now kept in that module's docstring. The guard also changed to hash the
+   **working tree** rather than `HEAD`, so a deliberate engine change can be re-validated
+   in the branch that makes it; the separate "uncommitted changes" probe is gone because
+   working-tree hashing subsumes it.
+3. **Bank conservation in the human driver** (D3) is checked after `env.reset` and after
+   every `env.step` in `scripts/play_vs_model.py`. In the interactive loop it is
+   **non-fatal**: a break prints once to console + the HUD strip and detaches, because
+   the replay is written only after the loop ends and raising would destroy the evidence.
+   `self_test` uses the raising form.
+4. **`intended_hex_size` follows the live board.** `_HumanGameRecorder` now records
+   `(board.width, board.height)` instead of a literal, and `recorder_loop.record_game`'s
+   default moved to `(1200, 900)`. Older replays keep `1000x800` and stay valid — the
+   field is a viewer hint and no pixel coordinate is derived from it.
+5. **`isAI` flip shipped as specified** (permanent, in `HumanVsBotEnv.reset`), together
+   with D2 — the condition the spec's "strongest opposite case" attached to it.
+6. **Bank-empty YoP picks are greyed out** in the picker and decline the click, and the
+   YoP cancel path `bank_recirculate`s whatever it had already drawn.
