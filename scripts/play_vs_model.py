@@ -91,6 +91,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import secrets
 import sys
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, cast
@@ -1700,7 +1701,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ckpt", type=str, default=DEFAULT_CKPT, help=f"Bot checkpoint (default: {DEFAULT_CKPT})."
     )
-    parser.add_argument("--seed", type=int, default=0, help="RNG seed (reproducible search).")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "RNG seed. DEFAULT: a fresh random seed per game, so every session "
+            "gets a different board and dice bag. Pass a value to replay an exact "
+            "game. The seed actually used is always printed and recorded, so a "
+            "random game stays reproducible after the fact."
+        ),
+    )
     parser.add_argument(
         "--search",
         action="store_true",
@@ -1748,8 +1759,21 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.self_test:
         # Keep the smoke fast + display-free: a fresh policy unless --ckpt points
-        # at a real file (use a small --sims for speed).
-        return self_test(args.sims, args.seed, ckpt=args.ckpt)
+        # at a real file (use a small --sims for speed). The self-test stays
+        # DETERMINISTIC by default — it is a smoke check, not a game.
+        return self_test(args.sims, 0 if args.seed is None else args.seed, ckpt=args.ckpt)
+
+    if args.seed is None:
+        # A fresh seed per game. The old default of 0 meant every session replayed
+        # the SAME board and the same StackedDice bag, which makes playtests
+        # correlated and hides how the bot handles a different map.
+        #
+        # `secrets` rather than the clock: two games started in the same second
+        # would collide on a time-derived seed, and second-resolution wastes most
+        # of the space. This is not a security decision, just the cheapest source
+        # of a well-spread integer.
+        args.seed = secrets.randbelow(2**31)
+        print(f"[seed] {args.seed}  (random; pass --seed {args.seed} to replay this game)")
 
     play_interactive(
         args.ckpt,
