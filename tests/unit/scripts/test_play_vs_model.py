@@ -547,3 +547,32 @@ class TestHudLogIsNotTheRecordersCollector:
         clone = copy.deepcopy(env)
         assert clone._human_view is None
         clone._log_move("this must go nowhere")  # no view -> no log, no error
+
+
+class TestFinalScreenHold:
+    """``_hold_final_screen`` must never block a headless run.
+
+    It is a blocking modal on the exit path of EVERY game, so the property that
+    actually matters is the early return: with no pygame display surface (CI,
+    ``--self-test``, any automated run) it must return immediately rather than
+    sit for ``FINAL_SCREEN_HOLD_S``. The interactive dismissal paths (click, any
+    key, window close) need a real display and are exercised by playing.
+    """
+
+    def test_returns_immediately_with_no_display_surface(self) -> None:
+        import time
+
+        pygame = pytest.importorskip("pygame")
+        mod = _load_module()
+        # Guard the guard: if a surface leaked in from another test, this would
+        # block for two minutes instead of asserting anything.
+        if pygame.get_init() and pygame.display.get_surface() is not None:
+            pygame.display.quit()
+        started = time.monotonic()
+        mod._hold_final_screen()
+        assert time.monotonic() - started < 1.0
+
+    def test_timeout_is_a_liveness_guard_not_a_wait(self) -> None:
+        """The hold is dismissible; the timeout only bounds an unattended run."""
+        mod = _load_module()
+        assert mod.FINAL_SCREEN_HOLD_S > 0

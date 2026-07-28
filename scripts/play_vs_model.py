@@ -1424,8 +1424,22 @@ def play_interactive(
         action = agent.choose_action(env)
         print(f"\n[BOT] {_describe_bot_move(action)}", flush=True)
         # HUD variant names the target index; the stdout/ledger label is frozen.
-        hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
+        #
+        # A ROLL is logged AFTER the step, because the value only exists once the
+        # step has run (``env.last_dice_roll``). Without this the bot's roll read
+        # a bare "Roll dice" while the human's read "You rolled 8" — leaving the
+        # persistent log strictly LESS informative than the single overwritten
+        # banner it replaces, on the most-consulted public fact in the game.
+        # Deferring the append is safe for a roll specifically: only END_TURN
+        # folds the human's turn, so nothing else can interleave ahead of it.
+        from catan_rl.env.catan_env import ActionType as _AT
+
+        is_roll = int(action[0]) == int(_AT.ROLL_DICE)
+        if not is_roll:
+            hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
         _obs, _r, terminated, truncated, _info = env.step(action)
+        if is_roll:
+            hud_log.append(f"Bot: Rolled {int(getattr(env, 'last_dice_roll', 0))}")
         if recorder is not None:
             # Recording is a SIDE CHANNEL: a recorder fault must never kill or
             # erase the game it is observing (an hour of human play), so it is
