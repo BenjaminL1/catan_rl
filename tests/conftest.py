@@ -9,6 +9,20 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+# Force SDL headless for the WHOLE suite, before any test module is imported.
+#
+# Individual GUI modules each call ``os.environ.setdefault("SDL_VIDEODRIVER",
+# "dummy")`` at module scope, but that only takes effect if the module is
+# imported BEFORE pygame brings up its video subsystem. Modules that merely
+# ``import pygame`` without setting the driver (e.g. the replay step-bar test)
+# can be collected first, initialising SDL under the real macOS driver — after
+# which every later ``pygame.display.set_mode`` (``gui/view.py``) opens a real
+# on-screen window. On a dev machine that means blank black windows popping up
+# during any test run. conftest is imported before every test module, so setting
+# it here is the only placement that reliably wins. ``setdefault`` keeps an
+# explicit override (e.g. running a GUI test against a real display) working.
+os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CHECKPOINT_DIR = REPO_ROOT / "checkpoints" / "train"
 FROZEN_CHAMPION = CHECKPOINT_DIR / "checkpoint_07390040.pt"
