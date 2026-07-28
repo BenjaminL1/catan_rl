@@ -131,8 +131,17 @@ class TestNoTorch:
     def test_schema_and_io_import_no_torch(self) -> None:
         # A fresh subprocess: importing the schema/IO path must not drag torch
         # in, or the viewer's import contract breaks.
+        # Insert THIS repo's src explicitly. A bare `python -c "import catan_rl"`
+        # resolves only through the installed .pth, which points wherever the last
+        # `pip install -e` ran — including a dev-loop worktree that may since have
+        # been deleted. That made this test assert against a different tree than
+        # the one under test, or fail with ModuleNotFoundError having nothing to do
+        # with torch. Every other subprocess spawn in the suite is already
+        # self-sufficient this way (see test_viewer_import_isolation.py).
+        src = Path(__file__).resolve().parents[3] / "src"
         code = (
-            "import sys; import catan_rl.replay.schema, catan_rl.replay.io; "
+            f"import sys; sys.path.insert(0, {str(src)!r}); "
+            "import catan_rl.replay.schema, catan_rl.replay.io; "
             "assert 'torch' not in sys.modules, sorted(m for m in sys.modules if 'torch' in m)"
         )
         import subprocess

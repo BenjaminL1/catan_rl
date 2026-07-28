@@ -1,6 +1,11 @@
-.PHONY: install install-gui install-all test test-unit test-integration test-all lint format typecheck train bench clean smoke-train rust-setup rust-build rust-test rust-bench rust-clean
+.PHONY: check-env install install-gui install-all test test-unit test-integration test-all lint format typecheck train bench clean smoke-train rust-setup rust-build rust-test rust-bench rust-clean
 
 PYTHON ?= python
+
+# Fail if the importable `catan_rl` is a DIFFERENT checkout than this one — see
+# scripts/check_env.py for why this cannot live in the package or in conftest.
+check-env:
+	@$(PYTHON) scripts/check_env.py
 
 install:
 	$(PYTHON) -m pip install -e ".[dev]"
@@ -33,13 +38,13 @@ format:
 typecheck:
 	mypy src
 
-train:
+train: check-env
 	$(PYTHON) scripts/train.py --config configs/ppo_default.yaml --verbose
 
 # Evaluation runs inside the training loop (catan_rl.eval.harness, periodic
 # WR-vs-heuristic with Wilson CIs); there is no standalone eval CLI in v2.
 
-smoke-train:
+smoke-train: check-env
 	$(PYTHON) scripts/train.py --dry-run
 
 # ``bench`` runs the engine throughput harness (Rust migration plan
@@ -49,7 +54,7 @@ smoke-train:
 # not env-step throughput in isolation — env stepping is not the
 # bottleneck per ``analysis/diag_*.log`` (SGD = ~80% of wall-time).
 # See ``docs/plans/rust_engine.md``.
-bench:
+bench: check-env
 	$(PYTHON) scripts/bench_engine.py --all --n-steps 1024
 
 clean:

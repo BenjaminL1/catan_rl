@@ -12,7 +12,14 @@ violates one is a **BLOCKER**. Keep this list short and true.
 
 1. **The gate runs on real exit codes.** `make typecheck` · `make lint` · `cargo fmt --all -- --check` · `make test-unit` must pass; a
    red check is a BLOCKER, never waved through on "looks right". _(owner: `code-review`)_
-2. _TODO: the core correctness invariant of this repo (the rule a change must never break)._ _(owner: assign — usually `code-review` or `drift`)_
+2. **A result must describe the tree it claims to.** Never `pip install -e` or
+   `maturin develop` into a **shared** interpreter: a worktree gets its own venv, or no
+   install at all. An editable install rewrites the global `catan_rl.pth`, so a worktree
+   install silently redirects every later `python scripts/*.py` in *other* checkouts to
+   the wrong code, and deleting that worktree breaks `import catan_rl` outright. Both
+   have happened. `make check-env` (see `scripts/check_env.py`) detects it; pytest does
+   **not** — `pythonpath = ["src"]` beats the `.pth`, which is exactly what makes the
+   corruption invisible in the one place that still works. _(owner: `code-review`)_
 
 ## Boundaries & safety
 
