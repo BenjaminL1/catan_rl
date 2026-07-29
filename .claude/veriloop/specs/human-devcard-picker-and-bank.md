@@ -165,6 +165,14 @@ Built as specified (D1-D5). Deviations and consequences worth recording:
    **non-fatal**: a break prints once to console + the HUD strip and detaches, because
    the replay is written only after the loop ends and raising would destroy the evidence.
    `self_test` uses the raising form.
+   The tripped state is also **persisted** to the game record as `"bank_ok": false`.
+   Warning alone was not enough: the console line is a single flush and the HUD strip is
+   a `deque(maxlen=6)` that evicts the warning within six log lines, so without the key a
+   conservation-broken game is byte-indistinguishable from a clean one. A **missing** key
+   means the game predates the check, not that it passed.
+   **Open follow-up (not in this change):** nothing *reads* `bank_ok` yet. The marker
+   makes a corrupt game detectable, but the scoreboard consumer must still learn to
+   exclude it, or the pre-mortem in this spec is only deferred, not closed.
 4. **`intended_hex_size` follows the live board.** `_HumanGameRecorder` now records
    `(board.width, board.height)` instead of a literal, and `recorder_loop.record_game`'s
    default moved to `(1200, 900)`. Older replays keep `1000x800` and stay valid — the

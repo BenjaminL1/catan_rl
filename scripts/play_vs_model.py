@@ -133,6 +133,14 @@ def _make_bank_conservation_reporter(hud_log: Any) -> Callable[[Any], None]:
     recording that is the evidence of the break. Same side-channel rule the
     recorder already follows — report loudly (console + HUD strip), once, then
     detach and let the game finish so the corrupted record can be inspected.
+
+    The returned callable carries ``.ok`` — a live flag the caller MUST write into
+    the game record. Warning alone is not enough: the console line is a single
+    flush the human may miss, and the HUD strip is a ``deque(maxlen=6)`` that
+    evicts the warning within six log lines. Without a persisted marker a
+    conservation-broken game is byte-indistinguishable from a clean one and can
+    reach the human scoreboard — which is the pre-mortem this whole feature was
+    written to prevent, one step further down the pipe.
     """
     live = [True]
 
@@ -152,6 +160,7 @@ def _make_bank_conservation_reporter(hud_log: Any) -> Callable[[Any], None]:
             )
             hud_log.append("BANK INVARIANT BROKEN - game is corrupt (see console)")
 
+    _check.ok = live  # type: ignore[attr-defined]
     return _check
 
 
@@ -1651,6 +1660,14 @@ def play_interactive(
             # on-screen move log, i.e. with strictly less public information than
             # a real table gives — a missing key means regime 1, not this one.
             "hud": 2,
+            # Finite-bank integrity. FALSE means the spec-009 invariant
+            # `bank[R] + sum(hands[R]) == 19` broke during this game, so the bank
+            # the bot OBSERVED was wrong and the game must never be scored.
+            # Persisted because warning is not enough: the console line is one
+            # flush and the HUD strip is a deque(maxlen=6) that evicts it. Without
+            # this key a corrupt game is byte-indistinguishable from a clean one.
+            # A MISSING key means the game predates the check, not that it passed.
+            "bank_ok": bool(check_bank.ok[0]),
             "replay_path": replay_path,
             "moves": move_log,
         }

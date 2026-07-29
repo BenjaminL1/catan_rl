@@ -698,12 +698,74 @@ class TestBankConservationGuard:
             mod._assert_bank_conservation(env)
 
     def test_the_driver_calls_the_guard_after_every_step(self) -> None:
-        src = _SCRIPT.read_text(encoding="utf-8")
-        # The interactive loop goes through the non-fatal reporter (reset + step);
-        # the self-test asserts directly, in both of its loops.
-        assert src.count("check_bank(env)") >= 2
-        assert "_assert_bank_conservation(env)" in src
-        assert "_assert_bank_conservation(env2)" in src
+        """The guard must be a STATEMENT inside every env-stepping loop.
+
+        This was a text grep (``src.count("check_bank(env)") >= 2``), which passes
+        if both calls sit in dead code, in a docstring, or before the loop rather
+        than inside it — for the one check the spec calls the single thing that
+        catches both the original bug and the minting bug. Parse instead.
+        """
+        import ast
+
+        tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+        guards = {"check_bank", "_assert_bank_conservation"}
+
+        def _calls_guard(node: ast.AST) -> bool:
+            return any(
+                isinstance(n, ast.Expr)
+                and isinstance(n.value, ast.Call)
+                and isinstance(n.value.func, ast.Name)
+                and n.value.func.id in guards
+                for n in ast.walk(node)
+            )
+
+        def _steps_env(node: ast.AST) -> bool:
+            return any(
+                isinstance(n, ast.Call)
+                and isinstance(n.func, ast.Attribute)
+                and n.func.attr == "step"
+                for n in ast.walk(node)
+            )
+
+        stepping = [n for n in ast.walk(tree) if isinstance(n, ast.While) and _steps_env(n)]
+        assert stepping, "no env-stepping loop found — this pin is looking at nothing"
+        unguarded = [ln.lineno for ln in stepping if not _calls_guard(ln)]
+        assert not unguarded, (
+            f"env-stepping loop(s) at line(s) {unguarded} step the env without "
+            "calling the bank-conservation guard inside the loop body"
+        )
+
+    def test_a_broken_bank_is_recorded_not_just_warned(self) -> None:
+        """A corrupt game must be MARKED in the ledger, not only printed.
+
+        The reporter prints once and appends to a ``deque(maxlen=6)`` that evicts
+        the warning within six log lines, so without a persisted key a
+        conservation-broken game is byte-indistinguishable from a clean one and
+        can reach the human scoreboard — the pre-mortem this feature exists to
+        prevent, one step further down the pipe.
+        """
+        from collections import deque
+
+        pytest.importorskip("torch")
+        mod = _load_module()
+        hud: deque[str] = deque(maxlen=6)
+        check = mod._make_bank_conservation_reporter(hud)
+
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=14, options={"agent_seat": 0})
+
+        check(env)
+        assert check.ok[0] is True, "a clean game must not be marked corrupt"
+
+        env.opponent_player.resources["WOOD"] += 1  # a mint, exactly as the picker did
+        check(env)
+        assert check.ok[0] is False, "the reporter must expose its tripped state"
+
+        # And the warning alone is not enough: the HUD strip evicts it.
+        assert hud.maxlen is not None and hud.maxlen <= 8
+        assert '"bank_ok"' in _SCRIPT.read_text(encoding="utf-8"), (
+            "the ledger record must persist a bank_ok marker"
+        )
 
     def test_the_interactive_reporter_does_not_kill_the_game(
         self, capsys: pytest.CaptureFixture[str]
