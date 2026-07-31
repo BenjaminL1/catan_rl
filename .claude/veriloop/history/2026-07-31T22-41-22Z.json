@@ -1,0 +1,218 @@
+{
+  "ts": "2026-07-31T22-41-22Z",
+  "feature": "spec=.claude/veriloop/specs/playable-and-recordable.md\n\nGOAL: make a human-vs-champion game valid, fair, survivable and attributable, so the owner can play and record games tonight. The owner has delegated all decisions for this slice and does NOT want to be asked anything.\n\nTDD IS BINDING: write the failing test FIRST and observe it fail against the current tree before implementing. Report each red-first result.\n\nBUILD ORDER IS LOAD-BEARING — D1 MUST land at or before D2, never after:\nD1 (gui/view.py bank fix) -> D2 (isAI flip + conservation guard + bank_ok in scripts/play_vs_model.py) -> D3 (delete the human pre-roll window) -> D4 (crash-safe loop) -> D5 (provenance keys) -> D6 (DEFAULT_CKPT repoint).\nRationale for the ordering: on main the AI branch of play_devCard already bank-draws correctly while the GUI branch does not, so flipping isAI BEFORE the view.py fix opens the picker onto an ungated grant path and ADDS a minting bug that does not exist today.\n\nREFERENCE IMPLEMENTATION for D1+D2: branch feat/human-devcard-picker-and-bank @ ba8f8ac (gate-green, unmerged). Take ONLY:\n- the bank hunks inside gui/view.py get_resource_selection (bank_recirculate on discard, bank_draw + bank_can_supply gate on YoP grant, bank_recirculate on YoP cancel/revert)\n- tests/unit/gui/test_human_picker_bank.py\n- from scripts/play_vs_model.py: the permanent isAI=False flip in HumanVsBotEnv.reset, _make_bank_conservation_reporter, the check_bank(env) calls after reset and after every step, and the \"bank_ok\" record key\nDO NOT TAKE from that branch: the engine/board.py window resize (1000x800 -> 1200x900), the gui/view.py layout constants (HAND_PANEL_LINE_HEIGHT, MOVE_LOG_RECT), or the eval/engine_parity.py re-pin. Those retire the engine tree the clause-(a) n=600 result was measured on and buy nothing for playability.\n\nHARD CONSTRAINTS:\n- PINNED_ENGINE_TREE must remain 261098d190c8. Do NOT touch src/catan_rl/engine/. If something seems to require it, find another way or report.\n- Do NOT add pre-roll for the bot (that is preroll-dev-cards-r1.md and needs a retrain). D3 REMOVES the human's window for symmetry.\n- D4 must use `except BaseException`, not `except Exception` — SystemExit is a BaseException and the five sys.exit(0) GUI paths would otherwise slip through.\n- D5 keys must be ADDITIVE; existing record readers must keep working.\n- No training runs, no BC regeneration, no long jobs.\n- End state must pass `python scripts/play_vs_model.py --self-test` headless.\n\nMERGE AUTHORISED: the owner has explicitly authorised merging this slice without further sign-off. Push the branch as usual; the main session will merge.",
+  "repo": "catan-rl-v2",
+  "tier": "high",
+  "baseSha": "3612e3fa86efcd76ae465ed5a45a2bb407215ea0",
+  "headSha": "13dafa03785f04efc51f57e5c619be8315698ba0",
+  "verdict": "CONCERNS",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "exit": 0,
+      "tail": "mypy src\nSuccess: no issues found in 148 source files"
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "exit": 0,
+      "tail": "ruff check src tests scripts\nAll checks passed!"
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "tail": "(no output)"
+    },
+    {
+      "name": "test",
+      "command": "make test-unit",
+      "exit": 0,
+      "tail": "3061 passed, 6 skipped, 108 warnings in 413.35s (0:06:53)\n(warnings only: torch quantization migration notices; pin_memory unsupported on MPS in tests/unit/human_data/test_board_cv.py, tests/unit/human_data/test_openings.py)"
+    }
+  ],
+  "baselineProbe": null,
+  "screenshots": [],
+  "screenshotVerdict": null,
+  "fixPasses": 1,
+  "blockers": [],
+  "concerns": [
+    "[baseline-reviewer (code-review) — correctness, conventions, type-safety, test integrity — MODE: REVIEW] After a D4 salvage abort the driver still falls into `_hold_final_screen()`, which blocks up to FINAL_SCREEN_HOLD_S = 120 s. `_hold_final_screen`'s early return only fires when pygame is torn down, and only ONE of the four quit paths calls `pygame.quit()` before `sys.exit(0)` (scripts/play_vs_model.py:626-627). The three `sys.exit(0)` sites in src/catan_rl/gui/view.py (:407 setup placement, :822 the discard/YoP/Monopoly picker, :994) do NOT, so on the most likely mid-game quit — closing the window while a picker is open — pygame is still initialised, the surface still exists, and the process sits for 120 s after the human already asked to quit. Compounding it, `traceback.print_exc()` at :1686 dumps a full stack trace for a deliberate `SystemExit(0)`, so a normal window-close reads as a crash. Neither is caught by the new tests, which monkeypatch `_hold_final_screen` to a no-op (tests/unit/scripts/test_play_vs_model.py `_run`).",
+    "[baseline-reviewer (code-review) — correctness, conventions, type-safety, test integrity — MODE: REVIEW] The `-dirty` suffix is computed from `git status --porcelain` with untracked files included. The owner's main checkout (the tree the games will actually be played from) currently reports `?? $SCRATCH/`, `?? src.mp4`, `?? data/bc/`, `?? data/exit/`, `?? scripts/dev/*.js` plus `M .claude/scheduled_tasks.lock` — none of which change the code the game runs on. Every record written tonight will therefore carry `<sha>-dirty` unconditionally, so the marker distinguishes nothing and `git_sha` stops being a parseable 40-char SHA (the new test itself has to `removesuffix(\"-dirty\")`). D5's stated purpose is attribution; an always-on dirty flag is noise, not attribution. It does match `scripts/bench_engine.py:105-129`, so the convention is defensible in the abstract — but there it annotates a one-off benchmark manifest, not every recorded game.",
+    "[drift (Drift Sentinel) — REVIEW mode] Truth drift — the justification for the `_no_pre_roll` suppression asserts something the tree disproves. The comment says the base env's `heuristic_pre_roll` fires on \"EVERY MCTS clone rollout and every --self-test game\". `search/mcts.py:166` (`clone_env`) always ends with `clone.set_snapshot_opponent(opponent)` and `search/agent.py:79` always builds a non-None `FrozenSnapshotOpponent`, while `env/catan_env.py:804` gates the pre-roll on `self._snapshot_opponent is None`. So the pre-roll can NEVER fire in an MCTS clone. I confirmed this empirically against the pre-change tree (pristine `main` extracted to a scratch dir): `heuristic_pre_roll calls DURING one search: 0`. The code change is harmless and correct for the path it actually covers (`--self-test` / any headless `HumanVsBotEnv`), but the stated reason — \"the bot would search against a human who can pre-roll\" — is false, and it is now repeated in a code comment, a test docstring and CLAUDE.md. A false rationale in three places is exactly the kind of claim a later reader will build on.",
+    "[drift (Drift Sentinel) — REVIEW mode] The `-dirty` suffix is unconditionally ON in practice, so D5's attribution key carries no information. `git status --porcelain` with no path filter and default `-unormal` counts untracked files and every tracked path in the repo. Measured against the owner's actual checkout right now: `would record: 3612e3fa86efcd76ae465ed5a45a2bb407215ea0-dirty` while `src/ dirty? False`. The dirt is `.claude/scheduled_tasks.lock` (a scheduler lockfile the loop itself churns), `scripts/dev/review_step6_plan_wf.js`, plus untracked `src.mp4` / `data/bc/` / `data/exit/`. Every game recorded tonight will be stamped `-dirty` regardless of whether a single line of game-affecting code differs, which defeats the whole point of the key (\"the record must name the exact code it was played against\").",
+    "[drift (Drift Sentinel) — REVIEW mode] Schema doc drift: `Metadata.git_sha`'s docstring says it is \"``git rev-parse HEAD`` of the tree the game was played on, or ``None``\" — it does not mention that the writer can append `-dirty`, making the value 45 chars instead of 40. This is a shared, versioned contract read by replay consumers; the slice's own test had to add `sha.removesuffix(\"-dirty\")` to keep its length assertion, which is the tell. A consumer that slices or compares against a 40-char SHA silently mismatches.",
+    "[drift (Drift Sentinel) — REVIEW mode] The ratified spec that governs this slice is not on the branch. All 12 sibling specs are tracked (`git ls-files .claude/veriloop/specs/` lists `preroll-dev-cards-r1.md`, `bc-coverage-and-bank-legality.md`, `human-devcard-picker-and-bank.md`, …), but `playable-and-recordable.md` exists only as an untracked file in the owner's main checkout and is absent from the worktree entirely. The code comments cite `preroll-dev-cards-r1.md` by filename, so a reader following the trail will find the stopgap's successor but not the spec that authorised the stopgap."
+  ],
+  "waived": [],
+  "filesChanged": [
+    "%REPO%/src/catan_rl/gui/view.py",
+    "%REPO%/scripts/play_vs_model.py",
+    "%REPO%/src/catan_rl/replay/schema.py",
+    "%REPO%/src/catan_rl/replay/io.py",
+    "%REPO%/CLAUDE.md",
+    "%REPO%/tests/unit/gui/test_human_picker_bank.py",
+    "%REPO%/tests/unit/scripts/test_play_vs_model.py",
+    "%REPO%/tests/unit/replay/test_schema_v2.py",
+    "%REPO%/tests/unit/replay/test_partition_attribution.py"
+  ],
+  "implSummary": "Six commits, one per decision, in the load-bearing D1→D6 order. No commit in the history has the picker reachable without the bank gate.\n\nD1 (74d218f, src/catan_rl/gui/view.py) — took ONLY the `get_resource_selection` hunks from the reference branch ba8f8ac: DISCARD now `bank_recirculate`s, YoP `bank_draw`s gated on `bank_can_supply`, a cancelled partial YoP puts back what it drew, plus the two in-function display hunks (greyed swatch + \"(greyed = bank empty)\" title suffix) that make the gate visible rather than a silently swallowed click. Explicitly NOT taken: the 1200x900 window resize, `HAND_PANEL_LINE_HEIGHT` 18→20, `MOVE_LOG_RECT` y-shift, the geometry comment rewrites, the engine/board.py resize and the engine_parity re-pin. Test `tests/unit/gui/test_human_picker_bank.py` (247 lines, verbatim from ba8f8ac) was verified RED on the pre-change tree — 4 failed / 3 passed — then green 7/7.\n\nD2 (42c55ec, scripts/play_vs_model.py) — `HumanVsBotEnv.reset` override flips `opponent_player.isAI = False` permanently, plus `_assert_bank_conservation`, `_make_bank_conservation_reporter` (non-fatal, one-shot, carries `.ok`), `check_bank(env)` after reset and after every interactive step, `_assert_bank_conservation` after both self_test step sites, and the `\"bank_ok\"` record key. Did NOT take the reference's `intended_hex_size=(board.width, board.height)` hunk — that existed only to follow the resize we are not doing, so `(1000, 800)` stays. Ported `TestHumanSeatIsNotAI` + `TestBankConservationGuard`; verified RED (7 failed) before the code landed.\n\nD3 (6bc0cc2) — deleted `self._human_pre_roll()` and the ~35-line `_human_pre_roll` method (with one of the five `sys.exit(0)` paths); rewrote the `_run_opponent_turn` docstring, which previously advertised the call as \"the only addition\". Added `\"preroll\": false` to the record. New `TestNoPreRollWindow` pins the removal AND the parity claim the fairness argument rests on (`compute_action_masks` under `roll_pending` yields exactly `{ROLL_DICE}`, asserted against a live env, not a comment).\n\nD4 (234fb5c) — loop body wrapped in `try/except BaseException` (NOT `Exception`; a test asserts the handler name via AST precisely because `SystemExit`/`KeyboardInterrupt` would slip through), falling through to the existing write block with `partial=True` threaded into `_HumanGameRecorder.finish(..., partial=False)` (new defaulted kwarg, so `recorder_loop`'s caller is unaffected) and an additive `\"partial\"` JSONL key. `TestCrashSafeArtifacts` drives real `play_interactive` headlessly with an exploding `env.step` and asserts BOTH artifacts land; verified RED first.\n\nD5 (fc6d1a1) — `git_sha` / `ckpt_sha256` appended to `Metadata` after the existing defaulted v2 fields; `REPLAY_SCHEMA_VERSION` deliberately stays 2 (additive-with-default is the precedent `mode`/`sims`/`clairvoyant`/`reveal_bot` set, and `test_the_bump_shipped_with_its_migration` demands a migration for any bump). `_git_sha()` and `_ckpt_sha256()` degrade to `None` — provenance must never stop a game from being played, and `None` means \"could not read\", never \"clean\".\n\nD6 (7df9c37) — OPS STEP DONE IN THE OWNER'S MAIN CHECKOUT (runs/ is gitignored): `bank_anchor(runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt, runs/anchors/ptr_v1_u500.pt)` — 5.6 MB policy-only slim, non-destructive, source untouched. Verified it loads through `build_actor`, then repointed `DEFAULT_CKPT`. `configs/selfplay_pointer_arch_v3.yaml` deliberately not touched. Docs sync: CLAUDE.md's `play_vs_model.py` bullet, and the `test_partition_attribution.py` module docstring that named `_human_pre_roll` as its motivating case (docstring only — the assertions are still load-bearing and untouched).\n\nAcceptance-criteria status I can attest to: #1 all four gate commands exit 0; #2 `git diff --name-only main..HEAD -- src/catan_rl/engine/ src/catan_rl/eval/engine_parity.py` is EMPTY and `PINNED_ENGINE_TREE` is still 261098d190c8; #3/#4/#5/#6/#7/#8 each have a pin, and #3, the D2 flip, the D4 salvage and the D5 keys were all observed red before they were made green; #9 self-test passes.\n\nTWO THINGS THE OWNER SHOULD KNOW, neither of which I changed on my own authority:\n\n1. DEPENDENCIES — I did NOT run `pip install -e \".[dev]\"` or `make rust-build` in the worktree, contrary to the launching instruction. The repo constitution rule #2 forbids exactly that: an editable install rewrites the shared conda `catan_rl.pth`, silently redirecting every later `python scripts/*.py` in the owner's MAIN checkout to this worktree, and deleting the worktree then breaks `import catan_rl` outright. Both failures are recorded as having actually happened, and `scripts/check_env.py` exists to detect them. Instead I copied the already-compiled, gitignored `src/catan_engine/catan_engine.cpython-312-darwin.so` into the worktree (a local artifact, not an install) and ran scripts with `PYTHONPATH=<wt>/src`. pytest needs neither, since `pythonpath = [\"src\"]` resolves to the worktree. The main checkout's env still resolves to itself — I re-verified.\n\n2. ONE PRE-EXISTING PIN LOOSENED, caused by my own change: `test_the_human_input_loops_still_log` asserted `src.count(\"self._log_human_action(before)\") >= 4`. D3 deleted the pre-roll window, which took one of those four logging sites with it, so the bar is now `>= 3` with a comment naming the reason and the three survivors (setup draft, robber, main turn). This is the one place I edited an existing assertion rather than leaving it — flagging it explicitly because loosening a pin to go green is exactly the move a reviewer should distrust; the alternative was keeping a window the spec ordered deleted. I also renamed `test_play_devcard_has_only_the_three_audited_call_sites` → `..._two_...` and dropped the expected list from three entries to two, since the pre-roll `play_devCard` site is gone.\n\nNot done, by instruction: no commit is pushed, nothing is merged, no review run.",
+  "lenses": [
+    {
+      "lens": "baseline-reviewer (code-review) — correctness, conventions, type-safety, test integrity — MODE: REVIEW",
+      "summary": "NO BLOCKERS. The slice does what the spec asked, in the order the spec required, and the full gate is green on real exit codes: `make typecheck` exit 0 (\"Success: no issues found in 148 source files\"), `make lint` exit 0 (\"All checks passed!\"), `cargo fmt --all -- --check` exit 0, `make test-unit` 3061 passed / 6 skipped. `python scripts/play_vs_model.py --self-test` passes headless — both with ambient imports and with PYTHONPATH forced at the worktree src, and again with `--ckpt runs/anchors/ptr_v1_u500.pt` (AC9).\n\nVerified correct, with evidence:\n- ORDERING (AC5): `git log main..HEAD` is 74d218f (D1 view.py bank) -> 42c55ec (D2 isAI flip + guard + bank_ok) -> 6bc0cc2 (D3) -> 234fb5c (D4) -> fc6d1a1 (D5) -> 7df9c37 (D6). D1 strictly precedes D2, so no commit exists where the picker is reachable through an ungated grant path.\n- PIN (AC2): `git rev-parse HEAD:src/catan_rl/engine` == `main:src/catan_rl/engine` == 261098d190c88923639018b52f92f583a30d2081; `git diff main -- src/catan_rl/engine/` is empty; PINNED_ENGINE_TREE untouched in eval/engine_parity.py. The three excluded items are genuinely absent: no window resize, no HAND_PANEL_LINE_HEIGHT/MOVE_LOG_RECT, no parity re-pin. The whole view.py diff is 35 lines, all inside `get_resource_selection`.\n- RED-FIRST for D1 verified independently, not taken on trust: I extracted main's tree (`git archive main src`) and ran the new `tests/unit/gui/test_human_picker_bank.py` against it — 4 failed / 3 passed, e.g. `assert 19 == 17` on the YoP bank draw. Main's view.py has zero `bank_recirculate`/`bank_draw` calls, confirming the 17/24-card leakage premise.\n- NO DOUBLE-COUNTING (the real hazard in D1): `player.play_devCard`'s GUI YoP branch (engine/player.py:466-475) does not add resources itself, and `discardResources` (engine/player.py:628-631) does not decrement — the view is the sole mutator, so adding bank calls there cannot double-count. The YoP cancel path refunds the card AND recirculates the partial draw.\n- D6 ops step verified by content, not by filename: `runs/anchors/ptr_v1_u500.pt`'s `policy_state_dict` hashes byte-identical (sha256 eca7589c51ce9d48…) to `runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt`. The rotation risk D6 cites is real — that source directory currently holds exactly 6 checkpoints (399/424/449/474/499/500).\n- ADDITIVITY (D5): `finish(..., partial: bool = False)` sits after `*` so it is keyword-only with a default; replay metadata reads the two new keys via `.get()`, pinned by `test_a_payload_without_the_attribution_keys_still_loads`. Old readers and old payloads both keep working. Legacy JSONL keys are untouched; every new key is new.\n- D4's `except BaseException` is confirmed by AST pin AND by three behavioural tests including the load-bearing `pygame.quit()`-then-`SystemExit` variant. D3's removal is pinned three ways, including a runtime pin that the auto-played human seat never pre-rolls and a pin that masks emit only ROLL_DICE while roll_pending. A missing checkpoint fails loudly in the interactive path (`build_actor` raises FileNotFoundError), so no game can silently be recorded against fresh weights.\n\nThe ten findings are all polish on a correct implementation. The two SHOULD-FIXes are both worth a few minutes before tonight: the 120 s post-abort screen hold plus stack-trace on a deliberate window close will read as a hang/crash on the most likely quit path, and the `-dirty` suffix will fire on every record because it counts untracked files that the owner's tree permanently has.",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "%REPO%/scripts/play_vs_model.py:1813 (with 1666-1686)",
+          "issue": "After a D4 salvage abort the driver still falls into `_hold_final_screen()`, which blocks up to FINAL_SCREEN_HOLD_S = 120 s. `_hold_final_screen`'s early return only fires when pygame is torn down, and only ONE of the four quit paths calls `pygame.quit()` before `sys.exit(0)` (scripts/play_vs_model.py:626-627). The three `sys.exit(0)` sites in src/catan_rl/gui/view.py (:407 setup placement, :822 the discard/YoP/Monopoly picker, :994) do NOT, so on the most likely mid-game quit — closing the window while a picker is open — pygame is still initialised, the surface still exists, and the process sits for 120 s after the human already asked to quit. Compounding it, `traceback.print_exc()` at :1686 dumps a full stack trace for a deliberate `SystemExit(0)`, so a normal window-close reads as a crash. Neither is caught by the new tests, which monkeypatch `_hold_final_screen` to a no-op (tests/unit/scripts/test_play_vs_model.py `_run`).",
+          "fix": "Guard the hold and the traceback on the abort reason: `if not aborted: _hold_final_screen()`, and inside the handler `if not isinstance(exc, SystemExit): traceback.print_exc()`. Drop the `_hold_final_screen` monkeypatch from at least the `tear_down_pygame=False` test so the pin covers the real path."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "%REPO%/scripts/play_vs_model.py:146-155",
+          "issue": "The `-dirty` suffix is computed from `git status --porcelain` with untracked files included. The owner's main checkout (the tree the games will actually be played from) currently reports `?? $SCRATCH/`, `?? src.mp4`, `?? data/bc/`, `?? data/exit/`, `?? scripts/dev/*.js` plus `M .claude/scheduled_tasks.lock` — none of which change the code the game runs on. Every record written tonight will therefore carry `<sha>-dirty` unconditionally, so the marker distinguishes nothing and `git_sha` stops being a parseable 40-char SHA (the new test itself has to `removesuffix(\"-dirty\")`). D5's stated purpose is attribution; an always-on dirty flag is noise, not attribution. It does match `scripts/bench_engine.py:105-129`, so the convention is defensible in the abstract — but there it annotates a one-off benchmark manifest, not every recorded game.",
+          "fix": "Use `[\"git\", \"status\", \"--porcelain\", \"--untracked-files=no\"]` so the suffix tracks modifications to *tracked* code, or keep `git_sha` a clean SHA and record dirtiness as a separate additive boolean key."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/play_vs_model.py:135-154",
+          "issue": "Neither `subprocess.run` call passes a `timeout`, and only `OSError` is caught — `subprocess.SubprocessError` / `TimeoutExpired` are not. The function's own docstring promises it \"degrades to None rather than raising — provenance must never stop a game from being played\", but a wedged `git` (index.lock contention, stalled filesystem) would block the artifact write indefinitely. The convention it cites, `bench_engine._git_sha`, passes `timeout=2.0` and catches `(OSError, subprocess.TimeoutExpired, subprocess.CalledProcessError)`.",
+          "fix": "Add `timeout=2.0` to both calls and widen the except to `(OSError, subprocess.SubprocessError)`."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/play_vs_model.py:1668 (also :896-897 and the TestCrashSafeArtifacts docstring)",
+          "issue": "The comment claims \"five GUI paths call `sys.exit(0)` on `pygame.QUIT`\". `grep -rn 'sys.exit(0)' src/catan_rl/gui/ scripts/play_vs_model.py` finds four: view.py:407, view.py:822, view.py:994, play_vs_model.py:627. The number was carried verbatim from the spec prose rather than re-counted against the tree, and the comment is load-bearing (it is the justification for `except BaseException`).",
+          "fix": "Say \"four\" (or drop the count and name the files), in the comment at :1668, the docstring at :896-897, and the `TestCrashSafeArtifacts` docstring."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/scripts/play_vs_model.py:1580-1583",
+          "issue": "The salvage try/except covers only the `while` loop. `env.reset(seed=..., options={...})` at :1580 drives the human's whole snake-draft placement through the GUI, and view.py:407's QUIT handler `sys.exit(0)`s straight out of it — so closing the window during setup still produces zero artifacts. This is outside D4's literal scope (the spec scopes the fix to the loop and AC7 says \"mid-game\"), and the loss is ~30 s not an hour, so it is not a spec violation — but the goal statement is \"a misclick cannot destroy an hour of play\" and this is the one remaining hole.",
+          "fix": "Optional: extend the same `except BaseException` around the reset + view-construction block, or note the gap in the D4 comment so it is a known limit rather than an oversight."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/tests/unit/scripts/test_play_vs_model.py:757-790 (test_the_driver_calls_the_guard_after_every_step)",
+          "issue": "The AST pin only walks `ast.While` nodes (`isinstance(n, ast.While) and _steps_env(n)`). `self_test` steps the env from a `for _ in range(40):` loop (scripts/play_vs_model.py:1868-1870), which the pin does not see. That loop does call `_assert_bank_conservation` today, but nothing keeps it there — the pin's own docstring argues it exists precisely because the previous text-grep version could pass while the guard sat outside the loop.",
+          "fix": "Include `ast.For` alongside `ast.While` in the `stepping` comprehension."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/src/catan_rl/gui/view.py:866-874",
+          "issue": "Residual capability asymmetry, SPEC-MANDATED — flagging for awareness only, not asking for a change. With a resource fully drained, the human's YoP click is refused and they simply pick something else (a free re-pick), while the policy's YoP at src/catan_rl/env/catan_env.py:611-615 and the AI branch at src/catan_rl/engine/player.py:459-464 burn the pick on an unsupplyable resource. AC4 explicitly requires \"a bank-unsupplyable YoP pick is not grantable\", and the code comment reasons the case through honestly, so this is the owner's decision implemented as written — but a feature whose headline is FAIR retains one small asymmetry in the human's favour. Reachability is low (requires all 19 of one resource in hands). A related edge: if the bank can supply only one card total, a 2-pick YoP cannot be completed and the human must cancel (the cancel path refunds the card and recirculates correctly, so no corruption).",
+          "fix": "None required. If you ever want exact parity, grant-what-you-can on confirm instead of refusing the click — but that contradicts AC4, so leave it."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/.claude/veriloop/specs/play-vs-model-recorder.md:91-96,188",
+          "issue": "Still describes `_human_pre_roll` as a live code path (\"the human's pre-roll knight window (`scripts/play_vs_v8.py:317`, `_human_pre_roll`) fires MOVE_ROBBER / STEAL...\"). D3 deleted it. The corresponding test docstring in tests/unit/replay/test_partition_attribution.py WAS updated, so the stale reference is now the only one. CLAUDE.md §6 asks that existing artifacts referencing touched code stay truthful; ratified specs are arguably point-in-time records, which is why this is a NIT and not higher.",
+          "fix": "Append a one-line superseded-by note pointing at playable-and-recordable.md D3, or leave it if ratified specs are treated as immutable history."
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO%/src/catan_rl/replay/schema.py:590-592",
+          "issue": "The `git_sha` field docstring says it is \"`git rev-parse HEAD` of the tree the game was played on, or None\" — it does not mention that the writer can append `-dirty`, so a consumer that assumes a 40-char SHA will be surprised. (`ckpt_sha256`'s docstring is accurate.)",
+          "fix": "Add: \"may carry a `-dirty` suffix when the tree had uncommitted edits.\""
+        },
+        {
+          "severity": "NIT",
+          "location": "%REPO% (environment, pre-existing)",
+          "issue": "",
+          "fix": "None in this diff. Worth knowing that any future `--self-test` gate step in a worktree should force `PYTHONPATH` (or give the worktree its own venv) or its PASS names the wrong tree."
+        }
+      ]
+    },
+    {
+      "lens": "drift (Drift Sentinel) — REVIEW mode",
+      "summary": "GO with fixes — no BLOCKER. The slice does what the owner asked, in the order the owner required, and every hard constraint holds.\\n\\nGATE (real exit codes, run in the worktree at %REPO%): `make lint` exit 0 (\\\"All checks passed!\\\"), `make typecheck` exit 0 (\\\"no issues found in 148 source files\\\"), `cargo fmt --all -- --check` exit 0, `pytest tests/unit` exit 0 (3061 passed, 6 skipped, 417s). AC-9 verified for real: `python scripts/play_vs_model.py --self-test --sims 4 --ckpt runs/anchors/ptr_v1_u500.pt` exits 0 — the banked anchor loads, both legality probes pass, a full game completes in 175 bot-steps, rules invariants clean. Constitution rule 1 satisfied; rule 5 respected (branch only, nothing merged). Rule 2 note, pre-existing and NOT caused by this change: `scripts/check_env.py` warns that the shared conda interpreter's `catan_rl.pth` points at the owner's main checkout, so bare `python scripts/*.py` in this worktree reads main's code — I ran the self-test with `PYTHONPATH=src` to make the result describe this tree.\\n\\nHARD CONSTRAINTS — all upheld, verified rather than assumed. `git diff main --stat -- src/catan_rl/engine/` is EMPTY and `eval/engine_parity.PINNED_ENGINE_TREE` is still `261098d190c88923…` (untouched). None of the three excluded reference-branch hunks were taken: no `engine/board.py` 1000x800→1200x900 resize, no `HAND_PANEL_LINE_HEIGHT` / `MOVE_LOG_RECT` change, no `eval/engine_parity.py` re-pin — I diffed `main..ba8f8ac` for `gui/view.py` and confirmed the bank hunks here are BYTE-IDENTICAL to the reference while the layout hunks are absent. `configs/selfplay_pointer_arch_v3.yaml` correctly still points at the live run path. No pre-roll was added for the bot. D4 uses `except BaseException` (pinned by an AST test). D5 keys are additive and `load_replay` drops unknown keys, so old readers keep working; a payload without the keys still loads (tested).\\n\\nBUILD ORDER — exactly as mandated, and it is real commit history, not a claim: 74d218f (gui/view.py bank fix) → 42c55ec (isAI flip + guard + bank_ok) → 6bc0cc2 (pre-roll removal) → 234fb5c (crash-safe) → fc6d1a1 (provenance) → 7df9c37 (DEFAULT_CKPT). D1 precedes D2, so no tree in this history opens the picker onto an ungated grant path. Commits are conventional, lowercase, authored solely by Benjamin, zero AI trailers.\\n\\nRED-FIRST — independently reproduced, not taken on trust. I extracted a pristine `main` via `git archive` into a scratch dir, dropped in `tests/unit/gui/test_human_picker_bank.py` unchanged, and ran it: 4 failed, 3 passed, with the load-bearing failure `assert board.resourceBank[\\\"BRICK\\\"] == 17` → `assert 19 == 17` (the YoP mint) plus the discard-leak and picker-routing pins. AC-3 and AC-4 genuinely fail against the pre-change tree.\\n\\nOTHER THINGS I VERIFIED RATHER THAN ASSUMED. No double-accounting: `game.log_discard` / `game.log_yop` (engine/game.py:300, :318) touch only the broadcast, never the bank, so the picker's new `bank_recirculate` / `bank_draw` are the sole mutation — conservation is clean end to end. The permanent `isAI=False` flip is safe: I enumerated every `isAI` reader — `gui/view.py:478` is behind `human_player is None` (the harness always sets it), `engine/game.py:187/203/402/522` are the `playCatan` loop (unreachable at `render_mode=None`), and `engine/player.py:452/480` are exactly the two picker branches the flip is meant to open. `_use_gui()` is False in clones because `__deepcopy__` nulls both the view and the factory. The salvage path's ordering is right: `_safe_display_game_screen` guards on `pygame.get_init()`, both artifact writes follow, and `_hold_final_screen()` is last so dismissing the window cannot cost a record.\\n\\nFINDINGS: no BLOCKER. Four SHOULD-FIXes — one truth-drift item where the `_no_pre_roll` rationale claims MCTS clones need it (they structurally cannot reach the branch; I measured 0 calls during a real search on the pre-change tree), a `-dirty` suffix that will be unconditionally ON in the owner's checkout tonight because it counts untracked files and `.claude/scheduled_tasks.lock` (measured: `-dirty` with `src/` byte-clean), the schema docstring not documenting that suffix, and the ratified spec file itself not being committed while all 12 siblings are. Six NITs. None of these block playing and recording tonight; items 1-3 are cheap and worth doing before the first recorded game, because item 2 in particular degrades the exact attribution key D5 exists to provide.",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "scripts/play_vs_model.py:539-544 (also tests/unit/scripts/test_play_vs_model.py:718 and CLAUDE.md:81)",
+          "issue": "Truth drift — the justification for the `_no_pre_roll` suppression asserts something the tree disproves. The comment says the base env's `heuristic_pre_roll` fires on \"EVERY MCTS clone rollout and every --self-test game\". `search/mcts.py:166` (`clone_env`) always ends with `clone.set_snapshot_opponent(opponent)` and `search/agent.py:79` always builds a non-None `FrozenSnapshotOpponent`, while `env/catan_env.py:804` gates the pre-roll on `self._snapshot_opponent is None`. So the pre-roll can NEVER fire in an MCTS clone. I confirmed this empirically against the pre-change tree (pristine `main` extracted to a scratch dir): `heuristic_pre_roll calls DURING one search: 0`. The code change is harmless and correct for the path it actually covers (`--self-test` / any headless `HumanVsBotEnv`), but the stated reason — \"the bot would search against a human who can pre-roll\" — is false, and it is now repeated in a code comment, a test docstring and CLAUDE.md. A false rationale in three places is exactly the kind of claim a later reader will build on.",
+          "fix": "Rewrite the comment, the `test_the_auto_played_human_seat_never_pre_rolls` docstring and the CLAUDE.md sentence to say what is true: the suppression covers `--self-test` and any headless `HumanVsBotEnv` auto-play; MCTS clones already skip the pre-roll because `clone_env` always attaches a `SnapshotOpponent` and `catan_env.py:804` gates on `_snapshot_opponent is None`."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "scripts/play_vs_model.py:118-136 (`_git_sha`)",
+          "issue": "The `-dirty` suffix is unconditionally ON in practice, so D5's attribution key carries no information. `git status --porcelain` with no path filter and default `-unormal` counts untracked files and every tracked path in the repo. Measured against the owner's actual checkout right now: `would record: 3612e3fa86efcd76ae465ed5a45a2bb407215ea0-dirty` while `src/ dirty? False`. The dirt is `.claude/scheduled_tasks.lock` (a scheduler lockfile the loop itself churns), `scripts/dev/review_step6_plan_wf.js`, plus untracked `src.mp4` / `data/bc/` / `data/exit/`. Every game recorded tonight will be stamped `-dirty` regardless of whether a single line of game-affecting code differs, which defeats the whole point of the key (\"the record must name the exact code it was played against\").",
+          "fix": "Scope the dirty probe to code that can affect a game — `git status --porcelain -- src scripts crates configs` — or at minimum pass `--untracked-files=no`. Update the `_git_sha` docstring and the CLAUDE.md `-dirty` sentence to state exactly which paths the flag covers."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/replay/schema.py:590-593",
+          "issue": "Schema doc drift: `Metadata.git_sha`'s docstring says it is \"``git rev-parse HEAD`` of the tree the game was played on, or ``None``\" — it does not mention that the writer can append `-dirty`, making the value 45 chars instead of 40. This is a shared, versioned contract read by replay consumers; the slice's own test had to add `sha.removesuffix(\"-dirty\")` to keep its length assertion, which is the tell. A consumer that slices or compares against a 40-char SHA silently mismatches.",
+          "fix": "Add one sentence to the `git_sha` docstring documenting the `-dirty` suffix and its meaning, so the dataclass is the source of truth for the format."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": ".claude/veriloop/specs/ (missing playable-and-recordable.md)",
+          "issue": "The ratified spec that governs this slice is not on the branch. All 12 sibling specs are tracked (`git ls-files .claude/veriloop/specs/` lists `preroll-dev-cards-r1.md`, `bc-coverage-and-bank-legality.md`, `human-devcard-picker-and-bank.md`, …), but `playable-and-recordable.md` exists only as an untracked file in the owner's main checkout and is absent from the worktree entirely. The code comments cite `preroll-dev-cards-r1.md` by filename, so a reader following the trail will find the stopgap's successor but not the spec that authorised the stopgap.",
+          "fix": "Commit `.claude/veriloop/specs/playable-and-recordable.md` with this slice, matching the existing convention."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/play_vs_model.py:1780-1801 vs 1465-1477",
+          "issue": "Artifact asymmetry: `git_sha`, `ckpt_sha256` and `partial` reach BOTH the JSONL record and the replay `Metadata`, but `bank_ok` and `preroll` land only in the JSONL. A downstream consumer that reads replay JSON (the richer, schema-versioned artifact) has no way to see that a game's finite-bank invariant broke. Spec D2/D3 only asked for the record key, so this is spec-conformant — but the stated purpose (\"a corrupt game must never be byte-indistinguishable from a clean one\") is only half-served.",
+          "fix": "Optional and out of scope for this slice: mirror `bank_ok` / `preroll` into `Metadata` as additive optional fields the same way `git_sha` was, or note the JSONL-only scope in the spec's known limitations."
+        },
+        {
+          "severity": "NIT",
+          "location": "tests/unit/scripts/test_play_vs_model.py:764",
+          "issue": "`TestBankConservationGuard`'s docstring opens with \"D3: the human driver asserts the finite-bank invariant it never had.\" In the ratified spec the conservation guard is D2; D3 is the pre-roll removal. Mis-labelled decision IDs make the acceptance-criteria trace harder to follow.",
+          "fix": "Change `D3:` to `D2:` in the class docstring."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/play_vs_model.py:1476-1477 and 1799-1800",
+          "issue": "`_git_sha()` and `_ckpt_sha256(ckpt)` are each evaluated twice per finished game — once for the replay `Metadata`, once for the JSONL record. `_ckpt_sha256` streams the whole checkpoint (the banked anchor is 5.5 MB) and `_git_sha` shells out to git twice each time. Harmless, but it also means the two artifacts could in principle disagree if the tree changed between the two calls.",
+          "fix": "Compute both once before the write block and reuse the values for both artifacts."
+        },
+        {
+          "severity": "NIT",
+          "location": "scripts/play_vs_model.py:1580-1583 (the `env.reset(...)` before the guarded loop)",
+          "issue": "D4's salvage covers the stepping loop only. With `--human-seat 0` the human's snake-draft placements are driven inside `env.reset()`, which sits OUTSIDE the try — a window close during setup still produces no artifact at all. This matches the spec exactly (D4 scopes the wrap to the loop body), so it is not a defect; recording the residual hole so it is a known limitation rather than an assumption that a misclick can never lose a game.",
+          "fix": "None required for this slice. If it matters later, hoist the reset into the same salvage scope, or note in the spec that setup-phase interruptions are still unrecoverable."
+        },
+        {
+          "severity": "NIT",
+          "location": "tests/unit/scripts/test_play_vs_model.py:800-830 (`test_the_driver_calls_the_guard_after_every_step`)",
+          "issue": "The AST pin only inspects `ast.While` nodes that contain a `.step(` call. `self_test`'s first stepping loop is a `for _ in range(40):` and is therefore invisible to the pin, even though it does call `_assert_bank_conservation` today. A future regression that drops the guard from that loop would not turn the pin red.",
+          "fix": "Widen the node filter to `(ast.While, ast.For)`."
+        },
+        {
+          "severity": "NIT",
+          "location": ".claude/veriloop/specs/bank-fix-slice-and-champion-bank.md:3",
+          "issue": "That spec is still headed \"Status: DRAFT (2026-07-29) — awaiting owner ratification\" and describes the same re-slice this branch implements (its D1 ordering rationale is the one the ratified spec restates). Leaving a superseded draft in-tree marked as pending invites a later reader to implement its extra decisions (engine re-pin discussion, clause-(a) recording, leak-era voiding) as if they were open.",
+          "fix": "Mark it SUPERSEDED by `playable-and-recordable.md`, or delete it."
+        }
+      ]
+    }
+  ],
+  "gateHistory": [
+    {
+      "verdict": "FAIL",
+      "blockers": 2,
+      "concerns": 5,
+      "waived": 0
+    },
+    {
+      "verdict": "CONCERNS",
+      "blockers": 0,
+      "concerns": 6,
+      "waived": 0
+    }
+  ],
+  "crossModel": null,
+  "missingGateJobs": [],
+  "implPreflight": "typecheck exit 0 (mypy src: 148 files clean), lint exit 0 (ruff check src tests scripts). Also ran, unrequested but cheap: `cargo fmt --all -- --check` exit 0 and `make test-unit` = 3059 passed / 6 skipped, plus the spec's acceptance run `PYTHONPATH=<wt>/src python scripts/play_vs_model.py --self-test --sims 8` = PASS (exit 0). Nothing was left red and no failure was attributable to code outside this change. NOTE: the repo's pre-commit hooks (ruff check --fix / ruff format) run automatically on `git commit` and reformatted two spots in my own new code — an unused `# noqa: BLE001` was dropped from the D4 except clause and two test signatures were re-wrapped. I did not invoke any formatter manually and no file outside my change was touched.",
+  "dryRun": false,
+  "land": {
+    "sha": "13dafa03785f04efc51f57e5c619be8315698ba0",
+    "pushed": true,
+    "branch": "feat/playable-and-recordable"
+  }
+}
