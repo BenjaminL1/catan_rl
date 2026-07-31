@@ -771,6 +771,8 @@ class catanGameView:
                 title_text = f"Discard {num_to_select - len(selected_resources)} cards"
             elif mode == "YOP":
                 title_text = f"Select {num_to_select - len(selected_resources)} resources"
+                if any(not self.board.bank_can_supply({r: 1}) for r in resources):
+                    title_text += "  (greyed = bank empty)"
             elif mode == "MONOPOLY":
                 title_text = "Select resource to monopolize"
             elif mode == "BANK":
@@ -789,6 +791,17 @@ class catanGameView:
                 count = player.resources[res]
                 count_text = self.font_button.render(str(count), True, (0, 0, 0))
                 self.screen.blit(count_text, (rect.centerx - 5, rect.centery - 5))
+
+                # Year of Plenty DRAWS from the finite bank, so a resource the
+                # bank cannot supply is not grantable below. The count drawn
+                # above is the PLAYER's holding, so without this an empty-bank
+                # resource looks identically pickable and the click just does
+                # nothing — grey it out instead of failing silently.
+                if mode == "YOP" and not self.board.bank_can_supply({res: 1}):
+                    shade = pygame.Surface((rect.width, rect.height), pygame.SRCALPHA)
+                    shade.fill((40, 40, 40, 190))
+                    self.screen.blit(shade, rect.topleft)
+                    pygame.draw.rect(self.screen, (90, 90, 90), rect, 4)
 
                 # Draw Outlines based on state
                 if mode == "MONOPOLY":
@@ -813,9 +826,13 @@ class catanGameView:
                     menu_rect = pygame.Rect(menu_x, menu_y, menu_width, menu_height)
                     if not menu_rect.collidepoint(e.pos) and mode != "DISCARD":
                         if mode == "YOP":
-                            # Revert resources added so far
+                            # Revert resources added so far. Each was DRAWN from
+                            # the finite bank below, so the revert must put it
+                            # back (spec 009) — otherwise cancelling a partly
+                            # picked YoP leaks the supply the other way.
                             for res in selected_resources:
                                 player.resources[res] -= 1
+                                self.board.bank_recirculate({res: 1})
 
                         result = None
                         running = False
@@ -830,14 +847,28 @@ class catanGameView:
                     if mode == "DISCARD":
                         if clicked_res and player.resources[clicked_res] > 0:
                             player.resources[clicked_res] -= 1
+                            # Discards RECIRCULATE into the finite bank (spec
+                            # 009), exactly as every non-GUI discard path does
+                            # (heuristic.py, random_ai.py, env/catan_env.py).
+                            self.board.bank_recirculate({clicked_res: 1})
                             selected_resources.append(clicked_res)
                             if len(selected_resources) >= num_to_select:
                                 result = selected_resources
                                 running = False
 
                     elif mode == "YOP":
-                        if clicked_res:
+                        # Year of Plenty DRAWS from the finite bank and is gated
+                        # on availability, matching the AI branch in
+                        # player.play_devCard: a resource the bank cannot supply
+                        # is simply not grantable (the click does not register;
+                        # the swatch is greyed above so that is visible). The AI
+                        # branch instead burns the pick on an unsupplied choice,
+                        # because it picks blind at random — a human reading a
+                        # greyed swatch is not making that choice, so declining
+                        # the click is the honest equivalent, not a favour.
+                        if clicked_res and self.board.bank_can_supply({clicked_res: 1}):
                             player.resources[clicked_res] += 1
+                            self.board.bank_draw({clicked_res: 1})
                             selected_resources.append(clicked_res)
                             if len(selected_resources) >= num_to_select:
                                 result = selected_resources
