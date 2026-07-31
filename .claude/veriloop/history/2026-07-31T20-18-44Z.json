@@ -1,0 +1,223 @@
+{
+  "ts": "2026-07-31T20-18-44Z",
+  "feature": "Follow-up fixes to the merged bc-coverage-and-bank-legality slice (now on main @ 1846113). Four items, owner-decided. TDD IS BINDING: write the failing test FIRST and observe it fail before implementing; state each red-first result in the report.\n\nF-A (owner chose 'record the real hex'): every recorded PLAY_KNIGHT row carries a fabricated constant tile label. `patched_play_knight` in src/catan_rl/bc/dataset.py builds the action with no tile argument so tile_idx defaults to 0, while HEAD_RELEVANCE[PLAY_KNIGHT][3] == 1 marks the tile head relevant and the main-phase branch of compute_action_masks never populates the tile mask. Measured 175/175 knight rows in a 40-game corpus and 30/30 in an 8-game seed-100 corpus (mask/tile.sum(axis=1) == 0, action[:,3] == 0). FIX: record the hex the nested move_robber actually picks, so the row carries a true label and a populated tile mask. DO NOT change HEAD_RELEVANCE (that is now the live PPO relevance buffer and would alter joint log-prob for existing v2 checkpoints — the owner explicitly rejected that option).\n\nF-B (owner chose to fix): the write-time legality gate in src/catan_rl/bc/dataset.py:265 `_record_decision` still validates only the type head (`if not bool(mask['type'][int(action[0])]): return`), but D4 made two SUB-head masks able to reject an action the type head admits. agents/heuristic.py trade() picks r2 as 'a resource I hold < 1 of' with no bank check, so a recorded BANK_TRADE can now carry an off-mask resource2. This is NOT gradient-safe: masked_log_softmax only falls back to uniform when the WHOLE row is masked, so a single masked-off target can blow up BC loss. FIX: validate every RELEVANT head's mask (use the shared obs_schema helpers/MASK_KEY_FOR), not just the type head, and drop the row if any relevant head rejects the chosen index.\n\nF-C (owner chose to fix): crates/catan_engine/src/masks.rs was updated to EMIT the four new D4 resource keys and its module docstring now claims parity with the Python compute_action_masks, but it does NOT APPLY the D4 gate (arr[ActionType::PlayYoP] fires on card-in-hand alone; the two type-level gates were never ported). The parity claim is currently FALSE. Either port the gate faithfully so the claim becomes true, or correct the docstring to state exactly what is and is not mirrored. Prefer porting the gate. Note the Rust crate is NOT the default backend (engine_backend: python), so this is correctness-of-claim work, not a hot path.\n\nF-D (owner chose 'add the discontinuity note'): D2 moved the standing measurement rod — the heuristic now plays dev cards, so any WR-vs-heuristic number banked before this change is not comparable to one measured after. The note landed in some docs but not all. Add it to docs/plans/v2/step4_ppo.md:202 (the 0.90 gate), docs/plans/v2/design.md:769-794 (the 0.70/0.90/0.95 gates), and docs/plans/v2/setup_strength_roadmap.md. State plainly that those thresholds were calibrated against a heuristic that could not play a development card and require empirical re-baselining before the next promotion decision. DO NOT change the threshold values in this slice — re-baselining is a separate measurement task.\n\nAlso fix, since they are in the same files and were flagged by both lenses:\n- tests/unit/search/test_priors.py:23-24 keeps a stale local copy of the type -> mask-key routing: _RES1_KEY still maps PLAY_YOP -> 'resource1_default' but YoP's first pick moved to 'resource1_yop'. Route it through the shared obs_schema table instead of a local duplicate.\n- docs/io_schema.md:128 says 'returns these 10 bool tensors (MASK_KEYS)' while the table below lists 12 rows. Make the count match reality.\n- src/catan_rl/env/masks.py:112-118 — the comment justifying the D4 gate asserts a livelock premise that drift found FALSE against the tree. The fix itself is correct (it matches Torevan legal-moves.ts legality); rewrite the justification to the true reason (reference-engine parity), do not keep a false claim in a code comment.\n\nHARD CONSTRAINTS:\n- Do NOT touch src/catan_rl/engine/. PINNED_ENGINE_TREE must remain 261098d190c8.\n- Do NOT change HEAD_RELEVANCE (F-A).\n- Do NOT change the promotion threshold VALUES (F-D) — documentation only.\n- No training runs, no BC regeneration, no long jobs. Code, tests and docs only.\n\nStop before merge for owner sign-off.",
+  "repo": "catan-rl-v2",
+  "tier": "high",
+  "baseSha": "18461131e5c310e551db4f3be4ad80bb07de697b",
+  "headSha": "658913ede92aacc35173931b69fc7202405522fb",
+  "verdict": "CONCERNS",
+  "checks": [
+    {
+      "name": "typecheck",
+      "command": "make typecheck",
+      "exit": 0,
+      "tail": "mypy src\nSuccess: no issues found in 148 source files"
+    },
+    {
+      "name": "lint",
+      "command": "make lint",
+      "exit": 0,
+      "tail": "ruff check src tests scripts\nAll checks passed!"
+    },
+    {
+      "name": "format",
+      "command": "cargo fmt --all -- --check",
+      "exit": 0,
+      "tail": "(no output)"
+    },
+    {
+      "name": "test",
+      "command": "make test-unit",
+      "exit": 0,
+      "tail": "tests/unit/human_data/test_board_cv.py: 4 warnings\ntests/unit/human_data/test_openings.py: 7 warnings\n  UserWarning: 'pin_memory' argument is set as true but not supported on MPS now, device pinned memory won't be used.\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n========== 3030 passed, 6 skipped, 108 warnings in 467.93s (0:07:47) ==========="
+    }
+  ],
+  "baselineProbe": null,
+  "screenshots": [],
+  "screenshotVerdict": null,
+  "fixPasses": 1,
+  "blockers": [],
+  "concerns": [
+    "[baseline-reviewer (MODE: REVIEW) — senior-engineer correctness/craft audit of the uncommitted `feat/bc-followup-fixes` worktree at %REPO%] This slice relaxes a pin owned by a DIFFERENT ratified spec. `.claude/veriloop/specs/play-vs-model-recorder.md:45` says verbatim \"**Do not edit `design.md`**\", and the old pin enforced that as byte-cleanliness. F-D requires editing design.md, so the conflict is real and owner-created — but the resolution taken is an implementer rewriting another spec's enforcement to insert-only. The implementer flagged this in-comment (lines 73-77) and correctly notes the replacement is STRICTLY WEAKER: insert-only still admits appending prose that contradicts a locked decision. A ratified decision is currently overridden by a code comment rather than by an owner amendment. Secondary: after this branch merges, `git diff HEAD` is empty and `origin/main...HEAD` collapses to nothing, so the pin self-disarms on main — same as before the change, but the weaker predicate makes that matter more.",
+    "[baseline-reviewer (MODE: REVIEW) — senior-engineer correctness/craft audit of the uncommitted `feat/bc-followup-fixes` worktree at %REPO%] Docs-sync gap in a file this slice edited. io_schema.md is the I/O-contract doc and still asserts \"`PlayKnight` (6) also drives the `tile` head — playing a knight moves the robber in the same step.\" The same slice establishes (bc/dataset.py:398-414) and I confirmed against the code that this is FALSE for the env: `env/catan_env.py:595-601` ignores `action[3]` for PLAY_KNIGHT entirely — it sets `robber_placement_pending = True` and demands a separate MOVE_ROBBER step, and `env/masks.py`'s Main branch never populates `tile`, so the served tile mask is all-False (`heads.masked_log_softmax` then returns a detached uniform, i.e. zero gradient). After F-A the statement is true only of the BC corpus, and only via a spliced mask the env emits for no state. CLAUDE.md §6 requires the touched doc to stay truthful.",
+    "[drift] CROSS-SPEC PIN RELAXATION — needs owner adjudication before merge. The pin protecting `docs/plans/v2/design.md` is owned by a DIFFERENT ratified spec (`.claude/veriloop/specs/play-vs-model-recorder.md:44-47`, D1: \"Do not edit design.md\"). This slice rewrites that pin from \"the file is byte-clean\" to \"the file is insert-only\" so the F-D caveat can land. The implementer disclosed this in-comment (lines 73-79) and the narrowing is arguably faithful to D1's stated rationale — D1 forbids \"an implementer editing a ratified doc to match what it built\", which an owner-directed measurement caveat is not — and the owner's own F-D instruction (\"design.md:769-794\") made the conflict unavoidable. But the replacement is strictly weaker (insert-only still admits appending text that CONTRADICTS a locked decision), and one spec's implementer unilaterally loosening another spec's guard is exactly the drift class this lens exists to catch. Not scored BLOCKER only because it is disclosed and owner-forced.",
+    "[drift] FALSE MEASURED NUMBER IN A COMMENT — the same defect class the owner explicitly asked to purge from `env/masks.py:112-118`. The knight comment says the change makes \"knight rows (~1.6% of tile-relevant rows) now contribute a real tile CE\". Measured on this tree (8 games, seeds 100-107): 35 PLAY_KNIGHT rows and 336 MOVE_ROBBER rows, so knight rows are 35/(35+336) = 9.4% of tile-relevant rows. 1.6% is roughly the share of ALL rows (my probe: 35/3286 = 1.1%), i.e. the denominator is mislabelled. This matters because the understated figure is what makes the \"accepted skew\" read as negligible — the true tile-head gradient share affected is ~6x larger.",
+    "[drift] UNREPRODUCIBLE MEASUREMENT PRESENTED AS A MEASUREMENT. The docstring states \"Measured over the canonical teacher (seeds 200-205, 3,674 type-legal rows): **zero** rows were rejected on a sub-head\" (repeated at docs/plans/v2/step3_bc.md:69). The zero-rejection half I CONFIRMED (instrumented gate over those seeds: 0 sub-head drops). The row count does not reproduce: `play_game` is non-deterministic under a fixed seed. Three in-process calls to `play_game(game_id=200, seed=200, max_turns=300)` returned 454 / 547 / 385 rows (83 / 95 / 67 turns), and seeds 200-205 aggregate returned 2,485 / 3,178 / 3,309 across separate runs. Root cause: `play_game` seeds only `np.random` (dataset.py:532) while `src/catan_rl/engine/dice.py:17` drives StackedDice off the stdlib `random` module, which is never seeded. Pre-existing and inside the PINNED engine, so not fixable in this slice — but it means every \"measured N rows\" claim in this slice and its parent is a single sample, not a measurement.",
+    "[drift] UNDECLARED SCOPE WITH AN OPERATIONAL COST: `RULESET_VERSION` is bumped 2 -> 3. This is not in the owner's four-item spec. `bc/loader.py:125` enforces the stamp, so the bump makes every existing v2 BC corpus (including anything already under `data/bc/`) raise `StaleCorpusError` and forces a full regeneration — work the spec explicitly excluded (\"no BC regeneration\"). The bump is semantically DEFENSIBLE (knight rows genuinely changed meaning and nothing in the shard arrays can reveal it) and it is documented in both the constant's docstring and docs/plans/v2/step3_bc.md:95, so this is a surfacing request, not a correctness objection.",
+    "[drift] OVER-BROAD NEW GLOBAL CONSTRAINT FROM A DOCS-ONLY SLICE. `test_annotated_document_is_insert_only` asserts that design.md, step4_ppo.md and setup_strength_roadmap.md are insert-only on ANY branch (it diffs both `HEAD` and `origin/main...HEAD`). Two consequences: (a) after this branch merges, both diffs go empty on a clean tree and the pin protects nothing; (b) any FUTURE branch that rewrites a line in those three roadmap docs now fails the unit suite — including the empirical re-baselining task that F-D itself defers (\"re-baselining is a separate measurement task\"), whose whole job is to move a threshold, which the test is designed to reject. A guard that must be deleted to do sanctioned work is a guard aimed at the wrong target."
+  ],
+  "waived": [],
+  "filesChanged": [
+    "%REPO%/src/catan_rl/policy/obs_schema.py",
+    "%REPO%/src/catan_rl/bc/dataset.py",
+    "%REPO%/src/catan_rl/env/masks.py",
+    "%REPO%/crates/catan_engine/src/masks.rs",
+    "%REPO%/tests/unit/policy/test_obs_schema.py",
+    "%REPO%/tests/unit/bc/test_dataset.py",
+    "%REPO%/tests/unit/search/test_priors.py",
+    "%REPO%/tests/unit/scripts/test_play_vs_model.py",
+    "%REPO%/docs/io_schema.md",
+    "%REPO%/docs/plans/v2/step3_bc.md",
+    "%REPO%/docs/plans/v2/step4_ppo.md",
+    "%REPO%/docs/plans/v2/design.md",
+    "%REPO%/docs/plans/v2/setup_strength_roadmap.md"
+  ],
+  "implSummary": "All four owner-elected fixes plus the three flagged items landed, each preceded by an observed-failing test. Nothing committed or pushed.\n\nF-A — PLAY_KNIGHT tile label (bc/dataset.py). `_record_decision` gained `mask_overrides`, applied BEFORE the legality gate. `patched_play_knight` now sets `robber_placement_pending`, lifts the `\"tile\"` key out of `compute_action_masks` (no fourth copy of the Friendly-Robber rule), and labels the row with `choose_player_to_rob(board)[0]` — recorded at record time so `step_idx`/ordering are untouched. RED evidence: `seed 100 row 84: empty tile mask on a knight row`. Two new tests pin a populated tile mask + the label agreeing with the MOVE_ROBBER row the knight drags in (which also pins `choose_player_to_rob`'s purity — a future stochastic override fails loudly).\n\nF-B — relevance-aware write-time legality gate. New torch-free `action_masked_legal(masks, action)` in `policy/obs_schema.py` walks `HEAD_RELEVANCE`/`MASK_KEY_FOR`, with head 5 mirroring `heads._resource2_mask` exactly; out-of-range indices are rejected, not raised. `dataset.py:265`'s type-only gate is replaced by it and the drop-reason docstring extended. New `tests/unit/policy/test_obs_schema.py` cross-checks head 5 against the torch implementation over the full 5x5 grid x 64 sampled mask draws for both BANK_TRADE and PLAY_YOP. RED evidence: `seed 200 row 157: action [6,0,0,0,0,0] is off its own mask`, and a bank drained of the receive resource still recorded the trade. `expert_iteration/labeler.py` was checked — it has NO type-only gate (search picks from the mask by construction), so per the plan it was left alone.\n\nF-C — Rust D4 gates ported (crates/catan_engine/src/masks.rs). A usable pure-Rust fixture exists (`GameState::new(seed)` + public fields), so the fallback-to-docstring-only option was not needed. Extracted `bank_supply` / `res1_trade_vec` / `res1_yop_vec` / `resource_legality` / `legal_type_mask`, hoisted above the type-mask block, consumed by both `compute_masks` and a new `#[cfg(test)] mod tests` (no GIL, no numpy). PlayYoP is now withheld unless a first pick is bank-legal; BankTrade unless a `(give, receive)` pair is, with the partner-drop and `res2_trade` zeroing. RED evidence: reverting just the two gates turns 4 of the 6 new tests FAILED. The module docstring no longer claims blanket parity — it states what IS mirrored and enumerates five KNOWN divergences (port-blind `resource1_trade`, permissive Setup type mask, cost-only build gating, the extra `roads_left >= 2` on PlayRoadBuilder, no EndTurn fallback in GameOver).\n\nF-D — teacher-discontinuity note added verbatim-in-spirit from step3_bc.md, plus the \"calibrated against a heuristic that could not play a development card / require empirical re-baselining\" sentence, to step4_ppo.md §6 (naming Gate 1's 0.90), design.md §5 (one note governing Steps 3/4/5/6 at 0.40/0.70/0.90/0.95 and the §6 criteria), and setup_strength_roadmap.md (naming the `heuristic_v0` NNLS table and Gate A.4's 2pp clause specifically). `git diff -U0 -- docs/` confirms every line is an ADDITION — no numeric threshold moved.\n\nFlagged items: `tests/unit/search/test_priors.py` local `_RES1_KEY`/`_CORNER_KEY` deleted in favour of `MASK_KEY_FOR` (RED first: the local table routed PLAY_YOP to `resource1_default`, the all-True Monopoly key, making the legality assertion vacuous for exactly the bank-sensitive type; `search/priors.py` itself was correct). `env/masks.py:112-120` and `docs/io_schema.md:154-158` justifications rewritten to the true reason (parity with Torevan `legal-moves.ts`, which enumerates only fully-supplyable pairs); the byte-identical/fixed-point premise is gone. `docs/io_schema.md:128` verified as ALREADY reading \"12 bool tensors\" with 12 table rows — no edit made.\n\nONE THING NEEDING YOUR CALL. `tests/unit/scripts/test_play_vs_model.py::TestRenamePin::test_locked_design_doc_still_reserves_the_path` asserted `docs/plans/v2/design.md` is byte-clean, which collides head-on with this slice's mandate to put the note in design.md. The `play-vs-model-recorder` D1 it encodes is narrower than the assertion: it forbids an implementer REWRITING the ratified design to match what it built. I narrowed the pin to that invariant — design.md may only be APPENDED to (zero removed lines) and no line containing `play_vs_` may move — rather than deleting it or leaving the gate red. If you would rather keep the byte-clean pin, the design.md hunk is the only thing to drop.\n\nConstitution compliance: `src/catan_rl/engine/` untouched (`git diff --name-only` confirms), `PINNED_ENGINE_TREE` still `261098d190c8`, no obs/action-space shape change, `RESERVED_PLAYER_SLOTS`/`CURR_EXTRA_DIM`/`CURR_RESERVED_SLOTS` untouched so `CURR_PLAYER_DIM` 67 / `NEXT_PLAYER_DIM` 69 are unchanged, DISCARD rows still excluded, no early-return no-op added on any apply path.",
+  "lenses": [
+    {
+      "lens": "baseline-reviewer (MODE: REVIEW) — senior-engineer correctness/craft audit of the uncommitted `feat/bc-followup-fixes` worktree at %REPO%",
+      "summary": "No BLOCKERS. All four gate commands are GREEN on real exit codes, run inside the worktree's own `.venv` (constitution rule 2 respected — `python scripts/check_env.py` exits 0, no shared-interpreter editable install): `make typecheck` = 0 (mypy, 148 files), `make lint` = 0 (ruff), `cargo fmt --all -- --check` = 0, `make test-unit` = 0 (3030 passed, 6 skipped, 463s). `cargo test -p catan_engine` also green (47 + 10). Constitution rule 5 respected — work is on `feat/bc-followup-fixes`, uncommitted, nothing merged.\n\nHard constraints all hold, verified: `git diff main --stat -- src/catan_rl/engine/` is EMPTY and `eval/engine_parity.PINNED_ENGINE_TREE` is still `261098d190c8…`; `_build_head_tables` / `HEAD_RELEVANCE` are untouched; the three F-D docs are insert-only (no threshold value moved — I diffed for removed lines and there are none).\n\nVerified correct, not just green:\n- F-A. `choose_player_to_rob` is genuinely pure (no RNG, no mutation) and always returns a hex inside `board.get_robber_spots()`, or 0 when that set is empty — in which case the robber branch's own `tile[:] = True` fallback makes index 0 legal, so no knight row can be dropped by its own override. The second call inside `heuristic_play_knight` sees only `devCards`/`knightsPlayed`/`devCardPlayedThisTurn` changed (`check_largest_army` runs after `move_robber`), none of which feed `get_robber_spots` or the hex score — the labels genuinely agree. D6 augmentation permutes head 3 unconditionally (`augmentation/dihedral.py:243-244`), so knight rows survive symmetry aug correctly.\n- F-B. I instrumented the gate over seeds 200-205 and independently CONFIRMED the \"zero sub-head drops\" claim (empty drop counter; 3,854 type-legal of 5,720 calls). The constructed-state test is genuinely discriminating — it drains one resource only, so `type[BANK_TRADE]` stays True and `resource2_trade[BRICK]` is the sole rejecting head, which the old type-head-only gate would have waved through. `action_masked_legal`'s head-5 branch is cross-checked exhaustively against the torch `CatanActionHeads._resource2_mask`, and being stricter than `masked_log_softmax`'s all-masked uniform fallback is the safe direction.\n- F-C. The D4 type gates are now faithfully ported: `res1_yop_vec` = `doubled[i] || (supplied[i] && has_other)` matches Python line-for-line, `yop_playable` gates `type[PlayYoP]`, the partner-drop on `res1_trade` and the zeroing of `res2_trade` match, and six pure-Rust tests pin them without needing `maturin develop`. No new build warnings from the dead-`needs_settlement` removal.\n- The `test_priors.py` routing fix is correct (`MASK_KEY_FOR[PLAY_YOP][4] == 'resource1_yop'`). Note this one cannot have been red-first — `action_priors` already picked res1 off the right mask, so it is test-hygiene, not a bug fix; worth saying so plainly in the TDD section of the report.\n- The `docs/io_schema.md:128` \"10 vs 12\" item required NO change: `git show main:docs/io_schema.md` already reads \"12 bool tensors\". Nothing was silently dropped, but the report should state that the flagged item was stale rather than leave a reader to wonder.\n\nThe three SHOULD-FIXes are: an implementer-side relaxation of another ratified spec's pin that needs owner ratification, an I/O-contract doc that now contradicts a serve-time behavior this same slice discovered, and an unrequested `RULESET_VERSION` bump (benign today — I checked the on-disk corpus already fails the loader — but it is a versioned contract shared with the ExIt labeler and belongs in the acceptance record).",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "tests/unit/scripts/test_play_vs_model.py:61-103",
+          "issue": "This slice relaxes a pin owned by a DIFFERENT ratified spec. `.claude/veriloop/specs/play-vs-model-recorder.md:45` says verbatim \"**Do not edit `design.md`**\", and the old pin enforced that as byte-cleanliness. F-D requires editing design.md, so the conflict is real and owner-created — but the resolution taken is an implementer rewriting another spec's enforcement to insert-only. The implementer flagged this in-comment (lines 73-77) and correctly notes the replacement is STRICTLY WEAKER: insert-only still admits appending prose that contradicts a locked decision. A ratified decision is currently overridden by a code comment rather than by an owner amendment. Secondary: after this branch merges, `git diff HEAD` is empty and `origin/main...HEAD` collapses to nothing, so the pin self-disarms on main — same as before the change, but the weaker predicate makes that matter more.",
+          "fix": "Do not land this as an implementer-side relaxation. Either (a) the owner amends `play-vs-model-recorder` D1 to \"design.md is insert-only; §5/§6 gate annotations are permitted\" and this test cites the amendment, or (b) keep the byte-clean pin and carve out an explicit allowlist of the inserted F-D block (e.g. assert the only added lines are inside a `Teacher discontinuity` blockquote). Get the sign-off before merge."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "docs/io_schema.md:102-103 (and table row `| 6 | PlayKnight | tile |`, ~line 113)",
+          "issue": "Docs-sync gap in a file this slice edited. io_schema.md is the I/O-contract doc and still asserts \"`PlayKnight` (6) also drives the `tile` head — playing a knight moves the robber in the same step.\" The same slice establishes (bc/dataset.py:398-414) and I confirmed against the code that this is FALSE for the env: `env/catan_env.py:595-601` ignores `action[3]` for PLAY_KNIGHT entirely — it sets `robber_placement_pending = True` and demands a separate MOVE_ROBBER step, and `env/masks.py`'s Main branch never populates `tile`, so the served tile mask is all-False (`heads.masked_log_softmax` then returns a detached uniform, i.e. zero gradient). After F-A the statement is true only of the BC corpus, and only via a spliced mask the env emits for no state. CLAUDE.md §6 requires the touched doc to stay truthful.",
+          "fix": "In io_schema.md, split the claim: the `tile` head is RELEVANT for PlayKnight in `HEAD_RELEVANCE` and is labelled in the BC corpus (the hex the teacher robs, under a robber-branch tile mask), but `CatanEnv._apply_action` ignores it and the Main-phase `tile` mask is all-False, so at rollout/serve time the head contributes a masked-uniform constant. One sentence under the existing note plus a footnote on the table row."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/policy/obs_schema.py:281-293",
+          "issue": "",
+          "fix": "Keep the bump (it is defensible — a v2 corpus really does hold fabricated `tile_idx = 0` knight labels that the arrays cannot reveal) but get it explicitly signed off, and add one clause to the version-3 docstring stating what it means for an ExIt-labelled corpus (i.e. that the labeler's contract is unchanged and the bump is inherited, not descriptive)."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/bc/dataset.py:239-243 (mirrored at docs/plans/v2/step3_bc.md:67-70)",
+          "issue": "The load-bearing measurement does not reproduce. Both places claim 'seeds 200-205, 3,674 type-legal rows'. Instrumenting `dataset.action_masked_legal` over exactly `play_game(game_id=seed, seed=seed, perturbation='canonical', max_turns=300)` for seeds 200-205 I measured 5,720 gate calls / 3,854 type-legal / 1,866 type-dropped, and 2,572 rows actually retained in `record.decisions`. The 3,674 figure matches neither. The ZERO-sub-head-drops claim itself I independently CONFIRMED (sub-head drops by action type: {} — empty).",
+          "fix": "Re-derive the number with the exact command used, or state which population it counts (gate-reaching vs retained vs post-DISCARD-filter). An unreproducible count in the comment that justifies 'this is a guard, not a corpus change' invites the next reader to distrust the whole paragraph."
+        },
+        {
+          "severity": "NIT",
+          "location": "tests/unit/bc/test_dataset.py:822-843",
+          "issue": "`test_every_recorded_row_is_legal_under_its_own_mask` is tautological against the current implementation: `_record_decision` appends the very same `mask` dict object it just evaluated with the very same `action_masked_legal` predicate (dataset.py:288-313), so a recorded row cannot fail this assertion. The docstring concedes it does not discriminate F-B; it does not concede that post-F-A it cannot fail at all. Its only residual value is catching a future refactor that stores a mask different from the gated one.",
+          "fix": "Either say that plainly in the docstring ('cannot fail while the recorder stores the gated mask; kept as a structural guard against that coupling being broken'), or make it non-tautological by recomputing the mask from the stored obs/phase rather than reusing `d.mask`."
+        },
+        {
+          "severity": "NIT",
+          "location": "crates/catan_engine/src/masks.rs:18-70",
+          "issue": "F-C's brief is 'the parity claim is true or corrected', so the divergence list is the deliverable and it has two gaps. (1) `resource2_trade` appears in neither the 'unconditional sub-mask construction' bullet nor the bank-alone bullet, yet `resource_legality` runs on every call so Rust emits a populated `resource2_trade` in Setup / Roll / Discard / Robber / RoadBuilder where Python has already `return _pack()`ed with it all-False. (2) The opening 'What is mirrored' paragraph states the D4 type-level gates ARE mirrored including `BankTrade`, but `res1_trade_vec` is port-blind (`>= 2`) while Python consults `p.portList` for 2:1/3:1/4:1 — so `type[BankTrade]` in Rust is a strict SUPERSET of Python's, not a mirror. The port-blindness is disclosed, but eight bullets below the sentence that a reader will take as the summary.",
+          "fix": "Add `resource2_trade` to the unconditional-construction bullet, and append one clause to the opening paragraph: '...with the same partner-drop and the same zeroing — though the give-side predicate itself is port-blind (see below), so `type[BankTrade]` is a superset of Python's.'"
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/bc/dataset.py:415-422",
+          "issue": "The knight tile-mask override is built OUTSIDE `_record_decision`, i.e. before that function normalizes `ctx.env_state.initial_placement_phase = phase == 'setup'` (dataset.py:261). `compute_action_masks` tests `initial_placement_phase` FIRST and returns a setup pack with `tile` all-False. Today this is safe (the main loop clears the flag at dataset.py:597 and knights only fire post-setup), but if that invariant ever slips the failure mode is silent: an all-False override makes `action_masked_legal` reject and every PLAY_KNIGHT row is dropped from the corpus with no error. Silent corpus loss is exactly the class of bug F-A was raised to fix.",
+          "fix": "Cheapest: `assert tile_mask.any()` (or an explicit `raise`) after the override is built — the robber branch's own `if not tile_mask.any(): tile_mask[:] = True` fallback guarantees it is non-empty whenever the branch was actually taken, so a False assertion means the branch was NOT taken and the row is about to be mislabelled."
+        },
+        {
+          "severity": "NIT",
+          "location": "tests/unit/bc/test_dataset.py:786-812",
+          "issue": "`test_play_knight_tile_matches_the_robber_move_it_triggers` — the pin that the predicted hex equals the robbed hex — runs only with `perturbation='canonical'`. The comment at dataset.py:393-396 justifies the whole design on 'neither perturbation subclass overrides it'; that assertion is untested. I verified it holds today (`EpsilonGreedyHeuristicAIPlayer` overrides only `__init__`/`initial_setup` and inherits `move()`, so it plays knights through the same pure `choose_player_to_rob`; `WeightNoisedHeuristicAIPlayer.move()` omits `heuristic_play_dev_card` so it plays none), but the comment's claim is the load-bearing one and nothing pins it.",
+          "fix": "Parametrize the existing test over `('canonical', 'epsilon_greedy')`, or add a one-line test asserting neither subclass defines `choose_player_to_rob` / `heuristic_move_robber` in its own `__dict__`."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/policy/obs_schema.py:344-348",
+          "issue": "The new `action_masked_legal` docstring states normatively that 'Writers of offline corpora (BC, expert iteration) must gate on this'. `expert_iteration/labeler.py` imports only `is_forced_decision` (line 29) and applies no write-time legality gate at all — its action comes from a mask-constrained search, so it arguably needs none. As written the docstring describes a convention the codebase does not follow.",
+          "fix": "Either narrow to 'the BC writer gates on this; the ExIt labeler derives its action from a mask-constrained search and therefore does not need to', or actually route the labeler through it."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/agents/heuristic.py:229-230 and 351-352",
+          "issue": "The slice's stated goal for the env/masks.py item was 'do not keep a false claim in a code comment'. The false wording is fully purged from env/masks.py and docs/io_schema.md (I grepped: no 'stable-argmax' / 're-picks forever' / 'early-returns on an empty bank' survives anywhere in docs/, src/, crates/). Two residual comments still lean on the same premise family: ':230 `devCardPlayedThisTurn = True` BEFORE any grant (which is what keeps YoP livelock-free)' and ':352 'a bank-starved YoP still consumes the card (no fixed point)'. These describe the APPLY path (the card is consumed, so the state is not byte-identical) which is a weaker and probably true statement — but if drift's finding invalidates the livelock premise generally, they read as the same claim.",
+          "fix": "Check them against the drift finding. If they survive, leave them; if not, restate as 'the card is consumed even when the bank cannot supply, matching env/catan_env.py:602-613' and drop the livelock/fixed-point framing."
+        }
+      ]
+    },
+    {
+      "lens": "drift",
+      "summary": "",
+      "findings": [
+        {
+          "severity": "SHOULD-FIX",
+          "location": "tests/unit/scripts/test_play_vs_model.py:61-103",
+          "issue": "CROSS-SPEC PIN RELAXATION — needs owner adjudication before merge. The pin protecting `docs/plans/v2/design.md` is owned by a DIFFERENT ratified spec (`.claude/veriloop/specs/play-vs-model-recorder.md:44-47`, D1: \"Do not edit design.md\"). This slice rewrites that pin from \"the file is byte-clean\" to \"the file is insert-only\" so the F-D caveat can land. The implementer disclosed this in-comment (lines 73-79) and the narrowing is arguably faithful to D1's stated rationale — D1 forbids \"an implementer editing a ratified doc to match what it built\", which an owner-directed measurement caveat is not — and the owner's own F-D instruction (\"design.md:769-794\") made the conflict unavoidable. But the replacement is strictly weaker (insert-only still admits appending text that CONTRADICTS a locked decision), and one spec's implementer unilaterally loosening another spec's guard is exactly the drift class this lens exists to catch. Not scored BLOCKER only because it is disclosed and owner-forced.",
+          "fix": "Do not merge until the owner signs off. Preferred: record a one-line D1 amendment in `.claude/veriloop/specs/play-vs-model-recorder.md` (\"docs-sync caveats mandated by CLAUDE.md §6 are exempt; the reserved `scripts/play_vs_model.py` line stays frozen\") and cite it from the test comment. Alternative that keeps D1 byte-exact: allow-list the specific caveat block by content hash instead of relaxing to insert-only."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/bc/dataset.py:408",
+          "issue": "FALSE MEASURED NUMBER IN A COMMENT — the same defect class the owner explicitly asked to purge from `env/masks.py:112-118`. The knight comment says the change makes \"knight rows (~1.6% of tile-relevant rows) now contribute a real tile CE\". Measured on this tree (8 games, seeds 100-107): 35 PLAY_KNIGHT rows and 336 MOVE_ROBBER rows, so knight rows are 35/(35+336) = 9.4% of tile-relevant rows. 1.6% is roughly the share of ALL rows (my probe: 35/3286 = 1.1%), i.e. the denominator is mislabelled. This matters because the understated figure is what makes the \"accepted skew\" read as negligible — the true tile-head gradient share affected is ~6x larger.",
+          "fix": "Change to \"~1% of all rows / ~9% of tile-relevant (MOVE_ROBBER + PLAY_KNIGHT) rows\", or drop the percentage and state the counts. Same denominator check applies to any restatement in docs/plans/v2/step3_bc.md."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/bc/dataset.py:240",
+          "issue": "UNREPRODUCIBLE MEASUREMENT PRESENTED AS A MEASUREMENT. The docstring states \"Measured over the canonical teacher (seeds 200-205, 3,674 type-legal rows): **zero** rows were rejected on a sub-head\" (repeated at docs/plans/v2/step3_bc.md:69). The zero-rejection half I CONFIRMED (instrumented gate over those seeds: 0 sub-head drops). The row count does not reproduce: `play_game` is non-deterministic under a fixed seed. Three in-process calls to `play_game(game_id=200, seed=200, max_turns=300)` returned 454 / 547 / 385 rows (83 / 95 / 67 turns), and seeds 200-205 aggregate returned 2,485 / 3,178 / 3,309 across separate runs. Root cause: `play_game` seeds only `np.random` (dataset.py:532) while `src/catan_rl/engine/dice.py:17` drives StackedDice off the stdlib `random` module, which is never seeded. Pre-existing and inside the PINNED engine, so not fixable in this slice — but it means every \"measured N rows\" claim in this slice and its parent is a single sample, not a measurement.",
+          "fix": "Either drop the exact counts and keep the qualitative claim (\"zero sub-head rejections observed across seeds 200-205\"), or state them as approximate with the caveat that `play_game` is not seed-reproducible because `engine/dice.py` uses the unseeded stdlib `random`. Flag the underlying non-determinism to the owner as a separate item — it also means the BC corpus itself is not reproducible from its manifest seeds."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "src/catan_rl/policy/obs_schema.py:281-293",
+          "issue": "UNDECLARED SCOPE WITH AN OPERATIONAL COST: `RULESET_VERSION` is bumped 2 -> 3. This is not in the owner's four-item spec. `bc/loader.py:125` enforces the stamp, so the bump makes every existing v2 BC corpus (including anything already under `data/bc/`) raise `StaleCorpusError` and forces a full regeneration — work the spec explicitly excluded (\"no BC regeneration\"). The bump is semantically DEFENSIBLE (knight rows genuinely changed meaning and nothing in the shard arrays can reveal it) and it is documented in both the constant's docstring and docs/plans/v2/step3_bc.md:95, so this is a surfacing request, not a correctness objection.",
+          "fix": "No code change needed if the owner accepts it. Get an explicit acknowledgement that the next BC train requires a regeneration, and note it in the sign-off. If the owner would rather defer, the alternative is to hold the bump until the regeneration slice — but then a stale corpus can be trained on silently, which is worse."
+        },
+        {
+          "severity": "SHOULD-FIX",
+          "location": "tests/unit/docs/test_teacher_discontinuity_notes.py:56",
+          "issue": "OVER-BROAD NEW GLOBAL CONSTRAINT FROM A DOCS-ONLY SLICE. `test_annotated_document_is_insert_only` asserts that design.md, step4_ppo.md and setup_strength_roadmap.md are insert-only on ANY branch (it diffs both `HEAD` and `origin/main...HEAD`). Two consequences: (a) after this branch merges, both diffs go empty on a clean tree and the pin protects nothing; (b) any FUTURE branch that rewrites a line in those three roadmap docs now fails the unit suite — including the empirical re-baselining task that F-D itself defers (\"re-baselining is a separate measurement task\"), whose whole job is to move a threshold, which the test is designed to reject. A guard that must be deleted to do sanctioned work is a guard aimed at the wrong target.",
+          "fix": "Scope the pin to what F-D actually protects: assert the specific threshold literals are still present (e.g. `0.90` in step4_ppo.md §6, `0.70`/`0.90`/`0.95` in design.md) rather than banning all line rewrites. If the insert-only form is kept, add an explicit note in the test docstring that the re-baselining task is expected to update this test, so it is not mistaken for an invariant."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/bc/dataset.py:415-424",
+          "issue": "`patched_play_knight` builds the robber-branch mask and calls `choose_player_to_rob` BEFORE `_record_decision` checks `ctx.suppress_recording` (dataset.py:259). During the pre-roll dev-card window (dataset.py:638-645) `suppress_recording` is True, so every pre-roll knight pays for a full `compute_action_masks` plus an extra O(19 hexes x 6 vertices) `choose_player_to_rob` scan whose result is discarded. Correctness is unaffected — the robber branch precedes the roll branch in `env/masks.py:150`, so the temporary flag flip does not corrupt anything, and it is restored in a `finally`.",
+          "fix": "Guard with `if not ctx.suppress_recording:` around the mask/hex computation, or hoist the suppression check to the top of `patched_play_knight`."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/bc/dataset.py:422",
+          "issue": "The `finally` restores `ctx.env_state.robber_placement_pending = False` unconditionally rather than saving and restoring the prior value (same at :433). Currently safe — the only caller path reaches `patched_play_knight` from `heuristic_play_dev_card` inside `p.move()`, where the flag is False — and it matches the pre-existing style at the adjacent block, so this is style-fragility not a live bug.",
+          "fix": "`prev = ctx.env_state.robber_placement_pending` / restore `prev` in the `finally`, in both blocks, if you touch this code again."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/policy/obs_schema.py:344-346",
+          "issue": "The `action_masked_legal` docstring says \"Writers of offline corpora (BC, expert iteration) must gate on this and not on `masks[\"type\"][a[0]]` alone\". `src/catan_rl/expert_iteration/labeler.py` has no legality gate at all (it imports only `is_forced_decision`, line 29) and was not updated in this slice. The sentence reads as a description of current behaviour when it is a rule for future writers.",
+          "fix": "Reword to \"any future writer of an offline corpus must gate on this\" and note that `expert_iteration/labeler.py` sources its actions from the search enumeration and so has no separate gate today — or wire the labeler, if the owner wants the invariant enforced there too."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/agents/heuristic.py:230",
+          "issue": "Residual \"livelock\" framing survives the purge the owner ordered for `env/masks.py:112-118`. `heuristic.py:230` says setting `devCardPlayedThisTurn = True` before any grant is \"what keeps YoP livelock-free\", and `:352` says \"bank-starved YoP still consumes the card (no fixed point)\". These are a DIFFERENT and TRUE claim (the apply path always consumes the card, so it cannot repeat), not the false mask-level premise — but a reader who was told the livelock story was wrong will read these as the same claim.",
+          "fix": "Optional. Reword to the mechanical fact (\"the card is consumed even when the bank cannot supply the picks, so the action is never repeatable\") and drop the livelock/fixed-point vocabulary."
+        },
+        {
+          "severity": "NIT",
+          "location": "src/catan_rl/bc/dataset.py:396-400",
+          "issue": "PROCESS, NOT CODE: the spec makes TDD binding (\"write the failing test FIRST and observe it fail\"), but the branch carries zero commits — `git log main..HEAD` is empty and the whole change is one uncommitted blob. Red-first ordering is therefore unverifiable from the tree. What I CAN confirm is that the new tests are non-vacuous: each carries an explicit anti-vacuity assertion (`assert rows`, `assert checked > 0`, `assert seen > 0`, and `test_bank_trade_with_supplyable_receive_is_still_recorded` is a genuine positive control against the drop test passing by rejecting everything).",
+          "fix": "The implementer must state, per fix, which test was written first and its observed failure output, as the spec requires. No code change."
+        }
+      ]
+    }
+  ],
+  "gateHistory": [
+    {
+      "verdict": "FAIL",
+      "blockers": 2,
+      "concerns": 11,
+      "waived": 0
+    },
+    {
+      "verdict": "CONCERNS",
+      "blockers": 0,
+      "concerns": 8,
+      "waived": 0
+    }
+  ],
+  "crossModel": null,
+  "missingGateJobs": [],
+  "implPreflight": "typecheck exit 0, lint exit 0. Also ran the rest of the gate: `cargo fmt --all -- --check` exit 0, `make test-unit` exit 0 (3023 passed, 6 skipped), `cargo test -p catan_engine --release` exit 0 (47 lib + 10 integration). Step-0 baseline on the untouched tree was typecheck 0 / lint 0 / fmt 0 / test-unit 0 (3012 passed); baseline `cargo test` initially exited 101 purely as an env artifact (missing `.cargo/config.toml` rpath in a fresh worktree) — fixed by running `make rust-setup`, after which the untouched crate was green, so that was never a code failure. Env: dedicated `.venv` (--system-site-packages) inside the worktree with `pip install -e \".[dev]\"` + `make rust-build`, deliberately NOT reusing the shared conda interpreter so the owner's global `catan_rl.pth` still points at their own checkout.",
+  "dryRun": false,
+  "land": {
+    "sha": "658913ede92aacc35173931b69fc7202405522fb",
+    "pushed": true,
+    "branch": "feat/bc-followup-fixes"
+  }
+}
