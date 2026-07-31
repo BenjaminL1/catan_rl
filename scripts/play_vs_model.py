@@ -104,7 +104,14 @@ if TYPE_CHECKING:
 #: The CURRENT champion (pointer-arch lineage). The old v8 anchor this script was
 #: written for no longer loads on main — the pointer-arch fork changed both the
 #: policy shape and the obs schema, so ``build_actor`` raises on a v8/v11 file.
-DEFAULT_CKPT = "runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt"
+#:
+#: BANKED, not live: this used to point straight at
+#: ``runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt``, inside a
+#: run directory under ``keep_last_n: 6`` rotation — so the champion every human
+#: game was scored against could be deleted out from under the path by the next
+#: six saves. ``runs/`` is gitignored, so banking the copy (``bank_anchor``,
+#: policy-only slim) is an OPS step; only this repoint is tracked.
+DEFAULT_CKPT = "runs/anchors/ptr_v1_u500.pt"
 DEFAULT_SIMS = 400
 
 
