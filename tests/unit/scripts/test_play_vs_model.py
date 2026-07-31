@@ -62,19 +62,15 @@ class TestRenamePin:
         design = (_REPO / rel).read_text(encoding="utf-8")
         assert "play_vs_model.py" in design
         # ``play-vs-model-recorder`` D1 forbids an implementer REWRITING the
-        # ratified design to match what it built. The original pin encoded that
-        # as "the file is byte-clean", which over-reached: it also forbade the
-        # docs-sync CLAUDE.md §6 mandates (this slice had to insert a
-        # measurement-validity caveat governing the §5 WR-vs-heuristic gates).
-        # Narrowed to what D1 actually protects: the design is INSERT-ONLY —
-        # existing lines may not be rewritten or deleted — and no line naming
-        # the reserved script path may move.
+        # ratified design to match what it built, and the original pin encoded
+        # that as "the file is byte-clean".
         #
-        # CROSS-SPEC, FLAGGED FOR THE OWNER: this relaxes a pin owned by a
-        # DIFFERENT ratified spec, and the replacement is strictly weaker —
-        # an insert-only rule still admits appending text that CONTRADICTS a
-        # locked decision. If that matters, the right fix is a D1 amendment on
-        # ``play-vs-model-recorder``, not a further loosening here.
+        # AUTHORITY FOR THE NARROWER RULE BELOW: the owner-ratified AMENDMENT to
+        # that spec's D1 (2026-07-31), which keeps the prohibition intact and
+        # exempts ONLY owner-directed docs-sync caveats, insertion-only, no
+        # threshold value changed. This test does not create that exemption and
+        # must not widen it — it enforces the amendment's limit. If a future
+        # slice needs more room, amend the spec, never this comment.
         for rev in ("HEAD", "origin/main...HEAD"):
             diff = subprocess.run(
                 ["git", "diff", "-U0", rev, "--", rel],

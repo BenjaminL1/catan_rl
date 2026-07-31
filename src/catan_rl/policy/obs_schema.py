@@ -289,7 +289,18 @@ FORCED_RULE_VERSION = 2
 #:       whose corner / edge / tile / resource index is masked OFF is dropped.
 #:     A version-2 corpus loaded into this tree would train the tile head on
 #:     fabricated knight labels, and nothing in the shard arrays can reveal
-#:     that — hence the bump.
+#:     that — hence the bump. Owner-signed-off 2026-07-31, acknowledging that
+#:     the next BC train needs a regeneration.
+#:
+#: SCOPE NOTE — the ExIt labeler INHERITS this constant.
+#: ``expert_iteration/labeler.py`` stamps the same ``RULESET_VERSION`` into its
+#: manifests, but its write contract did NOT change at 3: it does not record
+#: ``PLAY_KNIGHT`` tile labels the way ``bc/dataset.py`` does, so the two
+#: bullets above describe BC corpora only. An ExIt corpus stamped 3 is stamped
+#: with a version whose documented semantics do not describe it. That is
+#: accepted (the stamp is still monotonic and still refuses genuinely stale
+#: data); it is recorded here so a future reader does not infer an ExIt
+#: contract change that never happened.
 RULESET_VERSION = 3
 
 

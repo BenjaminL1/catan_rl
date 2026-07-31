@@ -236,9 +236,14 @@ def _record_decision(
     couldn't take under the same mask at inference time. Surfaced by
     a failing TDD test on the BC loader.
 
-    SUB-HEAD drops are a GUARD, not a corpus change. Measured over the
-    canonical teacher (seeds 200-205, 3,674 type-legal rows): **zero** rows
-    were rejected on a sub-head. The reachable cases below are therefore
+    SUB-HEAD drops are a GUARD, not a corpus change. Sampled over the
+    canonical teacher (seeds 200-205): **zero** rows were rejected on a
+    sub-head. The zero is reproducible; the row COUNT is not, and no exact
+    total is quoted here because generation is not reproducible from its seed
+    (``play_game`` seeds only ``np.random``, while ``engine/dice.py`` draws its
+    dice seed from the unseeded stdlib ``random``) — independent runs of the
+    same seeds returned type-legal totals spanning ~2.5k-3.9k. The reachable
+    cases below are therefore
     hypothetical for today's teacher and pinned by constructed-state tests
     (``tests/unit/bc/test_dataset.py``), not observed in generation:
       * a bank trade whose receive the finite bank cannot supply (spec 009 /
@@ -405,9 +410,16 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         # ``robber_placement_pending`` and asks for a separate MOVE_ROBBER, so
         # the tile head there sees an all-False mask. Consequences, both
         # accepted: the joint log-prob composition for PLAY_KNIGHT differs
-        # between BC and PPO rollouts, and knight rows (~1.6% of tile-relevant
-        # rows) now contribute a real tile CE where they previously
-        # contributed a constant -log(1/19). The alternative — keeping the
+        # between BC and PPO rollouts, and knight rows now contribute a real
+        # tile CE where they previously contributed a constant -log(1/19).
+        # That share is NOT negligible — on one 8-game sample (seeds 100-107)
+        # it was 35 PLAY_KNIGHT against 336 MOVE_ROBBER, i.e. ~9% of
+        # TILE-RELEVANT rows. (~1% is the share of ALL rows; quoting that as
+        # the tile-head impact is the same denominator mislabelling this slice
+        # removed from ``env/masks.py``.) Treat it as ONE SAMPLE: generation is
+        # not reproducible from its seed — ``play_game`` seeds only
+        # ``np.random`` while ``engine/dice.py`` draws its dice seed from the
+        # unseeded stdlib ``random``. The alternative — keeping the
         # fabricated ``tile_idx = 0`` — teaches a wrong hex, which is worse,
         # and the reference engine agrees with THIS choice: Torevan
         # ``packages/engine/src/legal-moves.ts`` enumerates ``PlayKnight``

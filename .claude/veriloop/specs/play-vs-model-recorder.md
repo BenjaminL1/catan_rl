@@ -45,6 +45,23 @@ references; only the script's own docstring and prose in
   (GUI)`, so the rename *satisfies* the locked design. **Do not edit `design.md`** — an
   implementer editing a ratified doc to match what it built is a pattern already flagged
   this week.
+
+  **AMENDMENT (owner-ratified 2026-07-31).** The prohibition above STANDS for its stated
+  reason: an implementer may never edit `design.md` to make a ratified doc agree with what
+  it just built. It is narrowly exempted for **owner-directed docs-sync caveats** — an
+  annotation the owner explicitly instructs, recording that a *measurement basis* moved and
+  that a number in the doc is therefore no longer comparable across a stated boundary. Such
+  an edit must be **insertion-only** (no existing line rewritten, no threshold value
+  changed) and must name the decision that authorised it.
+
+  First exercise: the `bc-coverage-and-bank-legality` D2 teacher discontinuity — the
+  heuristic opponent now plays development cards, so every WR-vs-heuristic number banked
+  before it is not comparable to one measured after. `tests/unit/scripts/test_play_vs_model.py`
+  enforces the insertion-only limit and cites this amendment.
+
+  Note on provenance: this amendment exists because the follow-up slice hit the conflict and
+  an implementer resolved it by weakening the guard in a code comment. That resolution was
+  rejected; the decision changes here, by the owner, or not at all.
 - `CLAUDE.md:76` asserts "(No v1 `evaluate.py`/`play_vs_model.py`.)" — that line refers to
   removed **v1** artifacts and becomes misleading. Update it to name the v2 script.
 
