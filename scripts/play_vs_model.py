@@ -93,7 +93,7 @@ import argparse
 import dataclasses
 import secrets
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
@@ -106,6 +106,62 @@ if TYPE_CHECKING:
 #: policy shape and the obs schema, so ``build_actor`` raises on a v8/v11 file.
 DEFAULT_CKPT = "runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.pt"
 DEFAULT_SIMS = 400
+
+
+def _assert_bank_conservation(env: Any) -> None:
+    """Pin the finite-bank invariant ``bank[R] + sum(hands[R]) == 19`` (spec 009).
+
+    ALWAYS ON: it is a 5-key sum, and this driver — the one a human actually
+    watches, and the one whose games feed the human scoreboard — is the only
+    driver that never had a bank guard. Both the GUI discard leak and the GUI
+    Year-of-Plenty mint lived here undetected for exactly that reason, and the
+    bank is a feature of the bot's observation, so a broken bank is a corrupted
+    policy input rather than a cosmetic accounting slip.
+    """
+    game = getattr(env, "game", None)
+    if game is None:
+        return
+    game.board.assert_conservation(list(game.playerQueue.queue))
+
+
+def _make_bank_conservation_reporter(hud_log: Any) -> Callable[[Any], None]:
+    """Non-fatal front end to :func:`_assert_bank_conservation` for the human loop.
+
+    The check itself raises, which is what the tests and the self-test want. In
+    the INTERACTIVE loop it must not: the replay is written only after the loop
+    ends, so raising here would both kill an hour of human play and destroy the
+    recording that is the evidence of the break. Same side-channel rule the
+    recorder already follows — report loudly (console + HUD strip), once, then
+    detach and let the game finish so the corrupted record can be inspected.
+
+    The returned callable carries ``.ok`` — a live flag the caller MUST write into
+    the game record. Warning alone is not enough: the console line is a single
+    flush the human may miss, and the HUD strip is a ``deque(maxlen=6)`` that
+    evicts the warning within six log lines. Without a persisted marker a
+    conservation-broken game is byte-indistinguishable from a clean one and can
+    reach the human scoreboard — which is the pre-mortem this whole feature was
+    written to prevent, one step further down the pipe.
+    """
+    live = [True]
+
+    def _check(env: Any) -> None:
+        if not live[0]:
+            return
+        try:
+            _assert_bank_conservation(env)
+        except AssertionError as exc:
+            live[0] = False
+            print(
+                f"[ERROR] finite-bank invariant BROKEN: {exc}\n"
+                "        The bank is in the bot's observation, so this game is "
+                "CORRUPT — finish or quit, but do not score it. Further bank "
+                "checks are disabled for this game.",
+                flush=True,
+            )
+            hud_log.append("BANK INVARIANT BROKEN - game is corrupt (see console)")
+
+    _check.ok = live  # type: ignore[attr-defined]
+    return _check
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +203,33 @@ def _build_human_env_class() -> type:
             # Analysis opt-in: show the BOT's full hand in the GUI panel + the
             # console line. OFF by default — see ``--reveal-bot``.
             self._reveal_bot: bool = False
+
+        def reset(self, *args: Any, **kwargs: Any) -> Any:
+            """Reset, then mark the opponent seat as HUMAN-driven.
+
+            ``CatanEnv.reset`` stamps ``opp.isAI = True`` on every reset, which
+            sends ``player.play_devCard`` down the ``np.random.choice`` branch —
+            so a human Monopoly / Year of Plenty picked its OWN resources at
+            random instead of opening the picker that already exists.
+
+            The flip is PERMANENT rather than saved/restored around each
+            ``play_devCard`` call: a restore that is ever skipped (exception,
+            nested view window) would leave ``isAI=False`` inside the bot's
+            deepcopied MCTS clones, where ``_HeadlessView.__getattr__`` returns
+            ``None`` and the dev card is silently refunded — i.e. the bot would
+            search against an opponent who cannot play YoP or Monopoly, with no
+            log line. The blast radius of the permanent flip is smaller and was
+            enumerated: ``play_devCard`` has only two call sites (the engine's
+            ``playCatan`` human loop, unreachable here because the env builds
+            with ``render_mode=None``, plus this script's single GUI site), and
+            every other ``isAI`` reader is either behind ``render_mode ==
+            'human'`` or behind ``view.human_player is None``, which this
+            harness always sets.
+            """
+            out = super().reset(*args, **kwargs)
+            assert self.opponent_player is not None
+            self.opponent_player.isAI = False
+            return out
 
         def attach_human_view(self, view: Any) -> None:
             self._human_view = view
@@ -1400,7 +1483,9 @@ def play_interactive(
         return built
 
     env.set_view_factory(_make_view)
+    check_bank = _make_bank_conservation_reporter(hud_log)
     env.reset(seed=seed, options={"agent_seat": bot_seat})
+    check_bank(env)  # setup grants are metered too
     # Ensure a view exists for rendering (already built during reset if the human
     # drafted first; built here otherwise — board is fixed at reset).
     assert env.game is not None
@@ -1439,6 +1524,9 @@ def play_interactive(
         if not is_roll:
             hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
         _obs, _r, terminated, truncated, _info = env.step(action)
+        # A step folds the human's WHOLE turn (picker included), so this is the
+        # tightest place the invariant can be checked from the driver.
+        check_bank(env)
         if is_roll:
             hud_log.append(f"Bot: Rolled {int(getattr(env, 'last_dice_roll', 0))}")
         if recorder is not None:
@@ -1569,6 +1657,14 @@ def play_interactive(
             # on-screen move log, i.e. with strictly less public information than
             # a real table gives — a missing key means regime 1, not this one.
             "hud": 2,
+            # Finite-bank integrity. FALSE means the spec-009 invariant
+            # `bank[R] + sum(hands[R]) == 19` broke during this game, so the bank
+            # the bot OBSERVED was wrong and the game must never be scored.
+            # Persisted because warning is not enough: the console line is one
+            # flush and the HUD strip is a deque(maxlen=6) that evicts it. Without
+            # this key a corrupt game is byte-indistinguishable from a clean one.
+            # A MISSING key means the game predates the check, not that it passed.
+            "bank_ok": bool(check_bank.ok[0]),
             "replay_path": replay_path,
             "moves": move_log,
         }
@@ -1638,6 +1734,7 @@ def self_test(sims: int, seed: int, *, ckpt: str | None = None) -> int:
     mid_ok = False
     for _ in range(40):
         _o, _r, term, trunc, _i = env.step(action)
+        _assert_bank_conservation(env)
         if term or trunc:
             break
         # Re-evaluate the mask BEFORE choosing so it matches the chosen action.
@@ -1660,6 +1757,7 @@ def self_test(sims: int, seed: int, *, ckpt: str | None = None) -> int:
     while not term and not trunc and n < cap:
         a = agent.choose_action(env2)
         _o, _r, term, trunc, _i = env2.step(a)
+        _assert_bank_conservation(env2)
         n += 1
     assert env2.agent_player is not None and env2.opponent_player is not None
     bot_vp = int(env2.agent_player.victoryPoints)
