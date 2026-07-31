@@ -1,10 +1,18 @@
 """Acting-seat attribution in ``_partition_main_events_by_actor``.
 
-The pre-roll dev-card window (``scripts/play_vs_model.py::_human_pre_roll``)
-lets a player play a Knight BEFORE rolling, so ``MOVE_ROBBER`` / ``STEAL`` /
-``LARGEST_ARMY_CHANGE`` arrive ahead of that player's ``DICE_ROLL``. Splitting
-on dice rolls alone credited them to the PREVIOUS player — "what the bot did"
-would list moves the human made.
+A player who plays a Knight BEFORE rolling emits ``MOVE_ROBBER`` / ``STEAL`` /
+``LARGEST_ARMY_CHANGE`` ahead of their own ``DICE_ROLL``. Splitting on dice
+rolls alone credited them to the PREVIOUS player — "what the bot did" would
+list moves the human made.
+
+The motivating case was the human harness's pre-roll dev-card window
+(``scripts/play_vs_model.py``), which is now GONE: the bot has no counterpart
+(``env/masks.py`` emits only ``ROLL_DICE`` while ``roll_pending``), so the
+window was a one-sided advantage and was removed. These pins stay load-bearing
+regardless — the bot's own Knight-then-robber ordering inside a single
+``env.step`` produces the same event sequence, and ``preroll-dev-cards-r1.md``
+will restore the window for BOTH seats. The event dicts below are synthetic, so
+nothing here depends on the harness's shape.
 """
 
 from __future__ import annotations

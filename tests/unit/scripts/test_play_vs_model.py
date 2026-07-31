@@ -426,8 +426,13 @@ class TestHarnessWiring:
     def test_the_human_input_loops_still_log(self) -> None:
         # AC5/D7: the log is BOTH players'. If these call sites vanish the strip
         # silently becomes bot-only, which reads as a working feature.
+        #
+        # The bar was 4 while the human had a pre-roll dev-card window; removing
+        # that window (fairness — the bot has no counterpart, see
+        # TestNoPreRollWindow) took its logging site with it. Three remain: the
+        # setup-draft loop, the robber loop and the main-turn loop.
         src = _SCRIPT.read_text(encoding="utf-8")
-        assert src.count("self._log_human_action(before)") >= 4
+        assert src.count("self._log_human_action(before)") >= 3
         assert 'self._log_move(f"You rolled {dice}")' in src
         assert 'self._log_move(f"You moved the robber to hex{hex_i}")' in src
 
@@ -632,10 +637,11 @@ class TestHumanSeatIsNotAI:
     / Year of Plenty through ``np.random.choice`` instead of the GUI picker. The
     harness flips it back on every reset. The flip is only safe because no
     deep-copied MCTS clone can reach the branch it changes: ``play_devCard`` has
-    exactly three call sites (the engine's ``playCatan`` human loop — unreachable
-    because the env builds ``render_mode=None`` — plus this script's two GUI
-    sites), so a clone rollout never executes it. The pin for that is
-    ``test_play_devcard_has_only_the_three_audited_call_sites``: unreachability
+    exactly two call sites (the engine's ``playCatan`` human loop — unreachable
+    because the env builds ``render_mode=None`` — plus this script's single GUI
+    site, the main-turn PLAY DEV button; the pre-roll one was removed with the
+    pre-roll window), so a clone rollout never executes it. The pin for that is
+    ``test_play_devcard_has_only_the_two_audited_call_sites``: unreachability
     is a STRUCTURAL property, and a runtime sentinel dropped into a scripted
     clone rollout could only ever re-confirm it (nothing under ``src/`` calls the
     method, so the sentinel is unreachable by construction regardless of the
@@ -670,7 +676,7 @@ class TestHumanSeatIsNotAI:
         assert clone._view_factory is None
         assert clone._use_gui() is False
 
-    def test_play_devcard_has_only_the_three_audited_call_sites(self) -> None:
+    def test_play_devcard_has_only_the_two_audited_call_sites(self) -> None:
         out = subprocess.run(
             ["git", "grep", "--untracked", "-n", r"\.play_devCard(", "--", "src", "scripts"],
             cwd=_REPO,
@@ -681,9 +687,47 @@ class TestHumanSeatIsNotAI:
         sites = sorted(line.split(":")[0] for line in out if line.strip())
         assert sites == [
             "scripts/play_vs_model.py",
-            "scripts/play_vs_model.py",
             "src/catan_rl/engine/game.py",
         ], sites
+
+
+class TestNoPreRollWindow:
+    """Neither seat may play a dev card before rolling (fairness stopgap).
+
+    ``env/masks.py`` returns ONLY ``ROLL_DICE`` while ``roll_pending``, and
+    ``env/catan_env.py`` no-ops anything else, so the POLICY structurally cannot
+    play a pre-roll Knight — not here and not anywhere in its training history.
+    The harness used to give the human that window anyway, which makes a human
+    win unattributable between "the policy is weak here" and "the bot was not
+    allowed to play its Knight". Both pins below are load-bearing: the first
+    proves the human window is gone, the second proves the bot-side asymmetry
+    the removal was justified by is real (delete it and the pin becomes an
+    unexamined claim in a docstring). See ``preroll-dev-cards-r1.md``.
+    """
+
+    def test_the_human_pre_roll_window_is_gone(self) -> None:
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert "_human_pre_roll" not in src, "the pre-roll window (or a call to it) survives"
+        assert "[PRE-ROLL]" not in src
+
+    def test_the_record_marks_the_game_post_roll_only(self) -> None:
+        assert '"preroll": False' in _SCRIPT.read_text(encoding="utf-8")
+
+    def test_the_policy_may_only_roll_while_roll_pending(self) -> None:
+        pytest.importorskip("torch")
+        from catan_rl.env.catan_env import ActionType
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=21, options={"agent_seat": 0})
+        # Play out the snake draft until the bot faces its first roll.
+        for _ in range(200):
+            if env.roll_pending:
+                break
+            env.step(_first_legal_action(env))
+        assert env.roll_pending, "never reached a roll-pending state"
+        legal = [i for i, ok in enumerate(env.get_action_masks()["type"]) if ok]
+        assert legal == [int(ActionType.ROLL_DICE)], legal
 
 
 class TestBankConservationGuard:

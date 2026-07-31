@@ -437,13 +437,24 @@ def _build_human_env_class() -> type:
                 self._log_move(f"You discarded {n_before - n_after} cards")
 
         def _run_opponent_turn(self) -> None:
-            """Run the human's whole turn, with a pre-roll dev-card window.
+            """Run the human's whole turn. POST-ROLL dev cards only, like the bot.
 
-            KEEP IN SYNC with catan_env._run_opponent_turn — the only addition is
-            the ``_human_pre_roll()`` call before the dice roll (so the human can
-            play a dev card BEFORE rolling, e.g. a Knight to block a number). Clones
-            (MCTS) + the headless self-test never use the GUI, so they delegate to
-            the base method verbatim.
+            KEEP IN SYNC with catan_env._run_opponent_turn — this override now
+            differs only in GUI plumbing (the human's discard / robber / main
+            phase go through the pygame windows). Clones (MCTS) + the headless
+            self-test never use the GUI, so they delegate to the base method
+            verbatim.
+
+            There is deliberately NO pre-roll dev-card window. ``env/masks.py``
+            emits ONLY ``ROLL_DICE`` while ``roll_pending``, so the policy cannot
+            play a Knight before rolling — not in this harness and not anywhere
+            in its training history. A human window with no bot counterpart is
+            the single largest bias in a playtest: it makes every human win
+            unattributable between "the policy is weak here" and "the bot was not
+            allowed to play its Knight". Both seats are now post-roll only,
+            matching the ruleset the champion was trained on. STOPGAP:
+            ``preroll-dev-cards-r1.md`` (RATIFIED) gives BOTH seats the window
+            and requires a retrain.
             """
             if not self._use_gui():  # clones + self-test: unchanged
                 super()._run_opponent_turn()
@@ -456,7 +467,6 @@ def _build_human_env_class() -> type:
             game.currentPlayer = opp
             opp.updateDevCards()
             opp.devCardPlayedThisTurn = False
-            self._human_pre_roll()  # NEW: pre-roll dev-card window
             dice = game.rollDice()
             self.last_dice_roll = dice
             self._log_move(f"You rolled {dice}")
@@ -475,48 +485,6 @@ def _build_human_env_class() -> type:
             if opp.victoryPoints >= game.maxPoints:
                 return
             self._run_opponent_main_turn()
-
-        def _human_pre_roll(self) -> None:
-            """Pre-roll window: let the human play a dev card before rolling dice.
-
-            Mirrors the button loop in ``_human_interactive_main_turn`` but limited
-            to PLAY DEV / ROLL DICE. ``updateDevCards`` + the single
-            ``devCardPlayedThisTurn`` reset already ran in ``_run_opponent_turn``;
-            the engine's ``play_devCard`` enforces one dev card per turn via that
-            flag and drives Knight robber-move / YOP / Monopoly through the GUI.
-            """
-            import pygame  # local import — only needed in the interactive path
-
-            game: Any = self.game
-            assert game is not None
-            human = self._human_player()
-            with self._ViewWindow(self) as view:
-                view.turn_banner = ("YOUR TURN - play a dev card or ROLL DICE", "forestgreen")
-                print(
-                    "\n[PRE-ROLL] Play a dev card now (PLAY DEV), or ROLL DICE to continue.",
-                    flush=True,
-                )
-                view.displayGameScreen()
-                clock = pygame.time.Clock()
-                rolled = False
-                while not rolled:
-                    clock.tick(60)
-                    for e in pygame.event.get():
-                        if e.type == pygame.QUIT:
-                            pygame.quit()
-                            sys.exit(0)
-                        if e.type != pygame.MOUSEBUTTONDOWN:
-                            continue
-                        before = _human_snapshot(human)
-                        if view.rollDice_button.collidepoint(e.pos):
-                            rolled = True
-                        elif view.playDevCard_button.collidepoint(e.pos):
-                            human.play_devCard(game)
-                            game.check_largest_army(human)
-                            game.check_longest_road(human)
-                        self._log_human_action(before)
-                        view.displayGameScreen()
-                    pygame.display.update()
 
         def _run_opponent_main_turn(self) -> None:
             """The human's full main turn (dice already rolled by the env caller)."""
@@ -551,8 +519,8 @@ def _build_human_env_class() -> type:
             import pygame  # local import — only needed in the interactive path
 
             # NOTE: updateDevCards + the SINGLE devCardPlayedThisTurn reset happen
-            # once in _run_opponent_turn (before the pre-roll window). Re-resetting
-            # here would let the human play a 2nd dev card after a pre-roll play.
+            # once in _run_opponent_turn, before the dice roll. Re-resetting here
+            # would let the human play a 2nd dev card in one turn.
             game: Any = self.game
             assert game is not None
             print(
@@ -1665,6 +1633,13 @@ def play_interactive(
             # this key a corrupt game is byte-indistinguishable from a clean one.
             # A MISSING key means the game predates the check, not that it passed.
             "bank_ok": bool(check_bank.ok[0]),
+            # Pre-roll dev-card window. FALSE = neither seat had one, i.e. both
+            # played post-roll only, which is the ruleset the champion trained
+            # on. A MISSING key means the game predates this stopgap and the
+            # HUMAN had a pre-roll window the bot structurally could not use
+            # (env/masks.py emits only ROLL_DICE while roll_pending), so its
+            # result is not attributable. See preroll-dev-cards-r1.md.
+            "preroll": False,
             "replay_path": replay_path,
             "moves": move_log,
         }
