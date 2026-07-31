@@ -31,7 +31,12 @@ import torch
 
 from catan_rl.checkpoint.manager import save_checkpoint
 from catan_rl.env.catan_env import CatanEnv
-from catan_rl.eval.cross_arch import CrossArchEnv, build_legacy_opponent, cross_arch_h2h
+from catan_rl.eval.cross_arch import (
+    CrossArchEnv,
+    build_legacy_opponent,
+    cross_arch_h2h,
+    to_legacy_masks,
+)
 from catan_rl.eval.harness import EvalHarness, EvalMatchupResult, EvalResult
 from catan_rl.eval.legacy_arch import _provenance as prov
 from catan_rl.eval.legacy_arch.network import CatanPolicy as LegacyCatanPolicy
@@ -192,7 +197,9 @@ def test_build_legacy_opponent_loads_strict_and_samples(tmp_path: Path) -> None:
             env_state,
             hand_tracker=env._hand_tracker,
         )
-        masks = env.get_action_masks()
+        # The vendored legacy heads are byte-pinned to the pre-fork commit and
+        # still read ``resource2_default``; ``to_legacy_masks`` restores it.
+        masks = to_legacy_masks(env.get_action_masks())
         from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 
         action = opp.sample(

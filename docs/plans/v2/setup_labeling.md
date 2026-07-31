@@ -16,7 +16,7 @@ This doc is the planning equivalent of `v2_step3_bc.md` / `v2_step4_ppo.md` / `v
 - v2 engine: `catanGame(render_mode=None)` from `src/catan_rl/engine/{game.py, board.py, player.py, dice.py}`. Headless constructor, used by both the scenario generator and the JSONL→NPZ converter.
 - Obs encoder: `src/catan_rl/policy/obs_encoder.py` — the canonical 10-key obs producer that the BC fine-tune will consume. The converter re-runs this on each reconstructed state.
 - Action-mask module: `src/catan_rl/env/masks.py:compute_action_masks(game, acting_player, env_state, vertex_to_idx, edge_to_idx)` — the standalone function the BC pipeline already uses. Reused at click-handling time (UI legality check) AND at NPZ conversion time (per-row mask field). This is the single source of truth for "what is a legal pick at this state"; the UI must not duplicate the logic.
-- `BcDataset` interface from `src/catan_rl/bc/loader.py` — the 10 obs keys (`_OBS_KEYS_FLOAT` + `_OBS_KEYS_INT`) and 9 mask keys (`_MASK_KEYS`) the converter must emit, per `loader.py:94-115`.
+- `BcDataset` interface from `src/catan_rl/bc/loader.py` — the 10 obs keys (`_OBS_KEYS_FLOAT` + `_OBS_KEYS_INT`) and 12 mask keys (`_MASK_KEYS`, re-exported from `policy/obs_schema.MASK_KEYS`) the converter must emit.
 - 1v1 Colonist.io ruleset (15 VP, no P2P trade, 9-card discard, Friendly Robber, StackedDice persistent Karma) — see `docs/1v1_rules.md`. The labeling tool is **read-only** w.r.t. these rules; it never overrides them.
 - Snake draft order: P1 settle+road → P2 settle+road → P2 settle+road → P1 settle+road. Standard Colonist.io.
 - v1 setup-pretrain ancestor (informational, not load-bearing): `/Users/benjaminli/my_projects/catan_rl/the removed v1 setup-pretrain plan` and `/Users/benjaminli/my_projects/catan_rl/src/catan_rl/rl/setup/`. The Monte-Carlo rollout heuristic is **not** ported — humans are the label source here, not MC.
@@ -331,12 +331,12 @@ python scripts/convert_labels_to_bc_shard.py \
    - Reconstruct `catanGame(seed=row["game_seed"])`.
    - Replay `row["prior_picks"]` through the engine (snake-draft order).
    - At the user's decision point, run `obs_encoder.compute_obs(...)` on the current state → 10-key obs dict.
-   - Build the 9-key mask dict via `compute_action_masks(...)` (must match what the UI showed at label time; pinned by `tests/integration/test_labels_to_npz_pipeline.py::test_mask_roundtrip`).
+   - Build the 12-key mask dict via `compute_action_masks(...)` (must match what the UI showed at label time; pinned by `tests/integration/test_labels_to_npz_pipeline.py::test_mask_roundtrip`).
    - Build the 6-head action tensor: `[type=BuildSettlement, corner=row["settlement_vertex"], edge=irrelevant, tile=irrelevant, res1=irrelevant, res2=irrelevant]` for the settlement step; a *separate* row for the road step: `[type=BuildRoad, corner=irrelevant, edge=row["road_edge"], ...]`. **Two NPZ rows per JSONL scenario** — the BC loss is relevance-weighted so this is the natural shape.
    - Set `belief_target` to the env's GT at the decision state (typically uniform-zero at setup phase since no dev cards drawn yet — the obs encoder handles this).
    - Set `z_disc = 0.0` (no game-outcome label; the value-loss weight zeros out per §F.2).
 3. Pack rows into NPZ shards of `--shard-size` rows each (default 5000 — smaller than the BC pipeline's 5000-games-per-shard since human labels are precious).
-4. Write `manifest.json` matching `bc/dataset.py:generate_dataset`'s output format so `BcDataset(data_dir=...)` loads it identically.
+4. Write `manifest.json` matching `bc/dataset.py:generate_dataset`'s output format so `BcDataset(data_dir=...)` loads it identically. This includes the `forced_rule_version` / `ruleset_version` stamps (`policy/obs_schema.FORCED_RULE_VERSION` / `RULESET_VERSION`) — `bc.loader.load_manifest` raises `StaleCorpusError` on an unstamped or stale manifest, so a converter that omits them produces an unloadable corpus.
 
 **Key invariant**: the obs emitted by the converter MUST equal what `obs_encoder.py` emits on the reconstructed state at the moment of decision. This is the load-bearing claim of the entire pipeline — if it fails, the BC fine-tune trains on out-of-distribution obs. Pinned by `tests/integration/test_labels_to_npz_pipeline.py::test_per_row_obs_equals_encoder_output`.
 

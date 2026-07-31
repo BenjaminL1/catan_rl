@@ -16,7 +16,7 @@ The function takes:
     (the env builds these once in ``_build_index_maps``; the BC
     dataset can derive them via ``catan_rl.policy.board_geometry``).
 
-Returns the same 9-key mask dict the env produces. The dict layout
+Returns the same 12-key mask dict the env produces. The dict layout
 matches the v2 6-head autoregressive action contract.
 
 Design note: phase flags in ``env_state`` (``initial_placement_phase``,
@@ -59,7 +59,7 @@ def compute_action_masks(
     vertex_to_idx: dict[Any, int],
     edge_to_idx: dict[tuple[str, str], int],
 ) -> dict[str, np.ndarray]:
-    """Compute the 9-key mask dict for ``acting_player`` in this game state.
+    """Compute the 12-key mask dict for ``acting_player`` in this game state.
 
     Args:
         game: a ``catanGame`` instance.
@@ -72,10 +72,11 @@ def compute_action_masks(
             (``(min(str(v1), str(v2)), max(...))``) to edge-index.
 
     Returns:
-        The 9-key mask dict expected by the v2 action heads:
+        The 12-key mask dict expected by the v2 action heads:
             ``type``, ``corner_settlement``, ``corner_city``, ``edge``,
             ``tile``, ``resource1_trade``, ``resource1_discard``,
-            ``resource1_default``, ``resource2_default``.
+            ``resource1_default``, ``resource1_yop``, ``resource2_yop``,
+            ``resource2_yop_same``, ``resource2_trade``.
     """
     board = game.board
     p = acting_player
@@ -88,7 +89,10 @@ def compute_action_masks(
     res1_trade = np.zeros(N_RESOURCES, dtype=bool)
     res1_disc = np.zeros(N_RESOURCES, dtype=bool)
     res1_def = np.zeros(N_RESOURCES, dtype=bool)
-    res2_def = np.zeros(N_RESOURCES, dtype=bool)
+    res1_yop = np.zeros(N_RESOURCES, dtype=bool)
+    res2_yop = np.zeros(N_RESOURCES, dtype=bool)
+    res2_yop_same = np.zeros(N_RESOURCES, dtype=bool)
+    res2_trade = np.zeros(N_RESOURCES, dtype=bool)
 
     def _pack() -> dict[str, np.ndarray]:
         return {
@@ -100,8 +104,23 @@ def compute_action_masks(
             "resource1_trade": res1_trade,
             "resource1_discard": res1_disc,
             "resource1_default": res1_def,
-            "resource2_default": res2_def,
+            "resource1_yop": res1_yop,
+            "resource2_yop": res2_yop,
+            "resource2_yop_same": res2_yop_same,
+            "resource2_trade": res2_trade,
         }
+
+    # Resources the finite bank (spec 009) can still supply. A receive the bank
+    # cannot honour must never be OFFERED: ``player.trade_with_bank``
+    # early-returns on an empty bank leaving state BYTE-IDENTICAL, which a
+    # stable-argmax policy re-picks forever (``eval/harness`` loops until
+    # terminated/truncated and truncation only advances at a turn boundary).
+    # Gating at the legality layer removes that fixed point — adding an
+    # apply-time no-op is what creates it. Mirrors the supply checks in
+    # Torevan ``packages/engine/src/legal-moves.ts``.
+    bank_supplied = np.array([board.resourceBank.get(r, 0) >= 1 for r in RESOURCES_CW], dtype=bool)
+    # Resources the bank can supply TWICE — the Year-of-Plenty doubled pick.
+    bank_double = np.array([board.resourceBank.get(r, 0) >= 2 for r in RESOURCES_CW], dtype=bool)
 
     # ---- Setup phase ----
     if env_state.initial_placement_phase:
@@ -204,10 +223,28 @@ def compute_action_masks(
     if p.devCards.get("KNIGHT", 0) > 0 and not p.devCardPlayedThisTurn:
         type_mask[ActionType.PLAY_KNIGHT] = True
 
+    # D4: Year of Plenty draws BOTH picks from the finite bank, so a pair
+    # ``(first, second)`` is legal iff
+    #     ``bank[first] >= 2``                              when first == second
+    #     ``bank[first] >= 1 and bank[second] >= 1``        otherwise.
+    # That needs three vectors, not one. ``resource1_default`` cannot carry the
+    # first-pick gate because Monopoly shares it and Monopoly is bank-
+    # independent, so YoP gets its OWN first-pick key ``resource1_yop``. The
+    # receive side splits into ``resource2_yop`` (a DIFFERENT second pick,
+    # ``bank >= 1``) and ``resource2_yop_same`` (the doubled pick,
+    # ``bank >= 2``); the autoregressive ``heads._resource2_mask`` swaps in the
+    # latter at index ``res1`` exactly as it applies the ``r2 != r1`` rule for
+    # BankTrade. A first pick is only offered when some legal partner exists,
+    # so the head can never be driven into an empty second-pick set.
     if p.devCards.get("YEAROFPLENTY", 0) > 0 and not p.devCardPlayedThisTurn:
-        type_mask[ActionType.PLAY_YOP] = True
-        res1_def[:] = True
-        res2_def[:] = True
+        has_other = np.array(
+            [bool(np.any(np.delete(bank_supplied, i))) for i in range(N_RESOURCES)], dtype=bool
+        )
+        res1_yop[:] = bank_double | (bank_supplied & has_other)
+        if res1_yop.any():
+            type_mask[ActionType.PLAY_YOP] = True
+            res2_yop[:] = bank_supplied
+            res2_yop_same[:] = bank_double
 
     if p.devCards.get("MONOPOLY", 0) > 0 and not p.devCardPlayedThisTurn:
         type_mask[ActionType.PLAY_MONOPOLY] = True
@@ -224,9 +261,17 @@ def compute_action_masks(
             res1_trade[i] = True
         elif res.get(r, 0) >= 4:
             res1_trade[i] = True
-    if res1_trade.any():
+    # D4: the receive side of a bank trade must be supplyable AND distinct from
+    # the give side (``heads._resource2_mask`` forbids ``r2 == r1``), so drop
+    # any give-resource left with no legal partner before enabling the type.
+    res2_trade[:] = bank_supplied
+    for i in range(N_RESOURCES):
+        if res1_trade[i] and not bool(np.any(np.delete(bank_supplied, i))):
+            res1_trade[i] = False
+    if res1_trade.any() and res2_trade.any():
         type_mask[ActionType.BANK_TRADE] = True
-        res2_def[:] = True
+    else:
+        res2_trade[:] = False
 
     if not type_mask.any():
         type_mask[ActionType.END_TURN] = True

@@ -180,7 +180,10 @@ def test_getitem_mask_has_all_v2_keys(tiny_dataset: Path) -> None:
         "resource1_trade",
         "resource1_discard",
         "resource1_default",
-        "resource2_default",
+        "resource1_yop",
+        "resource2_yop",
+        "resource2_yop_same",
+        "resource2_trade",
     }
     assert set(item["mask"].keys()) == expected
     for k in item["mask"]:

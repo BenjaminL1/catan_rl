@@ -13,8 +13,8 @@ Schema (sizes from :mod:`catan_rl.policy.obs_schema`):
 
   * ``tile_representations``      (19, 79) — Charlesworth tile features.
   * ``current_player_main``       (67,)    — agent scalar features
-                                             (CURR_PLAYER_DIM = 54 base + 5
-                                             own-extras + 8 reserved).
+                                             (CURR_PLAYER_DIM = 54 base + 6
+                                             own-extras + 7 reserved).
   * ``next_player_main``          (69,)    — opponent scalar features
                                              (NEXT_PLAYER_DIM = 54 base + 7
                                              opp-extras + 8 reserved).
@@ -69,6 +69,7 @@ from catan_rl.engine.board import catanBoard
 from catan_rl.policy.obs_schema import (
     BANK_CAPACITY,
     CURR_PLAYER_DIM,
+    CURR_RESERVED_SLOTS,
     DEV_CARD_ORDER,
     DEV_DECK_INITIAL,
     GLOBAL_DIM,
@@ -204,6 +205,10 @@ class EnvObsState:
     robber_placement_pending: bool = False
     road_building_roads_left: int = 0
     last_dice_roll: int = 0
+    #: Cards the ACTING player still owes to the 7-roll discard (D3). Zero
+    #: outside a discard sub-phase. Defaulted so every existing caller stays
+    #: valid; the env threads it for BOTH seats (agent + snapshot opponent).
+    cards_to_discard: int = 0
     # Phase 3.6 opponent-identity inputs. Defaults to unknown — eval-time
     # default for BC; PPO env passes real values once a league exists.
     opp_kind: int = OPP_KIND_UNKNOWN
@@ -694,7 +699,17 @@ class ObsEncoder:
             feats.append(min(1.0, float(getattr(player, "yopPlayed", 0)) / 4.0))
             feats.append(min(1.0, float(getattr(player, "monopolyPlayed", 0)) / 4.0))
             feats.append(min(1.0, float(getattr(player, "roadBuilderPlayed", 0)) / 4.0))
-            feats.extend([0.0] * RESERVED_PLAYER_SLOTS)
+            # Remaining-owed discard count (spec bc-coverage-and-bank-legality
+            # D3). The 7-roll discard is decomposed into floor(H0/2) separate
+            # env.step calls and the owed count is fixed at roll time then
+            # decremented invisibly — so without this scalar a 9-card hand
+            # cannot tell "owes 3, started at 12" from "owes 4, started at 9",
+            # and self-play was solving a sequential problem blind to its
+            # position in the sequence. Same min(1.0, n / 8.0) convention as
+            # the per-resource clips above. Consumes one RESERVED slot, so
+            # CURR_PLAYER_DIM is unchanged and no checkpoint forks.
+            feats.append(min(1.0, float(max(0, env_state.cards_to_discard)) / 8.0))
+            feats.extend([0.0] * CURR_RESERVED_SLOTS)
             if len(feats) != CURR_PLAYER_DIM:
                 raise RuntimeError(
                     f"current_player_main dim={len(feats)} expected {CURR_PLAYER_DIM}"

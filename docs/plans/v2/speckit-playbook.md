@@ -240,6 +240,17 @@ From `docs/plans/v2/step4_ppo.md §6` (seat-symmetrized, N≥3 seeds):
   this WR against the champion).
 - **G3:** WR ≥ 0.60 vs a frozen early-**v2** baseline (the bootstrap checkpoint or an early self-play snapshot — **no v1 champions**).
 
+> **Teacher discontinuity (spec `bc-coverage-and-bank-legality` D2, 2026-07).**
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). The heuristic is also the standing
+> measurement rod, so every "WR vs heuristic" threshold below now denotes a
+> HARDER bar than it did when it was written, and every banked number in the
+> v8 lineage was measured against the WEAKER teacher. Do not compare a
+> post-D2 WR-vs-heuristic against a pre-D2 one; re-measure the baseline before
+> reading any gate as pass/fail.
+
+
 G2/G3 use the *same* frozen-opponent primitive this keystone builds — which is
 why it unblocks measurement too.
 

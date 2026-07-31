@@ -1,4 +1,4 @@
-//! Native action-mask builder — returns 9 boolean masks matching
+//! Native action-mask builder — returns 12 boolean masks matching
 //! the Python `compute_action_masks` shape (env/masks.py):
 //!
 //! * `type`: (13,) bool — which of the 13 action types are legal
@@ -8,8 +8,11 @@
 //! * `tile`: (19,) bool — legal robber-destination hexes (Friendly Robber)
 //! * `resource1_trade`: (5,) bool — legal give-resources for BankTrade
 //! * `resource1_discard`: (5,) bool — legal discard resources
-//! * `resource1_default`: (5,) bool — legal res1 for YoP/Monopoly
-//! * `resource2_default`: (5,) bool — legal res2 for YoP/BankTrade
+//! * `resource1_default`: (5,) bool — legal res1 for Monopoly (bank-independent)
+//! * `resource1_yop`: (5,) bool — legal FIRST YoP pick (spec D4 bank gate)
+//! * `resource2_yop`: (5,) bool — legal DIFFERENT second YoP pick (`bank >= 1`)
+//! * `resource2_yop_same`: (5,) bool — legal DOUBLED YoP pick (`bank >= 2`)
+//! * `resource2_trade`: (5,) bool — legal BankTrade receive (`bank >= 1`)
 //!
 //! Reads from `GameState`; pre-allocates each mask per call.
 
@@ -285,7 +288,7 @@ pub fn compute_masks<'py>(py: Python<'py>, state: &GameState) -> PyResult<Bound<
     }
     out.set_item("resource1_discard", res1_disc)?;
 
-    // ---- resource1_default (5 bool, all true for YoP/Mono picks) ----
+    // ---- resource1_default (5 bool, all true — Monopoly is bank-independent) ----
     let res1_def = PyArray1::<bool>::zeros_bound(py, [5], false);
     {
         let mut arr = unsafe { res1_def.as_array_mut() };
@@ -295,15 +298,47 @@ pub fn compute_masks<'py>(py: Python<'py>, state: &GameState) -> PyResult<Bound<
     }
     out.set_item("resource1_default", res1_def)?;
 
-    // ---- resource2_default (5 bool) ----
-    let res2_def = PyArray1::<bool>::zeros_bound(py, [5], false);
+    // ---- D4 bank-gated resource masks (spec bc-coverage-and-bank-legality) ----
+    // A receive the finite bank cannot honour must never be OFFERED. YoP is
+    // legal for `(first, second)` iff `bank[first] >= 2` when they are equal,
+    // else `bank[first] >= 1 && bank[second] >= 1`; BankTrade needs
+    // `bank[r2] >= 1` with `r2 != r1`. Mirrors `env/masks.py`.
+    let cw_to_eng = [IDX_WOOD, IDX_BRICK, IDX_WHEAT, IDX_ORE, IDX_SHEEP];
+    let mut supplied = [false; 5];
+    let mut doubled = [false; 5];
+    for (cw, &eng) in cw_to_eng.iter().enumerate() {
+        supplied[cw] = state.bank[eng] >= 1;
+        doubled[cw] = state.bank[eng] >= 2;
+    }
+
+    // ---- resource1_yop (5 bool) ----
+    let res1_yop = PyArray1::<bool>::zeros_bound(py, [5], false);
     {
-        let mut arr = unsafe { res2_def.as_array_mut() };
+        let mut arr = unsafe { res1_yop.as_array_mut() };
         for i in 0..5 {
-            arr[i] = true;
+            let has_other = (0..5).any(|j| j != i && supplied[j]);
+            arr[i] = doubled[i] || (supplied[i] && has_other);
         }
     }
-    out.set_item("resource2_default", res2_def)?;
+    out.set_item("resource1_yop", res1_yop)?;
+
+    // ---- resource2_yop / resource2_yop_same / resource2_trade (5 bool each) ----
+    let res2_yop = PyArray1::<bool>::zeros_bound(py, [5], false);
+    let res2_yop_same = PyArray1::<bool>::zeros_bound(py, [5], false);
+    let res2_trade = PyArray1::<bool>::zeros_bound(py, [5], false);
+    {
+        let mut a_yop = unsafe { res2_yop.as_array_mut() };
+        let mut a_same = unsafe { res2_yop_same.as_array_mut() };
+        let mut a_trade = unsafe { res2_trade.as_array_mut() };
+        for i in 0..5 {
+            a_yop[i] = supplied[i];
+            a_same[i] = doubled[i];
+            a_trade[i] = supplied[i];
+        }
+    }
+    out.set_item("resource2_yop", res2_yop)?;
+    out.set_item("resource2_yop_same", res2_yop_same)?;
+    out.set_item("resource2_trade", res2_trade)?;
 
     Ok(out)
 }

@@ -53,7 +53,7 @@ The observation dict contains 10 keys per `src/catan_rl/bc/loader.py:94-104` (Ph
 
 ## 3. Action Masking
 
-The 9-key mask dict is computed by `src/catan_rl/env/masks.py:55-101` and applied at inference and training. Per `docs/io_schema.md`:
+The 12-key mask dict is computed by `src/catan_rl/env/masks.py:55-101` and applied at inference and training. Per `docs/io_schema.md`:
 
 | Mask key | Shape | Notes |
 |---|---|---|
@@ -64,8 +64,11 @@ The 9-key mask dict is computed by `src/catan_rl/env/masks.py:55-101` and applie
 | `tile` | (19,) | Robber placement post-7, excluding friendly-robber restriction (Friendly Robber: cannot place adjacent to player with < 3 visible VP per `CLAUDE.md` line 26) |
 | `resource1_trade` | (5,) | Resources the agent has ≥ N of (where N depends on best port ratio) |
 | `resource1_discard` | (5,) | Resources the agent has > 0 of |
-| `resource1_default` | (5,) | Any resource (YoP/Monopoly context) |
-| `resource2_default` | (5,) | Any resource (YoP-2nd / BankTrade-receive context) |
+| `resource1_default` | (5,) | Any resource (Monopoly context — bank-independent) |
+| `resource1_yop` | (5,) | YoP-1st, gated on finite-bank supply |
+| `resource2_yop` | (5,) | YoP-2nd (different pick), gated on finite-bank supply |
+| `resource2_yop_same` | (5,) | YoP-2nd (doubled pick), needs `bank[r] >= 2` |
+| `resource2_trade` | (5,) | BankTrade-receive, gated on finite-bank supply |
 
 Masked categories use hard masking via `masked_log_softmax` in `src/catan_rl/policy/heads.py:51-61`: illegal slots are set to -∞ before softmax, yielding zero probability. Rows with no valid entries return uniform log-prob to avoid NaN.
 

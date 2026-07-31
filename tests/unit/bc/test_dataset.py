@@ -16,12 +16,16 @@ import pytest
 from catan_rl.bc.dataset import generate_dataset, play_game
 from catan_rl.policy.obs_schema import (
     CURR_PLAYER_DIM,
+    FORCED_RULE_VERSION,
     N_DEV_TYPES,
     N_EDGES,
     N_TILES,
     N_VERTICES,
     NEXT_PLAYER_DIM,
+    RULESET_VERSION,
     TILE_DIM,
+    ActionType,
+    is_forced_decision,
 )
 
 # ---------------------------------------------------------------------------
@@ -232,7 +236,10 @@ def test_generate_dataset_shard_npz_has_v2_schema_keys(tmp_path: Path) -> None:
         "resource1_trade",
         "resource1_discard",
         "resource1_default",
-        "resource2_default",
+        "resource1_yop",
+        "resource2_yop",
+        "resource2_yop_same",
+        "resource2_trade",
     }
     mask_keys = {k[5:] for k in shard.files if k.startswith("mask/")}
     assert mask_keys == expected_masks
@@ -251,7 +258,13 @@ def test_generate_dataset_shard_npz_has_v2_schema_keys(tmp_path: Path) -> None:
 
 
 def test_generate_dataset_filters_forced_moves(tmp_path: Path) -> None:
-    """include_forced=False (default) must drop pairs where mask_type.sum()==1."""
+    """include_forced=False (default) must drop only GENUINELY forced pairs.
+
+    D1: the criterion is the shared relevance-aware
+    :func:`is_forced_decision`, not ``mask["type"].sum() == 1``. A singleton
+    type mask over a wide-open downstream head (every setup placement, every
+    robber placement) is a real decision and must survive.
+    """
     generate_dataset(
         out_dir=tmp_path,
         n_games=2,
@@ -263,11 +276,13 @@ def test_generate_dataset_filters_forced_moves(tmp_path: Path) -> None:
         progress_every=10**9,
     )
     shard = np.load(tmp_path / "shard_0000.npz")
-    # Every kept pair has at least 2 legal type-mask bits.
+    n = int(shard["action"].shape[0])
+    for i in range(n):
+        row = {k[5:]: shard[k][i] for k in shard.files if k.startswith("mask/")}
+        assert not is_forced_decision(row), f"forced pair leaked through filter at row {i}"
+    # ... and the singleton-type rows that DO survive are the restored ones.
     type_sums = shard["mask/type"].sum(axis=-1)
-    assert (type_sums >= 2).all(), (
-        f"forced pairs leaked through filter: min type-mask sum = {type_sums.min()}"
-    )
+    assert (type_sums == 1).any(), "relevance-aware filter kept no singleton-type decision"
 
 
 def test_generate_dataset_include_forced_keeps_them(tmp_path: Path) -> None:
@@ -326,7 +341,18 @@ def test_generate_dataset_manifest_records_provenance(tmp_path: Path) -> None:
     assert m["seed"] == 42
     assert "wall_clock_seconds" in m and m["wall_clock_seconds"] > 0
     assert "forced_move_drop_pct" in m
-    assert 0.0 <= m["forced_move_drop_pct"] < 1.0
+    # D5: this used to read ``0.0 <= pct`` and passed VACUOUSLY on the shipped
+    # manifest's dead 0.0 (the counters were never restored on resume). Some
+    # decisions ARE forced (ROLL_DICE), so the rate is strictly positive, and
+    # it must be the real ratio rather than a placeholder.
+    pre = m["total_decisions_pre_filter"]
+    post = m["total_decisions_post_filter"]
+    assert pre > 0 and post > 0
+    assert 0.0 < m["forced_move_drop_pct"] < 1.0
+    assert m["forced_move_drop_pct"] == pytest.approx(1.0 - post / pre)
+    # D5: version stamps must be present so the loader can refuse a stale dir.
+    assert m["forced_rule_version"] == FORCED_RULE_VERSION
+    assert m["ruleset_version"] == RULESET_VERSION
 
 
 def test_generate_dataset_no_game_id_duplication_across_shards(tmp_path: Path) -> None:
@@ -512,6 +538,72 @@ def test_resume_reconstructs_when_progress_missing(tmp_path: Path) -> None:
     assert len(train) > 0 and len(val) > 0
 
 
+def test_resume_restores_decision_counters_when_no_new_games_are_generated(
+    tmp_path: Path,
+) -> None:
+    """D5 / AC-8. A resume that generates ZERO new games used to write
+    ``total_decisions_pre_filter = 0`` and ``forced_move_drop_pct = 0.0`` over a
+    fully-generated corpus, because the counters live only in memory. They must
+    survive the resume boundary."""
+    first = generate_dataset(
+        out_dir=tmp_path,
+        n_games=3,
+        perturb_pct=0.0,
+        shard_size=3,
+        seed=7,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    assert first["total_decisions_pre_filter"] > 0
+
+    resumed = generate_dataset(
+        out_dir=tmp_path,
+        n_games=3,  # nothing left to do
+        perturb_pct=0.0,
+        shard_size=3,
+        seed=7,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+    assert resumed["total_decisions_pre_filter"] == first["total_decisions_pre_filter"]
+    assert resumed["total_decisions_post_filter"] == first["total_decisions_post_filter"]
+    assert resumed["forced_move_drop_pct"] == pytest.approx(first["forced_move_drop_pct"])
+    assert resumed["forced_move_drop_pct"] > 0.0
+
+
+def test_resume_counters_survive_the_reconstruct_path(tmp_path: Path) -> None:
+    """The SLOW resume branch (sidecar absent or stale) must not zero the
+    counters either. ``n_pairs`` recovers the post-filter total exactly; the
+    pre-filter total is floored at it so the drop pct under-reports rather than
+    claiming a 100% drop off a zeroed numerator."""
+    first = generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+    )
+    (tmp_path / "progress.json").unlink()
+    (tmp_path / "manifest.json").unlink()
+
+    resumed = generate_dataset(
+        out_dir=tmp_path,
+        n_games=4,  # nothing left to generate — counters come purely from disk
+        perturb_pct=0.0,
+        shard_size=2,
+        seed=0,
+        max_turns=60,
+        progress_every=10**9,
+        resume=True,
+    )
+    assert resumed["total_decisions_post_filter"] == first["total_decisions_post_filter"]
+    assert resumed["total_decisions_pre_filter"] >= resumed["total_decisions_post_filter"] > 0
+    assert 0.0 <= resumed["forced_move_drop_pct"] < 1.0
+
+
 def test_resume_without_existing_shards_is_fresh_run(tmp_path: Path) -> None:
     """--resume on an empty dir behaves exactly like a fresh run."""
     m = generate_dataset(
@@ -530,3 +622,129 @@ def test_resume_without_existing_shards_is_fresh_run(tmp_path: Path) -> None:
     for s in m["shards"]:
         gids.extend(s["game_ids"])
     assert sorted(gids) == list(range(4))
+
+
+# ---------------------------------------------------------------------------
+# D7 / AC-3 — SHARD-LEVEL coverage.
+#
+# The pre-existing phase test (``test_play_game_setup_actions_tagged_setup_phase``)
+# asserts at ``play_game`` level, BEFORE ``_flatten_records`` applies the
+# write-time ``forced`` filter — so it stayed green while 100% of setup rows
+# were being dropped on the way to disk. These assertions read what actually
+# LANDED in the shard.
+# ---------------------------------------------------------------------------
+
+
+def _load_shard_columns(tmp_path: Path) -> tuple[np.ndarray, np.ndarray]:
+    shard = np.load(tmp_path / "shard_0000.npz")
+    return shard["phase"], shard["action"]
+
+
+def test_shard_contains_setup_and_robber_rows_and_no_discard(tmp_path: Path) -> None:
+    generate_dataset(
+        out_dir=tmp_path,
+        n_games=6,
+        perturb_pct=0.0,
+        shard_size=6,
+        seed=100,
+        max_turns=200,
+        progress_every=10**9,
+    )
+    phase, action = _load_shard_columns(tmp_path)
+    phases = {str(p) for p in phase.tolist()}
+    assert {"setup", "main", "robber"} <= phases, f"missing decision class on disk: {phases}"
+
+    types = set(action[:, 0].tolist())
+    # Core placement / turn vocabulary must all be represented.
+    assert {0, 1, 2, 3, 4, 5, 10} <= types, f"type histogram gaps: {sorted(types)}"
+    # D1: DISCARD rows are deliberately never written — the recorder has no
+    # per-card intercept, so every such row would carry a fabricated WOOD label
+    # from a teacher that discards uniformly at random.
+    assert ActionType.DISCARD not in types
+    assert "discard" not in phases
+
+
+def test_shard_contains_dev_card_plays(tmp_path: Path) -> None:
+    """D2: the corpus used to hold ~50k BUY_DEV_CARD rows and ZERO plays."""
+    generate_dataset(
+        out_dir=tmp_path,
+        n_games=6,
+        perturb_pct=0.0,
+        shard_size=6,
+        seed=100,
+        max_turns=200,
+        progress_every=10**9,
+    )
+    _phase, action = _load_shard_columns(tmp_path)
+    types = set(action[:, 0].tolist())
+    play_types = {
+        ActionType.PLAY_KNIGHT,
+        ActionType.PLAY_YOP,
+        ActionType.PLAY_MONOPOLY,
+        ActionType.PLAY_ROAD_BUILDER,
+    }
+    assert types & play_types, "teacher still never plays a development card"
+
+
+# ---------------------------------------------------------------------------
+# D2 — the pre-roll dev-card window must contribute NO rows
+# ---------------------------------------------------------------------------
+
+
+def _phase_flag_indices() -> tuple[int, int]:
+    """Locate the ``roll_pending`` / ``robber_placement_pending`` slots inside
+    ``current_player_main`` by toggling them on the shared encoder, so this
+    test does not hardcode an offset that ``obs_encoder`` may re-pack."""
+    import queue as _queue
+
+    from catan_rl.agents.heuristic import heuristicAIPlayer
+    from catan_rl.engine.game import catanGame
+    from catan_rl.env.hand_tracker import BroadcastHandTracker
+    from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder
+
+    game = catanGame(render_mode=None)
+    p1 = heuristicAIPlayer("P1", "black")
+    p2 = heuristicAIPlayer("P2", "darkslateblue")
+    p1.updateAI()
+    p2.updateAI()
+    game.playerQueue = _queue.Queue(2)
+    game.playerQueue.put(p1)
+    game.playerQueue.put(p2)
+    encoder = ObsEncoder(game.board)
+    tracker = BroadcastHandTracker([p1.name, p2.name])
+    tracker.subscribe(game.broadcast)
+
+    def obs_for(**flags: bool) -> np.ndarray:
+        state = EnvObsState(initial_placement_phase=False, **flags)
+        return np.asarray(
+            encoder.build_obs(game, p1, p2, state, hand_tracker=tracker)["current_player_main"]
+        )
+
+    base = obs_for()
+    # Each toggle moves TWO slots: its own flag and the derived ``in_main``
+    # flag. ``in_main`` is the one they share, so subtract the intersection.
+    roll_diff = set(np.flatnonzero(obs_for(roll_pending=True) != base).tolist())
+    robber_diff = set(np.flatnonzero(obs_for(robber_placement_pending=True) != base).tolist())
+    shared = roll_diff & robber_diff  # in_main
+    (roll,) = roll_diff - shared
+    (robber,) = robber_diff - shared
+    return int(roll), int(robber)
+
+
+def test_no_row_claims_two_phases_at_once() -> None:
+    """The pre-roll Knight used to drag a robber placement into the corpus with
+    ``roll_pending=1`` AND ``robber_placement_pending=1`` in the same obs — a
+    state the learner's env can never occupy (the mask builder checks the
+    robber branch BEFORE the roll branch, so the row was mask-legal). Measured
+    at 7.2% of robber rows before the explicit ``suppress_recording`` gate."""
+    roll_idx, robber_idx = _phase_flag_indices()
+    seen_robber = 0
+    for seed in range(8):
+        record = play_game(game_id=seed, seed=seed, perturbation="canonical", max_turns=200)
+        for d in record.decisions:
+            main = np.asarray(d.obs["current_player_main"])
+            seen_robber += int(main[robber_idx] > 0)
+            assert not (main[roll_idx] > 0 and main[robber_idx] > 0), (
+                f"seed {seed}: row claims roll_pending AND robber_placement_pending"
+            )
+    assert seen_robber > 0, "no robber rows generated — the assertion would be vacuous"

@@ -6,8 +6,10 @@ Per ``v2_step3_bc.md`` §1, the deliverable is 30,000 games:
   * 70% canonical heuristic-vs-heuristic
   * 30% perturbed-vs-heuristic (split half ε-greedy / half weight-noised)
 
-Both players' decisions are recorded. Forced single-option moves
-(mask sum == 1) are skipped at write time per the panel's unanimous D4.
+Both players' decisions are recorded. Genuinely forced moves are skipped
+at write time per the panel's unanimous D4 — see the forced-move filter
+note below for what "forced" means since spec
+``bc-coverage-and-bank-legality`` D1.
 Each (obs, action, mask) tuple comes with a normalised belief target
 (opponent dev-card type distribution) and a discounted terminal outcome
 ``z_disc = γ^(T-t) · z`` so the BC value head + belief head can train
@@ -30,11 +32,26 @@ compute the mask at each decision point. Two reasons:
      needed here — we record only the (state, action) pairs and tag
      terminal outcomes after the game ends.
 
-Forced-move filter: a (state, action) pair is "forced" iff the type-head
-mask has exactly one legal entry — i.e., the heuristic had no choice.
-Records are still emitted to the in-memory log but the loader can skip
-them via the ``forced`` flag, OR they can be filtered at write time
-via ``include_forced=False`` (the default).
+Forced-move filter (spec ``bc-coverage-and-bank-legality`` D1): a
+(state, action) pair is "forced" iff EVERY head that contributes to the
+joint log-prob for the chosen action type offers at most one legal option
+— :func:`catan_rl.policy.obs_schema.is_forced_decision`, the single shared
+predicate (``expert_iteration.labeler`` uses the same one). The previous
+rule looked at the TYPE head alone, which deleted 100% of setup placements
+and every robber placement at write time: their type mask is a singleton
+while the corner / edge / tile head is wide open. Records are still emitted
+to the in-memory log but the loader can skip them via the ``forced`` flag,
+OR they can be filtered at write time via ``include_forced=False`` (the
+default).
+
+DISCARD decisions are NOT recorded at all — see the rationale inline in
+:func:`play_game`. They would pass the relevance-aware filter while
+carrying a constant, fabricated resource label.
+
+The manifest stamps ``forced_rule_version`` / ``ruleset_version``;
+:func:`catan_rl.bc.loader.load_manifest` refuses a corpus written under a
+superseded rule, because the write-time filter is the only gate (the
+loader never re-evaluates ``forced``).
 """  # noqa: RUF002
 
 from __future__ import annotations
@@ -63,9 +80,12 @@ from catan_rl.env.hand_tracker import BroadcastHandTracker
 from catan_rl.env.masks import compute_action_masks
 from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder, hidden_belief_target
 from catan_rl.policy.obs_schema import (
+    FORCED_RULE_VERSION,
     N_DEV_TYPES,
     RESOURCES_CW,
+    RULESET_VERSION,
     ActionType,
+    is_forced_decision,
 )
 
 # ---------------------------------------------------------------------------
@@ -166,6 +186,15 @@ class _RecorderContext:
     seat: int
     # Phase mutates as the game state machine progresses.
     env_state: EnvObsState
+    #: D2: set while the teacher acts inside a window the LEARNER's env can
+    #: never enter (the PRE-ROLL dev-card window). Every decision taken there —
+    #: the dev-card play itself AND anything it drags along, e.g. the robber
+    #: placement a pre-roll Knight triggers — is dropped, because the obs would
+    #: carry ``roll_pending=1`` alongside a mask for a different phase. Relying
+    #: on the mask to reject them is not enough: ``compute_action_masks`` tests
+    #: the robber branch BEFORE the roll branch, so the nested robber row is
+    #: mask-legal and would be written with an impossible obs.
+    suppress_recording: bool = False
 
 
 def _make_action(
@@ -200,7 +229,12 @@ def _record_decision(
     corrupt BC training — we'd be supervising on actions the network
     couldn't take under the same mask at inference time. Surfaced by
     a failing TDD test on the BC loader.
+
+    Also drops everything taken while ``ctx.suppress_recording`` is set — see
+    the field's docstring (the pre-roll dev-card window).
     """
+    if ctx.suppress_recording:
+        return
     ctx.env_state.initial_placement_phase = phase == "setup"
     # During setup, infer setup_step from the action type so the mask
     # accepts the chosen action. The env's state machine alternates
@@ -231,7 +265,14 @@ def _record_decision(
     if not bool(mask["type"][int(action[0])]):
         return
     belief = _belief_target_for(ctx.opp_player)
-    forced = bool(int(mask["type"].sum()) <= 1)
+    # D1: relevance-aware. The old ``mask["type"].sum() <= 1`` rule looked at
+    # the TYPE head alone and therefore deleted, at write time, every decision
+    # whose type was a singleton but whose downstream head was wide open —
+    # 100% of setup placements (one legal type, ~24 legal corners / 41 legal
+    # edges) and every robber placement (one legal type, up to 19 legal tiles).
+    # ``is_forced_decision`` consults every RELEVANT head via the shared
+    # schema table.
+    forced = is_forced_decision(mask)
     step_idx = len(ctx.records)
     ctx.records.append(
         _DecisionRecord(
@@ -262,11 +303,20 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
     orig_draw_dev = p.draw_devCard
     orig_trade_bank = p.trade_with_bank
     orig_move_robber = p.move_robber
+    orig_play_knight = p.heuristic_play_knight
+    orig_play_yop = p.heuristic_play_year_of_plenty
+    orig_play_monopoly = p.heuristic_play_monopoly
+    orig_play_road_builder = p.heuristic_play_road_builder
+
+    def _phase_now() -> str:
+        # Read the phase off the live state machine rather than off ``is_free``:
+        # Road-Builder roads are ALSO free, and labelling them "setup" would
+        # both mis-tag them and drive the mask into the snake-draft branch.
+        return "setup" if ctx.env_state.initial_placement_phase else "main"
 
     def patched_build_settlement(vCoord, board, is_free=False):
-        phase = "setup" if is_free else "main"
         action = _make_action(ActionType.BUILD_SETTLEMENT, corner_idx=ctx.vertex_to_idx[vCoord])
-        _record_decision(ctx, action, phase)
+        _record_decision(ctx, action, _phase_now())
         return orig_build_settlement(vCoord, board, is_free=is_free)
 
     def patched_build_city(vCoord, board):
@@ -275,9 +325,10 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         return orig_build_city(vCoord, board)
 
     def patched_build_road(v1, v2, board, is_free=False):
-        phase = "setup" if is_free else "main"
         action = _make_action(ActionType.BUILD_ROAD, edge_idx=ctx.edge_to_idx[_edge_key(v1, v2)])
-        _record_decision(ctx, action, phase)
+        _record_decision(ctx, action, _phase_now())
+        if ctx.env_state.road_building_roads_left > 0:
+            ctx.env_state.road_building_roads_left -= 1
         return orig_build_road(v1, v2, board, is_free=is_free)
 
     def patched_draw_dev(board):
@@ -299,12 +350,55 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         _record_decision(ctx, action, "robber")
         return orig_move_robber(hexIndex, board, player_robbed)
 
+    # --- Development-card plays (D2). Without these the corpus carried 50k
+    # BUY_DEV_CARD rows and ZERO plays: action types 6/7/8/9 had never been
+    # seen as a positive example. Each records BEFORE the mutation (so the
+    # mask still admits the action) and advertises the sub-phase the env's
+    # state machine would be in, so the nested robber / free-road decisions
+    # are masked exactly as the env would mask them.
+    def patched_play_knight(board):
+        _record_decision(ctx, _make_action(ActionType.PLAY_KNIGHT), "main")
+        ctx.env_state.robber_placement_pending = True
+        try:
+            return orig_play_knight(board)
+        finally:
+            ctx.env_state.robber_placement_pending = False
+
+    def patched_play_yop(board, r1, r2):
+        action = _make_action(
+            ActionType.PLAY_YOP,
+            resource1_idx=RESOURCES_CW.index(r1) if r1 in RESOURCES_CW else 0,
+            resource2_idx=RESOURCES_CW.index(r2) if r2 in RESOURCES_CW else 0,
+        )
+        _record_decision(ctx, action, "main")
+        return orig_play_yop(board, r1, r2)
+
+    def patched_play_monopoly(board, resource):
+        action = _make_action(
+            ActionType.PLAY_MONOPOLY,
+            resource1_idx=RESOURCES_CW.index(resource) if resource in RESOURCES_CW else 0,
+        )
+        _record_decision(ctx, action, "main")
+        return orig_play_monopoly(board, resource)
+
+    def patched_play_road_builder(board):
+        _record_decision(ctx, _make_action(ActionType.PLAY_ROAD_BUILDER), "main")
+        ctx.env_state.road_building_roads_left = 2
+        try:
+            return orig_play_road_builder(board)
+        finally:
+            ctx.env_state.road_building_roads_left = 0
+
     p.build_settlement = patched_build_settlement
     p.build_city = patched_build_city
     p.build_road = patched_build_road
     p.draw_devCard = patched_draw_dev
     p.trade_with_bank = patched_trade_bank
     p.move_robber = patched_move_robber
+    p.heuristic_play_knight = patched_play_knight
+    p.heuristic_play_year_of_plenty = patched_play_yop
+    p.heuristic_play_monopoly = patched_play_monopoly
+    p.heuristic_play_road_builder = patched_play_road_builder
     try:
         yield
     finally:
@@ -314,6 +408,10 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         p.draw_devCard = orig_draw_dev
         p.trade_with_bank = orig_trade_bank
         p.move_robber = orig_move_robber
+        p.heuristic_play_knight = orig_play_knight
+        p.heuristic_play_year_of_plenty = orig_play_yop
+        p.heuristic_play_monopoly = orig_play_monopoly
+        p.heuristic_play_road_builder = orig_play_road_builder
 
 
 # ---------------------------------------------------------------------------
@@ -451,31 +549,64 @@ def play_game(
 
                 p.updateDevCards()
                 p.devCardPlayedThisTurn = False
+                # D2 pre-roll dev-card window. These decisions are deliberately
+                # NOT clonable — the learner's env has no pre-roll window, so
+                # every row taken here is a state it can never occupy. The play
+                # still happens: the point is a practice opponent worth cloning,
+                # and a Knight that unblocks its own hex has to land before the
+                # dice. Making pre-roll actions available to the LEARNER is a
+                # separate spec (preroll-dev-cards-r1 D1-D5).
+                #
+                # Dropping is EXPLICIT (``suppress_recording``), not a
+                # side-effect of the mask: ``roll_pending=True`` does answer
+                # {ROLL_DICE} for the dev-card play itself, but a pre-roll
+                # Knight sets ``robber_placement_pending`` and calls through to
+                # ``move_robber``, and ``compute_action_masks`` tests the robber
+                # branch BEFORE the roll branch — so that nested row WAS
+                # mask-legal and got written with an internally-inconsistent obs
+                # (``roll_pending=1`` and ``robber_placement_pending=1`` at once,
+                # carrying the PREVIOUS turn's ``last_dice_roll``). Measured at
+                # 7.2% of robber rows before this gate.
+                env_state.roll_pending = True
+                ctx_active.suppress_recording = True
+                try:
+                    if hasattr(p, "heuristic_pre_roll"):
+                        p.heuristic_pre_roll(board)
+                finally:
+                    ctx_active.suppress_recording = False
+                    env_state.roll_pending = False
                 dice = game.rollDice()
                 env_state.last_dice_roll = int(dice)
 
                 if dice == 7:
-                    # Both players may need to discard. Discards are
-                    # forced (single-resource at a time, mask of held
-                    # resources only); we record them as forced and
-                    # they'll be filtered out by default.
-                    for pp_discard, pp_ctx in (
-                        (p1, ctx_p1),
-                        (p2, ctx_p2),
-                    ):
+                    # DISCARD IS DELIBERATELY NOT RECORDED (spec
+                    # bc-coverage-and-bank-legality D1).
+                    #
+                    # The per-card discard decisions never pass through a
+                    # patched build_*/move_*/draw_* method, so the only record
+                    # available here is one aggregate row per discarding
+                    # player — and ``_make_action(ActionType.DISCARD)`` carries
+                    # no resource argument, so ``resource1_idx`` defaults to 0 =
+                    # WOOD. A 40-game probe measured 2,342 such rows, EVERY one
+                    # of them saying WOOD, against a ``resource1_discard`` mask
+                    # averaging 4.46 legal picks with 100% of rows offering more
+                    # than one. The teacher itself discards
+                    # ``np.random.choice`` (agents/heuristic.py
+                    # ``discardResources``) — a skill-free choice. Restoring
+                    # these rows would put ~11% of the corpus into teaching a
+                    # constant lie from a teacher with no discard skill, so the
+                    # relevance-aware ``forced`` rule (which would otherwise
+                    # classify them as REAL decisions) is not allowed to reach
+                    # them: they are never written.
+                    #
+                    # Discard is learned by SELF-PLAY instead — the env takes
+                    # one ``env.step`` per discarded card and the shared
+                    # resource1 head already gets 87k bank-trade rows of
+                    # supervision (policy/heads.py routes YoP / Monopoly /
+                    # BankTrade / Discard through the same head). D3's
+                    # remaining-owed scalar is what makes that tractable.
+                    for pp_discard in (p1, p2):
                         if sum(pp_discard.resources.values()) > 9:
-                            env_state.discard_pending = True
-                            pp_ctx.agent_player = pp_discard
-                            pp_ctx.opp_player = p2 if pp_discard is p1 else p1
-                            # Heuristic chooses cards itself; we record
-                            # the *aggregate* action_type=DISCARD here
-                            # (forced) for schema completeness. The
-                            # individual per-card emissions happen via
-                            # log_discard but don't go through
-                            # build_*/move_*/draw_* — they don't get a
-                            # patched intercept, which means we miss
-                            # those records. Acceptable: they're forced.
-                            _record_decision(pp_ctx, _make_action(ActionType.DISCARD), "discard")
                             pp_discard.discardResources(game)
                     env_state.discard_pending = False
                     env_state.robber_placement_pending = True
@@ -725,6 +856,12 @@ def generate_dataset(
     resume_shards: list[dict[str, Any]] = []
     games_done = 0
     next_shard_idx = 0
+    # D5: the decision counters live only in memory, so a resumed run used to
+    # report ``total_decisions_pre_filter = 0`` / ``forced_move_drop_pct = 0.0``
+    # on a fully-generated corpus — the loop below only increments them for
+    # games it generates ITSELF. Carry them across the resume boundary.
+    resumed_pre_filter = 0
+    resumed_post_filter = 0
     if resume:
         existing = sorted(out_dir.glob("shard_*.npz"), key=lambda p: _shard_index_from_name(p.name))
         if existing:
@@ -741,11 +878,25 @@ def generate_dataset(
                 # Fast path: trust the sidecar written by a prior run.
                 resume_shards = list(prog["shards"])
                 games_done = int(prog["games_done"])
+                resumed_pre_filter = int(prog.get("total_decisions_pre_filter", 0))
+                resumed_post_filter = int(prog.get("total_decisions_post_filter", 0))
             else:
                 # Sidecar absent or stale (e.g. pre-resume partial shards):
                 # count games straight from the shard arrays.
                 resume_shards = [_reconstruct_shard_entry(p, game_perturbations) for p in existing]
                 games_done = sum(int(s["n_games"]) for s in resume_shards)
+                # D5 on the SLOW path too. ``n_pairs`` is the exact POST-filter
+                # row count of each shard, so that total is always recoverable.
+                # The PRE-filter total is not — dropped rows leave no trace on
+                # disk — so take it from the sidecar when one exists (even
+                # though its shard set is stale) and floor it at the post-filter
+                # total. That makes ``forced_move_drop_pct`` under-report the
+                # drop rather than claim a 100% drop off a zeroed numerator.
+                resumed_post_filter = sum(int(s["n_pairs"]) for s in resume_shards)
+                resumed_pre_filter = max(
+                    int(prog.get("total_decisions_pre_filter", 0)) if prog else 0,
+                    resumed_post_filter,
+                )
             next_shard_idx = max(_shard_index_from_name(p.name) for p in existing) + 1
             print(
                 f"[bc.dataset] resume: {games_done} games already persisted across "
@@ -756,8 +907,8 @@ def generate_dataset(
 
     shards: list[dict[str, Any]] = list(resume_shards)
     pending_games: list[_GameRecord] = []
-    total_pre_filter = 0
-    total_post_filter = 0
+    total_pre_filter = resumed_pre_filter
+    total_post_filter = resumed_post_filter
 
     def _build_manifest() -> dict[str, Any]:
         return {
@@ -771,6 +922,12 @@ def generate_dataset(
             "max_turns": max_turns,
             "discount": discount,
             "include_forced": include_forced,
+            # D5: the write-time ``forced`` filter is never re-evaluated by the
+            # loader, so a corpus is only interpretable against the rule that
+            # produced it. ``bc.loader.load_manifest`` REFUSES an unstamped or
+            # stale directory rather than training on silently-missing classes.
+            "forced_rule_version": FORCED_RULE_VERSION,
+            "ruleset_version": RULESET_VERSION,
             "perturbation_counts": perturbation_counts,
             "shards": shards,
             "total_decisions_pre_filter": total_pre_filter,
@@ -790,6 +947,8 @@ def generate_dataset(
                 {
                     "shards": shards,
                     "games_done": sum(int(s["n_games"]) for s in shards),
+                    "total_decisions_pre_filter": total_pre_filter,
+                    "total_decisions_post_filter": total_post_filter,
                     "seed_base": seed,
                     "target_games": n_games,
                     "shard_size": shard_size,

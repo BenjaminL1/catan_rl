@@ -9,6 +9,7 @@ import numpy as np
 from catan_rl.bc.loader import BcDataset
 from catan_rl.expert_iteration.config import SearchLabelConfig
 from catan_rl.expert_iteration.labeler import generate_search_labels
+from catan_rl.policy.obs_schema import is_forced_decision
 
 
 def test_shards_are_bcdataset_loadable_and_legal(tiny_ckpt: Path, tmp_path: Path) -> None:
@@ -30,12 +31,15 @@ def test_shards_are_bcdataset_loadable_and_legal(tiny_ckpt: Path, tmp_path: Path
     n = int(z["action"].shape[0])
     assert n == manifest["n_pairs_total"]
     assert z["action"].shape[1] == 6
-    # Every recorded action's TYPE is legal under its mask, and no forced
-    # (single-legal-type) position survives the write filter.
+    # Every recorded action's TYPE is legal under its mask, and no GENUINELY
+    # forced position survives the write filter. D1: the criterion is the shared
+    # relevance-aware predicate, not ``mask["type"].sum() > 1`` — a singleton
+    # type over a wide-open corner/edge/tile head is a real decision.
     for i in range(n):
         action_type = int(z["action"][i, 0])
         assert bool(z["mask/type"][i][action_type]), f"row {i}: illegal action type"
-        assert int(z["mask/type"][i].sum()) > 1, f"row {i}: forced position not filtered"
+        row = {k[5:]: z[k][i] for k in z.files if k.startswith("mask/")}
+        assert not is_forced_decision(row), f"row {i}: forced position not filtered"
     # z_disc is a discounted outcome in [-1, 1].
     assert np.all(np.abs(z["z_disc"]) <= 1.0 + 1e-6)
 

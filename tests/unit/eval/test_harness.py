@@ -84,12 +84,15 @@ class _TorchSamplingStub(nn.Module):
             # while discarding with no WOOD in hand) leaves the env's
             # discard counter stuck and the game loops forever.
             corner_key = "corner_city" if t == 1 else "corner_settlement"
-            res1_key = {10: "resource1_trade", 11: "resource1_discard"}.get(t, "resource1_default")
+            res1_key = {7: "resource1_yop", 10: "resource1_trade", 11: "resource1_discard"}.get(
+                t, "resource1_default"
+            )
             action[i, 1] = self._first_legal(masks, corner_key, i)
             action[i, 2] = self._first_legal(masks, "edge", i)
             action[i, 3] = self._first_legal(masks, "tile", i)
             action[i, 4] = self._first_legal(masks, res1_key, i)
-            action[i, 5] = self._first_legal(masks, "resource2_default", i)
+            res2_key = "resource2_trade" if t == 10 else "resource2_yop"
+            action[i, 5] = self._first_legal(masks, res2_key, i)
         return {
             "action": action,
             "log_prob": torch.zeros(B, device=device),
@@ -393,3 +396,57 @@ class TestCrossProcessDeterminism:
             "EvalHarness game seeds drift across PYTHONHASHSEED values — "
             "use a stable hash for the seed derivation"
         )
+
+
+# ---------------------------------------------------------------------------
+# D4 defence-in-depth — the rollout loop must be bounded
+# ---------------------------------------------------------------------------
+
+
+class _StuckPolicy(nn.Module):
+    """Always emits the same action with every sub-head pinned to 0.
+
+    Models the fixed point D4 removes at the legality layer: a stable-argmax
+    policy re-picking a state-preserving action. ``EvalHarness._play_game``
+    loops ``while not terminated and not truncated`` and truncation only
+    advances at a turn boundary, so without the step cap this never returns.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dummy = nn.Parameter(torch.zeros(1))
+
+    def sample(
+        self, obs: dict[str, torch.Tensor], masks: dict[str, torch.Tensor]
+    ) -> dict[str, torch.Tensor]:
+        B = next(iter(obs.values())).shape[0]
+        device = next(iter(obs.values())).device
+        action = torch.zeros((B, 6), dtype=torch.int64, device=device)
+        type_mask = masks["type"].cpu().numpy()
+        for i in range(B):
+            legal = np.flatnonzero(type_mask[i])
+            # Always the LOWEST legal type — deterministic and stable.
+            action[i, 0] = int(legal[0]) if legal.size else 3
+        return {
+            "action": action,
+            "log_prob": torch.zeros(B, device=device),
+            "value": torch.zeros(B, device=device),
+            "per_head_log_prob": torch.zeros((B, 6), device=device),
+            "entropy": torch.zeros(B, device=device),
+        }
+
+
+def test_rollout_loop_has_a_step_cap() -> None:
+    """A degenerate policy must not hang the harness — the loop is bounded by
+    ``max_turns * 50`` env steps and the overrun is reported as a truncation."""
+    from catan_rl.env.catan_env import CatanEnv
+
+    harness = EvalHarness(
+        opponent_types=("random",), n_games_per_seat=1, max_turns=4, audit_rules=False
+    )
+    env = CatanEnv(opponent_type="random", max_turns=4)
+    outcome = harness._play_one_game(env=env, policy=_StuckPolicy(), seed=0, agent_seat=0)
+    assert isinstance(outcome, GameOutcome)
+    # Returned at all == the loop is bounded. The cap is derived from
+    # ``max_turns``, so a small max_turns bounds the work.
+    assert outcome.n_turns <= 4 * 50 + 1

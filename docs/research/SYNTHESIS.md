@@ -15,7 +15,7 @@ How v2 differs from the two prior efforts:
 - **vs QSettlers** — v2 has one unified policy + value + belief network across all decisions; QSettlers fragmented into a trade-only DQN and an unbuilt settlement DQN. v2 uses PPO (on-policy, autoregressive-native); QSettlers used DQN with a 100-sample replay buffer in a 35%-discard-rate framework. None of QSettlers' reported numbers transfer.
 - **vs the v1 attempt** — v2 adds the GNN encoder, FiLM heads, axial pos emb, belief head, opp-action aux head (Step-3 only), D6 augmentation, PFSP-hard league, duo exploiter cycles, TrueSkill ratings, opp-id embedding, and a faculty-corrected terminal-only reward. v1 plateaued at ~0.56 WR vs heuristic; v2 targets `≥ 0.70` (Gate 1) → `≥ 0.90` (Gate 1 after Step 5).
 
-**Decisions that survived all four agents' scrutiny**: 6-head autoregressive action space, 9-key contextual masks, tripartite GNN + axial pos emb, BroadcastHandTracker + 5-way belief head, BC warm-start, curriculum opponent mix (60% → 25% heuristic), PFSP-hard sampling, terminal-only reward.
+**Decisions that survived all four agents' scrutiny**: 6-head autoregressive action space, 12-key contextual masks, tripartite GNN + axial pos emb, BroadcastHandTracker + 5-way belief head, BC warm-start, curriculum opponent mix (60% → 25% heuristic), PFSP-hard sampling, terminal-only reward.
 
 **Decisions still empirically open after Round 4**: (D2) reward `±1 + (vp_diff)/15` vs pure `±1` — launch-blocking A1 ablation needed; (D4) obs schema completeness re: dice-bag + persistent Karma buff state — launch-blocking A2 ablation needed before Step 4.
 
@@ -34,7 +34,7 @@ How v2 differs from the two prior efforts:
 
 ### Action space
 - **Keep** v2's `MultiDiscrete([13, 54, 72, 19, 5, 5])` factored 6-head autoregressive — type → corner → edge → tile → res1 → res2.
-- **Keep** the 9-key contextual mask dict (`env/masks.py`): type, corner_settlement, corner_city, edge, tile, resource1_trade, resource1_discard, resource1_default, resource2_default.
+- **Keep** the contextual mask dict (`env/masks.py`), now 12 keys: type, corner_settlement, corner_city, edge, tile, resource1_trade, resource1_discard, resource1_default, resource1_yop, resource2_yop, resource2_yop_same, resource2_trade. (`resource1_default` / `resource2_default` were split so the finite bank can gate the YoP picks and the BankTrade receive independently — spec `bc-coverage-and-bank-legality` D4.)
 - **Reject from Catanatron**: the flat 289-action space (`catanatron.md` §"Action space"). The original 5000+ space had to be compressed to be learnable; the compressed version still cannot share parameters across corner decisions.
 - **Reject from QSettlers**: fragmented per-decision networks (`qsettlers.md` §"Action space + masking"). No shared value head, no transfer.
 

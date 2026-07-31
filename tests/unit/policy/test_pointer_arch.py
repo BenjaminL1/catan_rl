@@ -35,7 +35,10 @@ def test_corner_context_dim_is_three() -> None:
 
 
 def test_player_and_global_dims_derive_from_constants() -> None:
-    assert S.CURR_PLAYER_DIM == S.PLAYER_BASE_DIM + S.CURR_EXTRA_DIM + S.RESERVED_PLAYER_SLOTS
+    # D3 consumed one CURRENT-player reserved slot for the remaining-owed
+    # discard count. ``RESERVED_PLAYER_SLOTS`` feeds BOTH blocks and must stay
+    # at 8; only the current block's own count moved.
+    assert S.CURR_PLAYER_DIM == S.PLAYER_BASE_DIM + S.CURR_EXTRA_DIM + S.CURR_RESERVED_SLOTS
     assert S.NEXT_PLAYER_DIM == S.PLAYER_BASE_DIM + S.OPP_EXTRA_DIM + S.RESERVED_PLAYER_SLOTS
     assert S.GLOBAL_DIM == S.GLOBAL_BANK_DIM + S.GLOBAL_DEVDECK_DIM + S.GLOBAL_RESERVED_SLOTS
     assert S.GLOBAL_BANK_DIM == S.N_RESOURCES
@@ -95,12 +98,49 @@ def test_global_bank_seatswap_invariant_and_reserved_zero() -> None:
 
 
 def test_player_reserved_slots_strict_zero() -> None:
+    """Narrowed for D3: the current block now has ``CURR_RESERVED_SLOTS`` (7)
+    of still-reserved tail — the 8th became the remaining-owed discard count.
+    A fresh env is never discarding, so the old assertion passed VACUOUSLY over
+    the new slot; ``test_discard_owed_slot_is_populated_when_discarding``
+    pins the populated case."""
     env = _fresh_env()
     obs = env._get_obs()
     cur = obs["current_player_main"]
     nxt = obs["next_player_main"]
-    assert np.all(cur[-S.RESERVED_PLAYER_SLOTS :] == 0.0)
+    assert np.all(cur[-S.CURR_RESERVED_SLOTS :] == 0.0)
     assert np.all(nxt[-S.RESERVED_PLAYER_SLOTS :] == 0.0)
+    # The freed slot exists and reads 0.0 outside a discard sub-phase.
+    assert cur[-S.CURR_RESERVED_SLOTS - 1] == 0.0
+    assert not env.discard_pending
+
+
+def test_discard_owed_slot_is_populated_when_discarding() -> None:
+    """D3: the remaining-owed count must be VISIBLE, and normalised with the
+    block's own min(1.0, n / 8.0) convention."""
+    env = _fresh_env()
+    env.discard_pending = True
+    env._cards_to_discard = 4
+    obs = env._get_obs()
+    slot = obs["current_player_main"][-S.CURR_RESERVED_SLOTS - 1]
+    assert slot == pytest.approx(4.0 / 8.0)
+    # Same hand, different position in the sequence -> different observation.
+    env._cards_to_discard = 3
+    obs2 = env._get_obs()
+    slot2 = obs2["current_player_main"][-S.CURR_RESERVED_SLOTS - 1]
+    assert slot2 == pytest.approx(3.0 / 8.0)
+    assert slot != slot2
+
+
+def test_discard_owed_slot_is_threaded_for_the_opponent_seat_too() -> None:
+    """Missing the second seat would train a self-play ASYMMETRY into exactly
+    the slot being added — the opponent's owed count used to live only as a
+    local inside ``_opponent_discard``."""
+    env = _fresh_env()
+    opp_state = env._opponent_env_state(discard_pending=True, cards_to_discard=5)
+    assert opp_state.cards_to_discard == 5
+    obs = env._build_obs_for(env.opponent_player, env.agent_player, opp_state)
+    slot = obs["current_player_main"][-S.CURR_RESERVED_SLOTS - 1]
+    assert slot == pytest.approx(5.0 / 8.0)
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +222,10 @@ def _full_masks(batch: int) -> dict[str, torch.Tensor]:
         "resource1_trade": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
         "resource1_discard": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
         "resource1_default": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
-        "resource2_default": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
+        "resource1_yop": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
+        "resource2_yop": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
+        "resource2_yop_same": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
+        "resource2_trade": torch.ones(batch, S.N_RESOURCES, dtype=torch.bool),
     }
 
 

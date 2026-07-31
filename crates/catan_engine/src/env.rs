@@ -109,7 +109,7 @@ impl PyRustEnv {
         Ok((obs, reward, terminated, truncated, info))
     }
 
-    /// Compute the 9-key action mask dict for the current state.
+    /// Compute the 12-key action mask dict for the current state.
     fn get_action_masks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         compute_masks(py, &self.state)
     }

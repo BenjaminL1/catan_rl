@@ -15,7 +15,9 @@ trimmed:
 What is preserved verbatim:
 
   * MultiDiscrete([13, 54, 72, 19, 5, 5]) action space.
-  * 9-key mask dict structure expected by the v2 action heads.
+  * mask dict structure expected by the v2 action heads (12 keys since
+    spec ``bc-coverage-and-bank-legality`` D4 split the bank-gated resource
+    keys; the 6-head action contract itself is unchanged).
   * Setup state machine (snake-draft: agent settle1 -> agent road1 ->
     opponent setup1+2 -> agent settle2 + road2 + starting resources).
   * Sub-turn phases: roll_pending, discard_pending, robber_placement_pending,
@@ -794,6 +796,14 @@ class CatanEnv(gym.Env):
         opp.updateDevCards()
         opp.devCardPlayedThisTurn = False
 
+        # D2 pre-roll window (heuristic opponent only): a Knight that clears
+        # the robber off the opponent's OWN hex must land BEFORE the dice, or
+        # the block costs them this turn's production. The snapshot-driven
+        # opponent has no pre-roll action in the mask contract, so it is
+        # deliberately skipped there.
+        if self._snapshot_opponent is None and hasattr(opp, "heuristic_pre_roll"):
+            opp.heuristic_pre_roll(board)
+
         dice = self.game.rollDice()
         # Keep the obs dice scalar faithful on the opponent's turn too (the
         # snapshot's POV must see ITS roll, not the agent's stale one).
@@ -852,6 +862,7 @@ class CatanEnv(gym.Env):
         road_building_roads_left: int = 0,
         initial_placement_phase: bool = False,
         setup_step: int = 0,
+        cards_to_discard: int = 0,
     ) -> EnvObsState:
         """Build the OPPONENT-LOCAL ``EnvObsState`` (T005/T015).
 
@@ -867,6 +878,11 @@ class CatanEnv(gym.Env):
             robber_placement_pending=robber_placement_pending,
             road_building_roads_left=road_building_roads_left,
             last_dice_roll=self.last_dice_roll,
+            # D3: the opponent's own remaining-owed count. Threading only the
+            # agent seat would train a self-play ASYMMETRY into the very slot
+            # being added — the opponent's count previously lived solely as a
+            # local inside ``_opponent_discard``.
+            cards_to_discard=cards_to_discard,
             opp_kind=OPP_KIND_SELF_LATEST,
             opp_policy_id=N_OPP_POLICY_SLOTS - 1,
         )
@@ -893,7 +909,12 @@ class CatanEnv(gym.Env):
         for _ in range(max(1, n_to_discard) * 4):
             if discarded >= n_to_discard:
                 break
-            action = self._sample_snapshot_action(self._opponent_env_state(discard_pending=True))
+            action = self._sample_snapshot_action(
+                self._opponent_env_state(
+                    discard_pending=True,
+                    cards_to_discard=n_to_discard - discarded,
+                )
+            )
             res_name = RESOURCES_CW[int(action[4])]
             if opp.resources.get(res_name, 0) > 0:
                 opp.resources[res_name] -= 1
@@ -1105,6 +1126,7 @@ class CatanEnv(gym.Env):
                 robber_placement_pending=self.robber_placement_pending,
                 road_building_roads_left=self.road_building_roads_left,
                 last_dice_roll=self.last_dice_roll,
+                cards_to_discard=self._cards_to_discard if self.discard_pending else 0,
             )
         return compute_action_masks(
             self.game,
@@ -1129,6 +1151,9 @@ class CatanEnv(gym.Env):
             robber_placement_pending=self.robber_placement_pending,
             road_building_roads_left=self.road_building_roads_left,
             last_dice_roll=self.last_dice_roll,
+            # D3: remaining cards this seat still owes to the 7-roll discard.
+            # Zero outside the discard sub-phase.
+            cards_to_discard=self._cards_to_discard if self.discard_pending else 0,
             opp_kind=self._opp_kind,
             opp_policy_id=self._opp_policy_id,
             # Stochastic opp-id mask: roll once per obs so within-step calls

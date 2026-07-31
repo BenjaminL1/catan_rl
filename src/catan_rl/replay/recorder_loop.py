@@ -172,10 +172,11 @@ def _build_board_static_from_dict(raw: dict[str, Any]) -> BoardStatic:
 
 
 # Action-type → mask-key mapping for the resource1 head. The env's
-# mask dict carries three separate resource1 masks (trade / discard /
+# mask dict carries four separate resource1 masks (trade / discard / yop /
 # default); the right one depends on the action type. Keys match
 # ``env/masks.py``'s ``_pack`` output.
 _RESOURCE1_MASK_BY_TYPE = {
+    7: "resource1_yop",  # PLAY_YOP (D4: bank-gated first pick)
     10: "resource1_trade",  # BANK_TRADE
     11: "resource1_discard",  # DISCARD
 }
@@ -195,6 +196,28 @@ def _corner_mask_for_type(masks: dict[str, np.ndarray], action_type: int) -> np.
 def _resource1_mask_for_type(masks: dict[str, np.ndarray], action_type: int) -> np.ndarray | None:
     key = _RESOURCE1_MASK_BY_TYPE.get(action_type, "resource1_default")
     return masks.get(key)
+
+
+def _resource2_mask_for_type(
+    masks: dict[str, np.ndarray], action_type: int, res1_idx: int
+) -> np.ndarray | None:
+    """Pick the right resource2 mask for ``action_type``. D4 split the shared
+    ``resource2_default`` key into a bank-gated ``resource2_trade`` (BankTrade
+    receive) and ``resource2_yop`` / ``resource2_yop_same`` (Year-of-Plenty
+    second pick, different vs doubled). Mirrors ``heads._resource2_mask``: the
+    doubled YoP pick needs ``bank >= 2``, so at index ``res1_idx`` the
+    doubled-pick vector replaces the different-pick one."""
+    if action_type == 10:  # BANK_TRADE
+        return masks.get("resource2_trade")
+    base = masks.get("resource2_yop")
+    if base is None or action_type != 7:  # not PLAY_YOP
+        return base
+    same = masks.get("resource2_yop_same")
+    if same is None:
+        return base
+    out = base.copy()
+    out[res1_idx] = same[res1_idx]
+    return out
 
 
 class _RandomMaskedActor:
@@ -251,7 +274,9 @@ class _RandomMaskedActor:
         action[2] = self._pick_from_mask(masks.get("edge"))
         action[3] = self._pick_from_mask(masks.get("tile"))
         action[4] = self._pick_from_mask(_resource1_mask_for_type(masks, action_type))
-        action[5] = self._pick_from_mask(masks.get("resource2_default"))
+        action[5] = self._pick_from_mask(
+            _resource2_mask_for_type(masks, action_type, int(action[4]))
+        )
         return action
 
 

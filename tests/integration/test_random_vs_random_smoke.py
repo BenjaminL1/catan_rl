@@ -57,10 +57,13 @@ def _sample_action_from_mask(masks: dict[str, np.ndarray], rng: np.random.Genera
         if legal.size:
             tile_idx = int(rng.choice(legal))
     elif t in (7,):  # PlayYoP
-        legal1 = np.flatnonzero(masks["resource1_default"])
-        legal2 = np.flatnonzero(masks["resource2_default"])
+        legal1 = np.flatnonzero(masks["resource1_yop"])
         if legal1.size:
             r1 = int(rng.choice(legal1))
+        # D4: the doubled pick needs bank >= 2 (mirrors heads._resource2_mask).
+        res2 = masks["resource2_yop"].copy()
+        res2[r1] = masks["resource2_yop_same"][r1]
+        legal2 = np.flatnonzero(res2)
         if legal2.size:
             r2 = int(rng.choice(legal2))
     elif t == 8:  # PlayMonopoly
@@ -69,7 +72,7 @@ def _sample_action_from_mask(masks: dict[str, np.ndarray], rng: np.random.Genera
             r1 = int(rng.choice(legal))
     elif t == 10:  # BankTrade
         legal1 = np.flatnonzero(masks["resource1_trade"])
-        legal2 = np.flatnonzero(masks["resource2_default"])
+        legal2 = np.flatnonzero(masks["resource2_trade"])
         if legal1.size:
             r1 = int(rng.choice(legal1))
         if legal2.size:

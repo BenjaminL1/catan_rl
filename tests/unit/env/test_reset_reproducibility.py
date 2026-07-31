@@ -31,7 +31,7 @@ def _drive_n_steps(env: CatanEnv, n: int) -> list[float]:
         action = np.zeros(6, dtype=np.int64)
         action[0] = t
         for head_idx, key in enumerate(
-            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_default"),
+            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_yop"),
             start=1,
         ):
             if key == "corner_settlement" and t == 1:
@@ -40,6 +40,10 @@ def _drive_n_steps(env: CatanEnv, n: int) -> list[float]:
                 key = "resource1_discard"
             elif key == "resource1_default" and t == 10:
                 key = "resource1_trade"
+            elif key == "resource1_default" and t == 7:
+                key = "resource1_yop"
+            if key == "resource2_yop" and t == 10:
+                key = "resource2_trade"
             head_legal = np.flatnonzero(masks[key])
             if head_legal.size:
                 action[head_idx] = int(rng.choice(head_legal))

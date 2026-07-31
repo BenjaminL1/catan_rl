@@ -29,6 +29,7 @@ from torch.distributions import Categorical
 from catan_rl.policy.obs_schema import (
     CORNER_CONTEXT_DIM,
     HEAD_DIMS,
+    HEAD_RELEVANCE,
     N_ACTION_TYPES,
     N_DEV_TYPES,
     N_RESOURCES,
@@ -230,26 +231,11 @@ class CatanActionHeads(nn.Module):
         )
 
         # Per-head relevance: 1 if the head's output contributes to the joint
-        # log-prob for this action type, else 0.
-        relevance = torch.zeros(N_ACTION_TYPES, 6, dtype=torch.float32)
-        # type is always relevant.
-        relevance[:, 0] = 1.0
-        # corner relevant on BuildSettlement / BuildCity.
-        relevance[ActionType.BUILD_SETTLEMENT, 1] = 1.0
-        relevance[ActionType.BUILD_CITY, 1] = 1.0
-        # edge relevant on BuildRoad.
-        relevance[ActionType.BUILD_ROAD, 2] = 1.0
-        # tile relevant on MoveRobber and PlayKnight (knight triggers robber).
-        relevance[ActionType.MOVE_ROBBER, 3] = 1.0
-        relevance[ActionType.PLAY_KNIGHT, 3] = 1.0
-        # resource1 relevant on YoP / Monopoly / BankTrade / Discard.
-        relevance[ActionType.PLAY_YOP, 4] = 1.0
-        relevance[ActionType.PLAY_MONOPOLY, 4] = 1.0
-        relevance[ActionType.BANK_TRADE, 4] = 1.0
-        relevance[ActionType.DISCARD, 4] = 1.0
-        # resource2 relevant on YoP / BankTrade (Monopoly and Discard take only one resource).
-        relevance[ActionType.PLAY_YOP, 5] = 1.0
-        relevance[ActionType.BANK_TRADE, 5] = 1.0
+        # log-prob for this action type, else 0. The rule itself lives in the
+        # torch-free schema module (``HEAD_RELEVANCE``) so the BC writer and the
+        # search enumeration read the SAME table; this is just its tensor view.
+        relevance = torch.tensor(HEAD_RELEVANCE, dtype=torch.float32)
+        assert relevance.shape == (N_ACTION_TYPES, len(HEAD_DIMS))
         self.register_buffer("head_relevance", relevance)
 
         # Maps each action_type -> its 4-dim resource-context one-hot index
@@ -313,9 +299,13 @@ class CatanActionHeads(nn.Module):
 
     @staticmethod
     def _resource1_mask(type_idx: torch.Tensor, masks: dict[str, torch.Tensor]) -> torch.Tensor:
+        # D4: PLAY_YOP reads its OWN key — its first pick must be bank-
+        # supplyable AND leave a legal partner, whereas PLAY_MONOPOLY (which
+        # shares ``resource1_default``) is bank-independent.
         is_trade = (type_idx == ActionType.BANK_TRADE).unsqueeze(-1)
         is_discard = (type_idx == ActionType.DISCARD).unsqueeze(-1)
-        default = masks["resource1_default"]
+        is_yop = (type_idx == ActionType.PLAY_YOP).unsqueeze(-1)
+        default = torch.where(is_yop, masks["resource1_yop"], masks["resource1_default"])
         return torch.where(
             is_trade,
             masks["resource1_trade"],
@@ -328,16 +318,27 @@ class CatanActionHeads(nn.Module):
         res1_idx: torch.Tensor,
         masks: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        # BANK_TRADE: forbid r2 == r1 (the engine accepts the degenerate
-        # trade silently as "pay 2-4 of r1, get 1 of r1 back" — a
-        # strictly losing action the policy should never sample). YOP
-        # is unaffected since picking two of the same resource is a
-        # legitimate strategic choice there.
-        mask = masks["resource2_default"].clone()
+        # D4: YoP and BankTrade read SEPARATE mask keys — the finite bank
+        # supplies them under different rules (YoP may need 2 of one resource;
+        # a bank trade needs 1 of a resource distinct from the one given).
+        # BANK_TRADE additionally forbids r2 == r1 (the engine accepts the
+        # degenerate trade silently as "pay 2-4 of r1, get 1 of r1 back" — a
+        # strictly losing action the policy should never sample). YOP DOES
+        # allow r2 == r1 — but only when the bank holds two of it, so at that
+        # one index the doubled-pick vector ``resource2_yop_same``
+        # (``bank >= 2``) replaces the different-pick vector
+        # ``resource2_yop`` (``bank >= 1``).
         is_trade = type_idx == ActionType.BANK_TRADE
+        is_yop = type_idx == ActionType.PLAY_YOP
+        mask = torch.where(
+            is_trade.unsqueeze(-1), masks["resource2_trade"], masks["resource2_yop"]
+        ).clone()
         if is_trade.any():
             rows = torch.nonzero(is_trade, as_tuple=True)[0]
             mask[rows, res1_idx[rows]] = False
+        if is_yop.any():
+            rows = torch.nonzero(is_yop, as_tuple=True)[0]
+            mask[rows, res1_idx[rows]] = masks["resource2_yop_same"][rows, res1_idx[rows]]
         return mask
 
     # ------------------------------------------------------------------

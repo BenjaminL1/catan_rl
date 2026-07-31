@@ -50,14 +50,23 @@ def legal_action(env: CatanEnv) -> np.ndarray:
         action[2] = _first_true(masks["edge"])
     if t in (ActionType.MOVE_ROBBER, ActionType.PLAY_KNIGHT):
         action[3] = _first_true(masks["tile"])
-    if t in (ActionType.PLAY_YOP, ActionType.PLAY_MONOPOLY):
+    if t == ActionType.PLAY_YOP:
+        action[4] = _first_true(masks["resource1_yop"])
+    elif t == ActionType.PLAY_MONOPOLY:
         action[4] = _first_true(masks["resource1_default"])
     elif t == ActionType.BANK_TRADE:
         action[4] = _first_true(masks["resource1_trade"])
     elif t == ActionType.DISCARD:
         action[4] = _first_true(masks["resource1_discard"])
     if t in (ActionType.PLAY_YOP, ActionType.BANK_TRADE):
-        action[5] = _first_true(masks["resource2_default"])
+        if t == ActionType.BANK_TRADE:
+            action[5] = _first_true(masks["resource2_trade"])
+        else:
+            # D4: the doubled YoP pick needs bank >= 2, so index res1 reads
+            # ``resource2_yop_same`` (mirrors ``heads._resource2_mask``).
+            res2 = masks["resource2_yop"].copy()
+            res2[action[4]] = masks["resource2_yop_same"][action[4]]
+            action[5] = _first_true(res2)
     return action
 
 

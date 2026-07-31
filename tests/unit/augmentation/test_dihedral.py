@@ -84,7 +84,10 @@ def _make_masks(batch_size: int, seed: int = 2) -> dict[str, torch.Tensor]:
         "resource1_trade": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
         "resource1_discard": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
         "resource1_default": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
-        "resource2_default": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
+        "resource1_yop": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
+        "resource2_yop": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
+        "resource2_yop_same": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
+        "resource2_trade": torch.from_numpy(rng.integers(0, 2, (batch_size, 5)).astype(bool)),
     }
 
 
@@ -165,7 +168,10 @@ def test_action_legal_under_mask_stays_legal_after_aug(g: int) -> None:
         "resource1_trade": torch.ones((4, 5), dtype=torch.bool),
         "resource1_discard": torch.ones((4, 5), dtype=torch.bool),
         "resource1_default": torch.ones((4, 5), dtype=torch.bool),
-        "resource2_default": torch.ones((4, 5), dtype=torch.bool),
+        "resource1_yop": torch.ones((4, 5), dtype=torch.bool),
+        "resource2_yop": torch.ones((4, 5), dtype=torch.bool),
+        "resource2_yop_same": torch.ones((4, 5), dtype=torch.bool),
+        "resource2_trade": torch.ones((4, 5), dtype=torch.bool),
     }
     # Row 0: BuildSettlement at corner 17. Row 1: BuildRoad at edge 33.
     # Row 2: MoveRobber at tile 7. Row 3: BuildCity at corner 42.
@@ -225,7 +231,10 @@ def test_non_spatial_masks_unchanged(g: int) -> None:
         "resource1_trade",
         "resource1_discard",
         "resource1_default",
-        "resource2_default",
+        "resource1_yop",
+        "resource2_yop",
+        "resource2_yop_same",
+        "resource2_trade",
     ):
         assert torch.equal(new_masks[key], masks[key])
 

@@ -230,7 +230,10 @@ def _equivariance_loss(
             "resource1_trade": torch.ones((b, 5), dtype=torch.bool),
             "resource1_discard": torch.ones((b, 5), dtype=torch.bool),
             "resource1_default": torch.ones((b, 5), dtype=torch.bool),
-            "resource2_default": torch.ones((b, 5), dtype=torch.bool),
+            "resource1_yop": torch.ones((b, 5), dtype=torch.bool),
+            "resource2_yop": torch.ones((b, 5), dtype=torch.bool),
+            "resource2_yop_same": torch.ones((b, 5), dtype=torch.bool),
+            "resource2_trade": torch.ones((b, 5), dtype=torch.bool),
         }
 
         per_head: dict[str, list[float]] = {h: [] for h in head_keys}

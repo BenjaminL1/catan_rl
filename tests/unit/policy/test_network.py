@@ -88,7 +88,10 @@ def _make_masks(batch_size: int, force_type: int | None = None) -> dict[str, tor
         "resource1_trade": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
         "resource1_discard": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
         "resource1_default": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
-        "resource2_default": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
+        "resource1_yop": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
+        "resource2_yop": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
+        "resource2_yop_same": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
+        "resource2_trade": torch.ones(batch_size, N_RESOURCES, dtype=torch.bool),
     }
     if force_type is not None:
         masks["type"] = torch.zeros(batch_size, 13, dtype=torch.bool)

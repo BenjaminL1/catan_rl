@@ -42,18 +42,40 @@ it's to be a non-uniform prior that piKL can leash and PPO can build on.
 | Storage format | Sharded NPZ (~320 MB / shard), one shard per 2.5k games | Parallelizes generation. NB: `np.savez_compressed` archives are **NOT** mmap-able (`np.load(mmap_mode=...)` is silently ignored for `.npz`, and reading any member decompresses the whole ~5.5 GB array). The loader therefore chunk-streams bounded row-ranges into a small LRU rather than mmapping — see `src/catan_rl/bc/loader.py`. |
 | Compute target | **≤ 1 hour on M1 Pro**, 8-way concurrent rollouts | 17k env-steps/sec measured in Step 1 random-vs-random; heuristic adds ~2× per-step cost. 30k games × ~50 actions = 1.5M env-steps. Target wall-clock ~30 min single-process, less with parallelism. |
 
-**Filter at write time**: drop (s, a) pairs where `mask_sum(type) == 1` — i.e., the
-state had only one legal action type. Forced moves contribute zero gradient and
-inflate accuracy metrics (unanimous panel vote on D4).
+**Filter at write time**: drop (s, a) pairs that are forced per
+`policy/obs_schema.is_forced_decision` — *every* head contributing to the joint
+log-prob must be a singleton, not the type head alone (spec
+`bc-coverage-and-bank-legality` D1; the type-head-only version deleted 100% of
+setup placements and every robber placement). Forced moves contribute zero
+gradient and inflate accuracy metrics (unanimous panel vote on D4).
+
+**Corpus versioning (D5)**: the filter runs at WRITE time only — `bc/loader.py`
+never re-evaluates `forced`, so a corpus written under an older predicate is
+silently missing whole decision classes and the arrays cannot reveal it.
+`generate_dataset` therefore stamps `forced_rule_version` / `ruleset_version`
+(`policy/obs_schema.FORCED_RULE_VERSION` / `RULESET_VERSION`) into
+`manifest.json`, and `bc.loader.load_manifest` raises `StaleCorpusError` on an
+unstamped or stale directory. Corpora generated before this ships must be
+**regenerated**, not loosened past the check.
 
 Record per-pair:
 - The full obs dict (per `obs_schema.py`).
 - The 6-head action `[type, corner, edge, tile, res1, res2]`.
-- The 9-key mask dict.
+- The mask dict (12 keys since spec `bc-coverage-and-bank-legality` D4 split `resource1_default` and `resource2_default` for the finite bank).
 - The opponent's true dev-card type counts at this state (for the belief target).
 - The terminal outcome `z ∈ {−1, +1}` and discounted return `γ^(T−t) · z` (for
   the BC value loss — see §3.2).
 - Game id + step index (for debugging / per-game stratification).
+
+> **Teacher discontinuity (spec `bc-coverage-and-bank-legality` D2, 2026-07).**
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). The heuristic is also the standing
+> measurement rod, so every "WR vs heuristic" threshold below now denotes a
+> HARDER bar than it did when it was written, and every banked number in the
+> v8 lineage was measured against the WEAKER teacher. Do not compare a
+> post-D2 WR-vs-heuristic against a pre-D2 one; re-measure the baseline before
+> reading any gate as pass/fail.
 
 ---
 
@@ -387,3 +409,11 @@ tests/
 - D7+D8 aux heads ON (Cicero): "free supervision is malpractice to leave on the floor."
 - D9 drop symmetry aug (Catanatron): outvoted but the inconsistent-labels risk drove the "transform both state and action" implementation requirement.
 - D4 skip forced moves (M1 Pro): "zero gradient signal, inflates accuracy by 10-20pts."
+  **Amended (spec `bc-coverage-and-bank-legality` D1):** "forced" is now
+  relevance-aware (`policy/obs_schema.is_forced_decision`) — every head that
+  contributes to the joint log-prob must be a singleton. The original
+  type-head-only implementation deleted 100% of setup placements and every
+  robber placement at write time. DISCARD decisions are excluded separately
+  (they are never recorded): the recorder has no per-card intercept, so every
+  such row would carry a fabricated WOOD label from a teacher that discards
+  uniformly at random. Discard is learned by self-play instead.

@@ -299,7 +299,7 @@ def test_tracks_full_game_under_random_play() -> None:
         action = np.zeros(6, dtype=np.int64)
         action[0] = t
         for head_idx, key in enumerate(
-            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_default"),
+            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_yop"),
             start=1,
         ):
             # Pick a legal value if the head has any; else 0 (irrelevant
@@ -310,6 +310,10 @@ def test_tracks_full_game_under_random_play() -> None:
                 key = "resource1_discard"
             elif key == "resource1_default" and t == 10:
                 key = "resource1_trade"
+            elif key == "resource1_default" and t == 7:
+                key = "resource1_yop"
+            if key == "resource2_yop" and t == 10:
+                key = "resource2_trade"
             legal = np.flatnonzero(masks[key])
             if legal.size:
                 action[head_idx] = int(rng.choice(legal))

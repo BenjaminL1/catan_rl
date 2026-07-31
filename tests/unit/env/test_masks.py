@@ -50,7 +50,8 @@ def test_mask_shapes() -> None:
     assert masks["resource1_trade"].shape == (N_RESOURCES,)
     assert masks["resource1_discard"].shape == (N_RESOURCES,)
     assert masks["resource1_default"].shape == (N_RESOURCES,)
-    assert masks["resource2_default"].shape == (N_RESOURCES,)
+    assert masks["resource2_yop"].shape == (N_RESOURCES,)
+    assert masks["resource2_trade"].shape == (N_RESOURCES,)
     for v in masks.values():
         assert v.dtype == bool
 

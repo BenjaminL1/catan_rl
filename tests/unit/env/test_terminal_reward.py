@@ -33,9 +33,12 @@ def _first_legal_action(masks: dict[str, np.ndarray]) -> np.ndarray:
             t = preferred
             break
     corner = first("corner_city") if t == 1 else first("corner_settlement")
-    res1_key = {10: "resource1_trade", 11: "resource1_discard"}.get(t, "resource1_default")
+    res1_key = {7: "resource1_yop", 10: "resource1_trade", 11: "resource1_discard"}.get(
+        t, "resource1_default"
+    )
+    res2_key = "resource2_trade" if t == 10 else "resource2_yop"
     return np.array(
-        [t, corner, first("edge"), first("tile"), first(res1_key), first("resource2_default")],
+        [t, corner, first("edge"), first("tile"), first(res1_key), first(res2_key)],
         dtype=np.int64,
     )
 

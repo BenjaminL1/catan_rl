@@ -34,7 +34,7 @@ def test_step_obs_matches_observation_space_for_50_steps() -> None:
         action = np.zeros(6, dtype=np.int64)
         action[0] = t
         for head_idx, key in enumerate(
-            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_default"),
+            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_yop"),
             start=1,
         ):
             if key == "corner_settlement" and t == 1:
@@ -43,6 +43,10 @@ def test_step_obs_matches_observation_space_for_50_steps() -> None:
                 key = "resource1_discard"
             elif key == "resource1_default" and t == 10:
                 key = "resource1_trade"
+            elif key == "resource1_default" and t == 7:
+                key = "resource1_yop"
+            if key == "resource2_yop" and t == 10:
+                key = "resource2_trade"
             legal = np.flatnonzero(masks[key])
             if legal.size:
                 action[head_idx] = int(rng.choice(legal))
@@ -71,7 +75,7 @@ def test_obs_hand_tracker_matches_engine_after_many_steps() -> None:
         action = np.zeros(6, dtype=np.int64)
         action[0] = t
         for head_idx, key in enumerate(
-            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_default"),
+            ("corner_settlement", "edge", "tile", "resource1_default", "resource2_yop"),
             start=1,
         ):
             if key == "corner_settlement" and t == 1:
@@ -80,6 +84,10 @@ def test_obs_hand_tracker_matches_engine_after_many_steps() -> None:
                 key = "resource1_discard"
             elif key == "resource1_default" and t == 10:
                 key = "resource1_trade"
+            elif key == "resource1_default" and t == 7:
+                key = "resource1_yop"
+            if key == "resource2_yop" and t == 10:
+                key = "resource2_trade"
             legal = np.flatnonzero(masks[key])
             if legal.size:
                 action[head_idx] = int(rng.choice(legal))

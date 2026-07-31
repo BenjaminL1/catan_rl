@@ -49,7 +49,30 @@ from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
 if TYPE_CHECKING:
     from catan_rl.policy.obs_encoder import EnvObsState
 
-__all__ = ["CrossArchEnv", "build_legacy_opponent", "cross_arch_h2h"]
+__all__ = ["CrossArchEnv", "build_legacy_opponent", "cross_arch_h2h", "to_legacy_masks"]
+
+
+def to_legacy_masks(masks: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a LIVE mask dict for the byte-pinned vendored legacy heads.
+
+    The action space is unchanged across the fork, but D4 moved two mask keys:
+    ``resource2_default`` split into a bank-gated ``resource2_trade`` /
+    ``resource2_yop`` / ``resource2_yop_same`` family, and the YoP first pick
+    split off ``resource1_default`` into ``resource1_yop``. The vendored legacy
+    heads are byte-identical to the pre-fork commit (a provenance test enforces
+    that) and still read the old keys, so both are reconstituted here as the
+    union — each legacy key was set whenever EITHER action sharing it was
+    legal. The legacy head then applies its own ``r2 != r1`` BankTrade rule
+    exactly as before; it stays bank-blind on YoP, which is intended (it is the
+    pinned pre-fork OPPONENT, not a legality reference).
+    """
+    if "resource2_default" in masks:
+        return masks
+    out = dict(masks)
+    out["resource2_default"] = masks["resource2_yop"] | masks["resource2_trade"]
+    out["resource1_default"] = masks["resource1_default"] | masks["resource1_yop"]
+    return out
+
 
 OpponentArch = Literal["legacy", "new"]
 
@@ -174,9 +197,9 @@ class CrossArchEnv(CatanEnv):
             self._legacy_obs_encoder = LegacyObsEncoder(board)
             self._legacy_encoder_board = board
 
-        # Masks are schema-independent (the action space + mask keys are
-        # unchanged across the fork) — the parent's live masks feed v11 as-is.
-        masks = self._compute_masks(self.opponent_player, env_state)
+        # Masks are schema-independent (the action space is unchanged across the
+        # fork); ``to_legacy_masks`` reconstitutes the one key D4 split.
+        masks = to_legacy_masks(self._compute_masks(self.opponent_player, env_state))
         # Opponent-POV LEGACY obs from the SAME shared game state (opponent sees
         # its own hand; the agent contributes only observable info — identical
         # POV contract to the parent's ``_build_obs_for``).

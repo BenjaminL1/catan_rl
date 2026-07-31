@@ -72,7 +72,10 @@ def _synth_batch(b: int, type_for_row: list[int]) -> dict:
         "resource1_trade": torch.ones((b, N_RESOURCES), dtype=torch.bool),
         "resource1_discard": torch.ones((b, N_RESOURCES), dtype=torch.bool),
         "resource1_default": torch.ones((b, N_RESOURCES), dtype=torch.bool),
-        "resource2_default": torch.ones((b, N_RESOURCES), dtype=torch.bool),
+        "resource1_yop": torch.ones((b, N_RESOURCES), dtype=torch.bool),
+        "resource2_yop": torch.ones((b, N_RESOURCES), dtype=torch.bool),
+        "resource2_yop_same": torch.ones((b, N_RESOURCES), dtype=torch.bool),
+        "resource2_trade": torch.ones((b, N_RESOURCES), dtype=torch.bool),
     }
     belief = torch.full((b, N_DEV_TYPES), 1.0 / N_DEV_TYPES, dtype=torch.float32)
     z_disc = torch.zeros(b, dtype=torch.float32)

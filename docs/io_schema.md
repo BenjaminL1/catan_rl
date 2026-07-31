@@ -31,7 +31,7 @@ Every key is always present (no opt-in/legacy keys). Dims come from
 | Key | Shape | Dtype | Notes |
 |---|---|---|---|
 | `tile_representations` | `(19, 79)` | `float32` | per-tile features (`TILE_DIM=79`); breakdown below |
-| `current_player_main` | `(67,)` | `float32` | agent scalars (`CURR_PLAYER_DIM=67` = 54 legacy base + 5 own-extras (hand-total, discard-pressure, own played YoP/Mono/RB) + 8 reserved strict-0.0 slots) |
+| `current_player_main` | `(67,)` | `float32` | agent scalars (`CURR_PLAYER_DIM=67` = 54 legacy base + 6 own-extras (hand-total, discard-pressure, own played YoP/Mono/RB, remaining-owed discard count `min(1, n/8)`) + 7 reserved strict-0.0 slots (`CURR_RESERVED_SLOTS`)). The 6th extra consumed one reserved slot, so the total is unchanged and no checkpoint forks; `RESERVED_PLAYER_SLOTS` stays 8 because it also feeds `next_player_main`. |
 | `next_player_main` | `(69,)` | `float32` | opponent scalars (`NEXT_PLAYER_DIM=69` = 54 legacy base + 7 opp-extras (6-bin hidden-count one-hot + total-res scalar) + 8 reserved strict-0.0 slots) |
 | `global_features` | `(14,)` | `float32` | Shared block outside the POV player pair (`GLOBAL_DIM=14` = 5 finite-bank-remaining + 5 public-reveal-derived dev-deck-remaining + 4 reserved). The bank subvector is seat-invariant; the dev-deck subvector is each seat's honest per-POV view of the unseen pool and **differs across seats by design** (the seat-swap pin asserts only the bank subvector). pointer-arch fork D3.3 |
 | `is_setup` | `(1,)` | `float32` | snake-draft-setup flag, threaded to the corner pointer head's FiLM context (D2) |
@@ -125,7 +125,7 @@ hard-disabled; `BankTrade` is the only trade ([ADR 0001](decisions/0001-1v1-rule
 
 ### Action masks
 
-`CatanEnv.get_action_masks()` returns these 9 bool tensors (`MASK_KEYS`):
+`CatanEnv.get_action_masks()` returns these 12 bool tensors (`MASK_KEYS`):
 
 | Key | Shape | Notes |
 |---|---|---|
@@ -136,11 +136,27 @@ hard-disabled; `BankTrade` is the only trade ([ADR 0001](decisions/0001-1v1-rule
 | `tile` | `(19,)` | valid robber hexes (post Friendly-Robber filter) |
 | `resource1_trade` | `(5,)` | resources you hold enough of to bank-trade |
 | `resource1_discard` | `(5,)` | resources you hold `> 0` of |
-| `resource1_default` | `(5,)` | YoP / Monopoly (any resource) |
-| `resource2_default` | `(5,)` | YoP-2nd, BankTrade-receive |
+| `resource1_default` | `(5,)` | Monopoly (any resource — Monopoly is bank-independent) |
+| `resource1_yop` | `(5,)` | YoP-1st — a bank-supplyable first pick that leaves a legal partner |
+| `resource2_yop` | `(5,)` | YoP-2nd, DIFFERENT from the first pick (`bank[r] >= 1`) |
+| `resource2_yop_same` | `(5,)` | YoP-2nd, DOUBLING the first pick (`bank[r] >= 2`) |
+| `resource2_trade` | `(5,)` | BankTrade-receive — gated on finite-bank supply (`bank[r] >= 1`) |
 
 For `BankTrade`, the `resource2` mask additionally forbids `r2 == r1` (the
-engine would otherwise accept a strictly-losing same-resource trade).
+engine would otherwise accept a strictly-losing same-resource trade). For
+`PLAY_YOP` the `resource2` mask swaps `resource2_yop_same` in at index `r1`,
+since doubling a pick draws two of that resource from the bank.
+
+The single `resource1_default` / `resource2_default` keys were split so the
+finite bank (spec 009) can gate each action independently. `PLAY_YOP` is legal
+for a pair `(first, second)` iff `bank[first] >= 2` when `first == second`,
+else `bank[first] >= 1` and `bank[second] >= 1`; `BankTrade` needs
+`bank[r2] >= 1` with `r2 != r1`. `player.trade_with_bank` early-returns on a
+bank-empty receive leaving state byte-identical, which a stable-argmax policy
+re-picks forever. The gate is at the LEGALITY layer, not an apply-time no-op —
+the no-op is what creates the fixed point. When no legal `(give, receive)` pair
+remains, `type[BANK_TRADE]` is withheld; when no legal YoP pair remains,
+`type[PLAY_YOP]` is withheld.
 
 ### Autoregressive structure
 

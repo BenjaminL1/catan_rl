@@ -23,6 +23,11 @@ import numpy as np
 from catan_rl.bc.dataset import _DecisionRecord, _flatten_records, _GameRecord
 from catan_rl.expert_iteration.config import SearchLabelConfig
 from catan_rl.policy.obs_encoder import hidden_belief_target
+from catan_rl.policy.obs_schema import (
+    FORCED_RULE_VERSION,
+    RULESET_VERSION,
+    is_forced_decision,
+)
 
 
 def _phase(env: Any) -> str:
@@ -58,7 +63,11 @@ def _play_one_label_game(
                 action=np.asarray(action, dtype=np.int64),
                 mask=masks,
                 belief_target=hidden_belief_target(env.opponent_player),
-                forced=bool(int(masks["type"].sum()) <= 1),
+                # Shared relevance-aware predicate (D1) — the same one the BC
+                # writer uses. The old type-head-only rule also drove
+                # ``total_nonforced`` below, so it under-counted every setup /
+                # robber label and over-ran the position target.
+                forced=is_forced_decision(masks),
                 phase=_phase(env),
                 player_seat=agent_seat,
                 step_idx=len(decisions),
@@ -169,6 +178,10 @@ def generate_search_labels(cfg: SearchLabelConfig) -> dict[str, Any]:
                 "game_ids": [g.game_id for g in games],
             }
         ],
+        # D5: the ExIt labeler writes a BcDataset-shaped corpus, so it carries
+        # the same write-time-rule stamps the loader enforces.
+        "forced_rule_version": FORCED_RULE_VERSION,
+        "ruleset_version": RULESET_VERSION,
         "n_pairs_total": n_pairs,
         "n_games": len(games),
         "source": "search-labeled (expert iteration)",

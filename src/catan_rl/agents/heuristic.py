@@ -90,6 +90,9 @@ class heuristicAIPlayer(player):
 
     def move(self, board):
         # print("AI Player {} playing...".format(self.name))
+        # Play a development card first (D2) — a Knight can unblock a hex and a
+        # YoP/Monopoly can complete a build that the rest of this turn spends.
+        self.heuristic_play_dev_card(board)
         # Trade resources if there are excessive amounts of a particular resource
         self.trade()
         # Build a settlements, city and few roads
@@ -208,24 +211,260 @@ class heuristicAIPlayer(player):
 
         return
 
-    # def heuristic_play_dev_card(self, board):
-    #     '''Heuristic strategies to choose and play a dev card
-    #     args: board object
-    #     '''
-    #     #Check if player can play a devCard this turn
-    #     if self.devCardPlayedThisTurn != True:
-    #         #Get a list of all the unique dev cards this player can play
-    #         devCardsAvailable = []
-    #         for cardName, cardAmount in self.devCards.items():
-    #             if(cardName != 'VP' and cardAmount >= 1): #Exclude Victory points
-    #                 devCardsAvailable.append((cardName, cardAmount))
+    # ------------------------------------------------------------------
+    # Development-card policy (spec bc-coverage-and-bank-legality D2)
+    # ------------------------------------------------------------------
+    #
+    # This used to be a commented-out stub, which meant the practice
+    # opponent BOUGHT development cards and never PLAYED one: the BC corpus
+    # held ~50k BUY_DEV_CARD rows and ZERO plays, so action types 6/7/8/9
+    # (Knight / YoP / Monopoly / Road Builder) had never appeared as a
+    # positive example. No filter change can recover an action the teacher
+    # never took.
+    #
+    # The transitions below deliberately do NOT call ``player.play_devCard``:
+    # that engine method routes through ``game.boardView.get_dev_card_selection``
+    # (a GUI dependency) and the engine tree is pinned. They mirror the env's
+    # apply paths in ``env/catan_env.py`` exactly instead —
+    # ``devCardPlayedThisTurn = True`` BEFORE any grant (which is what keeps
+    # YoP livelock-free), every resource delta routed through
+    # ``board.bank_draw`` / ``bank_recirculate`` (spec-009 conservation), and
+    # the matching broadcast so ``BroadcastHandTracker`` stays in sync.
 
-    #         if(len(devCardsAvailable) >=1):
-    # If a hexTile is currently blocked, try and play a Knight
+    #: Build costs in ENGINE resource order/naming (not Charlesworth).
+    _BUILD_COSTS = {
+        "CITY": {"ORE": 3, "WHEAT": 2},
+        "SETTLEMENT": {"BRICK": 1, "WOOD": 1, "SHEEP": 1, "WHEAT": 1},
+        "DEVCARD": {"ORE": 1, "WHEAT": 1, "SHEEP": 1},
+        "ROAD": {"BRICK": 1, "WOOD": 1},
+    }
 
-    # If expansion needed, try road-builder
+    def _shortfall(self, cost):
+        """Resources still missing to afford ``cost`` (engine naming)."""
+        return {
+            r: n - self.resources.get(r, 0) for r, n in cost.items() if self.resources.get(r, 0) < n
+        }
 
-    # If resources needed, try monopoly or year of plenty
+    def _robber_hex_index(self, board):
+        for idx, hex_tile in board.hexTileDict.items():
+            if hex_tile.has_robber:
+                return idx
+        return None
+
+    def _robber_sits_on_own_hex(self, board):
+        idx = self._robber_hex_index(board)
+        if idx is None:
+            return False
+        for vertex in board.hexTileDict[idx].get_corners(board.flat):
+            if board.boardGraph[vertex].owner is self:
+                return True
+        return False
+
+    def _knight_is_useful(self, board):
+        """Play a Knight when the robber sits on one of our own hexes (it is
+        costing us production every roll) or when there is an opponent worth
+        robbing (blocking their best number)."""
+        if self.devCards.get("KNIGHT", 0) < 1 or self.devCardPlayedThisTurn:
+            return False
+        if self._robber_sits_on_own_hex(board):
+            return True
+        _hex_i, player_to_rob = self.choose_player_to_rob(board)
+        return player_to_rob is not None
+
+    def heuristic_play_knight(self, board):
+        """Play a Knight: consume the card, move the robber, re-check army."""
+        self.devCards["KNIGHT"] -= 1
+        self.knightsPlayed += 1
+        self.devCardPlayedThisTurn = True
+        self.heuristic_move_robber(board)
+        if getattr(self, "game", None) is not None:
+            self.game.check_largest_army(self)
+
+    def heuristic_pre_roll(self, board):
+        """Pre-roll dev-card window — Knight only.
+
+        Playing the Knight BEFORE the roll is strictly better than after when
+        the robber is blocking our own production: the block is lifted in time
+        for this turn's dice. Subsumes ``preroll-dev-cards-r1`` D6 on the
+        opponent side. Returns True if a card was played.
+
+        Scoped to the case where pre-roll is genuinely better than post-roll —
+        the robber sitting on OUR hex. A purely offensive Knight (denying the
+        opponent's best number) is left to the main phase, where it is also a
+        recordable decision for the BC corpus.
+        """
+        if (
+            self.devCards.get("KNIGHT", 0) >= 1
+            and not self.devCardPlayedThisTurn
+            and self._robber_sits_on_own_hex(board)
+        ):
+            self.heuristic_play_knight(board)
+            return True
+        return False
+
+    def _yop_picks(self, board):
+        """Two resources that would complete a build, or None.
+
+        Only picks the bank can actually supply are returned — a pick the bank
+        cannot honour is simply not granted, so asking for it wastes the card.
+        """
+        bank = board.resourceBank
+        for kind in ("CITY", "SETTLEMENT", "DEVCARD", "ROAD"):
+            missing = self._shortfall(self._BUILD_COSTS[kind])
+            needed = [r for r, n in missing.items() for _ in range(n)]
+            if not needed or len(needed) > 2:
+                continue
+            if len(needed) == 1:
+                # One card short: take the missing resource plus the scarcest
+                # resource of the next-most-expensive build we can see.
+                needed.append(needed[0])
+            first, second = needed[0], needed[1]
+            if first == second:
+                if bank.get(first, 0) >= 2:
+                    return first, second
+                # Bank cannot double up — fall back to a DIFFERENT second pick.
+                # Excluding ``first`` is load-bearing: without it the generator
+                # re-selects the very resource this branch exists to reject and
+                # returns the (first, first) pair the bank cannot honour, so the
+                # card grants one card and the BC row teaches a wasteful play.
+                if bank.get(first, 0) < 1:
+                    continue
+                second = next(
+                    (
+                        r
+                        for r in ("ORE", "WHEAT", "BRICK", "WOOD", "SHEEP")
+                        if r != first and bank.get(r, 0) >= 1
+                    ),
+                    None,
+                )
+                if second is None:
+                    continue
+                return first, second
+            if bank.get(first, 0) >= 1 and bank.get(second, 0) >= 1:
+                return first, second
+        return None
+
+    def heuristic_play_year_of_plenty(self, board, r1, r2):
+        """Play Year of Plenty for ``r1`` + ``r2`` (engine resource names)."""
+        self.devCards["YEAROFPLENTY"] -= 1
+        self.yopPlayed += 1
+        # Mirrors env/catan_env.py: the flag is set BEFORE the grant so a
+        # bank-starved YoP still consumes the card (no fixed point).
+        self.devCardPlayedThisTurn = True
+        granted = []
+        for r in (r1, r2):
+            if board.resourceBank.get(r, 0) > 0:
+                self.resources[r] += 1
+                board.bank_draw({r: 1})
+                granted.append(r)
+        if getattr(self, "game", None) is not None:
+            self.game.log_yop(self, granted)
+
+    def _monopoly_pick(self):
+        """Resource to monopolise, or None when the steal is not worth a card.
+
+        Worth it when it completes a build, or when it nets >= 3 cards.
+        """
+        game = getattr(self, "game", None)
+        if game is None:
+            return None
+        holdings = {}
+        for other in list(game.playerQueue.queue):
+            if other is self:
+                continue
+            for r, n in other.resources.items():
+                holdings[r] = holdings.get(r, 0) + n
+        if not holdings:
+            return None
+        wanted = {}
+        for kind in ("CITY", "SETTLEMENT", "DEVCARD", "ROAD"):
+            for r, n in self._shortfall(self._BUILD_COSTS[kind]).items():
+                wanted[r] = max(wanted.get(r, 0), n)
+        best, best_gain = None, 0
+        for r, gain in holdings.items():
+            completes = gain >= wanted.get(r, 10**6)
+            if gain >= 3 or completes:
+                if gain > best_gain:
+                    best, best_gain = r, gain
+        return best
+
+    def heuristic_play_monopoly(self, board, resource):
+        """Play Monopoly on ``resource`` (engine resource name)."""
+        del board  # monopoly moves cards between hands; the bank is untouched
+        self.devCards["MONOPOLY"] -= 1
+        self.monopolyPlayed += 1
+        self.devCardPlayedThisTurn = True
+        game = self.game
+        total_stolen = 0
+        for other in list(game.playerQueue.queue):
+            if other is self:
+                continue
+            stolen = other.resources.get(resource, 0)
+            if stolen > 0:
+                other.resources[resource] = 0
+                self.resources[resource] += stolen
+                total_stolen += stolen
+                game.broadcast.resource_change(other.name, {resource: -stolen}, "MONOPOLY")
+                game.broadcast.resource_change(self.name, {resource: +stolen}, "MONOPOLY")
+        game.broadcast.monopoly(self.name, resource, total_stolen)
+
+    def _road_builder_is_useful(self, board):
+        """Road Builder pays off when two free roads can actually extend our
+        network (and therefore our longest road)."""
+        if self.roadsLeft < 1:
+            return False
+        return bool(board.get_potential_roads(self))
+
+    def heuristic_play_road_builder(self, board):
+        """Play Road Builder: two free roads, then recompute longest road."""
+        self.devCards["ROADBUILDER"] -= 1
+        self.roadBuilderPlayed += 1
+        self.devCardPlayedThisTurn = True
+        for _ in range(2):
+            possibleRoads = board.get_potential_roads(self)
+            if not possibleRoads or self.roadsLeft < 1:
+                break
+            edges = list(possibleRoads.keys())
+            chosen = edges[np.random.randint(0, len(edges))]
+            self.build_road(chosen[0], chosen[1], board, is_free=True)
+        if getattr(self, "game", None) is not None:
+            self.game.check_longest_road(self)
+
+    def heuristic_play_dev_card(self, board):
+        """Choose and play at most one development card this turn.
+
+        Priority: unblock our own production (Knight) > complete a build
+        (Year of Plenty, then Monopoly) > expand (Road Builder) > deny the
+        opponent (Knight). Returns True if a card was played.
+        """
+        if self.devCardPlayedThisTurn:
+            return False
+
+        if self.devCards.get("KNIGHT", 0) >= 1 and self._robber_sits_on_own_hex(board):
+            self.heuristic_play_knight(board)
+            return True
+
+        if self.devCards.get("YEAROFPLENTY", 0) >= 1:
+            picks = self._yop_picks(board)
+            if picks is not None:
+                self.heuristic_play_year_of_plenty(board, picks[0], picks[1])
+                return True
+
+        if self.devCards.get("MONOPOLY", 0) >= 1:
+            resource = self._monopoly_pick()
+            if resource is not None:
+                self.heuristic_play_monopoly(board, resource)
+                return True
+
+        if self.devCards.get("ROADBUILDER", 0) >= 1 and self._road_builder_is_useful(board):
+            self.heuristic_play_road_builder(board)
+            return True
+
+        if self._knight_is_useful(board):
+            self.heuristic_play_knight(board)
+            return True
+
+        return False
 
     def resources_needed_for_settlement(self):
         """Function to return the resources needed for a settlement

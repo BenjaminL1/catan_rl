@@ -418,6 +418,17 @@ Compound gate, all four must pass with **N ≥ 3 seeds** (per faculty-corrected 
 
 Symmetrised WR ≥ **0.90** vs heuristic, 200 games per seat × N=3 seeds (1200 total per seed). Reported with P1-seat / P2-seat / symmetrised columns. Bootstrap CI 99% must clear 0.90 from below.
 
+> **Teacher discontinuity (spec `bc-coverage-and-bank-legality` D2, 2026-07).**
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). The heuristic is also the standing
+> measurement rod, so every "WR vs heuristic" threshold below now denotes a
+> HARDER bar than it did when it was written, and every banked number in the
+> v8 lineage was measured against the WEAKER teacher. Do not compare a
+> post-D2 WR-vs-heuristic against a pre-D2 one; re-measure the baseline before
+> reading any gate as pass/fail.
+
+
 ### Gate 2 — MCTS-vs-policy-alone (MCTS earns its cost)
 
 WR ≥ **0.55** vs the Step-4 policy-alone baseline, head-to-head, 200 games per seat × N=3 seeds. Bootstrap CI must clear 0.55 from below. This is the **load-bearing claim** of Phase B; if it fails, Phase B is not shipped.

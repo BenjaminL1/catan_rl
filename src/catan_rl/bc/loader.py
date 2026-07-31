@@ -45,7 +45,7 @@ Each item from ``__getitem__`` is a dict::
     {
         "obs":   dict[str, Tensor],   # v2 obs schema
         "action": Tensor (6,) int64,
-        "mask":   dict[str, Tensor],  # bool, 9 keys
+        "mask":   dict[str, Tensor],  # bool, 12 keys
         "belief_target": Tensor (5,) float32,
         "z_disc":        Tensor scalar float32,
     }
@@ -76,6 +76,7 @@ from numpy.lib import format as _npformat
 from torch.utils.data import Dataset, Sampler
 
 from catan_rl.augmentation import apply_symmetry, sample_d6_element
+from catan_rl.policy.obs_schema import FORCED_RULE_VERSION, MASK_KEYS, RULESET_VERSION
 
 # ---------------------------------------------------------------------------
 # Obs / mask member keys
@@ -94,17 +95,49 @@ _OBS_KEYS_FLOAT: tuple[str, ...] = (
     "is_setup",
 )
 _OBS_KEYS_INT: tuple[str, ...] = ("opponent_kind", "opponent_policy_id")
-_MASK_KEYS: tuple[str, ...] = (
-    "type",
-    "corner_settlement",
-    "corner_city",
-    "edge",
-    "tile",
-    "resource1_trade",
-    "resource1_discard",
-    "resource1_default",
-    "resource2_default",
-)
+_MASK_KEYS: tuple[str, ...] = MASK_KEYS
+
+
+class StaleCorpusError(RuntimeError):
+    """Raised when a BC corpus was written under a superseded write-time rule.
+
+    The ``forced`` filter is applied at WRITE time (``bc.dataset``) and is never
+    re-evaluated by this loader, so a shard generated under an older predicate
+    is silently missing whole decision classes (setup, robber). There is no way
+    to detect that from the arrays — hence the manifest stamp (D5).
+    """
+
+
+def load_manifest(data_dir: Path) -> dict[str, Any]:
+    """Read + version-check ``manifest.json`` in ``data_dir``.
+
+    Refuses an UNSTAMPED manifest (written before D5) and a STALE one (written
+    under an older ``forced``-rule / ruleset revision). Regenerate the corpus
+    with the current :mod:`catan_rl.bc.dataset` instead of loosening this.
+    """
+    manifest_path = Path(data_dir) / "manifest.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Missing manifest.json in {data_dir}")
+    manifest: dict[str, Any] = json.loads(manifest_path.read_text())
+
+    for key, current in (
+        ("forced_rule_version", FORCED_RULE_VERSION),
+        ("ruleset_version", RULESET_VERSION),
+    ):
+        stamped = manifest.get(key)
+        if stamped is None:
+            raise StaleCorpusError(
+                f"BC corpus at {data_dir} has no '{key}' stamp — it predates the "
+                f"relevance-aware forced filter and is missing every setup/robber "
+                f"decision. Regenerate it (catan_rl.bc.dataset.generate_dataset)."
+            )
+        if int(stamped) != current:
+            raise StaleCorpusError(
+                f"BC corpus at {data_dir} was written with {key}={stamped}, "
+                f"but this tree expects {current}. Regenerate the corpus."
+            )
+    return manifest
+
 
 # Members materialised per chunk (everything ``__getitem__`` reads). ``game_id``
 # is read separately at construction time; ``phase`` / ``step_idx`` /
@@ -284,10 +317,7 @@ class BcDataset(Dataset):
     ) -> None:
         super().__init__()
         data_dir = Path(data_dir)
-        manifest_path = data_dir / "manifest.json"
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"Missing manifest.json in {data_dir}")
-        manifest = json.loads(manifest_path.read_text())
+        manifest = load_manifest(data_dir)
 
         paths: list[Path] = []
         n_pairs: list[int] = []
@@ -387,7 +417,7 @@ class BcDataset(Dataset):
         if not 0.0 < val_pct < 1.0:
             raise ValueError(f"val_pct must be in (0, 1), got {val_pct}")
         data_dir = Path(data_dir)
-        manifest = json.loads((data_dir / "manifest.json").read_text())
+        manifest = load_manifest(data_dir)
         all_game_ids: list[int] = []
         for s in manifest["shards"]:
             all_game_ids.extend(int(g) for g in s["game_ids"])
