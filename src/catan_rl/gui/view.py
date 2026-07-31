@@ -728,6 +728,18 @@ class catanGameView:
         Displays a resource selection menu and handles user interaction.
         mode: 'DISCARD', 'YOP', 'MONOPOLY', 'BANK'
         num_to_select: Number of resources to select (for DISCARD/YOP)
+
+        This method MUTATES ``player.resources`` directly, so it must also move
+        the finite resource bank (spec 009) or the
+        ``bank[R] + sum(hands[R]) == 19`` invariant breaks:
+          * 'DISCARD' -> ``bank_recirculate`` per card discarded;
+          * 'YOP' -> ``bank_draw`` per card granted, gated on
+            ``bank_can_supply`` (an unsuppliable swatch is greyed and its click
+            does not register), and ``bank_recirculate`` for every pick already
+            made if the player cancels;
+          * 'MONOPOLY' / 'BANK' return a choice without granting anything here,
+            so the caller (``player.play_devCard`` / ``initiate_trade``) owns
+            the bank move.
         """
         resources = ["BRICK", "ORE", "SHEEP", "WHEAT", "WOOD"]
 

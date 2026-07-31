@@ -110,7 +110,9 @@ def _v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     """v1 → v2: a pure version bump.
 
     v2 added ``ReplayStep.policy_internals`` and the ``Metadata``
-    provenance flags, all of which default to empty/``False`` in
+    provenance fields (``mode``/``sims``/``clairvoyant``/``reveal_bot``
+    and the ``git_sha``/``ckpt_sha256`` attribution pair), all of which
+    default to empty/``False``/``None`` in
     :mod:`catan_rl.replay.schema` and are read with ``.get`` defaults in
     :mod:`catan_rl.replay.io`. A v1 payload is therefore already a valid
     v2 payload — the only thing to change is the stamped version."""

@@ -564,9 +564,13 @@ class Metadata:
 
     total_steps: int
     partial: bool
-    """``True`` if the recorder bailed out mid-game (e.g., crash).
-    Currently always ``False`` because the recorder writes only at
-    end-of-game; reserved for a future incremental-write mode."""
+    """``True`` if the game did NOT play out to a terminal state — the
+    driver's loop was cut short (window close, ``KeyboardInterrupt``,
+    crash) and the record was salvaged anyway. Set by
+    ``scripts/play_vs_model.py``; a ``partial`` record is a valid trace
+    of the steps it contains but is NOT a valid outcome/strength read.
+    The batch recorder writes only at end-of-game, so its records are
+    always ``False``."""
 
     mode: str = "raw_policy"
     """v2. ``"raw_policy"`` or ``"search"`` — how the policy seat chose

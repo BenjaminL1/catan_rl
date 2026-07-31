@@ -710,6 +710,36 @@ class TestNoPreRollWindow:
         assert "_human_pre_roll" not in src, "the pre-roll window (or a call to it) survives"
         assert "[PRE-ROLL]" not in src
 
+    def test_the_auto_played_human_seat_never_pre_rolls(self) -> None:
+        """The seat the bot's SEARCH models must match the seat at the keyboard.
+
+        The GUI branch has no pre-roll window, but the headless branch delegates
+        to the base env, which plays ``heuristic_pre_roll`` for the opponent
+        whenever no snapshot drives it — i.e. every MCTS clone rollout and every
+        ``--self-test`` game. Left alone the bot plans against a human who can
+        pre-roll a Knight, which is the asymmetry D3 removed."""
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        assert not env._use_gui()
+        calls = [0]
+        real = type(env.opponent_player).heuristic_pre_roll
+
+        def counting(self, board):  # type: ignore[no-untyped-def]
+            calls[0] += 1
+            return real(self, board)
+
+        type(env.opponent_player).heuristic_pre_roll = counting
+        try:
+            for _ in range(400):
+                _o, _r, term, trunc, _i = env.step(_first_legal_action(env))
+                if term or trunc:
+                    break
+        finally:
+            type(env.opponent_player).heuristic_pre_roll = real
+        assert calls[0] == 0, f"{calls[0]} pre-roll windows on the human seat"
+
     def test_the_record_marks_the_game_post_roll_only(self) -> None:
         assert '"preroll": False' in _SCRIPT.read_text(encoding="utf-8")
 
@@ -864,9 +894,14 @@ class TestCrashSafeArtifacts:
     ``SystemExit`` is the realistic interruption AND a ``BaseException``, so it
     is what is injected here — an ``except Exception`` would let it through and
     this pin would go red, which is the point.
+
+    Those quit paths call ``pygame.quit()`` BEFORE ``sys.exit(0)``, so the
+    ``tear_down_pygame`` variant is the load-bearing one: catching the
+    ``SystemExit`` is not enough if anything drawn afterwards raises on the dead
+    display and takes the two writes with it.
     """
 
-    def _run(self, tmp_path, monkeypatch, *, exc, ckpt="unused"):  # type: ignore[no-untyped-def]
+    def _run(self, tmp_path, monkeypatch, *, exc, ckpt="unused", tear_down_pygame=False):  # type: ignore[no-untyped-def]
         import json
 
         pytest.importorskip("torch")
@@ -892,6 +927,13 @@ class TestCrashSafeArtifacts:
             def step(self, action):  # type: ignore[no-untyped-def]
                 n[0] += 1
                 if n[0] > 3:
+                    if tear_down_pygame:
+                        # The REAL window-close path: every GUI quit handler
+                        # calls pygame.quit() and THEN sys.exit(0), so anything
+                        # drawn after the salvage catch hits a dead display.
+                        import pygame
+
+                        pygame.quit()
                     raise exc
                 return base_step(self, action)
 
@@ -928,6 +970,31 @@ class TestCrashSafeArtifacts:
         assert record["partial"] is True
         assert replay["metadata"]["partial"] is True
         assert record["winner"] is None
+
+    def test_a_real_window_close_still_writes_both_artifacts(
+        self,
+        tmp_path,
+        monkeypatch,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """The scenario the salvage exists for: ``pygame.quit()`` then ``sys.exit(0)``.
+
+        A bare ``SystemExit`` never touches pygame, so it passes even on a tree
+        where the post-loop ``displayGameScreen()`` raises
+        ``pygame.error: display Surface quit`` and takes BOTH writes with it.
+        This variant tears the display down first, exactly like
+        ``_human_interactive_main_turn``'s QUIT handler."""
+        import pygame
+
+        try:
+            record, replay = self._run(
+                tmp_path, monkeypatch, exc=SystemExit(0), tear_down_pygame=True
+            )
+        finally:
+            # In production this path ends in sys.exit; in-process it would
+            # leave pygame torn down for every later test.
+            pygame.init()
+        assert record["partial"] is True
+        assert replay["metadata"]["partial"] is True
 
     def test_a_keyboardinterrupt_is_salvaged_too(
         self,
@@ -972,7 +1039,18 @@ class TestProvenanceKeys:
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=_REPO, capture_output=True, text=True, check=False
         ).stdout.strip()
-        assert mod._git_sha() == head
+        dirty = bool(
+            subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=_REPO,
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout.strip()
+        )
+        # A SHA with uncommitted edits on top does not describe the code the
+        # game was played on, so it must say so.
+        assert mod._git_sha() == (f"{head}-dirty" if dirty else head)
 
     def test_the_checkpoint_hash_is_the_file_content(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
         import hashlib
@@ -997,5 +1075,7 @@ class TestProvenanceKeys:
         )
         expected = _load_module()._ckpt_sha256(str(ckpt))
         for got in (record, replay["metadata"]):
-            assert got["git_sha"] is not None and len(got["git_sha"]) == 40
+            sha = got["git_sha"]
+            assert sha is not None
+            assert len(sha.removesuffix("-dirty")) == 40, sha
             assert got["ckpt_sha256"] == expected

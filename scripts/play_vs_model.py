@@ -30,10 +30,28 @@ Each finished game is written TWICE (dual-write, deliberately):
   the ``reveal_bot`` / ``replay_path`` keys and ``"hud": 2`` — the information
   regime the game was played under. A MISSING ``hud`` key means regime 1 (no
   knights/longest-road HUD, no on-screen move log), the same read-a-missing-key
-  convention as ``reveal_bot`` below; and
+  convention as ``reveal_bot`` below. It also carries ``"bank_ok"`` (did the
+  ``bank[R] + Σ hands[R] == 19`` conservation assert hold at every step),
+  ``"preroll": false`` (the pre-roll information regime — see below),
+  ``"partial"`` (the game was cut short), and the ``"git_sha"`` /
+  ``"ckpt_sha256"`` attribution pair; and
 * a full-fidelity ``Replay`` JSON under ``runs/human_playtest/replays/``,
   carrying BOTH players' move streams and the policy's per-decision internals,
-  openable in the existing ``replay/viewer``.
+  openable in the existing ``replay/viewer``. Its ``Metadata`` carries the same
+  ``partial`` / ``git_sha`` / ``ckpt_sha256`` provenance.
+
+BOTH artifacts are written even when the game is INTERRUPTED (window close,
+``KeyboardInterrupt``, crash), marked ``partial`` — a cut-short game is a valid
+trace of the moves it contains but is NOT an outcome/strength read.
+
+**Both seats are POST-ROLL ONLY.** The human gets no pre-roll dev-card window,
+because ``env/masks.py`` emits only ``ROLL_DICE`` while ``roll_pending`` — the
+policy structurally cannot use that window, so granting it to the human alone
+would be an asymmetry, not a courtesy. The auto-played human seat
+(MCTS clones, ``--self-test``) likewise has the base env's
+``heuristic_pre_roll`` suppressed, so the bot's search models the seat the human
+actually plays. Games record ``"preroll": false``. This is a stopgap until
+``preroll-dev-cards-r1`` gives BOTH seats the window (which needs a retrain).
 
 FIDELITY CAVEATS on that replay (do not discover these later):
 
@@ -85,6 +103,13 @@ What the existing GUI human-input covers (no stubs needed): roll dice, build
 road / settlement / city, buy dev card, play dev card (Knight/RoadBuilder/YoP/
 Monopoly via menus), bank/port trade, end turn, robber move + steal on a 7, and
 the 9-card discard menu. The full game is playable through the existing GUI.
+
+Those menus route through the FINITE resource bank (spec 009): the human's
+Year-of-Plenty picks ``bank_draw`` (and an unsuppliable resource is greyed out
+and unclickable, matching the AI branch's availability gate), discards
+``bank_recirculate``, and cancelling a partly-picked YoP puts back what it drew.
+The driver asserts ``board.assert_conservation`` after every step and records
+the result as ``bank_ok``.
 """
 
 from __future__ import annotations
@@ -122,21 +147,37 @@ def _git_sha() -> str | None:
     schema and this harness all move between games. Degrades to ``None`` rather
     than raising — provenance must never stop a game from being played, and a
     consumer reads ``None`` as "unattributed", not "clean".
+
+    A tree with uncommitted edits gets a ``-dirty`` suffix (same convention as
+    ``bench_engine._git_sha``): the SHA alone would name code the game was NOT
+    played on, which is exactly the mis-attribution this key exists to prevent.
+    The checkpoint side is content-hashed for the same reason.
     """
     import subprocess
     from pathlib import Path
 
+    root = str(Path(__file__).resolve().parent.parent)
     try:
         out = subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=str(Path(__file__).resolve().parent.parent),
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        sha = out.stdout.strip()
+        if not sha:
+            return None
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=root,
             capture_output=True,
             text=True,
             check=False,
         )
     except OSError:
         return None
-    return out.stdout.strip() or None
+    return f"{sha}-dirty" if status.stdout.strip() else sha
 
 
 def _ckpt_sha256(path: str | None) -> str | None:
@@ -221,6 +262,16 @@ def _make_bank_conservation_reporter(hud_log: Any) -> Callable[[Any], None]:
 # Human-as-opponent env: the bot is the agent seat; the human is the internal
 # opponent, driven via a real pygame view temporarily swapped onto game.boardView.
 # ---------------------------------------------------------------------------
+
+
+def _no_pre_roll(board: Any) -> None:
+    """Replacement for ``heuristicAIPlayer.heuristic_pre_roll`` on the human seat.
+
+    Bound onto the human player instance so the base env's pre-roll call
+    (``catan_env._run_opponent_turn``) is a no-op: the human at the keyboard has
+    no pre-roll window, so neither may the auto-played stand-in the bot's search
+    (and ``--self-test``) uses to model that seat."""
+    return None
 
 
 def _build_human_env_class() -> type:
@@ -495,8 +546,8 @@ def _build_human_env_class() -> type:
             KEEP IN SYNC with catan_env._run_opponent_turn — this override now
             differs only in GUI plumbing (the human's discard / robber / main
             phase go through the pygame windows). Clones (MCTS) + the headless
-            self-test never use the GUI, so they delegate to the base method
-            verbatim.
+            self-test never use the GUI, so they delegate to the base method —
+            with the base's heuristic pre-roll suppressed (below).
 
             There is deliberately NO pre-roll dev-card window. ``env/masks.py``
             emits ONLY ``ROLL_DICE`` while ``roll_pending``, so the policy cannot
@@ -504,12 +555,21 @@ def _build_human_env_class() -> type:
             in its training history. A human window with no bot counterpart is
             the single largest bias in a playtest: it makes every human win
             unattributable between "the policy is weak here" and "the bot was not
-            allowed to play its Knight". Both seats are now post-roll only,
-            matching the ruleset the champion was trained on. STOPGAP:
+            allowed to play its Knight". Both seats are post-roll only in this
+            harness, matching the ruleset the champion was trained on. STOPGAP:
             ``preroll-dev-cards-r1.md`` (RATIFIED) gives BOTH seats the window
             and requires a retrain.
             """
-            if not self._use_gui():  # clones + self-test: unchanged
+            if not self._use_gui():  # clones + self-test
+                # The base env plays a heuristic pre-roll Knight for the
+                # opponent seat whenever no snapshot drives it — which is EVERY
+                # MCTS clone rollout and every --self-test game. Left alone, the
+                # bot would search against a human who can pre-roll while the
+                # real human at the keyboard cannot: the same asymmetry D3
+                # removed, reintroduced inside the search model.
+                base_opp: Any = self.opponent_player
+                if getattr(base_opp, "heuristic_pre_roll", None) is not None:
+                    base_opp.heuristic_pre_roll = _no_pre_roll
                 super()._run_opponent_turn()
                 return
             game: Any = self.game
@@ -852,6 +912,28 @@ def _game_over_log_line(bot_player: Any, you_vp: int, *, reveal_bot: bool) -> st
     leak can be pinned by a test."""
     bot_shown = int(bot_player.victoryPoints) if reveal_bot else _visible_vp(bot_player)
     return f"GAME OVER — Bot {bot_shown} - {you_vp} You"
+
+
+def _safe_display_game_screen(view: Any) -> None:
+    """Redraw the final board, but never at the cost of the artifacts.
+
+    This runs BEFORE both artifact writes, and the salvage path it sits on is
+    reached by ``pygame.QUIT`` handlers that call ``pygame.quit()`` and THEN
+    ``sys.exit(0)`` (e.g. the human's own main turn). Drawing onto a torn-down
+    display raises ``pygame.error: display Surface quit``, which would propagate
+    out of ``play_interactive`` and skip the replay AND the JSONL line — the
+    exact loss the salvage exists to prevent. Same no-surface guard as
+    :func:`_hold_final_screen`; the ``pygame.error`` catch covers a display that
+    dies between the check and the draw.
+    """
+    import pygame
+
+    if not pygame.get_init() or pygame.display.get_surface() is None:
+        return
+    try:
+        view.displayGameScreen()
+    except pygame.error as exc:  # a dead window must not cost the record
+        print(f"[WARN] final board could not be redrawn: {exc!r}", flush=True)
 
 
 #: Seconds the finished board is held on screen before the window closes itself.
@@ -1643,7 +1725,7 @@ def play_interactive(
     # Terminal HUD line. The bot's VP-card count stays HIDDEN unless --reveal-bot
     # (this is the one place a VP-card-inclusive total could reach the screen).
     hud_log.append(_game_over_log_line(env.agent_player, you_vp, reveal_bot=reveal_bot))
-    view.displayGameScreen()
+    _safe_display_game_screen(view)
 
     # ---- full-fidelity replay (new format) --------------------------------
     replay_path: str | None = None

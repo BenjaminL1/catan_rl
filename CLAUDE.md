@@ -78,12 +78,16 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   games log `"hud": 2` for that information regime. **Both seats are POST-ROLL
   ONLY** — the human's pre-roll dev-card window is gone, because `env/masks.py`
   emits only `ROLL_DICE` while `roll_pending` so the policy structurally cannot
-  answer it; games log `"preroll": false` (a stopgap until
+  answer it, and the auto-played human seat (MCTS clones, `--self-test`) has the
+  base env's `heuristic_pre_roll` suppressed so the bot's search models the same
+  seat the human actually plays; games log `"preroll": false` (a stopgap until
   `preroll-dev-cards-r1`, which gives BOTH seats the window and needs a
   retrain). The human resource picker (`gui/view.get_resource_selection`) routes
   through the finite bank, the driver asserts `bank[R] + Σ hands[R] == 19` after
   every step and records `"bank_ok"`, an interrupted game still writes both
-  artifacts with `"partial": true`, and every record carries `"git_sha"` +
+  artifacts with `"partial": true` (including the real window-close path, which
+  calls `pygame.quit()` before `sys.exit(0)` — the post-loop redraw is guarded),
+  and every record carries `"git_sha"` (`-dirty`-suffixed on a modified tree) +
   `"ckpt_sha256"`. `DEFAULT_CKPT` is the BANKED `runs/anchors/ptr_v1_u500.pt`,
   never a live `runs/train/**` path under `keep_last_n` rotation).
   (No v1 `evaluate.py`.)
