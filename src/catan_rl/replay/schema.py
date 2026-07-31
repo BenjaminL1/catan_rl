@@ -587,6 +587,18 @@ class Metadata:
     (``play_vs_model.py --reveal-bot``). Also not a valid strength read;
     recorded so a revealed analysis game can never be misfiled as one."""
 
+    git_sha: str | None = None
+    """v2. ``git rev-parse HEAD`` of the tree the game was played on, or
+    ``None`` when it could not be read. Without it a recorded game names no
+    code, and the ruleset, the obs schema and the harness all move."""
+
+    ckpt_sha256: str | None = None
+    """v2. SHA-256 of the checkpoint FILE the policy seat was loaded from, or
+    ``None`` when it could not be read. ``PlayerSpec.ckpt_path`` alone is not
+    attribution: it points into a gitignored ``runs/`` directory under a
+    ``keep_last_n`` rotation, so tomorrow the same path may hold different
+    bytes, or nothing at all."""
+
 
 @dataclass(frozen=True, slots=True)
 class Replay:

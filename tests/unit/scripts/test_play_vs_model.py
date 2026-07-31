@@ -866,7 +866,7 @@ class TestCrashSafeArtifacts:
     this pin would go red, which is the point.
     """
 
-    def _run(self, tmp_path, monkeypatch, *, exc):  # type: ignore[no-untyped-def]
+    def _run(self, tmp_path, monkeypatch, *, exc, ckpt="unused"):  # type: ignore[no-untyped-def]
         import json
 
         pytest.importorskip("torch")
@@ -907,7 +907,7 @@ class TestCrashSafeArtifacts:
         log_path = tmp_path / "games.jsonl"
         # human_seat=1 -> the BOT drafts first, so reset() needs no human input.
         mod.play_interactive(
-            ckpt="unused",
+            ckpt=ckpt,
             sims=1,
             seed=5,
             human_seat=1,
@@ -955,3 +955,47 @@ class TestCrashSafeArtifacts:
             if isinstance(h.type, ast.Name)
         ]
         assert "BaseException" in handlers, handlers
+
+
+class TestProvenanceKeys:
+    """The record must name the exact policy and code it was played against.
+
+    Metadata carried ``ckpt_path`` but no git SHA and no checkpoint content
+    hash, and ``ckpt_path`` points into a gitignored ``runs/`` directory under a
+    ``keep_last_n: 6`` rotation — so tomorrow it may hold different bytes, or
+    nothing. Both keys are ADDITIVE and degrade to ``None``: provenance must
+    never be able to stop a game from being played.
+    """
+
+    def test_the_git_sha_is_this_tree(self) -> None:
+        mod = _load_module()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=_REPO, capture_output=True, text=True, check=False
+        ).stdout.strip()
+        assert mod._git_sha() == head
+
+    def test_the_checkpoint_hash_is_the_file_content(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        import hashlib
+
+        mod = _load_module()
+        blob = b"not-really-a-checkpoint" * 1000
+        f = tmp_path / "ckpt.pt"
+        f.write_bytes(blob)
+        assert mod._ckpt_sha256(str(f)) == hashlib.sha256(blob).hexdigest()
+
+    def test_an_unreadable_checkpoint_degrades_to_none(self, tmp_path) -> None:  # type: ignore[no-untyped-def]
+        mod = _load_module()
+        assert mod._ckpt_sha256(str(tmp_path / "nope.pt")) is None
+        assert mod._ckpt_sha256(None) is None
+        assert mod._ckpt_sha256("") is None
+
+    def test_both_keys_reach_both_artifacts(self, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        ckpt = tmp_path / "ckpt.pt"
+        ckpt.write_bytes(b"bytes")
+        record, replay = TestCrashSafeArtifacts()._run(
+            tmp_path, monkeypatch, exc=SystemExit(0), ckpt=str(ckpt)
+        )
+        expected = _load_module()._ckpt_sha256(str(ckpt))
+        for got in (record, replay["metadata"]):
+            assert got["git_sha"] is not None and len(got["git_sha"]) == 40
+            assert got["ckpt_sha256"] == expected

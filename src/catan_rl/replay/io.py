@@ -163,6 +163,8 @@ def _replay_to_dict(replay: Replay) -> dict[str, Any]:
             "sims": replay.metadata.sims,
             "clairvoyant": replay.metadata.clairvoyant,
             "reveal_bot": replay.metadata.reveal_bot,
+            "git_sha": replay.metadata.git_sha,
+            "ckpt_sha256": replay.metadata.ckpt_sha256,
         },
         "board_static": _board_static_to_dict(replay.board_static),
         "steps": [_step_to_dict(s) for s in replay.steps],
@@ -252,6 +254,11 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             sims=None if d.get("sims") is None else int(d["sims"]),
             clairvoyant=bool(d.get("clairvoyant", False)),
             reveal_bot=bool(d.get("reveal_bot", False)),
+            # Provenance. ``None`` means the recorder could not read it (or the
+            # payload predates the keys) — never that the tree/checkpoint was
+            # clean, so a consumer must treat a missing value as unattributed.
+            git_sha=None if d.get("git_sha") is None else str(d["git_sha"]),
+            ckpt_sha256=None if d.get("ckpt_sha256") is None else str(d["ckpt_sha256"]),
         )
 
     def _board_static(d: dict[str, Any]) -> BoardStatic:

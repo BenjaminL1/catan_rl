@@ -108,6 +108,52 @@ DEFAULT_CKPT = "runs/train/selfplay_pointer_arch_v2/checkpoints/ckpt_000000500.p
 DEFAULT_SIMS = 400
 
 
+def _git_sha() -> str | None:
+    """``git rev-parse HEAD`` for the tree this game is being played on.
+
+    A recorded game that names no code is not attributable: the ruleset, the obs
+    schema and this harness all move between games. Degrades to ``None`` rather
+    than raising — provenance must never stop a game from being played, and a
+    consumer reads ``None`` as "unattributed", not "clean".
+    """
+    import subprocess
+    from pathlib import Path
+
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(Path(__file__).resolve().parent.parent),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    return out.stdout.strip() or None
+
+
+def _ckpt_sha256(path: str | None) -> str | None:
+    """SHA-256 of the checkpoint FILE, or ``None`` if it cannot be read.
+
+    The path alone is not attribution: the default points into a gitignored
+    ``runs/`` tree under a ``keep_last_n`` rotation, so tomorrow the same path
+    may hold different bytes or nothing at all. Streamed in 1 MiB chunks — these
+    files are tens of megabytes.
+    """
+    if not path:
+        return None
+    import hashlib
+
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return None
+    return h.hexdigest()
+
+
 def _assert_bank_conservation(env: Any) -> None:
     """Pin the finite-bank invariant ``bank[R] + sum(hands[R]) == 19`` (spec 009).
 
@@ -1360,6 +1406,11 @@ class _HumanGameRecorder:
             sims=sims,
             clairvoyant=clairvoyant,
             reveal_bot=reveal_bot,
+            # Provenance: the record must name the exact policy and code it was
+            # played against. ``ckpt`` is a path into a gitignored, rotated
+            # ``runs/`` tree, so the FILE is hashed as well.
+            git_sha=_git_sha(),
+            ckpt_sha256=_ckpt_sha256(ckpt),
         )
         return Replay(
             schema_version=REPLAY_SCHEMA_VERSION,
@@ -1677,6 +1728,12 @@ def play_interactive(
             # A MISSING key means the game predates the crash-safe write, when
             # an interrupted game produced NO record at all.
             "partial": bool(aborted),
+            # Provenance. "ckpt" above is a path into a gitignored runs/ tree
+            # under a keep_last_n rotation, so it may name different bytes
+            # tomorrow, or none. NULL means it could not be read — never that
+            # the tree or the checkpoint was clean.
+            "git_sha": _git_sha(),
+            "ckpt_sha256": _ckpt_sha256(ckpt),
             "replay_path": replay_path,
             "moves": move_log,
         }

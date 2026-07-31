@@ -85,6 +85,36 @@ class TestRoundTrip:
             True,
         )
 
+    def test_attribution_keys_round_trip(self, tmp_path: Path) -> None:
+        """The record must name the exact CODE and CHECKPOINT it was played on.
+
+        ``ckpt_path`` is not attribution on its own: it points into a gitignored
+        ``runs/`` tree under a ``keep_last_n`` rotation, so the same path may
+        hold different bytes tomorrow — hence the content hash."""
+        base = _replay_with_internals()
+        meta = dataclasses.replace(base.metadata, git_sha="a" * 40, ckpt_sha256="b" * 64)
+        path = tmp_path / "prov.json"
+        save_replay(dataclasses.replace(base, metadata=meta), path)
+        loaded = load_replay(path, strict=True).metadata
+        assert loaded.git_sha == "a" * 40
+        assert loaded.ckpt_sha256 == "b" * 64
+
+    def test_attribution_keys_default_to_none(self) -> None:
+        """``None`` = could not be read. NEVER "the tree/checkpoint was clean"."""
+        meta = _minimal_metadata()
+        assert meta.git_sha is None and meta.ckpt_sha256 is None
+
+    def test_a_payload_without_the_attribution_keys_still_loads(self, tmp_path: Path) -> None:
+        path = tmp_path / "old.json"
+        save_replay(_replay_with_internals(), path)
+        raw = json.loads(path.read_text())
+        for key in ("git_sha", "ckpt_sha256"):
+            raw["metadata"].pop(key)
+        path.write_text(json.dumps(raw))
+        loaded = load_replay(path, strict=True).metadata
+        assert loaded.git_sha is None
+        assert loaded.ckpt_sha256 is None
+
     def test_human_kind_is_a_legal_record_value(self, tmp_path: Path) -> None:
         base = _replay_with_events()
         meta = dataclasses.replace(
