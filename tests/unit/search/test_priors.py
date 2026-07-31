@@ -8,23 +8,19 @@ import torch
 
 from catan_rl.env.catan_env import ActionType, CatanEnv
 from catan_rl.policy.heads import masked_log_softmax
+from catan_rl.policy.obs_schema import MASK_KEY_FOR
 from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 from catan_rl.search.priors import action_priors
 
 from .conftest import drive_to_main_phase
 
-# Which mask key gates each relevant sub-head, per action type, so we can assert
-# every chosen sub-index is actually legal (mirrors heads._*_mask selection).
-_CORNER_KEY = {
-    ActionType.BUILD_SETTLEMENT: "corner_settlement",
-    ActionType.BUILD_CITY: "corner_city",
-}
-_RES1_KEY = {
-    ActionType.PLAY_YOP: "resource1_default",
-    ActionType.PLAY_MONOPOLY: "resource1_default",
-    ActionType.BANK_TRADE: "resource1_trade",
-    ActionType.DISCARD: "resource1_discard",
-}
+# Which mask key gates each relevant sub-head is read from ``MASK_KEY_FOR``, the
+# single source of truth ``heads._*_mask`` is itself built against. This file
+# used to carry a hand-written copy that had silently drifted: it routed
+# ``PLAY_YOP``'s first pick to ``resource1_default`` (all-True — Monopoly is
+# bank-independent) instead of the bank-gated ``resource1_yop``, so the
+# legality assertion below was vacuous for exactly the type D4 made
+# bank-sensitive.
 
 
 def _assert_priors_well_formed(priors: dict, masks: dict) -> None:  # type: ignore[type-arg]
@@ -40,14 +36,16 @@ def _assert_priors_well_formed(priors: dict, masks: dict) -> None:  # type: igno
         # No illegal TYPE ever carries prior mass.
         assert t in legal_types, f"type {t} not in legal types {legal_types}"
         # Relevant sub-choices must be legal under their mask.
-        if t in _CORNER_KEY and masks[_CORNER_KEY[t]].any():
-            assert masks[_CORNER_KEY[t]][corner], f"illegal corner {corner} for type {t}"
+        corner_key = MASK_KEY_FOR[t][1]
+        if corner_key is not None and masks[corner_key].any():
+            assert masks[corner_key][corner], f"illegal corner {corner} for type {t}"
         if t == ActionType.BUILD_ROAD and masks["edge"].any():
             assert masks["edge"][edge], f"illegal edge {edge}"
         if t in (ActionType.MOVE_ROBBER, ActionType.PLAY_KNIGHT) and masks["tile"].any():
             assert masks["tile"][tile], f"illegal tile {tile}"
-        if t in _RES1_KEY and masks[_RES1_KEY[t]].any():
-            assert masks[_RES1_KEY[t]][res1], f"illegal res1 {res1} for type {t}"
+        res1_key = MASK_KEY_FOR[t][4]
+        if res1_key is not None and masks[res1_key].any():
+            assert masks[res1_key][res1], f"illegal res1 {res1} for type {t}"
         # BANK_TRADE never gives and receives the same resource (a strict loss the
         # policy masks out via _resource2_mask) — the representative action must respect it.
         if t == ActionType.BANK_TRADE:

@@ -101,6 +101,20 @@ assumptions.)
 
 > Note: `PlayKnight` (6) also drives the `tile` head — playing a knight moves
 > the robber in the same step.
+>
+> **Serve-time caveat.** `env/catan_env.py` IGNORES `action[3]` for
+> `PlayKnight`: it sets `robber_placement_pending` and asks for a separate
+> `MoveRobber` step, and `compute_action_masks` returns early in the robber
+> branch (only `MoveRobber` in the `type` mask). So on a live `PlayKnight` step
+> the `tile` mask is all-False. The BC recorder
+> (`bc/dataset.py:patched_play_knight`) deliberately diverges: it splices the
+> robber-branch `tile` mask onto the main-branch `type` mask and labels the row
+> with the hex the teacher is about to rob, so the tile head gets a real
+> gradient instead of a fabricated `tile_idx = 0`. That mask combination is
+> emitted for no env state — a BC mask is therefore NOT reproducible from the
+> stored obs on knight rows, and the joint log-prob composition for
+> `PlayKnight` differs between BC and PPO rollouts. Accepted; see
+> `docs/plans/v2/step3_bc.md` (this is what `RULESET_VERSION = 3` stamps).
 
 ### Action types (head 0)
 
@@ -147,16 +161,25 @@ engine would otherwise accept a strictly-losing same-resource trade). For
 `PLAY_YOP` the `resource2` mask swaps `resource2_yop_same` in at index `r1`,
 since doubling a pick draws two of that resource from the bank.
 
+Writers of offline corpora (BC, expert iteration) must check a candidate action
+against these masks with `policy/obs_schema.action_masked_legal(masks, action)`
+— the torch-free twin of the masking `CatanActionHeads` applies at sample time.
+It checks every head the action type actually uses (including the
+autoregressive head-5 rules above), not `masks["type"][a[0]]` alone; a
+type-legal row whose corner / edge / tile / resource index is masked OFF is an
+action the policy can never sample, i.e. exactly the train/serve skew BC exists
+to avoid.
+
 The single `resource1_default` / `resource2_default` keys were split so the
 finite bank (spec 009) can gate each action independently. `PLAY_YOP` is legal
 for a pair `(first, second)` iff `bank[first] >= 2` when `first == second`,
 else `bank[first] >= 1` and `bank[second] >= 1`; `BankTrade` needs
-`bank[r2] >= 1` with `r2 != r1`. `player.trade_with_bank` early-returns on a
-bank-empty receive leaving state byte-identical, which a stable-argmax policy
-re-picks forever. The gate is at the LEGALITY layer, not an apply-time no-op —
-the no-op is what creates the fixed point. When no legal `(give, receive)` pair
-remains, `type[BANK_TRADE]` is withheld; when no legal YoP pair remains,
-`type[PLAY_YOP]` is withheld.
+`bank[r2] >= 1` with `r2 != r1`. The gate lives at the LEGALITY layer because
+that is where the rule lives: the reference engine
+(`Torevan/packages/engine/src/legal-moves.ts`) enumerates only fully-supplyable
+`(give, receive)` pairs, so a mask that offers more has drifted from the
+ruleset. When no legal `(give, receive)` pair remains, `type[BANK_TRADE]` is
+withheld; when no legal YoP pair remains, `type[PLAY_YOP]` is withheld.
 
 ### Autoregressive structure
 

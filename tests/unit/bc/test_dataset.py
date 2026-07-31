@@ -22,9 +22,11 @@ from catan_rl.policy.obs_schema import (
     N_TILES,
     N_VERTICES,
     NEXT_PLAYER_DIM,
+    RESOURCES_CW,
     RULESET_VERSION,
     TILE_DIM,
     ActionType,
+    action_masked_legal,
     is_forced_decision,
 )
 
@@ -748,3 +750,183 @@ def test_no_row_claims_two_phases_at_once() -> None:
                 f"seed {seed}: row claims roll_pending AND robber_placement_pending"
             )
     assert seen_robber > 0, "no robber rows generated — the assertion would be vacuous"
+
+
+# ---------------------------------------------------------------------------
+# PLAY_KNIGHT tile label (F-A) + write-time relevance-aware legality (F-B)
+# ---------------------------------------------------------------------------
+
+
+def _knight_rows(n_games: int = 8, seed0: int = 100) -> list:  # type: ignore[type-arg]
+    rows = []
+    for seed in range(seed0, seed0 + n_games):
+        record = play_game(game_id=seed, seed=seed, perturbation="canonical", max_turns=300)
+        rows.extend(
+            (seed, i, d)
+            for i, d in enumerate(record.decisions)
+            if int(d.action[0]) == ActionType.PLAY_KNIGHT
+        )
+    return rows
+
+
+def test_play_knight_row_carries_a_populated_tile_mask() -> None:
+    """A knight row's tile head is RELEVANT (it triggers the robber move), so
+    its label must be a real hex under a populated tile mask. The row used to
+    be written with ``tile_idx`` defaulted to 0 and an all-False tile mask,
+    because the mask was built before ``robber_placement_pending`` was set."""
+    rows = _knight_rows()
+    assert rows, "no PLAY_KNIGHT rows generated — the assertion would be vacuous"
+    for seed, i, d in rows:
+        assert d.mask["tile"].any(), f"seed {seed} row {i}: empty tile mask on a knight row"
+        assert d.mask["tile"][int(d.action[3])], (
+            f"seed {seed} row {i}: knight tile {int(d.action[3])} is off the tile mask"
+        )
+
+
+def test_play_knight_tile_matches_the_robber_move_it_triggers() -> None:
+    """The knight's recorded hex is the hex the teacher actually robs — i.e.
+    the label agrees with the MOVE_ROBBER row the knight drags in for the same
+    seat. Pins the purity of ``choose_player_to_rob``: a future stochastic
+    override would break this loudly rather than silently mislabel the corpus."""
+    checked = 0
+    for seed in range(100, 108):
+        record = play_game(game_id=seed, seed=seed, perturbation="canonical", max_turns=300)
+        for i, d in enumerate(record.decisions):
+            if int(d.action[0]) != ActionType.PLAY_KNIGHT:
+                continue
+            nxt = next(
+                (
+                    e
+                    for e in record.decisions[i + 1 :]
+                    if e.player_seat == d.player_seat and int(e.action[0]) == ActionType.MOVE_ROBBER
+                ),
+                None,
+            )
+            assert nxt is not None, f"seed {seed} row {i}: knight recorded no robber move"
+            assert int(d.action[3]) == int(nxt.action[3]), (
+                f"seed {seed} row {i}: knight tile {int(d.action[3])} != "
+                f"robbed tile {int(nxt.action[3])}"
+            )
+            checked += 1
+    assert checked > 0, "no PLAY_KNIGHT rows generated — the assertion would be vacuous"
+
+
+def test_play_knight_rows_survive_the_relevance_gate() -> None:
+    """Regression guard on the F-A -> F-B ordering: the write-time legality
+    gate now checks the tile head for PLAY_KNIGHT, so if the tile override were
+    applied AFTER the gate (or not at all) every knight row would be dropped."""
+    assert _knight_rows(), "the relevance-aware gate swallowed every PLAY_KNIGHT row"
+
+
+def test_every_recorded_row_is_legal_under_its_own_mask() -> None:
+    """No row may carry an index that its own mask forbids on a RELEVANT head.
+
+    Scope note, so this is not over-read: on the canonical teacher this is red
+    against the PRE-F-A tree (the fabricated ``tile_idx = 0`` knight rows are
+    off their own tile mask) and it is an ongoing corpus-wide invariant — but
+    it does NOT discriminate F-B. The canonical teacher rejects zero rows on a
+    sub-head, so the type-head-only gate would leave this green too. The
+    discriminating F-B pin is
+    ``test_bank_trade_with_unsupplyable_receive_is_not_recorded``.
+    """
+    seen = 0
+    for seed in range(200, 206):
+        record = play_game(game_id=seed, seed=seed, perturbation="canonical", max_turns=300)
+        for i, d in enumerate(record.decisions):
+            assert action_masked_legal(d.mask, d.action), (
+                f"seed {seed} row {i}: action {d.action.tolist()} is off its own mask"
+            )
+            seen += 1
+    assert seen > 0
+
+
+def _record_one_bank_trade(give: str, receive: str, drained: str) -> tuple[list, dict]:  # type: ignore[type-arg]
+    """Drive ONE ``trade_with_bank`` call through the recorder; return ``(records, mask)``.
+
+    The player holds 6 of ``give`` (a 4:1 trade is affordable) and nothing else;
+    the bank is drained of ``drained`` ALONE, so every other resource is still
+    supplyable and the TYPE head therefore still offers ``BANK_TRADE``. That is
+    what makes the drop discriminating: draining the WHOLE bank would close the
+    type head, and the old type-head-only gate would have rejected the row too.
+    """
+    import queue as _queue
+
+    from catan_rl.agents.heuristic import heuristicAIPlayer
+    from catan_rl.bc.dataset import (
+        _build_index_maps,
+        _instrumented_player,
+        _RecorderContext,
+    )
+    from catan_rl.engine.game import catanGame
+    from catan_rl.env.hand_tracker import BroadcastHandTracker
+    from catan_rl.env.masks import compute_action_masks
+    from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder
+
+    np.random.seed(0)
+    game = catanGame(render_mode=None)
+    board = game.board
+
+    p1 = heuristicAIPlayer("P1", None)
+    p2 = heuristicAIPlayer("P2", None)
+    p1.game = game
+    p2.game = game
+    game.playerQueue = _queue.Queue(2)
+    game.playerQueue.put(p1)
+    game.playerQueue.put(p2)
+    encoder = ObsEncoder(board)
+    tracker = BroadcastHandTracker([p1.name, p2.name])
+    tracker.subscribe(game.broadcast)
+    vertex_to_idx, edge_to_idx = _build_index_maps(board)
+
+    for r in p1.resources:
+        p1.resources[r] = 0
+    p1.resources[give] = 6
+    board.resourceBank[drained] = 0
+
+    env_state = EnvObsState(initial_placement_phase=False)
+    ctx = _RecorderContext(
+        game=game,
+        agent_player=p1,
+        opp_player=p2,
+        encoder=encoder,
+        hand_tracker=tracker,
+        vertex_to_idx=vertex_to_idx,
+        edge_to_idx=edge_to_idx,
+        records=[],
+        seat=0,
+        env_state=env_state,
+    )
+    mask = compute_action_masks(game, p1, env_state, vertex_to_idx, edge_to_idx)
+    with _instrumented_player(ctx):
+        p1.trade_with_bank(give, receive, board)
+    return ctx.records, mask
+
+
+def test_bank_trade_with_unsupplyable_receive_is_not_recorded() -> None:
+    """Drain the bank of the resource the teacher would RECEIVE — and only that
+    one — and the row must be DROPPED.
+
+    The single-resource drain is the whole point: ``type[BANK_TRADE]`` stays
+    True (the give is still tradeable for the four resources the bank can still
+    supply), so ``resource2_trade[BRICK]`` is the ONLY head that says no. A
+    type-head-only gate records this row; the relevance-aware gate drops it.
+    """
+    records, mask = _record_one_bank_trade(give="WOOD", receive="BRICK", drained="BRICK")
+    brick = RESOURCES_CW.index("BRICK")
+    assert bool(mask["type"][ActionType.BANK_TRADE]), (
+        "type head closed — the drain was too broad, so this test no longer "
+        "discriminates against the old type-head-only gate"
+    )
+    assert not bool(mask["resource2_trade"][brick]), "BRICK receive should be off resource2_trade"
+    assert records == [], "recorded a bank trade whose receive the bank cannot supply"
+
+
+def test_bank_trade_with_supplyable_receive_is_still_recorded() -> None:
+    """Positive control for the gate above: same drained bank, but a receive the
+    bank CAN supply survives. Without this, the drop test could pass by the gate
+    rejecting every bank trade."""
+    records, mask = _record_one_bank_trade(give="WOOD", receive="WHEAT", drained="BRICK")
+    wheat = RESOURCES_CW.index("WHEAT")
+    assert bool(mask["resource2_trade"][wheat])
+    assert len(records) == 1, "a fully supplyable bank trade must survive the legality gate"
+    assert int(records[0].action[0]) == ActionType.BANK_TRADE

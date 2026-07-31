@@ -2,6 +2,32 @@
 
 **Status**: design draft (single author, senior-review distilled 2026-06-03); implementation gated on the §0 preflight gates. Plan layered on top of v2 Step 3 BC + v2 setup-labeling deliverables.
 
+> **Teacher discontinuity (spec `bc-coverage-and-bank-legality` D2, 2026-07).**
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). **Caveat on scope:** this is the CANONICAL
+> heuristic — `heuristicAIPlayer.move()` opens with `heuristic_play_dev_card`.
+> `bc/perturbed_heuristic.WeightNoisedHeuristicAIPlayer.move()` mirrors the
+> canonical body WITHOUT that call, so the `weight_noised` BC teacher config
+> still plays no dev cards on its own seat (a known gap in D2's
+> implementation). The eval rod is the canonical heuristic, so the
+> re-baselining below applies in full.
+>
+> The heuristic is the standing measurement rod, so every "WR vs heuristic"
+> threshold in this document now
+> denotes a HARDER bar than it did when it was written, and every banked number
+> in the v8 lineage was measured against the WEAKER teacher. These thresholds
+> were calibrated against a heuristic that could not play a development card and
+> require empirical re-baselining before the next promotion decision. Two places
+> in this plan are affected specifically: the **`heuristic_v0` NNLS table**
+> (§0.2 Table 2) is fitted from heuristic-vs-heuristic END-GAME RESOURCE SHARES,
+> which a dev-card-playing teacher shifts, so the fit must be re-run before the
+> table is trusted; and **Gate A.4's "not regressed by > 2pp vs the pre-analytic
+> run"** compares against a run measured on the weaker rod, so its reference
+> point must be re-measured, not its 2pp tolerance adjusted. Do not compare a
+> post-D2 WR-vs-heuristic against a pre-D2 one. Every numeric threshold in this
+> document is deliberately left UNCHANGED — what changed is the yardstick.
+
 **Provenance**: senior RL research-engineer review of the (removed) v1 Monte-Carlo setup-pretrain plan (v1 MC ancestor) and `docs/plans/v2_setup_labeling.md` (human-label fine-tune). The review's central claim: the v1 MC rollout estimator for setup-phase vertex value is *strictly dominated* by a closed-form expected-pip-yield score now that the chip layout is the verified 18-chip ABC spiral (`src/catan_rl/engine/board.py:34-44`), and the dihedral-aug pipeline silently leaks port information in BC training because `symmetry_tables.py` does not export a port permutation. Phase C is a meta-redirect surfacing the senior's "you may be solving the wrong problem" critique.
 
 ---

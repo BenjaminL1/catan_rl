@@ -278,7 +278,19 @@ FORCED_RULE_VERSION = 2
 #:     ``resource1_yop`` split off ``resource1_default`` and
 #:     ``resource2_default`` split into ``resource2_yop`` /
 #:     ``resource2_yop_same`` / ``resource2_trade`` (12-key mask dict).
-RULESET_VERSION = 2
+#: 3 — BC WRITE-TIME contract change (F-A / F-B). The mask KEYS are unchanged
+#:     from 2, but what a corpus CONTAINS is not:
+#:     * ``PLAY_KNIGHT`` rows now carry the hex the teacher is about to rob,
+#:       under a populated robber-branch ``tile`` mask. Under 2 they carried
+#:       the default ``tile_idx = 0`` under an all-False tile mask, so the
+#:       tile head got no gradient on exactly those rows.
+#:     * the write-time legality gate is relevance-aware
+#:       (:func:`action_masked_legal`) rather than type-head-only, so a row
+#:       whose corner / edge / tile / resource index is masked OFF is dropped.
+#:     A version-2 corpus loaded into this tree would train the tile head on
+#:     fabricated knight labels, and nothing in the shard arrays can reveal
+#:     that — hence the bump.
+RULESET_VERSION = 3
 
 
 def is_forced_decision(masks: object) -> bool:
@@ -314,5 +326,61 @@ def is_forced_decision(masks: object) -> bool:
         key = MASK_KEY_FOR[action_type][head]
         assert key is not None  # relevance implies a routed mask key
         if sum(1 for legal in masks_map[key] if legal) > 1:
+            return False
+    return True
+
+
+def _index_legal(mask: Sequence[bool], idx: int) -> bool:
+    """``mask[idx]`` with out-of-range treated as illegal rather than raising."""
+    if idx < 0 or idx >= len(mask):
+        return False
+    return bool(mask[idx])
+
+
+def action_masked_legal(masks: object, action: object) -> bool:
+    """Return True iff every RELEVANT head of ``action`` is on its own mask.
+
+    The torch-free twin of the masking :class:`catan_rl.policy.heads.
+    CatanActionHeads` applies at sample time. Writers of offline corpora (BC,
+    expert iteration) must gate on this and not on ``masks["type"][a[0]]``
+    alone: a type-legal row whose corner / edge / tile / resource index is
+    masked OFF supervises the network on an action it can never sample under
+    the same mask, which is exactly the train/serve skew BC exists to avoid.
+
+    Head 5 is AUTOREGRESSIVE and mirrors ``heads._resource2_mask``:
+
+    * ``BANK_TRADE`` — ``resource2_trade[r2]`` and ``r2 != r1`` (the engine
+      accepts a same-resource trade as a strict loss; the policy never
+      samples one).
+    * ``PLAY_YOP`` — ``resource2_yop_same[r2]`` when ``r2 == r1`` (a doubled
+      pick needs ``bank >= 2``), else ``resource2_yop[r2]``.
+
+    Args:
+        masks: mapping of mask key -> boolean sequence (numpy array or list).
+        action: the 6-tuple ``[type, corner, edge, tile, res1, res2]`` (numpy
+            array, list or tuple).
+    """
+    masks_map = cast("Mapping[str, Sequence[bool]]", masks)
+    act = cast("Sequence[int]", action)
+    action_type = int(act[0])
+    if not _index_legal(masks_map["type"], action_type):
+        return False
+    for head in range(1, len(HEAD_DIMS)):
+        if not HEAD_RELEVANCE[action_type][head]:
+            continue
+        idx = int(act[head])
+        if head == AUTOREGRESSIVE_HEAD:
+            res1 = int(act[4])
+            if action_type == ActionType.BANK_TRADE:
+                if idx == res1 or not _index_legal(masks_map["resource2_trade"], idx):
+                    return False
+            else:  # PLAY_YOP — the only other resource2-relevant type
+                key2 = "resource2_yop_same" if idx == res1 else "resource2_yop"
+                if not _index_legal(masks_map[key2], idx):
+                    return False
+            continue
+        key = MASK_KEY_FOR[action_type][head]
+        assert key is not None  # relevance implies a routed mask key
+        if not _index_legal(masks_map[key], idx):
             return False
     return True

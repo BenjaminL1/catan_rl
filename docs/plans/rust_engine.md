@@ -52,7 +52,7 @@ That is the entire Rust contact surface of `make train`.
 | `PyRustEnv` (`RustCatanEnv`) | `src/env.rs` | No opponent hook; `truncated` hardcoded `false`. |
 | `PyRustVecEnv` (`RustVectorizedEnv`) | `src/vec_env.rs` | `truncs` hardcoded `false`. |
 | Native obs encoder | `src/obs.rs` | Slots `[19..79]` zero-filled (vertex/edge/port). Slots `[0..19]` byte-parity with Python (resource/token order, robber bit, dots/5) per `test_obs_cross_impl_byte_parity.py`. |
-| Native mask builder | `src/masks.rs` | Reached only via `PyRustEnv`. |
+| Native mask builder | `src/masks.rs` | Reached only via `PyRustEnv`. **NOT** a byte-for-byte port of `env/masks.py`: the D4 type-level bank gates ARE mirrored, but all 12 sub-masks are built unconditionally (Python phase-branches and `return`s early), and the BankTrade give-side is port-blind. Known divergences are enumerated in the module header. |
 | `PyBoardStatic` | `src/board_static.rs` | Only test/diag callers. |
 | `chacha8_keystream` | `src/rng.rs` | Byte-parity test only. |
 | `Event` enum + `drain_events()` | `src/{events,env}.rs` | Reached only via `PyRustEnv`. |

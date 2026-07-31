@@ -85,6 +85,7 @@ from catan_rl.policy.obs_schema import (
     RESOURCES_CW,
     RULESET_VERSION,
     ActionType,
+    action_masked_legal,
     is_forced_decision,
 )
 
@@ -215,11 +216,16 @@ def _record_decision(
     ctx: _RecorderContext,
     action: np.ndarray,
     phase: str,
+    mask_overrides: dict[str, np.ndarray] | None = None,
 ) -> None:
     """Build obs + mask AT THE MOMENT of the call and append a record.
 
     Skips recording when the heuristic's chosen action is not actually
-    legal under the current mask. This happens when:
+    legal under the current mask — gated with the RELEVANCE-AWARE
+    :func:`~catan_rl.policy.obs_schema.action_masked_legal`, which checks every
+    head the action type actually uses, not just the type head.
+
+    TYPE-head drops are the ones that actually fire on the canonical corpus:
       * ``trade_with_bank`` is called with r1 the player has < 2/3/4 of
         (it no-ops silently inside the engine);
       * ``draw_devCard`` is called when the player lacks WHEAT/ORE/SHEEP
@@ -229,6 +235,23 @@ def _record_decision(
     corrupt BC training — we'd be supervising on actions the network
     couldn't take under the same mask at inference time. Surfaced by
     a failing TDD test on the BC loader.
+
+    SUB-HEAD drops are a GUARD, not a corpus change. Measured over the
+    canonical teacher (seeds 200-205, 3,674 type-legal rows): **zero** rows
+    were rejected on a sub-head. The reachable cases below are therefore
+    hypothetical for today's teacher and pinned by constructed-state tests
+    (``tests/unit/bc/test_dataset.py``), not observed in generation:
+      * a bank trade whose receive the finite bank cannot supply (spec 009 /
+        D4) — type-legal, but ``resource2_trade[r2]`` is False, so the policy
+        could never sample it (head 5);
+      * a Year-of-Plenty pair the bank cannot honour (heads 4/5);
+      * any corner / edge / tile index the mask forbids (heads 1/2/3).
+    They exist so that a future teacher change — or a mask change — surfaces
+    as a dropped row rather than an unsamplable training label.
+
+    ``mask_overrides`` replaces individual mask keys BEFORE the legality gate.
+    It exists for PLAY_KNIGHT, whose tile head is relevant but whose mask is
+    built one sub-phase early (see ``patched_play_knight``).
 
     Also drops everything taken while ``ctx.suppress_recording`` is set — see
     the field's docstring (the pre-roll dev-card window).
@@ -262,7 +285,9 @@ def _record_decision(
     mask = compute_action_masks(
         ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
     )
-    if not bool(mask["type"][int(action[0])]):
+    if mask_overrides:
+        mask.update(mask_overrides)
+    if not action_masked_legal(mask, action):
         return
     belief = _belief_target_for(ctx.opp_player)
     # D1: relevance-aware. The old ``mask["type"].sum() <= 1`` rule looked at
@@ -357,7 +382,50 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
     # state machine would be in, so the nested robber / free-road decisions
     # are masked exactly as the env would mask them.
     def patched_play_knight(board):
-        _record_decision(ctx, _make_action(ActionType.PLAY_KNIGHT), "main")
+        # The tile head is RELEVANT for PLAY_KNIGHT (the card triggers the
+        # robber move), but at this instant the mask builder is still in the
+        # MAIN branch, which never writes ``tile``. Recording the default 0
+        # under an all-False tile mask taught the corner-of-the-board hex as
+        # the knight's destination on every row. Build the robber-branch tile
+        # mask from the SINGLE existing source — ``compute_action_masks`` with
+        # ``robber_placement_pending`` set — rather than re-deriving the
+        # Friendly-Robber rule a fourth time, and label the row with the hex
+        # the teacher is about to rob. ``choose_player_to_rob`` is pure and
+        # deterministic (no RNG, no mutation) and neither perturbation
+        # subclass overrides it, so it returns the same hex the nested
+        # MOVE_ROBBER row will carry — pinned by a test.
+        #
+        # KNOWN, ACCEPTED SKEW — read this before assuming a BC mask is
+        # reproducible from the stored obs. The resulting row splices a
+        # MAIN-branch ``type`` mask onto a ROBBER-branch ``tile`` mask, and
+        # ``compute_action_masks`` emits that combination for NO env state:
+        # the robber branch returns early with only MOVE_ROBBER in the type
+        # mask (``env/masks.py``), and at serve time ``env/catan_env.py``
+        # IGNORES ``action[3]`` for PLAY_KNIGHT — it sets
+        # ``robber_placement_pending`` and asks for a separate MOVE_ROBBER, so
+        # the tile head there sees an all-False mask. Consequences, both
+        # accepted: the joint log-prob composition for PLAY_KNIGHT differs
+        # between BC and PPO rollouts, and knight rows (~1.6% of tile-relevant
+        # rows) now contribute a real tile CE where they previously
+        # contributed a constant -log(1/19). The alternative — keeping the
+        # fabricated ``tile_idx = 0`` — teaches a wrong hex, which is worse,
+        # and the reference engine agrees with THIS choice: Torevan
+        # ``packages/engine/src/legal-moves.ts`` enumerates ``PlayKnight``
+        # together with its ``hex`` over ``legalRobberHexes(state)``.
+        ctx.env_state.robber_placement_pending = True
+        try:
+            tile_mask = compute_action_masks(
+                ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
+            )["tile"]
+            hex_idx, _player_robbed = ctx.agent_player.choose_player_to_rob(board)
+        finally:
+            ctx.env_state.robber_placement_pending = False
+        _record_decision(
+            ctx,
+            _make_action(ActionType.PLAY_KNIGHT, tile_idx=int(hex_idx)),
+            "main",
+            mask_overrides={"tile": tile_mask},
+        )
         ctx.env_state.robber_placement_pending = True
         try:
             return orig_play_knight(board)

@@ -49,6 +49,40 @@ log-prob must be a singleton, not the type head alone (spec
 setup placements and every robber placement). Forced moves contribute zero
 gradient and inflate accuracy metrics (unanimous panel vote on D4).
 
+**Legality gate at write time** (also relevance-aware): a row is dropped unless
+`policy/obs_schema.action_masked_legal(mask, action)` holds — i.e. every head
+the chosen type actually uses has its chosen index ON its mask, with head 5
+mirroring the autoregressive `heads._resource2_mask` (BankTrade needs
+`resource2_trade[r2]` and `r2 != r1`; YoP swaps in `resource2_yop_same` when
+`r2 == r1`). The earlier gate tested `mask["type"][a[0]]` alone, so a bank
+trade whose receive the finite bank could not supply was written into the
+corpus even though the policy can never sample it. `PLAY_KNIGHT` is the one
+case needing a mask *override*: its tile head is relevant (the card triggers
+the robber move) but the mask is built one sub-phase early, so the recorder
+lifts the robber-branch `tile` mask out of `compute_action_masks` and labels
+the row with the hex `choose_player_to_rob` is about to take — those rows
+previously carried tile index 0 under an all-False tile mask.
+
+Two honest qualifications on that gate:
+
+- **The sub-head half is a GUARD, not a corpus change.** Measured over the
+  canonical teacher (seeds 200-205, 3,674 type-legal rows), *zero* rows are
+  rejected on a sub-head — today's heuristic never proposes a bank-unsupplyable
+  receive or an off-mask corner/edge/tile. The reachable cases are pinned by
+  constructed-state tests, not by generation. The gate's value is that a future
+  teacher or mask change surfaces as a dropped row rather than as an
+  unsamplable training label.
+- **The knight row carries a mask combination the env never emits.** It splices
+  a MAIN-phase `type` mask onto a ROBBER-branch `tile` mask, whereas
+  `compute_action_masks` returns early in the robber branch with only
+  `MOVE_ROBBER` in the type mask, and `env/catan_env.py` ignores `action[3]`
+  for `PLAY_KNIGHT` at serve time (it asks for a separate `MOVE_ROBBER`). A BC
+  mask is therefore **not** reproducible from the stored obs on knight rows,
+  and the joint log-prob composition for `PLAY_KNIGHT` differs between BC and
+  PPO rollouts. Accepted deliberately: the alternative teaches a wrong hex, and
+  the reference engine (Torevan `legal-moves.ts`) enumerates `PlayKnight`
+  together with its `hex`.
+
 **Corpus versioning (D5)**: the filter runs at WRITE time only — `bc/loader.py`
 never re-evaluates `forced`, so a corpus written under an older predicate is
 silently missing whole decision classes and the arrays cannot reveal it.
@@ -57,6 +91,12 @@ silently missing whole decision classes and the arrays cannot reveal it.
 `manifest.json`, and `bc.loader.load_manifest` raises `StaleCorpusError` on an
 unstamped or stale directory. Corpora generated before this ships must be
 **regenerated**, not loosened past the check.
+
+`RULESET_VERSION` is **3**: the write-time contract changed again above
+(knight rows now carry a real hex under a populated `tile` mask, and the
+legality gate is relevance-aware), and nothing in the stored arrays can reveal
+a version-2 corpus's fabricated `tile_idx = 0` knight labels. `FORCED_RULE_VERSION`
+stays **2** — `is_forced_decision` is untouched.
 
 Record per-pair:
 - The full obs dict (per `obs_schema.py`).

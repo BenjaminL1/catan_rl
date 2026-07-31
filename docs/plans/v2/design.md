@@ -743,6 +743,35 @@ catan_rl_v2/
 
 Each phase has a falsifiable gate before moving on.
 
+> **Teacher discontinuity — governs EVERY "WR vs heuristic" number in this
+> document, ABOVE this note as well as below** (spec
+> `bc-coverage-and-bank-legality` D2, 2026-07). Specifically: the Step 3 / 4 /
+> 5 / 6 gates below (0.40 / 0.70 / 0.90 / 0.95), the §6 success criteria, and —
+> on the SEPARATE Phase A/B/C ladder EARLIER in this document — the §1 target
+> "≥ 0.95 WR against the engine heuristic", Phase A's ≥ 0.50, Phase B's ≥ 0.90
+> and Phase C's ≥ 0.95. Nothing that measures against the heuristic is exempt.
+>
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). **Caveat on scope:** this is the CANONICAL
+> heuristic — `heuristicAIPlayer.move()` opens with `heuristic_play_dev_card`.
+> `bc/perturbed_heuristic.WeightNoisedHeuristicAIPlayer.move()` mirrors the
+> canonical body WITHOUT that call, so the `weight_noised` teacher config still
+> plays no dev cards on its own seat. That is a known gap in D2's
+> implementation, not an intended asymmetry; it does not affect the eval rod
+> (which uses the canonical heuristic) but it does mean the BC corpus's
+> dev-card coverage is uneven across teacher configs.
+>
+> The heuristic is the standing measurement rod, so every threshold in this
+> document now denotes a HARDER bar than it did when it was written, and every
+> banked number in the v8 lineage was measured against the WEAKER teacher.
+> These thresholds were calibrated against a heuristic that could not play a
+> development card and require empirical re-baselining before the next
+> promotion decision. Do not compare a post-D2 WR-vs-heuristic against a pre-D2
+> one; re-measure the baseline before reading any gate as pass/fail. The
+> numeric bars are deliberately left UNCHANGED — what changed is the yardstick
+> they are read on.
+
 ### Step 1 — Engine `copy()` + clean Gym env (1-2 days)
 
 - Add `CatanGame.copy()` (deepcopy board, players, dice bag, tracker, RNG).

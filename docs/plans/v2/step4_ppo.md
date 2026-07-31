@@ -194,6 +194,28 @@ tests/
 
 ## 6. Acceptance gate
 
+> **Teacher discontinuity (spec `bc-coverage-and-bank-legality` D2, 2026-07).**
+> `agents/heuristic.py` now PLAYS development cards (Knight / YoP / Monopoly /
+> Road Builder — measured 85 / 26 / 20 / 19 plays per 20 recorded games; it
+> previously played exactly zero). **Caveat on scope:** this is the CANONICAL
+> heuristic — `heuristicAIPlayer.move()` opens with `heuristic_play_dev_card`.
+> `bc/perturbed_heuristic.WeightNoisedHeuristicAIPlayer.move()` mirrors the
+> canonical body WITHOUT that call, so the `weight_noised` BC teacher config
+> still plays no dev cards on its own seat (a known gap in D2's
+> implementation). The eval rod itself is the canonical heuristic, so the
+> re-baselining below applies in full.
+>
+> The heuristic is the standing measurement rod, so every "WR vs heuristic"
+> threshold below — Gate 1's
+> **0.90** included — now denotes a HARDER bar than it did when it was
+> written, and every banked number in the v8 lineage was measured against the
+> WEAKER teacher. These thresholds were calibrated against a heuristic that
+> could not play a development card and require empirical re-baselining before
+> the next promotion decision. Do not compare a post-D2 WR-vs-heuristic against
+> a pre-D2 one; re-measure the baseline before reading any gate as pass/fail.
+> The numeric bars are deliberately left UNCHANGED — what changed is the
+> yardstick they are read on.
+
 Per `v2_design.md` §5 Step 4 + faculty-corrected §6:
 
 1. **Gate 1 — convergence**:

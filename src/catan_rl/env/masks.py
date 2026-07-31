@@ -111,13 +111,11 @@ def compute_action_masks(
         }
 
     # Resources the finite bank (spec 009) can still supply. A receive the bank
-    # cannot honour must never be OFFERED: ``player.trade_with_bank``
-    # early-returns on an empty bank leaving state BYTE-IDENTICAL, which a
-    # stable-argmax policy re-picks forever (``eval/harness`` loops until
-    # terminated/truncated and truncation only advances at a turn boundary).
-    # Gating at the legality layer removes that fixed point — adding an
-    # apply-time no-op is what creates it. Mirrors the supply checks in
-    # Torevan ``packages/engine/src/legal-moves.ts``.
+    # cannot honour is NOT A LEGAL MOVE, so it must not be OFFERED. That is the
+    # whole justification: the reference engine — Torevan
+    # ``packages/engine/src/legal-moves.ts`` — ENUMERATES only fully-supplyable
+    # (give, receive) pairs, so anything this mask offers beyond that set is
+    # ruleset drift, and eval numbers are only comparable while the two agree.
     bank_supplied = np.array([board.resourceBank.get(r, 0) >= 1 for r in RESOURCES_CW], dtype=bool)
     # Resources the bank can supply TWICE — the Year-of-Plenty doubled pick.
     bank_double = np.array([board.resourceBank.get(r, 0) >= 2 for r in RESOURCES_CW], dtype=bool)
