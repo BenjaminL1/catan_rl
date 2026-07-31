@@ -594,7 +594,13 @@ class Metadata:
     git_sha: str | None = None
     """v2. ``git rev-parse HEAD`` of the tree the game was played on, or
     ``None`` when it could not be read. Without it a recorded game names no
-    code, and the ruleset, the obs schema and the harness all move."""
+    code, and the ruleset, the obs schema and the harness all move.
+
+    MAY CARRY A ``-dirty`` SUFFIX, making the value 45 chars rather than 40:
+    the writer appends it when the game-affecting trees (``src scripts crates
+    configs``) had uncommitted edits, because a bare SHA would then name code
+    the game was NOT played on. Consumers must not assume a 40-char string —
+    compare on ``value.removesuffix("-dirty")`` and read the suffix as a flag."""
 
     ckpt_sha256: str | None = None
     """v2. SHA-256 of the checkpoint FILE the policy seat was loaded from, or

@@ -78,9 +78,11 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   games log `"hud": 2` for that information regime. **Both seats are POST-ROLL
   ONLY** — the human's pre-roll dev-card window is gone, because `env/masks.py`
   emits only `ROLL_DICE` while `roll_pending` so the policy structurally cannot
-  answer it, and the auto-played human seat (MCTS clones, `--self-test`) has the
-  base env's `heuristic_pre_roll` suppressed so the bot's search models the same
-  seat the human actually plays; games log `"preroll": false` (a stopgap until
+  answer it, and the auto-played human seat (headless `--self-test`) has the base
+  env's `heuristic_pre_roll` suppressed so the auto-played seat matches the one
+  the human actually plays (MCTS clones are unaffected — a clone always carries a
+  snapshot opponent and the pre-roll is gated on there being none); games log
+  `"preroll": false` (a stopgap until
   `preroll-dev-cards-r1`, which gives BOTH seats the window and needs a
   retrain). The human resource picker (`gui/view.get_resource_selection`) routes
   through the finite bank, the driver asserts `bank[R] + Σ hands[R] == 19` after

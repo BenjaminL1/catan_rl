@@ -47,10 +47,11 @@ trace of the moves it contains but is NOT an outcome/strength read.
 **Both seats are POST-ROLL ONLY.** The human gets no pre-roll dev-card window,
 because ``env/masks.py`` emits only ``ROLL_DICE`` while ``roll_pending`` — the
 policy structurally cannot use that window, so granting it to the human alone
-would be an asymmetry, not a courtesy. The auto-played human seat
-(MCTS clones, ``--self-test``) likewise has the base env's
-``heuristic_pre_roll`` suppressed, so the bot's search models the seat the human
-actually plays. Games record ``"preroll": false``. This is a stopgap until
+would be an asymmetry, not a courtesy. The auto-played human seat (headless
+``--self-test``) likewise has the base env's ``heuristic_pre_roll`` suppressed,
+so the auto-played seat matches the one the human actually plays. (MCTS clones
+are unaffected: a clone always carries a snapshot opponent, and the pre-roll is
+gated on there being none.) Games record ``"preroll": false``. This is a stopgap until
 ``preroll-dev-cards-r1`` gives BOTH seats the window (which needs a retrain).
 
 FIDELITY CAVEATS on that replay (do not discover these later):
@@ -152,6 +153,13 @@ def _git_sha() -> str | None:
     ``bench_engine._git_sha``): the SHA alone would name code the game was NOT
     played on, which is exactly the mis-attribution this key exists to prevent.
     The checkpoint side is content-hashed for the same reason.
+
+    The dirtiness probe is SCOPED to ``src scripts crates configs`` with
+    ``--untracked-files=no``. Unscoped it is dirty on this repo essentially
+    always (editor scratch, ``scripts/dev/*.js``, untracked ``data/``), which
+    would make the suffix constant — present on every game, therefore carrying
+    no information — while also making the value 45 chars instead of 40.
+    Consumers should treat the value as ``sha[:40]`` and the suffix as a flag.
     """
     import subprocess
     from pathlib import Path
@@ -168,8 +176,24 @@ def _git_sha() -> str | None:
         sha = out.stdout.strip()
         if not sha:
             return None
+        # SCOPED, and --untracked-files=no. An unscoped probe is dirty on this
+        # repo essentially always — scratch under ``.claude/``, ``scripts/dev/*.js``
+        # and untracked ``data/`` alone flip it — so ``-dirty`` would be
+        # unconditionally ON and the suffix would carry NO information while
+        # simultaneously making the value an unparseable 45 chars. Restrict it to
+        # the trees that can actually change how a game plays.
         status = subprocess.run(
-            ["git", "status", "--porcelain"],
+            [
+                "git",
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+                "--",
+                "src",
+                "scripts",
+                "crates",
+                "configs",
+            ],
             cwd=root,
             capture_output=True,
             text=True,
@@ -560,13 +584,20 @@ def _build_human_env_class() -> type:
             ``preroll-dev-cards-r1.md`` (RATIFIED) gives BOTH seats the window
             and requires a retrain.
             """
-            if not self._use_gui():  # clones + self-test
-                # The base env plays a heuristic pre-roll Knight for the
-                # opponent seat whenever no snapshot drives it — which is EVERY
-                # MCTS clone rollout and every --self-test game. Left alone, the
-                # bot would search against a human who can pre-roll while the
-                # real human at the keyboard cannot: the same asymmetry D3
-                # removed, reintroduced inside the search model.
+            if not self._use_gui():  # headless auto-play (--self-test)
+                # The base env plays a heuristic pre-roll Knight for the opponent
+                # seat whenever no snapshot drives it, so a headless auto-played
+                # human seat would pre-roll while the real human at the keyboard
+                # cannot — the same asymmetry D3 removed, reintroduced in the
+                # auto-play path.
+                #
+                # SCOPE, measured not assumed: this does NOT cover MCTS clones.
+                # ``search/mcts.py`` clone_env always ends with
+                # ``clone.set_snapshot_opponent(opponent)`` and ``search/agent.py``
+                # always builds a non-None FrozenSnapshotOpponent, while
+                # ``env/catan_env.py`` gates the pre-roll on
+                # ``_snapshot_opponent is None`` — so it can never fire in a clone
+                # (0 calls observed across a full search on pristine main).
                 base_opp: Any = self.opponent_player
                 if getattr(base_opp, "heuristic_pre_roll", None) is not None:
                     base_opp.heuristic_pre_roll = _no_pre_roll
@@ -1708,7 +1739,12 @@ def play_interactive(
                 "          writing PARTIAL artifacts before exit.",
                 flush=True,
             )
-            traceback.print_exc()
+            # A deliberate window-close is NOT a crash. The five GUI quit paths
+            # raise ``SystemExit(0)``; dumping a stack trace for one makes a
+            # normal quit read as a failure in the console the human is watching.
+            # Anything else genuinely is unexpected and keeps its traceback.
+            if not isinstance(exc, SystemExit):
+                traceback.print_exc()
             break
 
     assert env.agent_player is not None and env.opponent_player is not None
@@ -1835,7 +1871,14 @@ def play_interactive(
     # Hold the finished board (and the terminal result line) on screen. LAST,
     # after every artifact is on disk, so dismissing the window can never cost
     # the replay or the JSONL line.
-    _hold_final_screen()
+    #
+    # NOT after an abort. The human already asked to quit, and only ONE of the
+    # quit paths tears pygame down first — the three ``sys.exit(0)`` sites in
+    # ``gui/view.py`` do not — so the early-return inside ``_hold_final_screen``
+    # would not fire and the process would sit for ``FINAL_SCREEN_HOLD_S`` (120 s)
+    # after a window-close. Artifacts are already written by this point either way.
+    if not aborted:
+        _hold_final_screen()
 
 
 # ---------------------------------------------------------------------------

@@ -53,8 +53,19 @@ class TestRenamePin:
             text=True,
             check=False,
         ).stdout.split()
-        # The spec itself documents the rename and is allowed to name the old file.
-        offenders = [p for p in out if not p.startswith(".claude/veriloop/specs/")]
+        # Two exemptions, both for artifacts that RECORD the past rather than
+        # describe the present:
+        #   * ``specs/`` — a spec documents the rename, so it must name the old
+        #     file to explain what it renamed.
+        #   * ``history/`` — dated, machine-written attestation records that quote
+        #     spec text verbatim at the moment a branch landed. They are immutable
+        #     audit snapshots; an old name inside one is a true statement about a
+        #     past tree, and rewriting it would falsify the record.
+        # Nothing else is exempt: the pin exists so no LIVE code or doc leaves a
+        # reader hunting for a script that no longer exists. (Note this comment
+        # must not spell the old stem either — the grep would match this file.)
+        _RECORDS_THE_PAST = (".claude/veriloop/specs/", ".claude/veriloop/history/")
+        offenders = [p for p in out if not p.startswith(_RECORDS_THE_PAST)]
         assert offenders == [], f"stale {_OLD_STEM} references: {offenders}"
 
     def test_locked_design_doc_still_reserves_the_path(self) -> None:
@@ -715,9 +726,15 @@ class TestNoPreRollWindow:
 
         The GUI branch has no pre-roll window, but the headless branch delegates
         to the base env, which plays ``heuristic_pre_roll`` for the opponent
-        whenever no snapshot drives it — i.e. every MCTS clone rollout and every
-        ``--self-test`` game. Left alone the bot plans against a human who can
-        pre-roll a Knight, which is the asymmetry D3 removed."""
+        whenever no snapshot drives it — i.e. headless auto-play such as
+        ``--self-test``. Left alone the auto-played human seat pre-rolls a Knight
+        while the real human at the keyboard cannot, which is the asymmetry D3
+        removed.
+
+        SCOPE: this is NOT about MCTS clones. A clone always carries a snapshot
+        opponent (``search/mcts.py`` clone_env → ``set_snapshot_opponent``), and
+        ``env/catan_env.py`` gates the pre-roll on ``_snapshot_opponent is None``,
+        so it cannot fire there."""
         pytest.importorskip("torch")
         mod = _load_module()
         env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
