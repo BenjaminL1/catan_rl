@@ -1298,7 +1298,14 @@ class _HumanGameRecorder:
         sims: int | None,
         clairvoyant: bool,
         reveal_bot: bool,
+        partial: bool = False,
     ) -> Any:
+        """Build the :class:`Replay` for the game observed so far.
+
+        ``partial=True`` means the game did NOT play out — the driver's loop was
+        interrupted (window closed, ^C, a crash) and this is a salvage write.
+        Keyword-only with a default, so existing callers are unaffected.
+        """
         import datetime as _dt
 
         from catan_rl.replay.recorder_loop import _build_board_static_from_dict
@@ -1348,7 +1355,7 @@ class _HumanGameRecorder:
             winner_seat=winner_seat,
             final_vp=final_vp,
             total_steps=len(self.steps),
-            partial=False,
+            partial=bool(partial),
             mode=mode,
             sims=sims,
             clairvoyant=clairvoyant,
@@ -1467,77 +1474,101 @@ def play_interactive(
     terminated = truncated = False
     safety_cap = env.max_turns * 50
     n_steps = 0
+    aborted = False
     while not terminated and not truncated:
-        # Show a clear "bot thinking" flag before the (blocking) search so turns
-        # don't feel like they pass silently. The window can't animate during the
-        # search itself (it's a synchronous call); lower --sims for snappier turns.
-        view.turn_banner = ("BOT IS THINKING...", "gray30")
-        view.displayGameScreen()
-        # Bot (agent seat) decides + applies its action; this also folds the
-        # human's whole turn internally via the overridden _opponent_* hooks.
-        action = agent.choose_action(env)
-        print(f"\n[BOT] {_describe_bot_move(action)}", flush=True)
-        # HUD variant names the target index; the stdout/ledger label is frozen.
-        #
-        # A ROLL is logged AFTER the step, because the value only exists once the
-        # step has run (``env.last_dice_roll``). Without this the bot's roll read
-        # a bare "Roll dice" while the human's read "You rolled 8" — leaving the
-        # persistent log strictly LESS informative than the single overwritten
-        # banner it replaces, on the most-consulted public fact in the game.
-        # Deferring the append is safe for a roll specifically: only END_TURN
-        # folds the human's turn, so nothing else can interleave ahead of it.
-        from catan_rl.env.catan_env import ActionType as _AT
+        try:
+            # Show a clear "bot thinking" flag before the (blocking) search so turns
+            # don't feel like they pass silently. The window can't animate during the
+            # search itself (it's a synchronous call); lower --sims for snappier turns.
+            view.turn_banner = ("BOT IS THINKING...", "gray30")
+            view.displayGameScreen()
+            # Bot (agent seat) decides + applies its action; this also folds the
+            # human's whole turn internally via the overridden _opponent_* hooks.
+            action = agent.choose_action(env)
+            print(f"\n[BOT] {_describe_bot_move(action)}", flush=True)
+            # HUD variant names the target index; the stdout/ledger label is frozen.
+            #
+            # A ROLL is logged AFTER the step, because the value only exists once the
+            # step has run (``env.last_dice_roll``). Without this the bot's roll read
+            # a bare "Roll dice" while the human's read "You rolled 8" — leaving the
+            # persistent log strictly LESS informative than the single overwritten
+            # banner it replaces, on the most-consulted public fact in the game.
+            # Deferring the append is safe for a roll specifically: only END_TURN
+            # folds the human's turn, so nothing else can interleave ahead of it.
+            from catan_rl.env.catan_env import ActionType as _AT
 
-        is_roll = int(action[0]) == int(_AT.ROLL_DICE)
-        if not is_roll:
-            hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
-        _obs, _r, terminated, truncated, _info = env.step(action)
-        # A step folds the human's WHOLE turn (picker included), so this is the
-        # tightest place the invariant can be checked from the driver.
-        check_bank(env)
-        if is_roll:
-            hud_log.append(f"Bot: Rolled {int(getattr(env, 'last_dice_roll', 0))}")
-        if recorder is not None:
-            # Recording is a SIDE CHANNEL: a recorder fault must never kill or
-            # erase the game it is observing (an hour of human play), so it is
-            # detached on the first failure and the game plays on.
-            try:
-                recorder.after_env_step(
-                    action,
-                    getattr(agent, "last_internals", None),
-                    terminated=terminated,
-                    truncated=truncated,
-                )
-            except Exception as exc:  # never abort the game over a recorder fault
-                print(f"[WARN] replay recorder disabled after error: {exc!r}", flush=True)
-                recorder = None
-        view.displayGameScreen()
-        assert env.agent_player is not None and env.opponent_player is not None
-        # The bot's VP-card count is HIDDEN information: print its VISIBLE VP
-        # unless --reveal-bot. Your own total is your own information.
-        bot_vp_label = "Bot VP" if reveal_bot else "Bot visible VP"
-        bot_vp_shown = (
-            int(env.agent_player.victoryPoints) if reveal_bot else _visible_vp(env.agent_player)
-        )
-        print(
-            f"  {bot_vp_label}={bot_vp_shown} | You VP={env.opponent_player.victoryPoints}",
-            flush=True,
-        )
-        # Replayable record: the bot's action tuple + the VP state after it. The
-        # human's whole turn is folded inside env.step, so this is a bot-move log
-        # with score checkpoints, not a full move-by-move transcript.
-        move_log.append(
-            {
-                "step": n_steps,
-                "bot_action": [int(x) for x in action],
-                "bot_action_label": _describe_bot_move(action),
-                "bot_vp": int(env.agent_player.victoryPoints),
-                "human_vp": int(env.opponent_player.victoryPoints),
-            }
-        )
-        n_steps += 1
-        if n_steps > safety_cap:
-            print("[WARN] safety cap hit; ending.", flush=True)
+            is_roll = int(action[0]) == int(_AT.ROLL_DICE)
+            if not is_roll:
+                hud_log.append(f"Bot: {_describe_bot_move(action, with_location=True)}")
+            _obs, _r, terminated, truncated, _info = env.step(action)
+            # A step folds the human's WHOLE turn (picker included), so this is the
+            # tightest place the invariant can be checked from the driver.
+            check_bank(env)
+            if is_roll:
+                hud_log.append(f"Bot: Rolled {int(getattr(env, 'last_dice_roll', 0))}")
+            if recorder is not None:
+                # Recording is a SIDE CHANNEL: a recorder fault must never kill or
+                # erase the game it is observing (an hour of human play), so it is
+                # detached on the first failure and the game plays on.
+                try:
+                    recorder.after_env_step(
+                        action,
+                        getattr(agent, "last_internals", None),
+                        terminated=terminated,
+                        truncated=truncated,
+                    )
+                except Exception as exc:  # never abort the game over a recorder fault
+                    print(f"[WARN] replay recorder disabled after error: {exc!r}", flush=True)
+                    recorder = None
+            view.displayGameScreen()
+            assert env.agent_player is not None and env.opponent_player is not None
+            # The bot's VP-card count is HIDDEN information: print its VISIBLE VP
+            # unless --reveal-bot. Your own total is your own information.
+            bot_vp_label = "Bot VP" if reveal_bot else "Bot visible VP"
+            bot_vp_shown = (
+                int(env.agent_player.victoryPoints) if reveal_bot else _visible_vp(env.agent_player)
+            )
+            print(
+                f"  {bot_vp_label}={bot_vp_shown} | You VP={env.opponent_player.victoryPoints}",
+                flush=True,
+            )
+            # Replayable record: the bot's action tuple + the VP state after it. The
+            # human's whole turn is folded inside env.step, so this is a bot-move log
+            # with score checkpoints, not a full move-by-move transcript.
+            move_log.append(
+                {
+                    "step": n_steps,
+                    "bot_action": [int(x) for x in action],
+                    "bot_action_label": _describe_bot_move(action),
+                    "bot_vp": int(env.agent_player.victoryPoints),
+                    "human_vp": int(env.opponent_player.victoryPoints),
+                }
+            )
+            n_steps += 1
+            if n_steps > safety_cap:
+                print("[WARN] safety cap hit; ending.", flush=True)
+                break
+        except BaseException as exc:
+            # A misclick must not destroy an hour of play. BOTH artifact writes
+            # live AFTER this loop, and five GUI paths call ``sys.exit(0)`` on
+            # ``pygame.QUIT``, so closing the window mid-game used to discard the
+            # whole game silently.
+            #
+            # BaseException, not Exception, ON PURPOSE: ``SystemExit`` (those quit
+            # paths) and ``KeyboardInterrupt`` (^C) are both BaseException and
+            # would slip straight through an ``except Exception`` — which is the
+            # exact failure being fixed. Nothing is re-raised: falling through to
+            # the write block is the point, and the record is marked ``partial``
+            # so a half-finished game can never be read as a played-out one.
+            import traceback
+
+            aborted = True
+            print(
+                f"\n[ABORTED] game interrupted after {n_steps} bot moves: {exc!r}\n"
+                "          writing PARTIAL artifacts before exit.",
+                flush=True,
+            )
+            traceback.print_exc()
             break
 
     assert env.agent_player is not None and env.opponent_player is not None
@@ -1574,6 +1605,7 @@ def play_interactive(
                 sims=sims if use_search else None,
                 clairvoyant=bool(use_search),
                 reveal_bot=bool(reveal_bot),
+                partial=aborted,
             )
             stem = f"{time.strftime('%Y%m%dT%H%M%S')}_seed{seed}"
             dest = Path(replay_dir) / f"{stem}.json"
@@ -1640,6 +1672,11 @@ def play_interactive(
             # (env/masks.py emits only ROLL_DICE while roll_pending), so its
             # result is not attributable. See preroll-dev-cards-r1.md.
             "preroll": False,
+            # TRUE = the driver loop was interrupted (window closed, ^C, crash)
+            # and these artifacts are a salvage write, not a played-out game.
+            # A MISSING key means the game predates the crash-safe write, when
+            # an interrupted game produced NO record at all.
+            "partial": bool(aborted),
             "replay_path": replay_path,
             "moves": move_log,
         }

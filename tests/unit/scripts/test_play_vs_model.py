@@ -853,3 +853,105 @@ class TestBankConservationGuard:
 
         check(env)  # detached after the first report — no repeat spam
         assert len(hud_log) == 1
+
+
+class TestCrashSafeArtifacts:
+    """A misclick must not destroy an hour of play.
+
+    ``env.step`` sat in a bare ``while`` loop with BOTH artifact writes after it,
+    and five GUI paths call ``sys.exit(0)`` on ``pygame.QUIT``. Closing the
+    window mid-game therefore discarded the entire game with no partial write.
+    ``SystemExit`` is the realistic interruption AND a ``BaseException``, so it
+    is what is injected here — an ``except Exception`` would let it through and
+    this pin would go red, which is the point.
+    """
+
+    def _run(self, tmp_path, monkeypatch, *, exc):  # type: ignore[no-untyped-def]
+        import json
+
+        pytest.importorskip("torch")
+        mod = _load_module()
+
+        class _StubAgent:
+            last_internals = None
+
+            def choose_action(self, env):  # type: ignore[no-untyped-def]
+                return _first_legal_action(env)
+
+        monkeypatch.setattr(mod, "_load_raw_agent", lambda ckpt, seed: _StubAgent())
+        # The hold needs a real display; it is not what is under test.
+        monkeypatch.setattr(mod, "_hold_final_screen", lambda: None)
+
+        real_build = mod._build_human_env_class
+
+        def _build_exploding_env_class():  # type: ignore[no-untyped-def]
+            cls = real_build()
+            n = [0]
+            base_step = cls.step
+
+            def step(self, action):  # type: ignore[no-untyped-def]
+                n[0] += 1
+                if n[0] > 3:
+                    raise exc
+                return base_step(self, action)
+
+            cls.step = step
+            # Auto-play the human seat: the real GUI windows block on mouse
+            # input, which is not what this pin is about. This is the env's own
+            # headless branch (MCTS clones + ``--self-test`` take it too).
+            cls._use_gui = lambda self: False  # type: ignore[method-assign]
+            return cls
+
+        monkeypatch.setattr(mod, "_build_human_env_class", _build_exploding_env_class)
+
+        log_path = tmp_path / "games.jsonl"
+        # human_seat=1 -> the BOT drafts first, so reset() needs no human input.
+        mod.play_interactive(
+            ckpt="unused",
+            sims=1,
+            seed=5,
+            human_seat=1,
+            log_path=str(log_path),
+            replay_dir=str(tmp_path),
+        )
+        record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+        replays = sorted(tmp_path.glob("*.json"))
+        assert len(replays) == 1, replays
+        return record, json.loads(replays[0].read_text(encoding="utf-8"))
+
+    def test_a_mid_game_systemexit_still_writes_both_artifacts(
+        self,
+        tmp_path,
+        monkeypatch,  # type: ignore[no-untyped-def]
+    ) -> None:
+        record, replay = self._run(tmp_path, monkeypatch, exc=SystemExit(0))
+        assert record["partial"] is True
+        assert replay["metadata"]["partial"] is True
+        assert record["winner"] is None
+
+    def test_a_keyboardinterrupt_is_salvaged_too(
+        self,
+        tmp_path,
+        monkeypatch,  # type: ignore[no-untyped-def]
+    ) -> None:
+        record, replay = self._run(tmp_path, monkeypatch, exc=KeyboardInterrupt())
+        assert record["partial"] is True
+        assert replay["metadata"]["partial"] is True
+
+    def test_the_except_clause_is_baseexception(self) -> None:
+        """``except Exception`` would let every ``sys.exit(0)`` path through."""
+        import ast
+
+        tree = ast.parse(_SCRIPT.read_text(encoding="utf-8"))
+        fn = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "play_interactive"
+        )
+        handlers = [
+            h.type.id
+            for n in ast.walk(fn)
+            for h in getattr(n, "handlers", [])
+            if isinstance(h.type, ast.Name)
+        ]
+        assert "BaseException" in handlers, handlers
