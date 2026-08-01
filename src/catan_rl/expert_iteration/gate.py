@@ -23,15 +23,21 @@ def run_gate(
     heuristic_floor: float = 0.60,
 ) -> dict[str, Any]:
     """Return the PASS/FAIL verdict + WRs + CIs (search-free distilled-vs-raw-v6)."""
-    from catan_rl.eval.harness import EvalHarness, evaluate_policy_vs_policy
+    from catan_rl.eval.harness import EvalHarness, checkpoint_ruleset, evaluate_policy_vs_policy
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
 
     champ = cast(
         _PolicyActor,
         build_actor(PlayerSpec(kind="policy", ckpt_path=distilled_ckpt), seed=seed, device=device),
     ).policy
+    # The distilled seat plays the epoch its OWN checkpoint was trained under
+    # (absent stamp => R0); ``v6_ckpt``'s is read inside the primitive, so a
+    # cross-epoch gate REFUSES rather than scoring a mixed matchup (spec D8).
+    champ_ruleset = checkpoint_ruleset(distilled_ckpt)
 
-    quick = evaluate_policy_vs_policy(champ, v6_ckpt, n_games=n_quick, seed=seed, device=device)
+    quick = evaluate_policy_vs_policy(
+        champ, v6_ckpt, n_games=n_quick, seed=seed, device=device, ruleset=champ_ruleset
+    )
     verdict: dict[str, Any] = {
         "distilled_ckpt": str(distilled_ckpt),
         "v6_ckpt": str(v6_ckpt),
@@ -49,7 +55,12 @@ def run_gate(
         return verdict
 
     confirm = evaluate_policy_vs_policy(
-        champ, v6_ckpt, n_games=n_confirm, seed=seed + n_quick, device=device
+        champ,
+        v6_ckpt,
+        n_games=n_confirm,
+        seed=seed + n_quick,
+        device=device,
+        ruleset=champ_ruleset,
     )
     # Forgetting guard: the distilled policy must still crush the heuristic.
     heur = (
@@ -58,6 +69,7 @@ def run_gate(
             n_games_per_seat=max(1, n_quick // 2),
             seed=seed,
             device=device,
+            ruleset=champ_ruleset,
         )
         .run(champ)
         .results[0]

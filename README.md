@@ -74,6 +74,13 @@ concat → Linear → LayerNorm → GELU → **512-dim trunk** (`CatanPolicy`,
 Types: `0 BuildSettlement, 1 BuildCity, 2 BuildRoad, 3 EndTurn, 4 MoveRobber,
 5 BuyDevCard, 6 PlayKnight, 7 PlayYoP, 8 PlayMonopoly, 9 PlayRoadBuilder,
 10 BankTrade, 11 Discard, 12 RollDice`. There are **no P2P-trade actions**.
+Under ruleset epoch **R1** (`src/catan_rl/env/ruleset.py`; selected by
+`rollout.ruleset` in the training config) the `RollDice` node also offers a
+one-card pre-roll dev window — `PlayKnight` / `PlayYoP` / `PlayMonopoly`, never
+`PlayRoadBuilder` — on **both** policy seats. Epoch **R0**, the code-level
+default and the epoch every banked number was measured under, offers `RollDice`
+alone. Epochs are not cross-comparable, each checkpoint carries its epoch in its
+saved config, and a cross-epoch head-to-head is refused.
 Each head is masked; the joint log-prob sums only the relevant heads
 (per-type relevance buffers). Context-using heads (corner/res1/res2) use
 FiLM/AdaLN conditioning. A value head and a 5-way belief head share the trunk.

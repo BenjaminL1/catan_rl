@@ -52,6 +52,23 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--device", default="cpu", help="cpu (default) / mps / cuda / auto")
     p.add_argument("--max-turns", type=int, default=400)
     p.add_argument("--out", default=None, help="write the result JSON here")
+    p.add_argument(
+        "--ruleset",
+        default=None,
+        choices=("R0", "R1"),
+        help=(
+            "ruleset epoch the SEARCH seat plays. Default: read off --ckpt's own "
+            "saved config (absent stamp => R0). A 'policy:PATH' opponent's epoch "
+            "is read off its checkpoint the same way and a mismatch is REFUSED "
+            "unless --allow-mixed-ruleset; heuristic/random opponents play the "
+            "same epoch as the search seat"
+        ),
+    )
+    p.add_argument(
+        "--allow-mixed-ruleset",
+        action="store_true",
+        help="give each seat the epoch it was trained for instead of refusing",
+    )
     return p
 
 
@@ -68,7 +85,13 @@ def main(argv: list[str] | None = None) -> int:
     # Heavy imports scoped to main (keep CLI import cheap; no GUI on the path).
     from dataclasses import replace
 
+    from catan_rl.eval.harness import checkpoint_ruleset
     from catan_rl.search.config import SearchConfig
+
+    # Resolve the search seat's epoch up front so the printed/JSON summary
+    # records the epoch actually played, never a bare ``None``.
+    if args.ruleset is None:
+        args.ruleset = checkpoint_ruleset(ckpt)
 
     cfg = SearchConfig(
         sims_per_move=args.sims,
@@ -92,6 +115,7 @@ def main(argv: list[str] | None = None) -> int:
         "wr": result.wr,
         "ci_lower": result.ci.lower,
         "ci_upper": result.ci.upper,
+        "ruleset": args.ruleset,
         "rules_violations": len(result.rules_violations),
         "n_seat0": result.n_seat0,
         "n_seat1": result.n_seat1,
@@ -128,6 +152,8 @@ def _run(
             seed=args.seed,
             device=args.device,
             max_turns=args.max_turns,
+            ruleset=args.ruleset,
+            allow_mixed_ruleset=args.allow_mixed_ruleset,
         )
 
     if opponent_spec not in ("heuristic", "random"):
@@ -146,6 +172,9 @@ def _run(
         seed=args.seed,
         max_turns=args.max_turns,
         opponent_ref=opponent_spec,
+        # No opponent checkpoint to read an epoch off — the scripted body plays
+        # whatever the search seat does.
+        ruleset=args.ruleset,
     )
 
 

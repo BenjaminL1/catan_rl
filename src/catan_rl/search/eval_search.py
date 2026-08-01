@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 import torch
 
+from catan_rl.env.ruleset import RULESET_R0, validate_ruleset
 from catan_rl.eval.harness import EvalMatchupResult, GameOutcome
 from catan_rl.eval.rules_invariants import run_all_invariants
 from catan_rl.eval.wilson import wilson_interval
@@ -108,12 +109,21 @@ def run_search_matchup(
     opponent_ref: str,
     audit_rules: bool = True,
     alpha: float = 0.05,
+    ruleset: str = RULESET_R0,
+    opponent_ruleset: str | None = None,
 ) -> EvalMatchupResult:
     """Seat-symmetrized search-vs-opponent matchup; returns WR + Wilson CI.
 
     ``opponent`` is a frozen snapshot driving the opponent seat (None ->
     ``opponent_type``'s engine body, e.g. the heuristic). Mirrors
     ``EvalHarness._run_matchup_games`` seeding so two runs at one seed match.
+
+    ``ruleset`` is the epoch the SEARCH agent's seat plays; ``opponent_ruleset``
+    (default: same) is the other seat's. Both default to ``R0`` — the epoch the
+    banked +54.6 Elo search rung was measured under — so an R1 policy is never
+    seated under R0 rules by omission (spec ``preroll-dev-cards-r1`` D8). The
+    caller resolves the epochs; :func:`evaluate_search_vs_policy` reads them off
+    the checkpoints and refuses a mismatch.
     """
     from catan_rl.env.catan_env import CatanEnv
 
@@ -121,7 +131,21 @@ def run_search_matchup(
     py_state = random.getstate()
     torch_state = torch.random.get_rng_state()
     try:
-        env = CatanEnv(opponent_type=opponent_type, max_turns=max_turns)
+        # ``audit_events`` retains the broadcast stream so the post-game
+        # ``run_all_invariants`` call below can actually run its event-stream
+        # checks — with no retained log they silently no-op. Tied to
+        # ``audit_rules``: with the audit off nothing reads the log, and every
+        # MCTS ``clone_env`` deep-copies it (a full game emits thousands of
+        # events), so retaining it unread would slow the search path down.
+        env = CatanEnv(
+            opponent_type=opponent_type,
+            max_turns=max_turns,
+            audit_events=audit_rules,
+            ruleset=validate_ruleset(ruleset),
+            opponent_ruleset=(
+                None if opponent_ruleset is None else validate_ruleset(opponent_ruleset)
+            ),
+        )
         if opponent is not None:
             env.set_snapshot_opponent(opponent)
         try:
@@ -166,16 +190,44 @@ def evaluate_search_vs_policy(
     device: str = "cpu",
     max_turns: int = 400,
     audit_rules: bool = True,
+    ruleset: str | None = None,
+    opponent_ruleset: str | None = None,
+    allow_mixed_ruleset: bool = False,
 ) -> EvalMatchupResult:
     """Evaluate a search agent (wrapping ``search_ckpt``) vs a raw ``opponent_ckpt``.
 
     Both checkpoints load through the existing ``build_actor`` (no new loader, no
     state-dict change). The search models its opponent as its OWN wrapped policy
     (exact when ``search_ckpt == opponent_ckpt`` — the bake-off case).
+
+    Each seat's ruleset epoch defaults to the one stamped on its OWN checkpoint
+    (:func:`~catan_rl.eval.harness.checkpoint_ruleset`; absent ⇒ ``R0``), and a
+    mismatch is REFUSED with
+    :class:`~catan_rl.eval.harness.CrossRulesetEvalError` unless
+    ``allow_mixed_ruleset=True`` — same contract as
+    :func:`~catan_rl.eval.harness.evaluate_policy_vs_policy` (D8). Search is a
+    place this matters twice over: ``search/mcts.py`` short-circuits forced
+    nodes, so under R0 a roll node costs zero simulations and under R1 it costs
+    a full search — the two epochs are not the same experiment.
     """
+    from catan_rl.eval.harness import CrossRulesetEvalError, checkpoint_ruleset
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
     from catan_rl.search.agent import SearchAgent
     from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
+
+    search_epoch = checkpoint_ruleset(search_ckpt) if ruleset is None else validate_ruleset(ruleset)
+    opp_epoch = (
+        checkpoint_ruleset(opponent_ckpt)
+        if opponent_ruleset is None
+        else validate_ruleset(opponent_ruleset)
+    )
+    if search_epoch != opp_epoch and not allow_mixed_ruleset:
+        raise CrossRulesetEvalError(
+            f"cross-ruleset search h2h refused: {search_ckpt!r} was trained under "
+            f"{search_epoch!r} but {opponent_ckpt!r} under {opp_epoch!r}. Numbers "
+            "from the two epochs are not comparable. Either evaluate both under "
+            "one epoch, or pass allow_mixed_ruleset=True to give each seat its own."
+        )
 
     search_actor = cast(
         _PolicyActor,
@@ -202,4 +254,6 @@ def evaluate_search_vs_policy(
         max_turns=max_turns,
         opponent_ref=str(opponent_ckpt),
         audit_rules=audit_rules,
+        ruleset=search_epoch,
+        opponent_ruleset=opp_epoch,
     )

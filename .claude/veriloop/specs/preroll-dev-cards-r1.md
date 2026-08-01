@@ -221,3 +221,207 @@ repo's own most recent ranked ruling puts *aggregate midgame instrumentation ove
 corpora, zero new games, no baseline problem* above any further metric work. The fork is one merge
 plus one metric run from formal acceptance. This spec instead spends 4-8 M1-days and returns a
 champion whose gate had to be rewritten to accommodate it.
+
+---
+
+## Implementation notes (what actually shipped)
+
+Recorded per `CLAUDE.md` §6 — the final state, not the predicted one.
+
+**Stale line references.** The spec's `masks.py:204-217` dev-card block had grown
+to `:221-252` by implementation time (the bank-legality slice added
+`resource1_yop` / `resource2_yop` / `resource2_yop_same`). The extracted helper
+therefore carries the whole YoP bank triple, not just `res1_def` — which is
+exactly the D3 failure mode, one layer deeper than the spec described it.
+
+**Ruleset epochs are a module, not a flag.** `src/catan_rl/env/ruleset.py`
+exports `RULESET_R0` / `RULESET_R1` / `VALID_RULESETS` / `PRE_ROLL_DEV_TYPES` /
+`PRE_ROLL_DEV_CARD_NAMES` / `validate_ruleset`.
+
+**Every code-level default is `R0`** — `compute_action_masks`, `CatanEnv` and
+`EvalHarness` alike. An `R1` default was tried first and was wrong: the eval
+layer cannot know a checkpoint's epoch from the object, so an `R1` default
+silently seated every banked `R0` checkpoint (v11_cand, ptr_v1_u500, the v6/v8
+anchors, league snapshots) under rules its type head never saw a gradient for —
+*the exact scenario D8 exists to prevent*, made the repo-wide default. R1 is
+instead selected **explicitly** by `RolloutConfig.ruleset`
+(`configs/ppo_default.yaml` → `rollout.ruleset: R1`), which CLAUDE.md §5 makes
+the config source of truth, and which `training_loop` threads into the rollout
+env kwargs, the spec env and the eval harness.
+
+`RolloutConfig.ruleset` **also defaults to `R0`** — an `R1` dataclass default
+was the second version of the same mistake, one layer down. Eleven of the
+twelve train configs carry no `ruleset:` key, so an `R1` default silently
+flipped every one of them, including `selfplay_v8_cont_resume.yaml`, whose
+whole purpose is to RESUME a banked R0 lineage: `maybe_resume_from_checkpoint`
+takes weights from the payload but config from the LIVE yaml, so the lineage
+would continue under a different legal action set and stamp its next checkpoint
+`R1`, poisoning the very field the refusal machinery reads. `("rollout",
+"ruleset")` is now in `_RESUME_CRITICAL_FIELDS` (it is strictly more corrupting
+than `gamma`, which was already there), and `ppo_default.yaml` is the only
+config that opts in.
+
+**The epoch is stamped and read back.** `TrainConfig.to_dict()` already lands
+in the checkpoint payload, so `rollout.ruleset` rides along with **no schema
+bump and no migration**. `eval.harness.checkpoint_ruleset(path)` reads it, and
+an absent stamp means `R0` (every pre-slice checkpoint, by construction). This
+is what makes D8's refusal *reachable*: `evaluate_policy_vs_policy` and
+`cross_arch_h2h` (the accept-gate clause-(a) entry point) default
+`opponent_ruleset` to the stamp rather than `None`, so a mismatch raises
+without any caller knowing to look.
+
+**Asymmetry: only the OPPONENT seat auto-reads its stamp.**
+`cross_arch_h2h` / `evaluate_search_vs_policy` hold both checkpoint *paths* and
+so resolve both seats themselves. `evaluate_policy_vs_policy` / `EvalHarness`
+receive the champion as a live policy *object* — there is nothing to read a
+stamp off — so their champion seat falls back to `ruleset=` (default `R0`) and
+every caller that holds the champion's path must pass
+`ruleset=checkpoint_ruleset(path)`. All three in-repo callers now do:
+`scripts/elo_ladder.py`, `scripts/run_exploiter_gate.py` and
+`expert_iteration/gate.py` (quick + confirm + the heuristic forgetting guard).
+The failure mode when it is omitted is fail-CLOSED — `CrossRulesetEvalError` on
+a legitimate same-epoch R1 gate, never a silently mixed number.
+
+**The human-corpus bridge carries the epoch too.**
+`human_data.engine_bridge.BridgeState` gained `ruleset` / `opponent_ruleset`
+(trailing defaults ⇒ absent payload key means `R0`), captured in
+`serialize_post_setup` and re-applied in `rebuild_env`; without them a
+serialize→rebuild round-trip of an R1 env returned an R0 env, i.e. D8's failure
+on a surface D8 did not enumerate. `rebuild_env` also opens the rebuilt turn
+through `CatanEnv._begin_agent_turn()` instead of setting `roll_pending`
+directly — it was the last agent-side roll boundary bypassing D2's ordering.
+
+**`run_search_matchup` ties `audit_events` to `audit_rules`.** With the audit
+off nothing reads the retained broadcast log, while every MCTS `clone_env`
+deep-copies it (a full R1 game emits ~2.6k events), so retaining it unread
+taxed the hottest operation in the search eval path.
+
+**Per-seat rulesets — D9 is runnable (acceptance #10, second clause).**
+`CatanEnv` takes `opponent_ruleset` (defaulting to `ruleset`), and
+`_compute_masks` picks per acting seat, so "R1 policy with the window vs an R0
+policy denied it" is expressible. `EvalHarness.evaluate_vs_policy` /
+`evaluate_policy_vs_policy` / `cross_arch_h2h` take `allow_mixed_ruleset`,
+which does **not** relax the check — it builds the per-seat env instead of
+raising. Default remains refuse. The D9 *experiment* has not been RUN; the
+spec asked only that it be runnable.
+
+**Snapshot-opponent symmetry — work the spec did not enumerate.** D6 was already
+present on the heuristic (`agents/heuristic.py:heuristic_pre_roll`, Knight-only,
+gated on the robber sitting on its own hex), but the *snapshot* opponent had no
+pre-roll path at all. Left alone, self-play would have pitted an R1 learner
+against a structurally-R0 opponent and the learner would have farmed an option
+its opponent could not use — the very asymmetry the spec says kept this gap
+invisible. `CatanEnv._opponent_pre_roll` now samples the frozen snapshot at its
+own `roll_pending` node, applies a whitelisted type through the shared
+`_apply_main_action`, and resolves a resulting Knight robber. A pre-roll Knight
+can win via Largest Army, so the post-roll `victoryPoints >= maxPoints` guard is
+mirrored immediately after the window. The sample is **skipped** when the
+opponent holds no whitelisted card (`PRE_ROLL_DEV_CARD_NAMES`): the mask is then
+exactly `{ROLL_DICE}`, a forced node, and that is the common case on every
+opponent turn of every game across `n_envs=128`.
+
+The heuristic branch stays **unconditional** under both epochs. It is shipped
+R0 behaviour, it never goes through `compute_action_masks`, and every banked R0
+number was measured with it on — gating it on R1 would leave `ruleset="R0"`
+unable to reproduce the epoch it names. `env/ruleset.py` and `CLAUDE.md` say so
+explicitly; the earlier "neither seat may play a dev card before rolling" wording
+was wrong about the scripted seat.
+
+**Turn ownership.** `_begin_agent_turn` claims `game.currentPlayer`, mirroring
+the opponent seat (which claims it before *its* window). It previously moved
+inside `_do_roll_for_agent`, i.e. after the whole pre-roll window — so a
+pre-roll Knight and its robber ran while `currentPlayer` still pointed at the
+opponent (or was `None` on turn 1). Latent today, one call away from
+`engine/game.py`'s Karma branch and `DICE_ROLL` emit. Pinned by test.
+
+**Branch order needed no change.** `robber_placement_pending` was already tested
+above `roll_pending` in both `masks.py` and `CatanEnv.step`, so a pre-roll
+Knight's robber resolves before the dice with no reordering. Pinned by test.
+
+**D11 has two mechanisms, not one.** `engine/broadcast.py` is under `engine/`
+(D1: untouchable) and has no dev-card-played event and no turn-start event, so
+`check_one_dev_card_per_turn` combines exact `DICE_ROLL`-segmented attribution
+of `YOP`/`MONOPOLY` events with an aggregate pigeonhole over the cumulative
+`knightsPlayed` / `yopPlayed` / `monopolyPlayed` / `roadBuilderPlayed` counters
+(`plays <= rolled turns + 1`). The `+1` slack is load-bearing: a pre-roll Knight
+can end the game before that turn's roll is emitted.
+
+Mechanism 1 **also attributes Knight**, which the first cut did not — and Knight
+is the motivating card, 14 of the 25 in the deck, and D2's own example ("two
+knights/turn reaches Largest Army in two turns"). It emits no card event, so a
+single straddling double-Knight escaped mechanism 1 entirely and sat inside
+mechanism 2's `+1` slack: verified, a re-introduced D2 bug produced a
+2-dev-play turn that neither mechanism flagged. Knight is now inferred from the
+robber: within a turn segment, `knights >= MOVE_ROBBER events by X - (1 if X
+rolled a 7 this turn)`. The bound only under-counts (a 7 with no legal robber
+spot under Friendly Robber emits nothing), so it cannot false-positive —
+confirmed over 60 dev-card-biased games across both epochs, 0 flags, while the
+re-introduced D2 bug's one cheating turn IS flagged.
+
+**D11 needed an event log to exist at all.** `GameBroadcast` has `last_event`
+and no history — there is no `broadcast.events` anywhere in the engine — so the
+first cut of both this check and the pre-existing `check_no_p2p_trade` was a
+**total no-op on every real game**, green only because the tests stubbed a shape
+the engine never produces. `src/catan_rl/env/event_log.py:attach_event_log`
+bolts a retained mirror on from OUTSIDE the engine (subscribe + publish the list
+as `broadcast.events`), so `PINNED_ENGINE_TREE` is untouched. It is opt-in via
+`CatanEnv(audit_events=...)` because a full game emits thousands of events and
+`n_envs=128` training must not retain them; `EvalHarness` sets it from
+`audit_rules`, and `eval_search` / `engine_bridge` / `play_vs_model` set it
+directly. Tests pin that the engine really lacks the attribute, and that an
+audited env makes the check fire.
+
+**The turn boundary is the OPPONENT's roll, not every roll.** Under R1 a turn
+runs *pre-roll → own roll → main phase*, so a player's own `DICE_ROLL` sits in
+the middle of their turn. Clearing every counter on every roll — the first cut —
+split one turn in two and let the exact D2 failure (pre-roll Monopoly, roll,
+main-phase YoP) through; the pigeonhole could not rescue it either, since one
+straddle gives `total == turns + 1`, inside the deliberate slack. In 1v1 the
+seats alternate, so a roll by X ends every *other* seat's turn and never X's
+own. Regression-tested in that exact shape, plus its mirror.
+
+**Conformance.** `CONFORMANCE_SCHEMA_VERSION` 1 -> 2 (within-turn step ordering
+changed). No conformance fixtures are committed in this repo — `git ls-files`
+finds only the three source files, and `scripts/record_conformance.py` writes
+into the sibling Torevan checkout — so the bump breaks nothing here. **The
+Torevan TS half of D10 is NOT in this slice** and remains owed — which is
+exactly why the recorder is **per-caller with an `R0` default** like every
+other epoch-aware surface (`record_game(..., ruleset=...)`,
+`catan-rl-conformance --ruleset`), rather than flipping globally. An
+unconditional R1 recorder would emit logs the reference oracle throws on
+(`actions.ts`: `'Must roll the dice before building'`) and would leave no way to
+produce an R0 fixture at all. Logs now carry a `"ruleset"` field; R0 output is
+step-for-step identical to the pre-slice recorder (the pre-roll branch consumes
+no RNG when skipped), and R1 output differs on every seed tried (7/8/15/42).
+
+The owed TS work has one concrete, easily-missed edge:
+`Torevan/packages/engine/src/conformance/conformance.test.ts` asserts
+`expect(log.schema_version).toBe(1)`, so the oracle goes RED the first time ANY
+fixture is regenerated — R0 included, whose steps are otherwise byte-identical
+to v1. No local test can see it (this repo commits no fixtures), so the
+dependency is recorded at the point of change: the `CONFORMANCE_SCHEMA_VERSION`
+docstring in `conformance/recorder.py` and the epoch section of `CLAUDE.md`.
+
+**Epoch tagging of banked numbers.** Every banked figure — v8 `0.668` WR
+CI[0.630,0.705] n=600, search `+54.6` Elo [+23.9,+85.4], the accept-gate
+clause-(a) `n=600` result — is an **R0** number and is not comparable to any R1
+measurement. `CLAUDE.md` and `README.md` now say so.
+
+**BC / ExIt corpora stay R0.** `bc/dataset.py` and `labeling/scenario_gen.py`
+pin `R0` explicitly, and `expert_iteration/labeler.py` now does too — it writes
+a `BcDataset`-shaped corpus stamped `RULESET_VERSION`, and `bc/loader.py` mixes
+shards on that stamp alone, so an R1-labelled corpus carrying the R0 stamp would
+be indistinguishable from an R0 one. `RULESET_VERSION` is therefore **not**
+bumped in this slice: no corpus changes epoch here. Committed shards are also
+unaffected by the D2 hoist — it only moves `updateDevCards()` above the roll
+row, which is forced and dropped by `include_forced: false`. The bump belongs to
+D7's regeneration.
+
+**Explicitly NOT done in this slice** (all spec non-goals or later stages):
+D5's frozen-policy pre-roll histogram (acceptance #9), D7's BC regeneration,
+**running** D9's replacement accept gate (the harness support for it shipped —
+see per-seat rulesets above), any exploration machinery, any `engine/` edit
+(`PINNED_ENGINE_TREE` unchanged at `261098d190c8`), and the Torevan TS change.
+`scripts/play_vs_model.py` pins `R0`, so its `"preroll": false` stamp and its
+"both seats post-roll only" docstring stay true; a human-side pre-roll window is
+a separate slice.

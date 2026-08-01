@@ -21,6 +21,7 @@ from typing import Any, cast
 import numpy as np
 
 from catan_rl.bc.dataset import _DecisionRecord, _flatten_records, _GameRecord
+from catan_rl.env.ruleset import RULESET_R0
 from catan_rl.expert_iteration.config import SearchLabelConfig
 from catan_rl.policy.obs_encoder import hidden_belief_target
 from catan_rl.policy.obs_schema import (
@@ -132,7 +133,12 @@ def generate_search_labels(cfg: SearchLabelConfig) -> dict[str, Any]:
         opponent = None
         opponent_type = cfg.opponent
 
-    env = CatanEnv(opponent_type=opponent_type, max_turns=cfg.max_turns)
+    # R0 is PINNED, not defaulted: this writes a BcDataset-shaped corpus
+    # stamped with ``RULESET_VERSION``, and ``bc/loader.py`` mixes shards on
+    # that stamp alone — an R1-labelled corpus carrying the R0 stamp would be
+    # indistinguishable from an R0 one. Moving to R1 is the BC-regeneration
+    # slice (spec preroll-dev-cards-r1 D7), which bumps the stamp.
+    env = CatanEnv(opponent_type=opponent_type, max_turns=cfg.max_turns, ruleset=RULESET_R0)
     if opponent is not None:
         env.set_snapshot_opponent(opponent)
 

@@ -18,17 +18,49 @@ Coverage (the 1v1 ruleset checks that have a cheap post-game proxy):
   P2P trade messages (only BANK trades).
 * ``check_stacked_dice_in_use`` — engine's dice instance is
   ``StackedDice`` (not a vanilla pair-of-dice fallback).
+* ``check_one_dev_card_per_turn`` — at most one non-VP dev card is
+  played per player per turn (the R1 pre-roll window must not become a
+  second card).
 
 Each check is a free function that takes the ``catanGame`` instance
 post-termination and either returns silently or raises
 :class:`RulesInvariantViolation`. :func:`run_all_invariants` aggregates
 them and reports the full set of violations rather than short-
 circuiting on the first.
+
+**Event-stream checks need an opt-in log.** ``engine.broadcast.GameBroadcast``
+keeps only ``last_event`` — it has no history, and ``engine/`` is out of scope
+for the ``preroll-dev-cards-r1`` slice (D1). The two checks that read a stream
+(:func:`check_no_p2p_trade`, :func:`check_one_dev_card_per_turn`) therefore
+depend on :func:`catan_rl.env.event_log.attach_event_log` (re-exported here),
+which subscribes an in-memory mirror and publishes it as
+``game.broadcast.events``. Without it both checks degrade to a no-op. It is
+opt-in rather than automatic because a full game emits thousands of events and
+the training rollout (``n_envs=128``) must not retain them — every *audited*
+path attaches it (``CatanEnv(audit_events=True)``, which
+:class:`catan_rl.eval.harness.EvalHarness` sets from ``audit_rules``, plus
+``search.eval_search``, ``human_data.engine_bridge`` and
+``scripts/play_vs_model.py``), and those are the paths whose numbers are read.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from catan_rl.env.event_log import attach_event_log
+
+__all__ = [
+    "RulesInvariantViolation",
+    "attach_event_log",
+    "check_friendly_robber",
+    "check_max_points_15",
+    "check_no_p2p_trade",
+    "check_one_dev_card_per_turn",
+    "check_stacked_dice",
+    "check_terminal_state",
+    "check_two_players",
+    "run_all_invariants",
+]
 
 
 class RulesInvariantViolation(AssertionError):
@@ -153,6 +185,18 @@ def check_friendly_robber(game: Any) -> None:
                     )
 
 
+def _events_of(game: Any) -> list[dict[str, Any]] | None:
+    """The retained broadcast history, or ``None`` if none was attached.
+
+    ``GameBroadcast`` itself has no ``events`` attribute — only
+    :func:`attach_event_log` adds one — so this returning ``None`` means the
+    caller never opted in, NOT that the game emitted nothing.
+    """
+    broadcast = getattr(game, "broadcast", None)
+    events = getattr(broadcast, "events", None)
+    return events if isinstance(events, list) else None
+
+
 def check_no_p2p_trade(game: Any) -> None:
     """Inspect the broadcast event stream for any P2P trade event.
 
@@ -161,12 +205,12 @@ def check_no_p2p_trade(game: Any) -> None:
     ``catan/engine/player.py``). A P2P trade event in the stream means
     either a leak in the player API or a third-party patch.
     """
-    broadcast = getattr(game, "broadcast", None)
-    if broadcast is None or not hasattr(broadcast, "events"):
-        # No event log → cannot verify. Treated as a warning, not a
-        # violation — older test envs may not retain the log.
+    events = _events_of(game)
+    if events is None:
+        # No retained event log → cannot verify. Treated as a warning, not a
+        # violation; call ``attach_event_log(game)`` to enable this check.
         return
-    for event in broadcast.events:
+    for event in events:
         kind = event.get("type", "") if isinstance(event, dict) else ""
         if "P2P" in kind or "PLAYER_TRADE" in kind:
             raise RulesInvariantViolation(f"P2P trade event in broadcast log: {event}")
@@ -183,6 +227,124 @@ def check_stacked_dice(game: Any) -> None:
             f"game.dice is not StackedDice — Colonist.io ruleset broken; "
             f"got {type(getattr(game, 'dice', None)).__name__}"
         )
+
+
+def check_one_dev_card_per_turn(game: Any) -> None:
+    """At most ONE non-VP dev card may be played per player per turn.
+
+    Spec ``preroll-dev-cards-r1`` D11 — the invariant that would have caught
+    the D2 turn-boundary bug (a pre-roll play sets the flag, the roll clears
+    it, the main-phase mask re-offers the card). Two dev cards per turn is
+    reward-positive, so PPO finds it fast, and every number measured after it
+    would be measuring a cheat.
+
+    Two mechanisms, because neither alone is complete and ``engine/broadcast``
+    is out of scope for this spec (there is no dev-card-played event, and no
+    turn-start event to hang one off):
+
+    1. **Exact, per turn.** Segment the event stream on ``DICE_ROLL`` and
+       attribute dev plays to the player each event names. ``YOP`` /
+       ``MONOPOLY`` name themselves. **Knight is inferred from the robber**:
+       within one turn segment a player's ``MOVE_ROBBER`` events are all Knight
+       plays except at most one, the move owed to their own rolled 7 — so
+       ``knights >= robber_moves - (1 if they rolled a 7 this turn else 0)``.
+       That lower bound is what makes the highest-risk case visible: two
+       Knights in one turn is the reward-positive exploit D2 names ("two
+       knights/turn reaches Largest Army in two turns"), Knight is 14 of the 25
+       dev cards, and Knight emits no card event of its own. The bound only
+       ever *under*-counts (a 7 with no legal robber spot under Friendly Robber
+       emits no ``MOVE_ROBBER``), so it cannot produce a false positive.
+
+       The segmentation boundary is subtle and was got wrong once: under R1 a
+       turn runs *pre-roll window -> own roll -> main phase*, so a player's own
+       ``DICE_ROLL`` sits in the MIDDLE of their turn. Clearing every counter
+       on every roll would split one turn in two and let the exact D2 bug
+       (pre-roll Monopoly, roll, main-phase YoP) through unseen. In 1v1 the
+       seats alternate, so the correct rule is: **a roll by X ends every OTHER
+       player's turn, and never X's own.**
+    2. **Aggregate catch-all.** ``ROADBUILDER`` still emits nothing
+       attributable, so fall back on the cumulative counters: for each player,
+       ``knights + yop + monopoly + roadBuilder <= (their DICE_ROLL count) + 1``.
+       Pigeonhole-sound: at most one play per turn implies plays <= turns. The
+       ``+1`` of slack is necessary, not cosmetic — a pre-roll Knight can win
+       via Largest Army before that turn's roll is ever emitted. It is also why
+       mechanism 1 exists: a *single* straddling double-play sits inside the
+       slack, so only mechanism 1 sees it — which is precisely why mechanism 1
+       has to cover Knight and not just the two self-naming cards.
+
+    VP cards are excluded by construction: they are never *played*, and no
+    ``vpPlayed`` counter exists.
+
+    Requires :func:`attach_event_log` to have been called on ``game``; without
+    a retained stream this check cannot run at all (both mechanisms need the
+    per-player roll count) and returns silently.
+    """
+    events = _events_of(game)
+    if events is None:
+        # No retained event log -> cannot verify (mirrors check_no_p2p_trade).
+        return
+
+    # --- 1) exact per-turn segmentation over the events that name a player.
+    # Per player, for the turn currently in flight: self-naming card plays,
+    # robber moves, and whether their own roll this turn was a 7 (which
+    # entitles them to exactly one non-Knight robber move).
+    cards: dict[str, int] = {}
+    robber_moves: dict[str, int] = {}
+    rolled_seven: dict[str, bool] = {}
+    rolls_by_player: dict[str, int] = {}
+
+    def _assert_at_most_one(name: str, kind: str) -> None:
+        knights = max(0, robber_moves.get(name, 0) - (1 if rolled_seven.get(name) else 0))
+        total = cards.get(name, 0) + knights
+        if total > 1:
+            raise RulesInvariantViolation(
+                f"player {name!r} played {total} non-VP dev cards in one turn "
+                f"(event {kind}; {cards.get(name, 0)} named + {knights} Knight(s) inferred "
+                f"from {robber_moves.get(name, 0)} robber move(s), "
+                f"rolled_seven={bool(rolled_seven.get(name))}); at most 1 is legal"
+            )
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        kind = event.get("type", "")
+        name = event.get("player")
+        if kind == "DICE_ROLL":
+            if name is not None:
+                rolls_by_player[name] = rolls_by_player.get(name, 0) + 1
+            # End every OTHER seat's turn; keep the roller's own tallies, which
+            # may already hold a pre-roll play belonging to this same turn.
+            cards = {k: v for k, v in cards.items() if k == name}
+            robber_moves = {k: v for k, v in robber_moves.items() if k == name}
+            rolled_seven = {k: v for k, v in rolled_seven.items() if k == name}
+            if name is not None and event.get("value") == 7:
+                rolled_seven[name] = True
+            continue
+        if name is None:
+            continue
+        if kind in ("YOP", "MONOPOLY"):
+            cards[name] = cards.get(name, 0) + 1
+            _assert_at_most_one(name, kind)
+        elif kind == "MOVE_ROBBER":
+            robber_moves[name] = robber_moves.get(name, 0) + 1
+            _assert_at_most_one(name, kind)
+
+    # --- 2) aggregate pigeonhole over the cumulative counters.
+    players = list(game.playerQueue.queue) if hasattr(game, "playerQueue") else []
+    for p in players:
+        total = (
+            int(getattr(p, "knightsPlayed", 0))
+            + int(getattr(p, "yopPlayed", 0))
+            + int(getattr(p, "monopolyPlayed", 0))
+            + int(getattr(p, "roadBuilderPlayed", 0))
+        )
+        turns = rolls_by_player.get(getattr(p, "name", None), 0)
+        if total > turns + 1:
+            raise RulesInvariantViolation(
+                f"player {getattr(p, 'name', '?')!r} played {total} non-VP dev cards across "
+                f"{turns} rolled turns; at most one per turn (+1 slack for a pre-roll play "
+                f"that ended the game before its roll) allows {turns + 1}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -214,4 +376,5 @@ def run_all_invariants(game: Any, *, truncated: bool = False) -> list[str]:
     _check(check_friendly_robber, game)
     _check(check_no_p2p_trade, game)
     _check(check_stacked_dice, game)
+    _check(check_one_dev_card_per_turn, game)
     return violations

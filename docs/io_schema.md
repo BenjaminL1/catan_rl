@@ -156,6 +156,17 @@ hard-disabled; `BankTrade` is the only trade ([ADR 0001](decisions/0001-1v1-rule
 | `resource2_yop_same` | `(5,)` | YoP-2nd, DOUBLING the first pick (`bank[r] >= 2`) |
 | `resource2_trade` | `(5,)` | BankTrade-receive — gated on finite-bank supply (`bank[r] >= 1`) |
 
+`compute_action_masks(..., ruleset=...)` takes a **ruleset epoch**
+(`src/catan_rl/env/ruleset.py`). Under `R0` — the default, and the epoch every
+banked checkpoint was trained under — a `roll_pending` node sets `type` to
+`{ROLL_DICE}` alone. Under `R1` it additionally offers the pre-roll dev-card
+window: `PlayKnight` / `PlayYoP` / `PlayMonopoly` (never `PlayRoadBuilder`, whose
+two free roads must not straddle the roll), with their `resource1_*` /
+`resource2_*` keys filled by the same helper the main-turn block uses, so the
+two can never drift. `ROLL_DICE` stays set unconditionally, so a turn can never
+be ended without rolling. No mask key, shape, or action-type id changes between
+epochs. See [1v1 ruleset](1v1_rules.md#ruleset-epochs-r0--r1).
+
 For `BankTrade`, the `resource2` mask additionally forbids `r2 == r1` (the
 engine would otherwise accept a strictly-losing same-resource trade). For
 `PLAY_YOP` the `resource2` mask swaps `resource2_yop_same` in at index `r1`,

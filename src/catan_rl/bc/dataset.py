@@ -78,6 +78,7 @@ from catan_rl.engine.game import catanGame
 from catan_rl.engine.tracker import ResourceTracker
 from catan_rl.env.hand_tracker import BroadcastHandTracker
 from catan_rl.env.masks import compute_action_masks
+from catan_rl.env.ruleset import RULESET_R0
 from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder, hidden_belief_target
 from catan_rl.policy.obs_schema import (
     FORCED_RULE_VERSION,
@@ -287,8 +288,16 @@ def _record_decision(
             ctx.game, ctx.agent_player, ctx.opp_player, ctx.env_state, hand_tracker=ctx.hand_tracker
         ),
     )
+    # R0 is PINNED here, not defaulted: every existing shard was generated
+    # under R0 and the pre-roll window is deliberately not recorded (see the
+    # main loop). Flipping this to R1 is the BC-regeneration slice (D7).
     mask = compute_action_masks(
-        ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
+        ctx.game,
+        ctx.agent_player,
+        ctx.env_state,
+        ctx.vertex_to_idx,
+        ctx.edge_to_idx,
+        ruleset=RULESET_R0,
     )
     if mask_overrides:
         mask.update(mask_overrides)
@@ -427,7 +436,12 @@ def _instrumented_player(ctx: _RecorderContext) -> Iterator[None]:
         ctx.env_state.robber_placement_pending = True
         try:
             tile_mask = compute_action_masks(
-                ctx.game, ctx.agent_player, ctx.env_state, ctx.vertex_to_idx, ctx.edge_to_idx
+                ctx.game,
+                ctx.agent_player,
+                ctx.env_state,
+                ctx.vertex_to_idx,
+                ctx.edge_to_idx,
+                ruleset=RULESET_R0,
             )["tile"]
             hex_idx, _player_robbed = ctx.agent_player.choose_player_to_rob(board)
         finally:
@@ -615,6 +629,15 @@ def play_game(
                     break
                 game.currentPlayer = p
 
+                # Turn-boundary bookkeeping, ABOVE the roll record (spec
+                # preroll-dev-cards-r1 D2 — the same hoist as
+                # ``catan_env._begin_agent_turn``). It used to sit below, so the
+                # recorded roll row's obs carried a stale dev hand: a card
+                # bought on turn N-1 was still in ``newDevCards``, and last
+                # turn's ``devCardPlayedThisTurn`` was still set.
+                p.updateDevCards()
+                p.devCardPlayedThisTurn = False
+
                 # Roll-dice decision (recorded but always forced — type
                 # mask is {ROLL_DICE}). Kept for completeness; filtered
                 # at write time by the include_forced=False flag.
@@ -627,15 +650,15 @@ def play_game(
                 _record_decision(ctx_active, _make_action(ActionType.ROLL_DICE), "roll")
                 env_state.roll_pending = False
 
-                p.updateDevCards()
-                p.devCardPlayedThisTurn = False
                 # D2 pre-roll dev-card window. These decisions are deliberately
-                # NOT clonable — the learner's env has no pre-roll window, so
-                # every row taken here is a state it can never occupy. The play
-                # still happens: the point is a practice opponent worth cloning,
-                # and a Knight that unblocks its own hex has to land before the
-                # dice. Making pre-roll actions available to the LEARNER is a
-                # separate spec (preroll-dev-cards-r1 D1-D5).
+                # NOT recorded. The learner's env DOES have a pre-roll window
+                # now (ruleset R1), but this generator still masks under R0 and
+                # every existing shard was built that way, so recording them
+                # here would mix epochs inside one corpus. Turning the rows on
+                # is the BC-regeneration slice (spec preroll-dev-cards-r1 D7),
+                # which must not precede D6. The play still happens: the point
+                # is a practice opponent worth cloning, and a Knight that
+                # unblocks its own hex has to land before the dice.
                 #
                 # Dropping is EXPLICIT (``suppress_recording``), not a
                 # side-effect of the mask: ``roll_pending=True`` does answer

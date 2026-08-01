@@ -44,15 +44,21 @@ BOTH artifacts are written even when the game is INTERRUPTED (window close,
 ``KeyboardInterrupt``, crash), marked ``partial`` — a cut-short game is a valid
 trace of the moves it contains but is NOT an outcome/strength read.
 
-**Both seats are POST-ROLL ONLY.** The human gets no pre-roll dev-card window,
-because ``env/masks.py`` emits only ``ROLL_DICE`` while ``roll_pending`` — the
-policy structurally cannot use that window, so granting it to the human alone
-would be an asymmetry, not a courtesy. The auto-played human seat (headless
+**Both seats are POST-ROLL ONLY.** This harness PINS ruleset ``R0``
+(``env/ruleset.py``), under which ``env/masks.py`` emits only ``ROLL_DICE``
+while ``roll_pending``. ``R1`` — both seats get a pre-roll dev-card window — is
+NOT a code-level default anywhere (``CatanEnv``, ``EvalHarness`` and
+``RolloutConfig`` all default ``R0``); it is opted into per caller, and this
+harness deliberately does not, because it has no pre-roll UI for the human
+seat, so an R1 env here would give the BOT a window the human cannot use.
+Granting the window to exactly one seat is an asymmetry, not a courtesy, in
+either direction. The auto-played human seat (headless
 ``--self-test``) likewise has the base env's ``heuristic_pre_roll`` suppressed,
 so the auto-played seat matches the one the human actually plays. (MCTS clones
 are unaffected: a clone always carries a snapshot opponent, and the pre-roll is
-gated on there being none.) Games record ``"preroll": false``. This is a stopgap until
-``preroll-dev-cards-r1`` gives BOTH seats the window (which needs a retrain).
+gated on there being none.) Games record ``"preroll": false``, which stays
+TRUE under the R0 pin. Lifting it needs a human-side pre-roll window plus an
+R1-trained champion — a separate slice.
 
 FIDELITY CAVEATS on that replay (do not discover these later):
 
@@ -310,6 +316,7 @@ def _build_human_env_class() -> type:
     from catan_rl.engine.game import _HeadlessView
     from catan_rl.engine.player import player as PlainPlayer
     from catan_rl.env.catan_env import CatanEnv
+    from catan_rl.env.ruleset import RULESET_R0
 
     class HumanVsBotEnv(CatanEnv):
         """``CatanEnv`` whose internal opponent seat is played by a HUMAN.
@@ -321,6 +328,20 @@ def _build_human_env_class() -> type:
         """
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
+            # PIN the ruleset epoch to R0 (no pre-roll dev-card window on
+            # either seat) rather than inheriting whatever the default is.
+            # This harness's human seat has no pre-roll UI, so an R1 env would
+            # hand the BOT a
+            # window the human cannot use — the mirror image of the asymmetry
+            # this file exists to avoid — and would falsify both the
+            # "both seats are post-roll only" docstring above and the
+            # ``"preroll": false`` stamp on every recorded game. Giving the
+            # human seat the window is a separate slice.
+            kwargs.setdefault("ruleset", RULESET_R0)
+            # Retain the broadcast stream: the self-test finishes with a full
+            # ``run_all_invariants`` audit, whose event-stream checks silently
+            # no-op without a log.
+            kwargs.setdefault("audit_events", True)
             super().__init__(*args, **kwargs)
             self._human_view: Any = None
             # Lazily builds a pygame view on first human-input need (interactive
@@ -573,16 +594,19 @@ def _build_human_env_class() -> type:
             self-test never use the GUI, so they delegate to the base method —
             with the base's heuristic pre-roll suppressed (below).
 
-            There is deliberately NO pre-roll dev-card window. ``env/masks.py``
-            emits ONLY ``ROLL_DICE`` while ``roll_pending``, so the policy cannot
-            play a Knight before rolling — not in this harness and not anywhere
-            in its training history. A human window with no bot counterpart is
-            the single largest bias in a playtest: it makes every human win
-            unattributable between "the policy is weak here" and "the bot was not
-            allowed to play its Knight". Both seats are post-roll only in this
-            harness, matching the ruleset the champion was trained on. STOPGAP:
-            ``preroll-dev-cards-r1.md`` (RATIFIED) gives BOTH seats the window
-            and requires a retrain.
+            There is deliberately NO pre-roll dev-card window. This harness PINS
+            ``RULESET_R0``, under which ``env/masks.py`` emits ONLY ``ROLL_DICE``
+            while ``roll_pending``, so the policy cannot play a Knight before
+            rolling here. (Under ``RULESET_R1`` — which
+            ``preroll-dev-cards-r1.md`` added and which no shipped checkpoint has
+            yet been trained under — it can; this harness does not opt in.) A
+            human window with no bot counterpart is the single largest bias in a
+            playtest: it makes every human win unattributable between "the policy
+            is weak here" and "the bot was not allowed to play its Knight". Both
+            seats are post-roll only in this harness, matching the ruleset every
+            banked champion was trained on. Once an R1 champion exists, playing
+            it here would mean seating it under rules it was not trained for —
+            lifting the pin needs a human-side pre-roll UI in the same slice.
             """
             if not self._use_gui():  # headless auto-play (--self-test)
                 # The base env plays a heuristic pre-roll Knight for the opponent

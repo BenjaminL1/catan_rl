@@ -37,12 +37,14 @@ from __future__ import annotations
 import random
 import zlib
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 import torch
 
 from catan_rl.env.catan_env import CatanEnv
+from catan_rl.env.ruleset import RULESET_R0, validate_ruleset
 from catan_rl.eval.rules_invariants import run_all_invariants
 from catan_rl.eval.wilson import WilsonInterval, wilson_interval
 from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
@@ -78,6 +80,34 @@ def _restore_torch_rng(state: dict[str, Any]) -> None:
         torch.cuda.set_rng_state_all(state["cuda"])
     if "mps" in state:
         torch.mps.set_rng_state(state["mps"])
+
+
+class CrossRulesetEvalError(ValueError):
+    """Raised when an h2h would seat two policies from different ruleset epochs.
+
+    Spec ``preroll-dev-cards-r1`` D8: numbers from two epochs are not
+    comparable, so such a matchup is refused rather than annotated. Pass
+    ``allow_mixed_ruleset=True`` to run it deliberately as the D9 per-seat flag
+    experiment, where each policy plays the rules it was trained for.
+    """
+
+
+def checkpoint_ruleset(ckpt_path: str | Path) -> str:
+    """The ruleset epoch ``ckpt_path`` was TRAINED under.
+
+    Read from the saved training config (``config["rollout"]["ruleset"]``,
+    stamped by :class:`catan_rl.ppo.arguments.RolloutConfig`). **An absent
+    stamp means R0**, not "unknown": every checkpoint banked before the
+    ``preroll-dev-cards-r1`` slice predates the field and was, by construction,
+    trained under the pre-roll-less rules. That default is what makes the D8
+    refusal reachable in production rather than a kwarg nobody passes — a
+    banked R0 snapshot seated against an R1 harness now raises on its own.
+    """
+    raw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+    config = raw.get("config", {}) if isinstance(raw, dict) else {}
+    rollout = config.get("rollout", {}) if isinstance(config, dict) else {}
+    stamped = rollout.get("ruleset") if isinstance(rollout, dict) else None
+    return validate_ruleset(str(stamped)) if stamped is not None else RULESET_R0
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +235,7 @@ class EvalHarness:
         max_turns: int = 400,
         alpha: float = 0.05,
         audit_rules: bool = True,
+        ruleset: str = RULESET_R0,
     ) -> None:
         if n_games_per_seat <= 0:
             raise ValueError(f"n_games_per_seat must be > 0, got {n_games_per_seat}")
@@ -217,6 +248,12 @@ class EvalHarness:
         self.max_turns = max_turns
         self.alpha = alpha
         self.audit_rules = audit_rules
+        # Ruleset epoch every env this harness builds plays under. R0 and R1
+        # numbers are NOT comparable, so it is recorded per-harness rather
+        # than assumed globally. Defaults to R0 — the epoch every banked
+        # checkpoint was trained under — so no caller silently re-rules an
+        # existing checkpoint by upgrading (spec D8).
+        self.ruleset = validate_ruleset(ruleset)
 
     # ------------------------------------------------------------------
     # Public API
@@ -325,7 +362,12 @@ class EvalHarness:
 
     def _evaluate_matchup(self, *, policy: Any, opponent_type: str) -> EvalResult:
         """Play ``2 * n_games_per_seat`` games for one opponent kind."""
-        env = CatanEnv(opponent_type=opponent_type, max_turns=self.max_turns)
+        env = CatanEnv(
+            opponent_type=opponent_type,
+            max_turns=self.max_turns,
+            ruleset=self.ruleset,
+            audit_events=self.audit_rules,
+        )
         try:
             games = self._run_matchup_games(env, policy, seed_label=opponent_type)
             wins = sum(1 for g in games if g.won)
@@ -341,7 +383,13 @@ class EvalHarness:
             env.close()
 
     def evaluate_vs_policy(
-        self, champion: Any, opponent: Any, *, opponent_ref: str
+        self,
+        champion: Any,
+        opponent: Any,
+        *,
+        opponent_ref: str,
+        opponent_ruleset: str | None = None,
+        allow_mixed_ruleset: bool = False,
     ) -> EvalMatchupResult:
         """Champion vs a loaded opponent policy (US2).
 
@@ -349,8 +397,38 @@ class EvalHarness:
         (e.g. a ``FrozenSnapshotOpponent``); it is seated via the in-env
         snapshot-opponent driver (NOT the recorder actor). Seat-symmetrized;
         returns WR + Wilson CI.
+
+        ``opponent_ruleset`` names the epoch the opponent checkpoint was
+        TRAINED under. By default a mismatch is **refused**, never annotated
+        (spec D8): an R0 checkpoint played under R1 rules samples from a region
+        of its own type head that received exactly zero gradient, so the
+        resulting win-rate measures opponent out-of-distribution-ness rather
+        than strength — and a number nobody can read is worse than no number.
+
+        ``allow_mixed_ruleset=True`` is the one sanctioned way past the
+        refusal, and it does NOT relax the rules — it gives each seat its own
+        epoch (``CatanEnv(ruleset=..., opponent_ruleset=...)``), so both
+        policies play what they were trained for. That is D9's replacement
+        accept gate: an R1 champion *with* the pre-roll window vs an R0
+        checkpoint *denied* it, symmetric-seat, Wilson LB > 0.50. The flag is
+        explicit precisely so a mixed matchup can never happen by omission.
         """
-        env = CatanEnv(opponent_type="snapshot", max_turns=self.max_turns)
+        mixed = opponent_ruleset is not None and opponent_ruleset != self.ruleset
+        if mixed and not allow_mixed_ruleset:
+            raise CrossRulesetEvalError(
+                f"cross-ruleset h2h refused: harness ruleset={self.ruleset!r} but "
+                f"opponent {opponent_ref!r} was trained under {opponent_ruleset!r}. "
+                "Numbers from the two epochs are not comparable. Either evaluate "
+                "both under one epoch, or pass allow_mixed_ruleset=True to run the "
+                "D9 per-seat flag experiment (each policy under its own rules)."
+            )
+        env = CatanEnv(
+            opponent_type="snapshot",
+            max_turns=self.max_turns,
+            ruleset=self.ruleset,
+            opponent_ruleset=opponent_ruleset if mixed else None,
+            audit_events=self.audit_rules,
+        )
         env.set_snapshot_opponent(opponent)
         try:
             games = self._run_matchup_games(env, champion, seed_label=opponent_ref)
@@ -454,6 +532,9 @@ def evaluate_policy_vs_policy(
     seed: int = 0,
     device: str = "cpu",
     max_turns: int = 400,
+    ruleset: str = RULESET_R0,
+    opponent_ruleset: str | None = None,
+    allow_mixed_ruleset: bool = False,
 ) -> EvalMatchupResult:
     """Evaluate ``champion`` head-to-head against a loaded opponent checkpoint.
 
@@ -462,6 +543,16 @@ def evaluate_policy_vs_policy(
     ``FrozenSnapshotOpponent``, and seated via the in-env snapshot-opponent
     driver. Plays ``2 * (n_games // 2)`` seat-symmetrized games; returns WR +
     Wilson CI. Bit-for-bit reproducible on CPU at a fixed seed.
+
+    ``ruleset`` is the epoch the CHAMPION plays (default ``R0`` — the epoch
+    every banked checkpoint was trained under). ``opponent_ruleset`` is the
+    epoch ``opponent_ckpt`` was trained under; leave it ``None`` and it is read
+    off the checkpoint itself via :func:`checkpoint_ruleset` (absent stamp ⇒
+    ``R0``), so a cross-epoch matchup is detected **without the caller knowing
+    to look** — that is what makes D8's refusal reachable from production
+    rather than a kwarg nobody passes. A mismatch raises
+    :class:`CrossRulesetEvalError` unless ``allow_mixed_ruleset=True``, which
+    runs D9's per-seat flag experiment (each policy under its own rules).
 
     Note: this seeds the global torch RNG for a reproducible champion sampling
     stream, but **saves and restores** every torch backend's state (cpu + cuda
@@ -495,8 +586,17 @@ def evaluate_policy_vs_policy(
             seed=seed,
             device=torch.device(device),
             max_turns=max_turns,
+            ruleset=ruleset,
         )
-        return harness.evaluate_vs_policy(champion, opponent, opponent_ref=str(opponent_ckpt))
+        return harness.evaluate_vs_policy(
+            champion,
+            opponent,
+            opponent_ref=str(opponent_ckpt),
+            opponent_ruleset=(
+                checkpoint_ruleset(opponent_ckpt) if opponent_ruleset is None else opponent_ruleset
+            ),
+            allow_mixed_ruleset=allow_mixed_ruleset,
+        )
     finally:
         np.random.set_state(np_state)
         random.setstate(py_state)

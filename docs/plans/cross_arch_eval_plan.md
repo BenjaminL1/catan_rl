@@ -113,6 +113,10 @@ Shipped:
   drifted from the pinned pre-fork tree (keys off HEAD's tree SHA so it works in shallow CI).
 - `scripts/eval_cross_arch.py` — the CLI (`--new --old --n-games 100 --seed 0`;
   `--old-arch new` for the equivalence self-check; `--skip-engine-parity-check` to override).
+  Both seats' **ruleset epochs** are read off their own checkpoints and printed before the run
+  (`--ruleset` overrides the NEW seat; a cross-epoch matchup is refused unless
+  `--allow-mixed-ruleset`, which seats each policy under its own epoch — see
+  [1v1 ruleset](../1v1_rules.md#ruleset-epochs-r0--r1)).
 
 Correctness guards, all in `tests/unit/eval/test_cross_arch.py` (14 tests, CI-runnable on fresh
 random-init policies — no `runs/` dependency): (1) new-vs-new through `CrossArchEnv` reproduces

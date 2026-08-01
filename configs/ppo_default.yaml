@@ -15,6 +15,7 @@ rollout:
   max_turns: 400                 # truncation cap
   opponent_type: heuristic       # default for Phase 1-7 sanity training; league later
   engine_backend: python         # Phase 4 explicit default. Rust path is scaffolding-only; see docs/plans/rust_engine_actual_state.md
+  ruleset: R1                    # epoch: R1 = Colonist pre-roll dev-card window on both policy seats; R0 = the pre-2026-07 rules every banked number was measured under. The CODE default is R0 and this is the only config that opts in — the resume/continuation configs deliberately carry no key so a banked R0 lineage cannot flip epoch on a merge. Stamped into the checkpoint config (and resume-critical); R0 and R1 numbers are NOT comparable.
 
 ppo:
   n_epochs: 4                    # passes over the rollout buffer per update

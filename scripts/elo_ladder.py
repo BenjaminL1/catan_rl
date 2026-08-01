@@ -9,6 +9,10 @@ Round-robin via the wired eval primitives (no training):
 Fits a logistic-Elo MLE (Bradley-Terry, base-10 / 400) with the HEURISTIC pinned
 at 500 so every rung is an interpretable offset from it. Parallel across cores.
 
+Each rung plays the ruleset epoch stamped on its OWN checkpoint (absent => R0);
+a cross-epoch pairing REFUSES inside the eval primitive rather than producing an
+Elo number that silently mixes two rulesets. See ``env/ruleset.py``.
+
 This script writes the round-robin ladder to ``--out`` (default ``runs/elo_ladder.json``).
 For the 003 search uplift we do NOT run a fresh multi-hour search round-robin — the
 n=500 bake-off already measured search-vs-raw-v6; the reusable :func:`elo_from_wr`
@@ -88,12 +92,17 @@ def bt_prob(ra: float, rb: float, scale: float = SCALE) -> float:
 
 def run_match(task: dict[str, Any]) -> tuple[str, str, int, int]:
     """One matchup a-vs-b. Returns (a_name, b_name, wins_a, n) — integer wins."""
-    from catan_rl.eval.harness import EvalHarness, evaluate_policy_vs_policy
+    from catan_rl.eval.harness import EvalHarness, checkpoint_ruleset, evaluate_policy_vs_policy
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
 
     a_name, a_kind, a_path = task["a_name"], task["a_kind"], task["a_path"]
     b_name, b_kind, b_path = task["b_name"], task["b_kind"], task["b_path"]
     nps, seed = task["nps"], task["seed"]
+    # Each rung plays the ruleset epoch its own checkpoint was TRAINED under,
+    # read off the checkpoint (absent stamp => R0). A cross-epoch pairing then
+    # REFUSES inside the eval primitive rather than producing an Elo number
+    # that silently mixes two rulesets (spec preroll-dev-cards-r1 D8).
+    a_ruleset = checkpoint_ruleset(a_path)
 
     if a_kind == "search":
         from catan_rl.search.agent import SearchAgent
@@ -118,6 +127,7 @@ def run_match(task: dict[str, Any]) -> tuple[str, str, int, int]:
             n_games=2 * nps,
             seed=seed,
             opponent_ref=b_kind,
+            ruleset=a_ruleset,
         )
         return (a_name, b_name, int(r.wins), int(r.n))
 
@@ -125,9 +135,13 @@ def run_match(task: dict[str, Any]) -> tuple[str, str, int, int]:
     assert isinstance(actor, _PolicyActor)
     champ = actor.policy
     if b_kind == "policy":
-        res = evaluate_policy_vs_policy(champ, b_path, n_games=2 * nps, seed=seed, device="cpu")
+        res = evaluate_policy_vs_policy(
+            champ, b_path, n_games=2 * nps, seed=seed, device="cpu", ruleset=a_ruleset
+        )
         return (a_name, b_name, int(res.wins), int(res.n))
-    harness = EvalHarness(opponent_types=(b_kind,), n_games_per_seat=nps, seed=seed, device="cpu")
+    harness = EvalHarness(
+        opponent_types=(b_kind,), n_games_per_seat=nps, seed=seed, device="cpu", ruleset=a_ruleset
+    )
     r2 = harness.run(champ).results[0]
     return (a_name, b_name, int(r2.wins), int(r2.n))
 

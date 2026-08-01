@@ -31,8 +31,10 @@ import argparse
 import sys
 import time
 
+from catan_rl.env.ruleset import VALID_RULESETS
 from catan_rl.eval.cross_arch import cross_arch_h2h
 from catan_rl.eval.engine_parity import EngineParityError, assert_engine_parity
+from catan_rl.eval.harness import checkpoint_ruleset
 
 
 def main() -> int:
@@ -77,6 +79,25 @@ def main() -> int:
     p.add_argument(
         "--smoke", action="store_true", help="override to n-games=4 for a fast end-to-end check"
     )
+    p.add_argument(
+        "--ruleset",
+        default=None,
+        choices=sorted(VALID_RULESETS),
+        help=(
+            "ruleset epoch the NEW champion plays. Default: read off --new's own "
+            "saved config (absent stamp => R0). The OLD checkpoint's epoch is read "
+            "off --old the same way; a mismatch is REFUSED unless "
+            "--allow-mixed-ruleset"
+        ),
+    )
+    p.add_argument(
+        "--allow-mixed-ruleset",
+        action="store_true",
+        help=(
+            "run the D9 per-seat flag experiment: each policy plays the epoch it "
+            "was trained for, instead of refusing the cross-epoch matchup"
+        ),
+    )
     args = p.parse_args()
 
     n_games = 4 if args.smoke else args.n_games
@@ -99,6 +120,14 @@ def main() -> int:
         f"  engine-parity      : engine={stamp['engine']} board_geometry={stamp['board_geometry']}",
         file=sys.stderr,
     )
+    # Surface the epochs BEFORE the run: an unreadable number is the failure
+    # this gate's pre-mortem names, and both seats' epochs are defaulted.
+    new_epoch = args.ruleset if args.ruleset is not None else checkpoint_ruleset(args.new)
+    print(
+        f"  ruleset epochs     : NEW={new_epoch} OLD={checkpoint_ruleset(args.old)}"
+        + ("  [mixed allowed — D9 per-seat experiment]" if args.allow_mixed_ruleset else ""),
+        file=sys.stderr,
+    )
 
     t0 = time.time()
     result = cross_arch_h2h(
@@ -110,6 +139,8 @@ def main() -> int:
         device=args.device,
         max_turns=args.max_turns,
         strict_engine_parity=strict_parity,
+        ruleset=args.ruleset,
+        allow_mixed_ruleset=args.allow_mixed_ruleset,
     )
     dt = time.time() - t0
 

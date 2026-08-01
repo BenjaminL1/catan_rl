@@ -36,6 +36,7 @@ from typing import Any
 
 import numpy as np
 
+from catan_rl.env.ruleset import RULESET_R0, RULESET_R1
 from catan_rl.policy.obs_schema import (
     ActionType,
     N_ACTION_TYPES,
@@ -52,12 +53,72 @@ def _edge_key(v1: Any, v2: Any) -> tuple[str, str]:
     return (s1, s2) if s1 < s2 else (s2, s1)
 
 
+def _set_dev_card_legality(
+    p: Any,
+    *,
+    type_mask: np.ndarray,
+    res1_def: np.ndarray,
+    res1_yop: np.ndarray,
+    res2_yop: np.ndarray,
+    res2_yop_same: np.ndarray,
+    bank_supplied: np.ndarray,
+    bank_double: np.ndarray,
+    allow_road_builder: bool,
+) -> None:
+    """Set the dev-card type bits AND their resource-head defaults.
+
+    Shared by the main-turn block and the R1 pre-roll window so the two can
+    never drift. Setting the type bit alone is NOT enough:
+    ``policy.heads.masked_log_softmax`` returns a **uniform** distribution for
+    an all-zero mask row, silently — so a pre-roll YoP whose ``resource1_yop``
+    was left zeroed would grant two uniformly-random resources with no crash
+    and a green suite.
+
+    ``allow_road_builder=False`` is the pre-roll caller (see
+    :data:`catan_rl.env.ruleset.PRE_ROLL_DEV_TYPES` for why).
+    """
+    if p.devCards.get("KNIGHT", 0) > 0 and not p.devCardPlayedThisTurn:
+        type_mask[ActionType.PLAY_KNIGHT] = True
+
+    # D4: Year of Plenty draws BOTH picks from the finite bank, so a pair
+    # ``(first, second)`` is legal iff
+    #     ``bank[first] >= 2``                              when first == second
+    #     ``bank[first] >= 1 and bank[second] >= 1``        otherwise.
+    # That needs three vectors, not one. ``resource1_default`` cannot carry the
+    # first-pick gate because Monopoly shares it and Monopoly is bank-
+    # independent, so YoP gets its OWN first-pick key ``resource1_yop``. The
+    # receive side splits into ``resource2_yop`` (a DIFFERENT second pick,
+    # ``bank >= 1``) and ``resource2_yop_same`` (the doubled pick,
+    # ``bank >= 2``); the autoregressive ``heads._resource2_mask`` swaps in the
+    # latter at index ``res1`` exactly as it applies the ``r2 != r1`` rule for
+    # BankTrade. A first pick is only offered when some legal partner exists,
+    # so the head can never be driven into an empty second-pick set.
+    if p.devCards.get("YEAROFPLENTY", 0) > 0 and not p.devCardPlayedThisTurn:
+        has_other = np.array(
+            [bool(np.any(np.delete(bank_supplied, i))) for i in range(N_RESOURCES)], dtype=bool
+        )
+        res1_yop[:] = bank_double | (bank_supplied & has_other)
+        if res1_yop.any():
+            type_mask[ActionType.PLAY_YOP] = True
+            res2_yop[:] = bank_supplied
+            res2_yop_same[:] = bank_double
+
+    if p.devCards.get("MONOPOLY", 0) > 0 and not p.devCardPlayedThisTurn:
+        type_mask[ActionType.PLAY_MONOPOLY] = True
+        res1_def[:] = True
+
+    if allow_road_builder and p.devCards.get("ROADBUILDER", 0) > 0 and not p.devCardPlayedThisTurn:
+        type_mask[ActionType.PLAY_ROAD_BUILDER] = True
+
+
 def compute_action_masks(
     game: Any,
     acting_player: Any,
     env_state: Any,
     vertex_to_idx: dict[Any, int],
     edge_to_idx: dict[tuple[str, str], int],
+    *,
+    ruleset: str = RULESET_R0,
 ) -> dict[str, np.ndarray]:
     """Compute the 12-key mask dict for ``acting_player`` in this game state.
 
@@ -70,6 +131,10 @@ def compute_action_masks(
             (matches :class:`CatanEnv._vertex_to_idx`).
         edge_to_idx: maps the canonical edge key
             (``(min(str(v1), str(v2)), max(...))``) to edge-index.
+        ruleset: ruleset epoch (:mod:`catan_rl.env.ruleset`). ``R0`` (the
+            default, so every pre-existing call site keeps its exact
+            behaviour) offers only ``ROLL_DICE`` at a ``roll_pending``
+            node; ``R1`` additionally offers the pre-roll dev-card window.
 
     Returns:
         The 12-key mask dict expected by the v2 action heads:
@@ -156,9 +221,25 @@ def compute_action_masks(
             tile_mask[:] = True
         return _pack()
 
-    # ---- Roll dice ----
+    # ---- Roll dice (+ the R1 pre-roll dev-card window) ----
     if env_state.roll_pending:
+        # ``ROLL_DICE`` is set FIRST and unconditionally, so the
+        # ``if not type_mask.any(): END_TURN`` fallback at the bottom of this
+        # function is structurally unreachable from a pre-roll node — the agent
+        # can never end a turn without rolling it.
         type_mask[ActionType.ROLL_DICE] = True
+        if ruleset == RULESET_R1:
+            _set_dev_card_legality(
+                p,
+                type_mask=type_mask,
+                res1_def=res1_def,
+                res1_yop=res1_yop,
+                res2_yop=res2_yop,
+                res2_yop_same=res2_yop_same,
+                bank_supplied=bank_supplied,
+                bank_double=bank_double,
+                allow_road_builder=False,
+            )
         return _pack()
 
     # ---- Road builder cleanup ----
@@ -218,38 +299,17 @@ def compute_action_masks(
     ):
         type_mask[ActionType.BUY_DEV_CARD] = True
 
-    if p.devCards.get("KNIGHT", 0) > 0 and not p.devCardPlayedThisTurn:
-        type_mask[ActionType.PLAY_KNIGHT] = True
-
-    # D4: Year of Plenty draws BOTH picks from the finite bank, so a pair
-    # ``(first, second)`` is legal iff
-    #     ``bank[first] >= 2``                              when first == second
-    #     ``bank[first] >= 1 and bank[second] >= 1``        otherwise.
-    # That needs three vectors, not one. ``resource1_default`` cannot carry the
-    # first-pick gate because Monopoly shares it and Monopoly is bank-
-    # independent, so YoP gets its OWN first-pick key ``resource1_yop``. The
-    # receive side splits into ``resource2_yop`` (a DIFFERENT second pick,
-    # ``bank >= 1``) and ``resource2_yop_same`` (the doubled pick,
-    # ``bank >= 2``); the autoregressive ``heads._resource2_mask`` swaps in the
-    # latter at index ``res1`` exactly as it applies the ``r2 != r1`` rule for
-    # BankTrade. A first pick is only offered when some legal partner exists,
-    # so the head can never be driven into an empty second-pick set.
-    if p.devCards.get("YEAROFPLENTY", 0) > 0 and not p.devCardPlayedThisTurn:
-        has_other = np.array(
-            [bool(np.any(np.delete(bank_supplied, i))) for i in range(N_RESOURCES)], dtype=bool
-        )
-        res1_yop[:] = bank_double | (bank_supplied & has_other)
-        if res1_yop.any():
-            type_mask[ActionType.PLAY_YOP] = True
-            res2_yop[:] = bank_supplied
-            res2_yop_same[:] = bank_double
-
-    if p.devCards.get("MONOPOLY", 0) > 0 and not p.devCardPlayedThisTurn:
-        type_mask[ActionType.PLAY_MONOPOLY] = True
-        res1_def[:] = True
-
-    if p.devCards.get("ROADBUILDER", 0) > 0 and not p.devCardPlayedThisTurn:
-        type_mask[ActionType.PLAY_ROAD_BUILDER] = True
+    _set_dev_card_legality(
+        p,
+        type_mask=type_mask,
+        res1_def=res1_def,
+        res1_yop=res1_yop,
+        res2_yop=res2_yop,
+        res2_yop_same=res2_yop_same,
+        bank_supplied=bank_supplied,
+        bank_double=bank_double,
+        allow_road_builder=True,
+    )
 
     for i, r in enumerate(RESOURCES_CW):
         r_port = f"2:1 {r}"

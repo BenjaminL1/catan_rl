@@ -235,3 +235,31 @@ def test_rebuild_hand_tracker_parity_and_conservation() -> None:
     # Hands are non-trivial (both seats received a setup grant).
     total_cards = sum(sum(p.resources.values()) for p in list(rebuilt.game.playerQueue.queue))
     assert total_cards > 0
+
+
+def test_round_trip_preserves_the_ruleset_epoch() -> None:
+    """D8: an R1 env round-trips as R1, not silently re-ruled to R0.
+
+    Without the epoch on ``BridgeState`` the rebuilt env offers no pre-roll
+    window, so a policy replayed through the bridge would be judged under rules
+    it was not trained for.
+    """
+    rng = np.random.default_rng(13)
+    env = CatanEnv(opponent_type="heuristic", ruleset="R1")
+    drive_env_to_post_setup(env, rng, seed=4242)
+    state = serialize_post_setup(env)
+    assert state.ruleset == "R1"
+    assert BridgeState.from_dict(state.to_dict()).ruleset == "R1"
+    rebuilt = rebuild_env(state)
+    assert rebuilt.ruleset == "R1" and rebuilt.opponent_ruleset == "R1"
+
+
+def test_state_from_a_payload_without_a_stamp_means_r0() -> None:
+    """Pre-slice payloads carry no ``ruleset`` key; absent stamp ⇒ R0."""
+    rng = np.random.default_rng(17)
+    env = CatanEnv(opponent_type="random")
+    drive_env_to_post_setup(env, rng, seed=909)
+    payload = serialize_post_setup(env).to_dict()
+    payload.pop("ruleset")
+    payload.pop("opponent_ruleset")
+    assert BridgeState.from_dict(payload).ruleset == "R0"

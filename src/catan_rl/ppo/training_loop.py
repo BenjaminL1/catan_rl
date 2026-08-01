@@ -285,7 +285,17 @@ def _build_env_kwargs_list(
     future Phase that wires snapshot opponents (Phase 11+) doesn't
     need to touch the loop.
     """
-    return [{"opponent_type": opp, "max_turns": cfg.rollout.max_turns} for opp in opponent_mix]
+    return [
+        {
+            "opponent_type": opp,
+            "max_turns": cfg.rollout.max_turns,
+            # The env defaults to R0 (so no eval silently re-rules a banked
+            # checkpoint); training opts into its epoch explicitly, and the
+            # same value is stamped into the saved checkpoint config.
+            "ruleset": cfg.rollout.ruleset,
+        }
+        for opp in opponent_mix
+    ]
 
 
 def build_training_state(
@@ -370,7 +380,11 @@ def build_training_state(
     # vec_env's internal state isn't perturbed by ``env.reset(seed=0)``
     # inside ``mask_spec_from_env``. Reviewer-caught HIGH: spec
     # discovery should not have side effects on a rollout-bound env.
-    spec_env = CatanEnv(opponent_type="random", max_turns=cfg.rollout.max_turns)
+    spec_env = CatanEnv(
+        opponent_type="random",
+        max_turns=cfg.rollout.max_turns,
+        ruleset=cfg.rollout.ruleset,
+    )
     try:
         obs_spec = obs_spec_from_env(spec_env)
         mask_spec = mask_spec_from_env(spec_env)
@@ -429,6 +443,9 @@ def build_training_state(
         # so training resumes on `device` untouched. (wall-clock audit)
         device=torch.device("cpu"),
         max_turns=cfg.rollout.max_turns,
+        # Same epoch the rollouts run under — an eval under different rules
+        # than training would not measure the policy being trained.
+        ruleset=cfg.rollout.ruleset,
     )
 
     n_updates_total = cfg.total_steps // (cfg.rollout.n_envs * cfg.rollout.n_steps)
@@ -460,6 +477,7 @@ _RESUME_CRITICAL_FIELDS: tuple[tuple[str, ...], ...] = (
     ("rollout", "n_envs"),
     ("rollout", "n_steps"),
     ("rollout", "max_turns"),
+    ("rollout", "ruleset"),
     ("ppo", "batch_size"),
     ("gae", "gamma"),
     ("gae", "gae_lambda"),
@@ -471,7 +489,14 @@ training. Architecture fields (``trunk_dim``, ``use_graph_encoder``,
 silent-corruption cases — a different ``n_envs`` would only blow up
 inside ``apply_to_vec_env`` (clear error there); a different ``gamma``
 or ``gae_lambda`` would silently change the value targets going
-forward."""
+forward.
+
+``rollout.ruleset`` is the most corrupting of the set: resume takes
+weights/optimizer/league from the saved payload but the config from the
+LIVE yaml, so an unnoticed epoch flip continues a banked R0 lineage
+under a different legal action set at every roll node — and then stamps
+the next checkpoint ``R1``, poisoning the epoch that the whole D8/D9
+refusal machinery reads back (spec ``preroll-dev-cards-r1``)."""
 
 
 def _diff_resume_config(saved: dict[str, Any], live: dict[str, Any]) -> list[str]:

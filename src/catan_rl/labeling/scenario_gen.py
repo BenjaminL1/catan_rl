@@ -38,6 +38,7 @@ from catan_rl.engine.board import catanBoard
 from catan_rl.engine.game import catanGame
 from catan_rl.engine.player import player as Player
 from catan_rl.env.masks import compute_action_masks
+from catan_rl.env.ruleset import RULESET_R0
 from catan_rl.policy.obs_encoder import EnvObsState
 
 # Snake-draft order: P1, P2, P2, P1 (0-indexed: 0, 1, 1, 0).
@@ -133,6 +134,7 @@ class Scenario:
                 env_state,
                 self._vertex_to_idx,
                 self._edge_to_idx,
+                ruleset=RULESET_R0,
             )
             return np.asarray(masks["edge"], dtype=bool)
         finally:
@@ -214,7 +216,12 @@ class ScenarioGenerator:
             setup_step=setup_step_settle,
         )
         masks = compute_action_masks(
-            self._game, acting, env_state, self._vertex_to_idx, self._edge_to_idx
+            self._game,
+            acting,
+            env_state,
+            self._vertex_to_idx,
+            self._edge_to_idx,
+            ruleset=RULESET_R0,
         )
         legal_corners = np.asarray(masks["corner_settlement"], dtype=bool)
 
@@ -266,7 +273,12 @@ class ScenarioGenerator:
             setup_step=scenario._setup_step_road,
         )
         road_masks = compute_action_masks(
-            self._game, acting, env_state, self._vertex_to_idx, self._edge_to_idx
+            self._game,
+            acting,
+            env_state,
+            self._vertex_to_idx,
+            self._edge_to_idx,
+            ruleset=RULESET_R0,
         )
         legal_roads = np.asarray(road_masks["edge"], dtype=bool)
         if not (0 <= road_edge_idx < 72):

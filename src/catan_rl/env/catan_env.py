@@ -46,7 +46,15 @@ from catan_rl.engine.broadcast import GameBroadcast  # re-exported for downstrea
 from catan_rl.engine.game import catanGame
 from catan_rl.engine.player import player as PlainPlayer
 from catan_rl.engine.tracker import ResourceTracker
+from catan_rl.env.event_log import attach_event_log
 from catan_rl.env.hand_tracker import BroadcastHandTracker
+from catan_rl.env.ruleset import (
+    PRE_ROLL_DEV_CARD_NAMES,
+    PRE_ROLL_DEV_TYPES,
+    RULESET_R0,
+    RULESET_R1,
+    validate_ruleset,
+)
 from catan_rl.policy.obs_encoder import (
     EDGE_FEATURE_DIM,
     HEX_FEATURE_DIM,
@@ -181,6 +189,9 @@ class CatanEnv(gym.Env):
         max_turns: int = 500,
         vp_margin_bonus: float = 1.0 / 15.0,
         engine_backend: str = "python",
+        ruleset: str = RULESET_R0,
+        opponent_ruleset: str | None = None,
+        audit_events: bool = False,
     ) -> None:
         """
         Args:
@@ -199,6 +210,28 @@ class CatanEnv(gym.Env):
                 plan). The Rust path raises ``NotImplementedError``
                 with a pointer to the plan until Phase 5 / 6 land the
                 adapter proxies.
+            ruleset: ruleset epoch (:mod:`catan_rl.env.ruleset`) the AGENT
+                seat plays. ``"R0"`` — the default — is the pre-2026-07 epoch
+                every banked checkpoint was trained under and every banked
+                number was measured under; ``"R1"`` is the Colonist-faithful
+                epoch with a pre-roll dev-card window. The default is R0 so no
+                caller silently changes the rules a checkpoint is judged
+                under by merely upgrading (spec D8); training opts into R1
+                explicitly via ``RolloutConfig.ruleset``, which is recorded in
+                the checkpoint config. Numbers from the two epochs are NOT
+                comparable — see the R0/R1 note in ``CLAUDE.md``.
+            opponent_ruleset: epoch the OPPONENT seat plays; defaults to
+                ``ruleset`` (both seats symmetric, which is what self-play and
+                every same-epoch eval want). Setting it differently is the D9
+                flag experiment — an R1 policy with the pre-roll window vs an
+                R0 policy denied it — and is the ONLY sanctioned use; a
+                cross-epoch h2h reached any other way is refused by
+                :class:`catan_rl.eval.harness.CrossRulesetEvalError`.
+            audit_events: retain the broadcast event stream on each game
+                (:func:`catan_rl.env.event_log.attach_event_log`) so the
+                post-game rule audit can run its event-stream invariants.
+                Off by default — a full game emits thousands of events and
+                training must not retain them.
         """
         super().__init__()
         if engine_backend not in {"python", "rust"}:
@@ -215,6 +248,11 @@ class CatanEnv(gym.Env):
                 "See docs/plans/rust_engine_actual_state.md."
             )
         self.engine_backend = engine_backend
+        self.ruleset = validate_ruleset(ruleset)
+        self.opponent_ruleset = validate_ruleset(
+            ruleset if opponent_ruleset is None else opponent_ruleset
+        )
+        self.audit_events = bool(audit_events)
         # ``"snapshot"`` is a frozen past-self policy driving the opponent seat,
         # injected post-construction via ``set_snapshot_opponent`` (the env does
         # not own the league pool). Until one is injected, a snapshot env falls
@@ -344,6 +382,12 @@ class CatanEnv(gym.Env):
         self._agent_seat = agent_seat
 
         self.game = catanGame(render_mode=None)
+        if self.audit_events:
+            # Retain the broadcast stream for the post-game rule audit. Must be
+            # attached HERE, before setup or any roll — the per-turn dev-card
+            # invariant counts DICE_ROLL events as turns, so a log started
+            # mid-game undercounts turns and can false-positive.
+            attach_event_log(self.game)
         board = self.game.board
 
         self.agent_player = PlainPlayer("Agent", "black")
@@ -463,7 +507,7 @@ class CatanEnv(gym.Env):
                     self._run_opponent_main_turn()
                     terminated, truncated = self._check_terminal()
                     if not terminated and not truncated:
-                        self.roll_pending = True
+                        self._begin_agent_turn()
                         self._turn_count += 1
                 else:
                     # Agent rolled the 7; place robber next.
@@ -482,6 +526,32 @@ class CatanEnv(gym.Env):
 
         # ---------------------- Roll dice ----------------------
         if self.roll_pending:
+            if self.ruleset == RULESET_R1 and action_type in PRE_ROLL_DEV_TYPES:
+                # R1 pre-roll dev-card window. Dispatch is an explicit
+                # WHITELIST (never "anything that isn't ROLL_DICE"), so a
+                # mask/env disagreement degrades to the pre-existing no-op
+                # below rather than applying an unvetted action pre-roll.
+                # ``roll_pending`` deliberately stays True: the card is played,
+                # the dice are still owed. A Knight sets
+                # ``robber_placement_pending``, and BOTH ``masks.py`` and this
+                # method test the robber branch ABOVE the roll branch, so the
+                # robber resolves first and the roll follows.
+                ts = _TurnState(robber_placement_pending=self.robber_placement_pending)
+                self._apply_main_action(
+                    agent,
+                    action_type=action_type,
+                    corner_idx=corner_idx,
+                    edge_idx=edge_idx,
+                    tile_idx=tile_idx,
+                    res1_idx=res1_idx,
+                    res2_idx=res2_idx,
+                    ts=ts,
+                )
+                # Road Builder is excluded from the whitelist precisely so no
+                # free-road sub-phase can straddle the roll; pin that.
+                assert ts.road_building_roads_left == 0
+                self.robber_placement_pending = ts.robber_placement_pending
+                return self._get_obs(), 0.0, False, False, info
             if action_type != ActionType.ROLL_DICE:
                 # Mask should prevent this; treat as no-op for safety.
                 return self._get_obs(), 0.0, False, False, info
@@ -513,7 +583,7 @@ class CatanEnv(gym.Env):
             self._run_opponent_turn()
             terminated, truncated = self._check_terminal()
             if not terminated and not truncated and not self.discard_pending:
-                self.roll_pending = True
+                self._begin_agent_turn()
                 self._turn_count += 1
             if terminated or truncated:
                 info = self._terminal_info(terminated)
@@ -724,10 +794,10 @@ class CatanEnv(gym.Env):
                         info,
                     )
                 if not self.discard_pending:
-                    self.roll_pending = True
+                    self._begin_agent_turn()
                     self._turn_count += 1
             else:
-                self.roll_pending = True
+                self._begin_agent_turn()
         return self._get_obs(), 0.0, False, False, {}
 
     def _grant_setup_resources(self, p: PlainPlayer) -> None:
@@ -748,6 +818,35 @@ class CatanEnv(gym.Env):
     # Roll + opponent turn
     # ------------------------------------------------------------------
 
+    def _begin_agent_turn(self) -> None:
+        """Open the agent's turn: turn-boundary bookkeeping, then ``roll_pending``.
+
+        Spec ``preroll-dev-cards-r1`` D2. ``updateDevCards()`` (which promotes
+        ``newDevCards -> devCards``) and clearing ``devCardPlayedThisTurn`` used
+        to live inside ``_do_roll_for_agent``, i.e. AFTER the pre-roll node.
+        With the R1 window open that ordering is two bugs: a pre-roll play
+        would be un-flagged by the roll and re-offered in the main phase (two
+        dev cards per turn — reward-positive, so PPO would find it), and a card
+        bought on turn N would still be invisible at turn N+1's pre-roll node.
+        The true turn boundary is where ``roll_pending`` goes True, so both
+        statements live here and every site that opens an agent turn calls this.
+
+        ``game.currentPlayer`` is claimed here too, mirroring the opponent seat
+        (which sets it before its own pre-roll window in ``_run_opponent_turn``).
+        It used to be claimed inside ``_do_roll_for_agent``, i.e. AFTER the
+        whole pre-roll window — so a pre-roll Knight and its robber placement
+        ran while ``currentPlayer`` still pointed at the opponent (or was
+        ``None`` on turn 1). No whitelisted pre-roll path reads it today, but
+        ``engine/game.py``'s StackedDice Karma branch and its ``DICE_ROLL``
+        emit both do, and that is one call away.
+        """
+        assert self.agent_player is not None
+        self.agent_player.updateDevCards()
+        self.agent_player.devCardPlayedThisTurn = False
+        if self.game is not None:
+            self.game.currentPlayer = self.agent_player
+        self.roll_pending = True
+
     def _do_roll_for_agent(self) -> None:
         assert self.game is not None and self.agent_player is not None
         assert self.opponent_player is not None
@@ -755,8 +854,6 @@ class CatanEnv(gym.Env):
         opponent = self.opponent_player
         board = self.game.board
 
-        agent.updateDevCards()
-        agent.devCardPlayedThisTurn = False
         self.game.currentPlayer = agent
         dice = self.game.rollDice()
         self.last_dice_roll = dice
@@ -790,19 +887,16 @@ class CatanEnv(gym.Env):
         assert self.agent_player is not None
         opp = self.opponent_player
         agent = self.agent_player
-        board = self.game.board
 
         self.game.currentPlayer = opp
         opp.updateDevCards()
         opp.devCardPlayedThisTurn = False
 
-        # D2 pre-roll window (heuristic opponent only): a Knight that clears
-        # the robber off the opponent's OWN hex must land BEFORE the dice, or
-        # the block costs them this turn's production. The snapshot-driven
-        # opponent has no pre-roll action in the mask contract, so it is
-        # deliberately skipped there.
-        if self._snapshot_opponent is None and hasattr(opp, "heuristic_pre_roll"):
-            opp.heuristic_pre_roll(board)
+        self._opponent_pre_roll()
+        # A pre-roll Knight can win outright via Largest Army. Mirror the
+        # post-roll guard below so the opponent never plays on past 15 VP.
+        if opp.victoryPoints >= self.game.maxPoints:
+            return
 
         dice = self.game.rollDice()
         # Keep the obs dice scalar faithful on the opponent's turn too (the
@@ -825,6 +919,78 @@ class CatanEnv(gym.Env):
             return
 
         self._run_opponent_main_turn()
+
+    def _opponent_pre_roll(self) -> None:
+        """The OPPONENT seat's pre-roll dev-card window (spec D2/D6/#8).
+
+        Seat symmetry is the whole point: without the snapshot branch below,
+        self-play would pit an R1 learner against an R0 opponent, and the
+        learner would farm an option its opponent structurally could not use —
+        exactly the asymmetry that kept this gap invisible for the whole
+        lineage.
+
+        The heuristic branch is unchanged and unconditional — it is shipped R0
+        behaviour (a Knight that clears the robber off the heuristic's OWN hex
+        must land before the dice or the block costs it this turn's
+        production), it never goes through ``compute_action_masks``, and every
+        banked R0 number was measured with it on, so gating it on R1 would stop
+        ``ruleset="R0"`` from reproducing the epoch it names.
+
+        The snapshot branch is gated on ``self.opponent_ruleset`` (the epoch
+        the OPPONENT seat plays, normally equal to ``self.ruleset``; they
+        differ only in the D9 flag experiment): one sample at the
+        opponent-local ``roll_pending`` node, applied only if it lands in the
+        whitelist, with a resulting Knight robber resolved immediately. At most
+        one card, so no loop is needed beyond that follow-on.
+
+        The sample is skipped outright when the opponent holds no whitelisted
+        dev card, because the pre-roll mask is then exactly ``{ROLL_DICE}`` — a
+        forced node whose outcome is predetermined. That is the overwhelmingly
+        common case, and paying an obs build + mask build + forward pass for it
+        on every opponent turn of every game across ``n_envs`` rollout envs is
+        pure waste.
+        """
+        assert self.game is not None and self.opponent_player is not None
+        opp = self.opponent_player
+        if self._snapshot_opponent is None:
+            if hasattr(opp, "heuristic_pre_roll"):
+                opp.heuristic_pre_roll(self.game.board)
+            return
+        if self.opponent_ruleset != RULESET_R1 or not self._has_pre_roll_dev_card(opp):
+            return
+        action = self._sample_snapshot_action(self._opponent_env_state(roll_pending=True))
+        action_type = int(action[0])
+        if action_type not in PRE_ROLL_DEV_TYPES:
+            return
+        ts = _TurnState()
+        self._apply_main_action(
+            opp,
+            action_type=action_type,
+            corner_idx=int(action[1]),
+            edge_idx=int(action[2]),
+            tile_idx=int(action[3]),
+            res1_idx=int(action[4]),
+            res2_idx=int(action[5]),
+            ts=ts,
+        )
+        assert ts.road_building_roads_left == 0
+        if ts.robber_placement_pending:
+            self._opponent_move_robber()
+
+    @staticmethod
+    def _has_pre_roll_dev_card(p: PlainPlayer) -> bool:
+        """Could ``p`` legally play ANY dev card at a pre-roll node?
+
+        The cheap precondition of the R1 pre-roll type mask: an unplayed
+        whitelisted card in hand. False here ⇒ the pre-roll type mask is
+        exactly ``{ROLL_DICE}``, so the node is forced and no sample is needed.
+        Note this is a *necessary*, not sufficient, condition — YoP additionally
+        needs bank stock (``masks._set_dev_card_legality``) — which is fine: it
+        only ever skips work the mask would also have refused.
+        """
+        if p.devCardPlayedThisTurn:
+            return False
+        return any(p.devCards.get(name, 0) > 0 for name in PRE_ROLL_DEV_CARD_NAMES)
 
     def _run_opponent_main_turn(self) -> None:
         assert self.game is not None and self.opponent_player is not None
@@ -1128,12 +1294,19 @@ class CatanEnv(gym.Env):
                 last_dice_roll=self.last_dice_roll,
                 cards_to_discard=self._cards_to_discard if self.discard_pending else 0,
             )
+        # Per-SEAT epoch: the opponent seat may be pinned to a different
+        # ruleset than the agent (the D9 flag experiment — an R1 policy with
+        # the pre-roll window vs an R0 policy denied it). Normally identical.
+        seat_ruleset = (
+            self.opponent_ruleset if acting_player is self.opponent_player else self.ruleset
+        )
         return compute_action_masks(
             self.game,
             acting_player,
             env_state,
             self._vertex_to_idx,
             self._edge_to_idx,
+            ruleset=seat_ruleset,
         )
 
     # ------------------------------------------------------------------

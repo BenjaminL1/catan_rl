@@ -38,7 +38,12 @@ from catan_rl.engine.player import player as PlainPlayer
 from catan_rl.engine.tracker import ResourceTracker
 from catan_rl.env.catan_env import CatanEnv
 from catan_rl.env.hand_tracker import BroadcastHandTracker
-from catan_rl.eval.rules_invariants import RulesInvariantViolation, run_all_invariants
+from catan_rl.env.ruleset import RULESET_R0, validate_ruleset
+from catan_rl.eval.rules_invariants import (
+    RulesInvariantViolation,
+    attach_event_log,
+    run_all_invariants,
+)
 from catan_rl.policy.obs_encoder import ObsEncoder
 
 if TYPE_CHECKING:
@@ -85,6 +90,13 @@ class BridgeState:
     opponent_type: str
     opp_kind: int
     opp_policy_id: int
+    #: Ruleset epoch the serialized env was running (spec ``preroll-dev-cards-r1``
+    #: D8). Carried so a round-trip cannot silently re-rule an R1 state as R0 —
+    #: the rebuilt env would offer no pre-roll window and judge a policy under
+    #: rules it was not trained for. Trailing default: payloads recorded before
+    #: the epoch split (and older positional constructions) mean ``R0``.
+    ruleset: str = RULESET_R0
+    opponent_ruleset: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -100,6 +112,10 @@ class BridgeState:
             "opponent_type": self.opponent_type,
             "opp_kind": int(self.opp_kind),
             "opp_policy_id": int(self.opp_policy_id),
+            "ruleset": str(self.ruleset),
+            "opponent_ruleset": (
+                None if self.opponent_ruleset is None else str(self.opponent_ruleset)
+            ),
         }
 
     @classmethod
@@ -122,6 +138,12 @@ class BridgeState:
             opponent_type=str(payload["opponent_type"]),
             opp_kind=int(payload["opp_kind"]),
             opp_policy_id=int(payload["opp_policy_id"]),
+            ruleset=validate_ruleset(str(payload.get("ruleset", RULESET_R0))),
+            opponent_ruleset=(
+                None
+                if payload.get("opponent_ruleset") is None
+                else validate_ruleset(str(payload["opponent_ruleset"]))
+            ),
         )
 
 
@@ -197,6 +219,8 @@ def serialize_post_setup(env: CatanEnv) -> BridgeState:
         opponent_type=env.opponent_type,
         opp_kind=int(env._opp_kind),
         opp_policy_id=int(env._opp_policy_id),
+        ruleset=env.ruleset,
+        opponent_ruleset=env.opponent_ruleset,
     )
 
 
@@ -211,9 +235,17 @@ def rebuild_env(state: BridgeState) -> CatanEnv:
     post-condition (the engine ``build_*`` silently no-ops, so legality is only
     known after the fact). Returns the env positioned at the agent's roll.
     """
-    env = CatanEnv(opponent_type=state.opponent_type)
+    env = CatanEnv(
+        opponent_type=state.opponent_type,
+        ruleset=state.ruleset,
+        opponent_ruleset=state.opponent_ruleset,
+    )
 
     game = catanGame(render_mode=None)
+    # Retain the broadcast stream from the very first emit so the
+    # ``run_all_invariants`` audit below can run its event-stream checks —
+    # without a retained log they silently no-op.
+    attach_event_log(game)
     board = game.board
     resources = [str(h["resource"]) for h in state.hexes]
     numbers = [h["number"] for h in state.hexes]
@@ -270,7 +302,11 @@ def rebuild_env(state: BridgeState) -> CatanEnv:
     env.initial_placement_phase = False
     game.gameSetup = False
     env._setup_step = 4
-    env.roll_pending = True
+    # D2: every site that opens an agent turn goes through ``_begin_agent_turn``
+    # (dev-card promotion + per-turn flag + ``currentPlayer``), never a bare
+    # ``roll_pending = True`` — otherwise an R1 rebuild's pre-roll window would
+    # run with stale dev cards and no current player.
+    env._begin_agent_turn()
     env.discard_pending = False
     env.robber_placement_pending = False
     env.road_building_roads_left = 0

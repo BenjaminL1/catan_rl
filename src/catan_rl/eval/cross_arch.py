@@ -35,12 +35,15 @@ import numpy as np
 import torch
 
 from catan_rl.env.catan_env import CatanEnv
+from catan_rl.env.ruleset import RULESET_R0, validate_ruleset
 from catan_rl.eval.engine_parity import assert_engine_parity
 from catan_rl.eval.harness import (
+    CrossRulesetEvalError,
     EvalHarness,
     EvalMatchupResult,
     _restore_torch_rng,
     _snapshot_torch_rng,
+    checkpoint_ruleset,
 )
 from catan_rl.eval.wilson import wilson_interval
 from catan_rl.policy.network import CatanPolicy
@@ -167,6 +170,9 @@ class CrossArchEnv(CatanEnv):
         max_turns: int = 500,
         vp_margin_bonus: float = 1.0 / 15.0,
         engine_backend: str = "python",
+        ruleset: str = RULESET_R0,
+        opponent_ruleset: str | None = None,
+        audit_events: bool = False,
         *,
         legacy_opponent: bool = False,
     ) -> None:
@@ -175,6 +181,9 @@ class CrossArchEnv(CatanEnv):
             max_turns=max_turns,
             vp_margin_bonus=vp_margin_bonus,
             engine_backend=engine_backend,
+            ruleset=ruleset,
+            opponent_ruleset=opponent_ruleset,
+            audit_events=audit_events,
         )
         self._legacy_opponent = legacy_opponent
         self._legacy_obs_encoder: Any = None
@@ -232,6 +241,9 @@ def cross_arch_h2h(
     device: str = "cpu",
     max_turns: int = 400,
     strict_engine_parity: bool = True,
+    ruleset: str | None = None,
+    opponent_ruleset: str | None = None,
+    allow_mixed_ruleset: bool = False,
 ) -> EvalMatchupResult:
     """Seat-symmetrized head-to-head: new pointer-arch champion vs an old policy.
 
@@ -251,6 +263,18 @@ def cross_arch_h2h(
     vendored legacy encoder was written against (``strict_engine_parity=False``
     bypasses — untrusted).
 
+    **Both** seats' epochs are read off their own checkpoints when not given
+    explicitly (:func:`~catan_rl.eval.harness.checkpoint_ruleset`; an absent
+    stamp ⇒ ``R0``, which every pre-slice checkpoint is by construction).
+    ``ruleset`` is the epoch the NEW champion plays and defaults to
+    ``new_ckpt``'s own stamp; ``opponent_ruleset`` defaults to ``old_ckpt``'s.
+    Wiring the refusal on one side only would have left the accept-gate entry
+    point running an R1 champion under R0 rules whenever both defaults were
+    taken — the exact silent re-ruling D8 exists to stop. A mismatch is
+    REFUSED with :class:`~catan_rl.eval.harness.CrossRulesetEvalError` unless
+    ``allow_mixed_ruleset=True`` — which gives each seat its own rules (D9's
+    per-seat flag experiment) rather than relaxing the check.
+
     Returns an :class:`EvalMatchupResult`: the NEW arch's seat-symmetrized win
     rate + Wilson CI over ``2 * (n_games // 2)`` games. Bit-for-bit reproducible
     on CPU at a fixed seed; the global numpy / stdlib / every-torch-backend RNG
@@ -258,6 +282,19 @@ def cross_arch_h2h(
     """
     if old_arch not in ("legacy", "new"):
         raise ValueError(f"old_arch must be 'legacy' or 'new'; got {old_arch!r}")
+    new_ruleset = checkpoint_ruleset(new_ckpt) if ruleset is None else validate_ruleset(ruleset)
+    opp_ruleset = (
+        checkpoint_ruleset(old_ckpt)
+        if opponent_ruleset is None
+        else validate_ruleset(opponent_ruleset)
+    )
+    if opp_ruleset != new_ruleset and not allow_mixed_ruleset:
+        raise CrossRulesetEvalError(
+            f"cross-ruleset h2h refused: new champion plays {new_ruleset!r} but "
+            f"{old_ckpt!r} was trained under {opp_ruleset!r}. Numbers from the two "
+            "epochs are not comparable. Either evaluate both under one epoch, or "
+            "pass allow_mixed_ruleset=True to run the D9 per-seat flag experiment."
+        )
     # Guard 3: the whole in-process method rests on the engine being byte-
     # identical across the fork — refuse (or warn, if unverifiable) up front.
     assert_engine_parity(strict=strict_engine_parity)
@@ -277,6 +314,9 @@ def cross_arch_h2h(
         env = CrossArchEnv(
             opponent_type="snapshot",
             max_turns=max_turns,
+            ruleset=new_ruleset,
+            opponent_ruleset=opp_ruleset,
+            audit_events=True,
             legacy_opponent=(old_arch == "legacy"),
         )
         env.set_snapshot_opponent(opponent)
@@ -286,6 +326,7 @@ def cross_arch_h2h(
             seed=seed,
             device=torch.device(device),
             max_turns=max_turns,
+            ruleset=new_ruleset,
         )
         try:
             games = harness._run_matchup_games(env, champion, seed_label=str(old_ckpt))

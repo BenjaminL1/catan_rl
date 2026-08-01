@@ -11,7 +11,8 @@ Pins:
 3. YAML round-trip preserves the config.
 4. Env-var overrides layer correctly, including type coercion.
 5. Unknown YAML / env keys raise (silent drop is a footgun).
-6. The default YAML file matches the dataclass defaults exactly.
+6. The default YAML file matches the dataclass defaults exactly, save for one
+   deliberate delta (``rollout.ruleset``) pinned field-by-field.
 """
 
 from __future__ import annotations
@@ -272,13 +273,27 @@ class TestYAMLRoundTrip:
             TrainConfig.from_yaml(path)
 
     def test_default_yaml_file_matches_dataclass_defaults(self) -> None:
-        """The shipped configs/ppo_default.yaml should exactly equal
-        TrainConfig.default()'s to_dict output."""
+        """The shipped configs/ppo_default.yaml equals TrainConfig.default(),
+        with ONE deliberate, spelled-out divergence: ``rollout.ruleset``.
+
+        Spec ``preroll-dev-cards-r1``: R1 is the ruleset a NEW lineage should
+        train under, so the flagship config opts in — but the dataclass default
+        must stay R0, because eleven other train configs carry no ``ruleset``
+        key and several of them (``selfplay_v8_cont_resume.yaml``) exist to
+        RESUME a banked R0 lineage. An R1 dataclass default would flip those on
+        a merge. Pinned as an exact one-field delta rather than a loosened
+        comparison, so any OTHER drift between the two still fails here.
+        """
+        from dataclasses import replace
+
         repo_root = Path(__file__).resolve().parents[3]
         yaml_path = repo_root / "configs" / "ppo_default.yaml"
         assert yaml_path.exists(), f"configs/ppo_default.yaml not found at {yaml_path}"
         cfg = TrainConfig.from_yaml(yaml_path)
-        assert cfg == TrainConfig.default()
+        defaults = TrainConfig.default()
+        assert defaults.rollout.ruleset == "R0"
+        assert cfg.rollout.ruleset == "R1"
+        assert cfg == replace(defaults, rollout=replace(defaults.rollout, ruleset="R1"))
 
 
 # ---------------------------------------------------------------------------

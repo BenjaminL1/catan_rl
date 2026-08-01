@@ -38,8 +38,13 @@ def _fake_harness(heur_wr: float):  # type: ignore[no-untyped-def]
     return _FakeHarness
 
 
-def _patch(monkeypatch, eval_fn, heur_wr: float = 0.9) -> None:  # type: ignore[no-untyped-def]
+def _patch(  # type: ignore[no-untyped-def]
+    monkeypatch, eval_fn, heur_wr: float = 0.9, champ_epoch: str = "R0"
+) -> None:
     monkeypatch.setattr(PF, "build_actor", lambda spec, **k: types.SimpleNamespace(policy=object()))
+    # The gate reads the CHAMPION's epoch off its own checkpoint (D8); the
+    # stub keeps these decision-logic tests off disk.
+    monkeypatch.setattr(H, "checkpoint_ruleset", lambda path: champ_epoch)
     monkeypatch.setattr(H, "evaluate_policy_vs_policy", eval_fn)
     monkeypatch.setattr(H, "EvalHarness", _fake_harness(heur_wr))
 
@@ -47,7 +52,7 @@ def _patch(monkeypatch, eval_fn, heur_wr: float = 0.9) -> None:  # type: ignore[
 def test_gate_fails_when_quick_lb_below_half(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     calls: list[int] = []
 
-    def fake(champ, opp, *, n_games, seed, device):  # type: ignore[no-untyped-def]
+    def fake(champ, opp, *, n_games, seed, device, ruleset):  # type: ignore[no-untyped-def]
         calls.append(n_games)
         return _res(n_games // 2, n_games)  # WR ~ 0.50
 
@@ -61,7 +66,7 @@ def test_gate_fails_when_quick_lb_below_half(monkeypatch) -> None:  # type: igno
 
 
 def test_gate_passes_when_distilled_beats_v6(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    def fake(champ, opp, *, n_games, seed, device):  # type: ignore[no-untyped-def]
+    def fake(champ, opp, *, n_games, seed, device, ruleset):  # type: ignore[no-untyped-def]
         return _res(int(n_games * 0.62), n_games)  # WR ~ 0.62 -> LB > 0.50
 
     _patch(monkeypatch, fake)
@@ -75,7 +80,7 @@ def test_gate_passes_when_distilled_beats_v6(monkeypatch) -> None:  # type: igno
 
 def test_gate_fails_on_catastrophic_forgetting(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     # Beats v6 (WR 0.62) but COLLAPSED vs the heuristic (WR 0.40 < floor) -> FAIL.
-    def fake(champ, opp, *, n_games, seed, device):  # type: ignore[no-untyped-def]
+    def fake(champ, opp, *, n_games, seed, device, ruleset):  # type: ignore[no-untyped-def]
         return _res(int(n_games * 0.62), n_games)
 
     _patch(monkeypatch, fake, heur_wr=0.40)
@@ -89,7 +94,7 @@ def test_gate_fails_on_catastrophic_forgetting(monkeypatch) -> None:  # type: ig
 def test_gate_confirm_uses_disjoint_seed(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     seeds: list[int] = []
 
-    def fake(champ, opp, *, n_games, seed, device):  # type: ignore[no-untyped-def]
+    def fake(champ, opp, *, n_games, seed, device, ruleset):  # type: ignore[no-untyped-def]
         seeds.append(seed)
         return _res(int(n_games * 0.62), n_games)
 
@@ -98,3 +103,23 @@ def test_gate_confirm_uses_disjoint_seed(monkeypatch) -> None:  # type: ignore[n
 
     run_gate("d.pt", "v6.pt", n_quick=200, n_confirm=500, seed=0)
     assert len(seeds) == 2 and seeds[0] != seeds[1]  # confirm games disjoint from quick
+
+
+def test_gate_seats_the_champion_under_its_own_epoch(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """D8: the distilled seat plays the epoch ITS checkpoint was trained under.
+
+    Left to the ``evaluate_policy_vs_policy`` default it would silently take
+    ``R0`` — an R1 champion judged under rules it was not trained for, or a
+    refusal on a legitimate same-epoch gate.
+    """
+    epochs: list[str] = []
+
+    def fake(champ, opp, *, n_games, seed, device, ruleset):  # type: ignore[no-untyped-def]
+        epochs.append(ruleset)
+        return _res(int(n_games * 0.62), n_games)
+
+    _patch(monkeypatch, fake, champ_epoch="R1")
+    from catan_rl.expert_iteration.gate import run_gate
+
+    run_gate("d.pt", "v6.pt", n_quick=200, n_confirm=500)
+    assert epochs == ["R1", "R1"]  # quick + confirm both seated under R1

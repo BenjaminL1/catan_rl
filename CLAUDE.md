@@ -32,6 +32,7 @@ eval).
 | Board / resources / ports | standard 19 tiles, 54 vertices, 72 edges; standard counts; 5×2:1 + 4×3:1 ports | identical |
 | **Resource bank** | **finite 19 per resource** + official depletion (bank short & one player owed → sole claimant takes the remainder; bank short & both owed → neither receives) | same (finite 19) |
 | Largest Army / Longest Road | 3 knights / 5 roads | same |
+| **Pre-roll dev card** | **allowed** — one dev card (Knight / YoP / Monopoly) may be played BEFORE the dice, both seats (ruleset epoch **R1**) | same |
 
 **Implications baked into the engine (`src/catan_rl/engine/`) — do not undo without flagging:**
 - `catanGame.maxPoints = 15`, `numPlayers = 2` hardcoded (`engine/game.py`).
@@ -101,6 +102,69 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
 Types: `0 BuildSettlement, 1 BuildCity, 2 BuildRoad, 3 EndTurn, 4 MoveRobber,
 5 BuyDevCard, 6 PlayKnight, 7 PlayYoP, 8 PlayMonopoly, 9 PlayRoadBuilder,
 10 BankTrade, 11 Discard, 12 RollDice`.
+
+## Ruleset epochs — R0 vs R1 (`src/catan_rl/env/ruleset.py`)
+
+The env carries a `ruleset` constructor arg. **Numbers from the two epochs are
+NOT comparable**; every banked figure (v8 `0.668` WR, search `+54.6` Elo, the
+accept-gate clause-(a) `n=600` result) is an **R0** number.
+
+- **`R0`** — the shipped rules up to 2026-07. At a `roll_pending` node the mask
+  offers exactly `ROLL_DICE` to **every policy seat**. It is the **default**
+  everywhere in code (`compute_action_masks`, `CatanEnv`, `EvalHarness`), so no
+  caller re-rules a banked checkpoint merely by upgrading. The scripted
+  heuristic's pre-roll Knight is shipped R0 behaviour and runs under **both**
+  epochs — it never goes through the mask, and every banked number was measured
+  with it on, so gating it would stop `R0` reproducing the epoch it names.
+- **`R1`** — Colonist-faithful: **both policy seats** may play ONE dev card
+  before rolling. Whitelist Knight / YoP / Monopoly; **Road Builder excluded**
+  (free roads must not straddle the roll). Selected explicitly by
+  `RolloutConfig.ruleset` (`configs/ppo_default.yaml` → `rollout.ruleset: R1`),
+  which is the config source of truth. **`RolloutConfig.ruleset` itself defaults
+  to `R0`** and `ppo_default.yaml` is the only config that opts in — the other
+  train configs (notably `selfplay_v8_cont_resume.yaml`, which exists to RESUME
+  a banked R0 lineage) carry no key and stay R0, and `("rollout", "ruleset")` is
+  in `training_loop._RESUME_CRITICAL_FIELDS` so a resume-time epoch flip warns
+  loudly instead of silently re-ruling a lineage mid-run. Action space, obs
+  schema, mask keys and checkpoint shapes are unchanged — `roll_pending` is
+  already an obs phase flag and types 6-9 already exist.
+- **Every run stamps its epoch.** `TrainConfig.to_dict()` lands in the
+  checkpoint payload, so `eval.harness.checkpoint_ruleset(path)` reads a
+  checkpoint's epoch back; **an absent stamp means R0** (all pre-slice
+  checkpoints). `cross_arch_h2h` and `evaluate_search_vs_policy` take BOTH
+  checkpoint paths, so they read **both** seats' stamps automatically and an
+  R1-vs-R1 rung there needs no flag. `evaluate_policy_vs_policy` / `EvalHarness`
+  auto-read the **opponent** stamp only — their champion arrives as a live
+  policy object, not a path — so the champion seat falls back to the `ruleset=`
+  default (`R0`), and a caller holding the champion's checkpoint path must pass
+  `ruleset=checkpoint_ruleset(path)` (as `scripts/elo_ladder.py`,
+  `scripts/run_exploiter_gate.py` and `expert_iteration/gate.py` do). Omit it
+  with an R1 champion and the matchup fails **closed** —
+  `CrossRulesetEvalError` on a legitimate same-epoch pairing — never a silently
+  mixed number.
+- A cross-epoch head-to-head is **refused** (`CrossRulesetEvalError`), never
+  annotated. The single sanctioned override is `allow_mixed_ruleset=True`,
+  which does not relax the rules — it gives each seat its own epoch
+  (`CatanEnv(ruleset=..., opponent_ruleset=...)`) so both policies play what
+  they were trained for. That is D9's replacement accept gate.
+- The post-game rule audit's event-stream checks (one-dev-card-per-turn, no
+  P2P trade) need `CatanEnv(audit_events=True)` — the engine's broadcast keeps
+  no history. Every audited path sets it; training does not. The one-card check
+  infers Knight plays from per-turn `MOVE_ROBBER` events (minus the one owed to
+  an own rolled 7), since Knight emits no card event of its own.
+- The conformance recorder (`record_game(..., ruleset=...)`,
+  `catan-rl-conformance --ruleset`) also defaults to **R0**: the Torevan TS
+  reference engine still refuses pre-roll actions, so an R1 fixture is not
+  replayable there until the TS half of D10 lands. Logs carry a `"ruleset"`
+  field; `CONFORMANCE_SCHEMA_VERSION` is 2.
+  **Owed, cross-repo:** the Torevan oracle still pins the OLD version —
+  `Torevan/packages/engine/src/conformance/conformance.test.ts` asserts
+  `expect(log.schema_version).toBe(1)`. This repo commits no fixtures, so
+  `make test-unit` cannot see it; the oracle goes RED the first time ANY
+  fixture is regenerated (even an R0 one, whose steps are otherwise identical
+  to v1). Bump that assertion to `2` in the same change that regenerates
+  fixtures.
+- Spec: `.claude/veriloop/specs/preroll-dev-cards-r1.md`.
 
 ## Observation
 

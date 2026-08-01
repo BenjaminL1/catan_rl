@@ -47,6 +47,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Overwrite existing replay-log files. Default refuses.",
     )
     p.add_argument(
+        "--ruleset",
+        default="R0",
+        choices=("R0", "R1"),
+        help=(
+            "ruleset epoch to record under (default R0). R1 turns may open with "
+            "ONE pre-roll dev card; the reference TS engine does not accept that "
+            "yet, so R1 fixtures are only replayable once the Torevan half of "
+            "spec preroll-dev-cards-r1 D10 lands."
+        ),
+    )
+    p.add_argument(
         "--verbose",
         action="store_true",
         help="DEBUG-level logging.",
@@ -69,9 +80,15 @@ def main(argv: list[str] | None = None) -> int:
         out_path = out_dir / f"game-seed-{seed}.json"
         if out_path.exists() and not args.force:
             raise SystemExit(f"error: {out_path} already exists; pass --force to overwrite")
-        replay = record_game(seed, max_main_turns=args.max_main_turns)
+        replay = record_game(seed, max_main_turns=args.max_main_turns, ruleset=args.ruleset)
         save_log(replay, out_path)
-        log.info("wrote %s: %d steps, seed=%d", out_path.name, len(replay["steps"]), seed)
+        log.info(
+            "wrote %s: %d steps, seed=%d, ruleset=%s",
+            out_path.name,
+            len(replay["steps"]),
+            seed,
+            args.ruleset,
+        )
     return 0
 
 

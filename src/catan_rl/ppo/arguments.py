@@ -49,6 +49,10 @@ import yaml
 
 _VEC_ENV_MODES: Final[tuple[str, ...]] = ("serial", "subproc")
 _ENGINE_BACKENDS: Final[tuple[str, ...]] = ("python", "rust")
+# Mirrors catan_rl.env.ruleset.VALID_RULESETS. Spelled out rather than imported
+# because ``catan_rl.env`` pulls in the whole gym/torch env at import time and
+# this module is the light-weight config source of truth.
+_RULESETS: Final[tuple[str, ...]] = ("R0", "R1")
 _KL_APPROXIMATIONS: Final[tuple[str, ...]] = ("k1", "k2", "k3")
 _ADVANTAGE_NORM_MODES: Final[tuple[str, ...]] = ("rollout", "batch", "none")
 _DEVICE_VALUES: Final[tuple[str, ...]] = ("auto", "cpu", "mps", "cuda")
@@ -99,6 +103,32 @@ class RolloutConfig:
     """Default opponent at rollout time. ``league`` requires the league
     selfplay phase to be wired in."""
 
+    ruleset: Literal["R0", "R1"] = "R0"
+    """Ruleset epoch the rollout + eval envs play (:mod:`catan_rl.env.ruleset`).
+
+    ``R1`` is the Colonist-faithful epoch — one pre-roll dev card per turn, on
+    both policy seats. ``R0`` is the pre-2026-07 epoch every banked checkpoint
+    was trained under and every banked number — v8's 0.668 WR, search's +54.6
+    Elo, the accept-gate clause-(a) n=600 result — was measured under.
+
+    **The default is ``R0``, and every code-level default in the slice matches
+    it.** R1 is opted into per-config: ``configs/ppo_default.yaml`` sets
+    ``rollout.ruleset: R1`` for new lineages, and the eleven other train
+    configs — several of which exist to RESUME a banked R0 lineage
+    (``selfplay_v8_cont_resume.yaml``) — carry no key and therefore stay R0.
+    An ``R1`` default was tried first and was wrong for exactly that reason: it
+    would flip a banked lineage's epoch mid-run on the strength of a merge,
+    corrupting both the value targets and the stamp the D8/D9 refusal machinery
+    reads back.
+
+    This is the config source of truth for the epoch, and it is what makes the
+    epoch *recoverable*: ``TrainConfig.to_dict()`` lands in the saved
+    checkpoint payload, so ``eval.harness.checkpoint_ruleset`` can read a
+    checkpoint's epoch back and refuse a cross-epoch head-to-head. Checkpoints
+    predating this field are R0 by construction. A resume-time mismatch is
+    caught by ``training_loop._RESUME_CRITICAL_FIELDS``. R0 and R1 numbers are
+    NOT comparable — never compare across the stamp."""
+
     engine_backend: Literal["python", "rust"] = "python"
     """Catan engine backend. ``python`` is the production default
     (``catanGame`` + ``catanBoard``). ``rust`` selects the
@@ -116,6 +146,7 @@ class RolloutConfig:
         _check_in("vec_env_mode", self.vec_env_mode, _VEC_ENV_MODES)
         _check_in("opponent_type", self.opponent_type, _OPPONENT_TYPES)
         _check_in("engine_backend", self.engine_backend, _ENGINE_BACKENDS)
+        _check_in("ruleset", self.ruleset, _RULESETS)
         if self.vec_env_mode == "subproc":
             import warnings
 

@@ -5,7 +5,9 @@ The replay-log JSON has the shape (all resource keys Charlesworth-ordered
 ``packages/engine/src/topology.fixture.json``)::
 
     {
-      "schema_version": 1,
+      "schema_version": 2,                # == CONFORMANCE_SCHEMA_VERSION below
+      "ruleset": "R0",                    # epoch: R1 turns may open with ONE
+                                          # pre-roll dev card; R0 never does
       "seed": 7,                          # numpy seed used for this game
       "board": {                          # the LOADED board (never regenerated)
         "robber_hex": 4,
@@ -77,11 +79,22 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import numpy as np
 
 from catan_rl.engine.game import catanGame
+from catan_rl.env.ruleset import RULESET_R0, RULESET_R1, validate_ruleset
 
 _LOG = logging.getLogger("catan_rl.conformance")
 
 #: On-disk schema version for the conformance replay-log.
-CONFORMANCE_SCHEMA_VERSION = 1
+#: Bumped 1 -> 2 by spec ``preroll-dev-cards-r1`` D10: fixtures may now carry a
+#: pre-roll dev-card step BEFORE their ``RollDice`` step, so within-turn step
+#: ordering changed and a v1 consumer would mis-align.
+#:
+#: CROSS-REPO DEPENDENCY (owed, not enforceable here): the Torevan reference
+#: oracle still pins the OLD value in
+#: ``Torevan/packages/engine/src/conformance/conformance.test.ts``
+#: (``expect(log.schema_version).toBe(1)``). This repo commits no fixtures, so
+#: no local test can catch it — the oracle goes RED the first time ANY fixture
+#: is regenerated, R0 included. Bump that TS assertion in the same change.
+CONFORMANCE_SCHEMA_VERSION = 2
 
 #: Canonical (Charlesworth) resource order — matches @torevan/engine's
 #: ``RESOURCES`` and the obs schema. Every resource map in the log is
@@ -343,7 +356,11 @@ def _hand_total(player: Any) -> int:
 
 
 def record_game(
-    seed: int, *, max_main_turns: int = 200, assert_conservation: bool = False
+    seed: int,
+    *,
+    max_main_turns: int = 200,
+    assert_conservation: bool = False,
+    ruleset: str = RULESET_R0,
 ) -> dict[str, Any]:
     """Play one full reference game under a random-legal policy and return
     the conformance replay-log as a JSON-safe dict.
@@ -367,7 +384,18 @@ def record_game(
 
     Order matters: seed the global BEFORE constructing ``catanGame`` so
     the dice picks up the determined seed at construction time.
+
+    ``ruleset`` selects the epoch the recorded game is played under, and is
+    written into the log as ``"ruleset"``. It defaults to ``R0`` — matching
+    every other epoch-aware surface in this slice, and matching the reference
+    TS engine, whose ``actions.ts`` still throws
+    ``'Must roll the dice before building'`` while ``rollPending`` (the TS half
+    of D10 is not in this slice). Under ``R1`` a turn may open with ONE pre-roll
+    dev card, which is the whole point of the schema bump; recording R1 fixtures
+    before the TS side lands would produce logs the oracle cannot replay, so R1
+    is opt-in, not the default.
     """
+    ruleset = validate_ruleset(ruleset)
     np.random.seed(seed)
     random.seed(seed)  # pins the global stream the Rust dice seeds from
     rng = random.Random(seed)  # the recorder's own legal-move selection stream
@@ -441,7 +469,16 @@ def record_game(
         player.updateDevCards()
         player.devCardPlayedThisTurn = False
 
-        # 1) Roll.
+        # 1) Pre-roll dev-card window (ruleset R1 only). The harness was
+        # STRUCTURALLY BLIND to this change class before: every turn opened
+        # with an unconditional RollDice, so re-recording under R1 produced
+        # byte-identical logs and the two engines could fork while green.
+        if ruleset == RULESET_R1:
+            _pre_roll_actions(game, ctx, player, turn_seat, sink, rng, emit)
+            if game.gameOver:
+                break
+
+        # 2) Roll.
         dice_roll = int(game.dice.roll(player, game.last_player_to_roll_7))
         if dice_roll == 7:
             game.last_player_to_roll_7 = player
@@ -459,13 +496,13 @@ def record_game(
             # Re-emit the post-distribution snapshot onto the RollDice step.
             steps[-1]["state_after"] = _snapshot(game, ctx)
 
-        # 2) Free-form actions (random count) until end turn / win.
+        # 3) Free-form actions (random count) until end turn / win.
         _play_actions(game, ctx, player, turn_seat, sink, rng, emit)
 
         if game.gameOver:
             break
 
-        # 3) End turn.
+        # 4) End turn.
         emit(turn_seat, {"kind": "EndTurn", "args": {}}, {})
         turn_seat = 1 - turn_seat
 
@@ -473,6 +510,7 @@ def record_game(
 
     return {
         "schema_version": CONFORMANCE_SCHEMA_VERSION,
+        "ruleset": ruleset,
         "seed": int(seed),
         "board": board_payload,
         "players": [
@@ -586,6 +624,40 @@ def _play_actions(
         if player.victoryPoints >= game.maxPoints:
             game.gameOver = True
             return
+
+
+def _pre_roll_actions(
+    game: Any,
+    ctx: _Ctx,
+    player: Any,
+    turn_seat: int,
+    sink: _StealSink,
+    rng: random.Random,
+    emit: Any,
+) -> None:
+    """Maybe play ONE dev card before rolling (ruleset R1, spec D10).
+
+    Sibling of :func:`_play_actions`, drawing from the SAME ``rng`` so the
+    fixture stream stays a single deterministic sequence. Offers only
+    :data:`catan_rl.env.ruleset.PRE_ROLL_DEV_TYPES` — Road Builder is excluded
+    pre-roll, exactly as in ``env/masks.py``, so the two never disagree.
+    """
+    if game.gameOver:
+        return
+    choices = [
+        c
+        for c in _legal_main_choices(game, ctx, player)
+        if c in ("PlayKnight", "PlayYearOfPlenty", "PlayMonopoly")
+    ]
+    if not choices:
+        return
+    # ``None`` = decline the window; keeps most turns plain RollDice openers.
+    choice = rng.choice([None, *choices])
+    if choice is None:
+        return
+    _apply_main_choice(game, ctx, player, turn_seat, sink, rng, emit, choice)
+    if player.victoryPoints >= game.maxPoints:
+        game.gameOver = True
 
 
 def _legal_main_choices(game: Any, ctx: _Ctx, player: Any) -> list[str]:
