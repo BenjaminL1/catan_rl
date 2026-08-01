@@ -1,0 +1,176 @@
+# R1 self-play — the FIRST lineage trained on the corrected Colonist ruleset.
+#
+# WHAT CHANGED vs every prior run: R1 lets BOTH seats play one dev card BEFORE the
+# dice roll (Knight / Year of Plenty / Monopoly; Road Builder excluded, spec D4).
+# Every lineage up to and including ptr_v1_u500 trained under R0, where
+# `env/masks.py` emitted ONLY ROLL_DICE while roll_pending — so the policy has
+# never once had that option. Spec: .claude/veriloop/specs/preroll-dev-cards-r1.md
+#
+# SEEDING — warm-start + ORDINARY PPO. No exploration lever, and that is a
+# MEASURED decision, not an assumption. Spec D5 required the histogram first:
+# freezing ptr_v1_u500, widening the mask and sampling 3,000 env steps gave 113
+# pre-roll nodes and 69 dev-card plays = 61.1% (Knight 50 / Mono 10 / YoP 9 vs
+# 44 rolls; runs/analysis/preroll_histogram.json). The policy OVER-plays the new
+# window, so the failure mode an entropy bonus defends against does not exist
+# here — and that bonus is on this repo's do-not-fund list anyway
+# (setup_entropy_coef 0.02 -> entropy 0.21->2.3, 0 promotions, 17h lost).
+# What PPO has to learn here is RESTRAINT, which is ordinary credit assignment.
+#
+# EPOCH: numbers from this run are R1 and are NOT comparable to any banked R0
+# number — v8 0.668 WR, search +54.6 Elo, accept-gate clause-(a) 0.7500/n=600.
+# `eval/harness.py` refuses a cross-ruleset h2h rather than annotating one.
+#
+# DELTAS vs selfplay_pointer_arch_v3 (each justified, none cosmetic):
+#   (a) rollout.ruleset: R1   <- THE POINT. CatanEnv defaults to R0, so this is
+#       opt-in; without this line the run would silently retrain the old rules.
+#   (b) warm+anchor on runs/anchors/ptr_v1_u500.pt (the BANKED slim copy) rather
+#       than the training-dir path, which sits under keep_last_n:6 rotation and
+#       can be deleted out from under the run.
+#   (c) pfsp_k 2.0 -> 1.0. 2.0 was v3's declared variable-under-test and v3
+#       soft-stopped at u200 with an anchor-window median of 0.5233 and ZERO
+#       promotions. Revert to the validated v8->v11 ratchet value.
+#   (d) heuristic_weight 0.1 -> 0.2. It was cut to 0.1 because the heuristic was
+#       saturated at ~0.97 — but it could not play a dev card at all. It now has
+#       a real dev-card policy INCLUDING pre-roll Knight, so it is an informative
+#       opponent again and the one league member that is not a mirror.
+#   (e) auto_stop soft 150 -> 300. v3 lowered it to fail fast on a recipe knob;
+#       this run asks the learner to re-price a NEW action at ~99 nodes/game, so
+#       cutting it at 150 would kill a slow ramp before it means anything. The
+#       hard stop at 400 is unchanged.
+#   (f) fresh seed + run_name.
+#
+# TERMINATION: auto_stop is the terminator, NOT total_steps (a runaway ceiling).
+
+rollout:
+  n_envs: 128
+  n_steps: 256
+  vec_env_mode: serial
+  max_turns: 400
+  opponent_type: heuristic   # the league block (snapshot 0.6 / anchor 0.3 / heuristic 0.1) drives
+                             # the ACTUAL self-play opponent mix; this is only the fallback kind.
+  engine_backend: python
+  ruleset: R1                 # (a) THE POINT — CatanEnv defaults to R0
+
+ppo:
+  n_epochs: 4
+  batch_size: 512
+  clip_range: 0.2
+  clip_range_vf: 0.2
+  target_kl: 0.02
+  kl_approx: k3
+  advantage_norm: rollout
+  use_value_clipping: true
+
+gae:
+  gamma: 0.995
+  gae_lambda: 0.95
+
+loss:
+  value_coef: 0.5
+  entropy_coef_start: 0.005
+  entropy_coef_end: 0.005
+  entropy_anneal_start_update: 50
+  entropy_anneal_end_update: 200
+  belief_coef: 0.05
+  opp_action_coef: 0.0       # INERT: the pointer-arch policy has NO opp_action head (verified —
+                             # network.py exposes only value/belief/aux_value heads), so the trainer
+                             # never reads this coef and no opp_action loss is ever computed. Pinned 0
+                             # (not v11's 0.03) to document that + stop a future head-wiring from
+                             # silently training an aux objective on this run.
+  aux_value_coef: 0.05       # pointer-arch D4: trunk-shaping aux value head (MSE onto discounted
+                             # return). Co-trained from update 0; never feeds control.
+  setup_entropy_coef: 0.0    # REVERTED to the validated v11 recipe. The 0.02 first-relaunch value
+                             # OVER-corrected: it drove setup_head_entropy from 0.21 (u0) to ~2.3
+                             # (the untrained/random level) within 25 updates and held it there, so
+                             # the learner played near-random openings, lost to its own frozen anchor
+                             # (anchor_wr_window ~0.2), never promoted, and auto_stopped soft at u300.
+                             # The entropy bonus is the WRONG tool (randomizes ALL openings, not just
+                             # good diversity). Opening diversity is handled PROPERLY downstream: the
+                             # opening scoreboard MEASURES whether openings are weak, then corpus
+                             # opening-SEEDS (Workstream B) inject specific good human openings if so.
+
+optimizer:
+  lr_start: 2.0e-4
+  lr_end: 1.5e-4
+  weight_decay: 1.0e-4
+  eps: 1.0e-5
+  grad_clip_max_norm: 1.0
+  lr_anneal_total_updates: 900   # PIN the validated self-play schedule: 2.0e-4 -> 1.5e-4 over the
+                                 # first 900 updates, then HOLD at lr_end for the rest of the
+                                 # unbounded run (linear_lr_schedule clamps progress at 1.0).
+
+checkpoint:
+  save_every_updates: 25
+  keep_last_n: 6           # 6 x ~16.7MB (policy+optimizer; the league pool lives in the deduped
+                           # sidecar store, NOT inline like v11's ~577MB fat ckpts) ~= 100MB rolling
+                           # + exempt promotion ckpts; fits the disk budget.
+  save_optimizer_state: true
+
+eval:
+  eval_every_updates: 100  # S5 review deviation: raised 40->100. The eval opponent is the heuristic
+                           # the seed already beats ~0.97 all run (saturated -> information-free), and
+                           # each round is ~1000 serial batch-1 CPU games contending the M1. Self-play
+                           # progress is read from anchor_wr_window / reanchor events, not this eval.
+  eval_games: 100
+  eval_seeds: [0, 1, 2, 3, 4]
+  eval_opponents: [heuristic]
+
+league:
+  random_weight: 0.0
+  heuristic_weight: 0.2    # (d) heuristic now plays dev cards
+                           # PG-2). The seed beats the heuristic ~0.97, so a quarter of every rollout on
+                           # it produced ~degenerate advantages that dilute the real self-play signal +
+                           # trained belief/aux heads on trivially-won states. The freed 0.15 goes to
+                           # snapshot/anchor below (2:1 kept), so 60/30/10 snapshot/anchor/heuristic.
+  snapshot_weight: 0.6     # S4: 0.5->0.6 (absorbs part of the lowered heuristic weight)
+  anchor_weight: 0.3       # S4: 0.25->0.3 (keeps the snapshot:anchor ratio at 2:1)
+  anchor_checkpoint_path: runs/anchors/ptr_v1_u500.pt   # (b) banked, not rotation-prunable
+  require_heuristic_floor: true
+  add_snapshot_every_n_updates: 4
+  maxlen: 100
+  pfsp_enabled: true
+  pfsp_curve: hard
+  pfsp_k: 1.0                    # (c) revert v3's variable-under-test
+                                 # toward harder league opponents. Everything else is v2 verbatim.
+  pfsp_min_games: 5
+  pfsp_cold_start_weight: 1.0
+  pfsp_ema_alpha: 0.1
+  auto_reanchor_enabled: true
+  auto_reanchor_winrate_threshold: 0.63          # the working bar — do NOT raise (0.85 froze v7)
+  auto_reanchor_sustained_checks: 2
+  auto_reanchor_check_every_updates: 25
+  auto_reanchor_min_games: 150                   # windowed gate: N_eff = 150 (not the old EMA's ~19)
+  auto_reanchor_cooldown_updates: 75             # short cooldown so promotions CHAIN within the run
+
+# Automated plateau termination — the real terminator for this unbounded run.
+auto_stop:
+  enabled: true
+  hard_updates_since_promotion: 400
+  soft_updates_since_promotion: 300   # (e) new action to re-price; do not cut a slow ramp
+                                      # test of ONE hypothesis (pfsp_k=2.0 unsticks the u500 plateau);
+                                      # if it is not working we want to know in ~1 day, not 3. NOTE the
+                                      # soft rule also needs 8 recorded window means (cadence 25), so the
+                                      # earliest possible soft stop is ~u200, not u150.
+                                      # landed ~u275; a learner starts at anchor_wr_window ~0.50 (it IS
+                                      # the anchor at u0) and ramps, so a 250-update soft cap could
+                                      # soft-stop a healthy slow-ramper BEFORE its first promotion.
+                                      # 300 clears the observed first-promo latency; still < hard 400.
+  soft_window_bar: 0.58               # S3: 0.55->0.58 narrows the dead band. Promotion needs window WR
+                                      # > 0.63; a soft bar at 0.55 left [0.55,0.63] as a band that
+                                      # neither promotes nor soft-stops (rides to hard-400 with ZERO
+                                      # promotion ckpts). 0.58 shrinks that dead zone while staying
+                                      # clearly below the 0.63 promotion bar.
+  soft_window_checks: 8
+
+# Warm-start the learner from the pointer-arch bootstrap ckpt_649 (fresh optimizer; the league
+# snapshot pool rebuilds from here). Same ckpt is installed as the initial frozen anchor above.
+init_policy_checkpoint: runs/anchors/ptr_v1_u500.pt      # (b) same banked artifact
+
+total_steps: 196608000           # 6000 rollouts x 128 x 256 — a RUNAWAY CEILING (~2 weeks), NOT a
+                                 # budget; auto_stop is the real terminator (KILL per plateau).
+min_free_disk_gb: 5.0            # stop cleanly BEFORE a full disk truncates a torch.save mid-write.
+seed: 811
+device: mps
+torch_compile: false
+run_name: selfplay_preroll_r1
+output_dir: runs/train
