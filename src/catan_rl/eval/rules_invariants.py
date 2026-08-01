@@ -339,11 +339,31 @@ def check_one_dev_card_per_turn(game: Any) -> None:
             + int(getattr(p, "roadBuilderPlayed", 0))
         )
         turns = rolls_by_player.get(getattr(p, "name", None), 0)
-        if total > turns + 1:
+        # The +1 slack exists for exactly ONE legitimate case: a pre-roll play
+        # that ends the game before its roll, so the turn is never counted.
+        # That can only happen to a WINNER — so only a winner gets the slack.
+        #
+        # Why this matters, measured: with the slack granted unconditionally, a
+        # D2-class straddle (pre-roll Monopoly -> roll -> main-phase Road
+        # Builder in ONE turn) produced total=2 against turns+1=2 and was NOT
+        # flagged. Road Builder emits no broadcast event, so the per-turn
+        # attribution in step 1 cannot see it either — this aggregate is the
+        # only line of defence for that card, and unconditional slack blinded
+        # it. Restricting the slack to a winner closes the straddle while
+        # keeping the real case legal.
+        max_points = int(getattr(game, "maxPoints", 15))
+        won = int(getattr(p, "victoryPoints", 0)) >= max_points
+        allowed = turns + 1 if won else turns
+        if total > allowed:
             raise RulesInvariantViolation(
                 f"player {getattr(p, 'name', '?')!r} played {total} non-VP dev cards across "
-                f"{turns} rolled turns; at most one per turn (+1 slack for a pre-roll play "
-                f"that ended the game before its roll) allows {turns + 1}"
+                f"{turns} rolled turns; at most one per turn allows {allowed}"
+                + (
+                    " (+1 slack applied: this player won, so a pre-roll play may have ended "
+                    "the game before its roll)"
+                    if won
+                    else " (no slack: this player did not reach the win condition)"
+                )
             )
 
 

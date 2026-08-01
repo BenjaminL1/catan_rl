@@ -427,6 +427,7 @@ def run_sprt_agents_vs_reference(
     seed: int = 0,
     max_turns: int = 400,
     audit_rules: bool = False,
+    ruleset: str | None = None,
     on_pair: Callable[[int, float, PentanomialSPRT], None] | None = None,
 ) -> SPRTResult:
     """Sequentially compare two decision agents A vs B against a common reference.
@@ -442,6 +443,7 @@ def run_sprt_agents_vs_reference(
     import torch
 
     from catan_rl.env.catan_env import CatanEnv
+    from catan_rl.env.ruleset import RULESET_R0
 
     # This driver ALWAYS scores common-reference differential pairs, so it forces
     # the differential pairing regardless of the caller's cfg — otherwise the
@@ -455,7 +457,17 @@ def run_sprt_agents_vs_reference(
     sprt = PentanomialSPRT(sprt_cfg)
     n_games = 0
     try:
-        env = CatanEnv(opponent_type="snapshot", max_turns=max_turns)
+        # D8: the epoch is EXPLICIT here, never implicit. This is spec 008's
+        # reusable accept/reject gate, so a silently-wrong epoch decides whether
+        # a champion ships. Running an R1 policy under R0 rules samples a region
+        # of its type head that received exactly zero gradient — the failure D8
+        # exists to make impossible. Default to the env's own default rather
+        # than pinning an epoch here, so this gate cannot drift from the tree.
+        env = CatanEnv(
+            opponent_type="snapshot",
+            max_turns=max_turns,
+            ruleset=RULESET_R0 if ruleset is None else ruleset,
+        )
         env.set_snapshot_opponent(reference)
         try:
             base = (seed * 1_000_003 + 2_246_822_519) % (2**31 - 1)

@@ -251,15 +251,22 @@ def _stub_game(events: list[dict], players: list[SimpleNamespace]) -> SimpleName
     return SimpleNamespace(
         broadcast=SimpleNamespace(events=events),
         playerQueue=SimpleNamespace(queue=players),
+        maxPoints=15,
     )
 
 
 def _stub_player(name: str, **counters: int) -> SimpleNamespace:
+    # ``victoryPoints`` defaults to 0 = did NOT win, so the aggregate check's
+    # +1 slack does not apply. The slack is winner-only on purpose: granted
+    # unconditionally it swallowed a pre-roll-Monopoly -> roll -> Road-Builder
+    # straddle exactly (total 2 <= turns + 1 = 2), and Road Builder emits no
+    # broadcast event, so the per-turn attribution cannot see it either.
     base = {
         "knightsPlayed": 0,
         "yopPlayed": 0,
         "monopolyPlayed": 0,
         "roadBuilderPlayed": 0,
+        "victoryPoints": 0,
     }
     base.update(counters)
     return SimpleNamespace(name=name, **base)
@@ -351,13 +358,51 @@ def test_aggregate_pigeonhole_catches_silent_knights() -> None:
 
 def test_one_card_of_slack_is_allowed_for_a_game_ending_preroll_play() -> None:
     """A pre-roll Knight can win via Largest Army BEFORE that turn's roll is
-    ever emitted, so ``plays == turns + 1`` must not be a violation."""
+    ever emitted, so ``plays == turns + 1`` must not be a violation.
+
+    The slack is WINNER-ONLY, so the player must actually have reached
+    ``maxPoints`` — that is the only way a turn can go unrolled."""
+    events = [
+        {"type": "DICE_ROLL", "player": "P1", "value": 8},
+        {"type": "DICE_ROLL", "player": "P1", "value": 4},
+    ]
+    game = _stub_game(
+        events,
+        [_stub_player("P1", knightsPlayed=3, victoryPoints=15), _stub_player("P2")],
+    )
+    check_one_dev_card_per_turn(game)
+
+
+def test_slack_is_denied_to_a_player_who_did_not_win() -> None:
+    """Same counts as the test above, but nobody won — so no turn can have gone
+    unrolled and the extra card has to be a straddle."""
     events = [
         {"type": "DICE_ROLL", "player": "P1", "value": 8},
         {"type": "DICE_ROLL", "player": "P1", "value": 4},
     ]
     game = _stub_game(events, [_stub_player("P1", knightsPlayed=3), _stub_player("P2")])
-    check_one_dev_card_per_turn(game)
+    with pytest.raises(RulesInvariantViolation, match="no slack"):
+        check_one_dev_card_per_turn(game)
+
+
+def test_a_road_builder_straddle_is_caught_by_the_aggregate() -> None:
+    """Pre-roll Monopoly -> roll -> main-phase Road Builder, all in one turn.
+
+    This is the D2 exploit wearing its least visible costume. Mechanism 1 cannot
+    see it: Road Builder emits NO broadcast event, so per-turn attribution has
+    nothing to attribute. Mechanism 2 is the only defence — and with the ``+1``
+    slack granted unconditionally it absorbed this exactly (total 2 <= 2) and
+    the violation escaped. Winner-only slack closes it."""
+    events = [
+        {"type": "DICE_ROLL", "player": "P2", "value": 5},
+        {"type": "DICE_ROLL", "player": "P1", "value": 8},
+    ]
+    game = _stub_game(
+        events,
+        [_stub_player("P1", monopolyPlayed=1, roadBuilderPlayed=1), _stub_player("P2")],
+    )
+    with pytest.raises(RulesInvariantViolation, match="no slack"):
+        check_one_dev_card_per_turn(game)
 
 
 def test_two_knights_in_one_turn_around_the_roll_is_a_violation() -> None:

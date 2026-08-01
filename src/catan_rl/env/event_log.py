@@ -32,6 +32,26 @@ class _EventLog:
     def __call__(self, event: dict[str, Any]) -> None:
         self.events.append(event)
 
+    def __deepcopy__(self, memo: dict[int, Any]) -> _EventLog:
+        """A clone starts with an EMPTY history. Load-bearing for search.
+
+        ``search/mcts.py`` ``clone_env`` deepcopies the whole env on every
+        determinization root AND every expansion, so a retained log would be
+        copied thousands of times per move — and the cost GROWS WITHIN a game as
+        the log fills. Measured on this branch before this override: 1.99 ms ->
+        5.10 ms at 1053 events (2.6x), and 2.02 / 4.40 / 5.17 / 7.40 ms at
+        0 / 500 / 1500 / 2600 events (a full R1 game emits ~2.6k). Under
+        ``SearchConfig.time_budget_s`` that silently buys fewer simulations
+        late-game than early — a deepening regression that would sail past a
+        sims/s gate, on the exact surface the banked search uplift was measured.
+
+        Dropping the history is CORRECT, not merely cheap: the audit is a
+        post-game check on the real game's stream. A simulated line inside the
+        tree was never played, so its events are not audit input, and nothing
+        reads ``broadcast.events`` during search.
+        """
+        return _EventLog()
+
 
 def attach_event_log(game: Any) -> list[dict[str, Any]]:
     """Give ``game`` a retained broadcast history and return it.
