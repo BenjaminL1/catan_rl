@@ -9,6 +9,7 @@ import pygame
 from catan_rl.engine.geometry import *
 from catan_rl.gui import render
 from catan_rl.gui import render_constants as RC
+from catan_rl.policy.obs_schema import DEV_DECK_INITIAL
 
 pygame.init()
 
@@ -35,6 +36,50 @@ _DEV_CARD_DISPLAY = {
     "ROADBUILDER": "RB",
     "YEAROFPLENTY": "YOP",
 }
+
+
+def _played_dev_total(player) -> int:
+    """Publicly-played dev cards for ``player`` (the counters the obs exposes)."""
+    return (
+        int(getattr(player, "knightsPlayed", 0))
+        + int(getattr(player, "yopPlayed", 0))
+        + int(getattr(player, "monopolyPlayed", 0))
+        + int(getattr(player, "roadBuilderPlayed", 0))
+    )
+
+
+def dev_card_button_enabled(player, board) -> bool:
+    """Is BUY DEV CARD actually usable right now?
+
+    The FULL predicate the bot's mask uses (``env/masks.py``): a non-empty deck
+    AND the 1 ORE / 1 WHEAT / 1 SHEEP cost. ``player.draw_devCard`` no-ops on
+    either half without spending anything, so greying the button is a UX fix, not
+    a correctness one — but the human should not have to learn the rule by
+    clicking a gold button that does nothing.
+    """
+    deck_total = sum((getattr(board, "devCardStack", {}) or {}).values())
+    res = getattr(player, "resources", {}) or {}
+    can_afford = all(res.get(r, 0) >= 1 for r in ("ORE", "WHEAT", "SHEEP"))
+    return bool(deck_total > 0 and can_afford)
+
+
+def public_dev_deck_remaining(player, opponent) -> int:
+    """Dev cards the human can honestly deduce are still unseen.
+
+    Same public-reveal-derived formula the bot observes
+    (``policy/obs_encoder._build_global_features``), summed over types:
+    ``25 - own_held - own_played - opponent_played``. Deliberately NOT
+    ``board.devCardStack``, which is deck TRUTH and would tell the human how many
+    cards sit in the opponent's hidden hand — information the bot does not get.
+    """
+    total = sum(DEV_DECK_INITIAL)
+    dev = getattr(player, "devCards", {}) or {}
+    new_dev = getattr(player, "newDevCards", []) or []
+    own_held = sum(int(v) for v in dev.values()) + len(new_dev)
+    played = _played_dev_total(player)
+    if opponent is not None:
+        played += _played_dev_total(opponent)
+    return max(0, total - own_held - played)
 
 
 def _public_progress_lines(player, board) -> list[str]:
@@ -442,7 +487,15 @@ class catanGameView:
         pygame.draw.rect(self.screen, pygame.Color("gray33"), self.buildRoad_button)
         pygame.draw.rect(self.screen, pygame.Color("gray33"), self.buildSettlement_button)
         pygame.draw.rect(self.screen, pygame.Color("gray33"), self.buildCity_button)
-        pygame.draw.rect(self.screen, pygame.Color("gold"), self.devCard_button)
+        # BUY DEV CARD is greyed on the FULL predicate (empty deck OR
+        # unaffordable), matching the bot's mask; see dev_card_button_enabled.
+        buyer = self._button_player()
+        buy_enabled = buyer is not None and dev_card_button_enabled(buyer, self.board)
+        pygame.draw.rect(
+            self.screen,
+            pygame.Color("gold") if buy_enabled else pygame.Color("gray50"),
+            self.devCard_button,
+        )
         pygame.draw.rect(self.screen, pygame.Color("gold"), self.playDevCard_button)
         pygame.draw.rect(self.screen, pygame.Color("magenta"), self.tradeBank_button)
 
@@ -456,7 +509,38 @@ class catanGameView:
         self.screen.blit(playDevCardText, (30, 410))
         self.screen.blit(tradeBankText, (self.board.width - 115, 410))
 
+        # Dev-deck remaining, in the human's own units: the same public-reveal-
+        # derived figure the bot observes, NOT deck truth. The bot sees this and
+        # the human saw nothing.
+        if buyer is not None:
+            deck_left = public_dev_deck_remaining(buyer, self._other_player(buyer))
+            self.screen.blit(
+                self.font_resource.render(f"Deck: {deck_left}", False, (0, 0, 0)), (20, 348)
+            )
+
         self.screen.blit(endTurnText, (30, 710))
+
+    def _button_player(self):
+        """The seat the left-rail buttons act for, or None if undetermined.
+
+        Same resolution order as ``displayPlayerStats``: the harness pins
+        ``human_player`` (the human sits in the AI-flagged opponent seat); the
+        engine's own ``playCatan`` loop leaves it None and the current player is
+        the one clicking.
+        """
+        if self.human_player is not None:
+            return self.human_player
+        return getattr(self.game, "currentPlayer", None)
+
+    def _other_player(self, player):
+        """The opponent of ``player`` in the 2-player queue, or None."""
+        queue = getattr(getattr(self.game, "playerQueue", None), "queue", None)
+        if queue is None:
+            return None
+        for p in list(queue):
+            if p is not player:
+                return p
+        return None
 
     # Function to display robber
 
@@ -644,18 +728,26 @@ class catanGameView:
             pygame.draw.rect(self.screen, (0, 0, 0), bg_rect, 2)
             self.screen.blit(text_surface, text_rect)
 
-    def buildRoad_display(self, currentPlayer, roadsPossibleDict):
+    def buildRoad_display(self, currentPlayer, roadsPossibleDict, allow_cancel=None):
         """Function to control build-road action with display
         args: player, who is building road; roadsPossibleDict - possible roads
         returns: road edge of road to be built
+
+        ``allow_cancel=None`` (the default, and every historical caller) keeps
+        the original behaviour: cancellable outside the setup phase. A caller
+        that has ALREADY spent something on this placement — Road Builder, whose
+        card is gone by the time we get here — passes ``allow_cancel=False`` so a
+        stray click cannot silently forfeit the free road.
         """
         # Pulsating glow on every legal road edge; click one to build. Outside
         # the setup phase a click on empty space cancels (returns None).
+        if allow_cancel is None:
+            allow_cancel = not self.game.gameSetup
         roads = [edge for edge in roadsPossibleDict if roadsPossibleDict[edge]]
         return self._animated_pick(
             roads,
             lambda edge, pulse: self._glow_road(edge, currentPlayer.color, pulse),
-            allow_cancel=not self.game.gameSetup,
+            allow_cancel=allow_cancel,
         )
 
     def buildSettlement_display(self, currentPlayer, verticesPossibleDict):
@@ -689,14 +781,34 @@ class catanGameView:
     # Function to control the move-robber action with display
 
     def moveRobber_display(self, currentPlayer, possibleRobberDict):
+        """Pick a robber hex, then resolve the steal victim.
+
+        Two conformance rules the bot already has and this picker did not:
+
+        * **Fail open on an empty spot set**, mirroring ``env/masks.py`` (which
+          sets all 19 tiles when the Friendly-Robber filter leaves nothing). The
+          pick below is ``allow_cancel=False`` with no ``pygame.QUIT`` arm, so an
+          empty set used to hard-lock the window instead of offering anything.
+        * **``currentPlayer`` is filtered out of the victim set.**
+          ``board.get_players_to_rob`` is keyed on the hex alone, so the human's
+          OWN building was offered as a steal target; ``steal_resource(self)`` is
+          a net-zero self-transfer, i.e. a mis-click forfeited the steal. The bot
+          filters itself (``env/catan_env._apply_robber_placement``), as does
+          ``conformance/recorder.py``.
+        """
         # Pulsating glow on every legal robber hex; click one, then pick a victim.
-        pix = {R: possibleRobberDict[R].to_pixel(self.board.flat) for R in possibleRobberDict}
+        spots = possibleRobberDict or self.board.hexTileDict
+        pix = {R: spots[R].to_pixel(self.board.flat) for R in spots}
         hexIndex = self._animated_pick(
             list(pix.keys()),
             lambda R, pulse: self._glow_robber(pix[R], pulse),
             allow_cancel=False,
         )
-        possiblePlayerDict = self.board.get_players_to_rob(hexIndex)
+        possiblePlayerDict = {
+            victim: vertex
+            for victim, vertex in self.board.get_players_to_rob(hexIndex).items()
+            if victim is not currentPlayer
+        }
         playerToRob = self.choosePlayerToRob_display(possiblePlayerDict)
         return hexIndex, playerToRob
 
@@ -704,14 +816,25 @@ class catanGameView:
     # Returns the choice of player to rob
 
     def choosePlayerToRob_display(self, possiblePlayerDict):
+        """Choose a steal victim from the (already self-filtered) candidates.
+
+        Zero candidates -> ``None`` (no steal). Exactly one candidate -> it is
+        AUTO-SELECTED with no prompt, matching the bot, which never asks. In 1v1
+        those are the only two cases that can occur once the robbing player is
+        filtered out, so the click loop below is effectively dead code kept for
+        the legacy engine loop rather than a path the harness can enter.
+        """
+        if not possiblePlayerDict:
+            return None
+
+        if len(possiblePlayerDict) == 1:
+            return next(iter(possiblePlayerDict))
+
         # Get all other players the player can move robber to and show circles
         for player, vertex in possiblePlayerDict.items():
             possiblePlayerDict[player] = self.draw_possible_players_to_rob(vertex)
 
         pygame.display.update()
-
-        if possiblePlayerDict == {}:
-            return None
 
         mouseClicked = False
         clock = pygame.time.Clock()

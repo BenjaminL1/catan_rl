@@ -75,8 +75,13 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
 - `src/catan_rl/eval/` — `harness.py` (symmetric-seat WR), `wilson.py`, `rules_invariants.py`.
 - `src/catan_rl/{bc,setup_phase,replay,agents,augmentation,checkpoint,cli}/` — BC, setup pretrain, replay/player_factory, heuristic agent, symmetry aug, checkpoint mgr, CLI entry.
 - `scripts/` — `train.py` (→ `catan_rl.cli.train`), `train_bc.py`, `generate_bc_dataset.py`, `migrate_checkpoint.py`, replay/record tools, `play_vs_model.py` (the v2 human-vs-policy GUI harness — bot panel is BLIND unless `--reveal-bot`, but always shows the
-  PUBLIC facts: knights played + longest-road length, plus an on-screen move log;
-  games log `"hud": 2` for that information regime. **Both seats are POST-ROLL
+  PUBLIC facts: knights played + longest-road length, plus an on-screen move log,
+  the public-reveal-derived dev-deck remaining, and a BUY DEV CARD button greyed
+  on the bot's own mask predicate; games log `"hud": 3` for that information
+  regime, `"rules_epoch": 2` for the human's legal option set (which now matches
+  the bot's — see `.claude/veriloop/specs/human-path-conformance-fixes.md`), and
+  `"rules_ok"` / `"rules_violations"` from an interactive `rules_invariants`
+  audit that RECORDS and never asserts. **Both seats are POST-ROLL
   ONLY** — the human's pre-roll dev-card window is gone, because `env/masks.py`
   emits only `ROLL_DICE` while `roll_pending` so the policy structurally cannot
   answer it, and the auto-played human seat (headless `--self-test`) has the base

@@ -23,15 +23,28 @@ withholding them would bias the playtest toward the bot. ``--reveal-bot``
 restores the omniscient analysis view and is recorded in BOTH logs, because a
 revealed game is not a strength read.
 
+The left rail additionally shows ``Deck: N`` — the PUBLIC-REVEAL-DERIVED
+dev-deck remaining (``25 - own_held - own_played - opp_played``), i.e. exactly
+the figure in the bot's obs, not ``board.devCardStack`` deck truth — and greys
+BUY DEV CARD out whenever the deck is empty OR the cost is unaffordable, the
+same predicate as the bot's mask.
+
 Each finished game is written TWICE (dual-write, deliberately):
 
 * the legacy four-field JSON line in ``runs/human_playtest/games.jsonl`` (its
   ``bot_vp`` / ``human_vp`` keys stay TOTAL VP and are never re-pointed), plus
-  the ``reveal_bot`` / ``replay_path`` keys and ``"hud": 2`` — the information
+  the ``reveal_bot`` / ``replay_path`` keys and ``"hud": 3`` — the information
   regime the game was played under. A MISSING ``hud`` key means regime 1 (no
   knights/longest-road HUD, no on-screen move log), the same read-a-missing-key
-  convention as ``reveal_bot`` below. It also carries ``"bank_ok"`` (did the
-  ``bank[R] + Σ hands[R] == 19`` conservation assert hold at every step),
+  convention as ``reveal_bot`` below; regime 2 additionally lacked the dev-deck
+  readout and the greyed BUY DEV CARD button. It also carries ``"bank_ok"`` (did
+  the ``bank[R] + Σ hands[R] == 19`` conservation assert hold at every step),
+  ``"rules_epoch": 2`` (what the human was ALLOWED TO DO, as opposed to what
+  they could see — a missing key means the epoch-1 rules, under which a
+  cancelled dev-card picker stranded a public played-counter and the human
+  could target themselves as a steal victim), ``"rules_ok"`` +
+  ``"rules_violations"`` (the ``eval/rules_invariants`` audit, RECORDED and
+  never asserted, so an interrupted game still writes its artifacts),
   ``"preroll": false`` (the pre-roll information regime — see below),
   ``"partial"`` (the game was cut short), and the ``"git_sha"`` /
   ``"ckpt_sha256"`` attribution pair; and
@@ -117,6 +130,13 @@ and unclickable, matching the AI branch's availability gate), discards
 ``bank_recirculate``, and cancelling a partly-picked YoP puts back what it drew.
 The driver asserts ``board.assert_conservation`` after every step and records
 the result as ``bank_ok``.
+
+The driver also runs the full ``eval/rules_invariants`` audit over every played
+game — not only under ``--self-test`` as it once did — and RECORDS the outcome
+as ``rules_ok`` / ``rules_violations``. It deliberately does NOT assert: an
+assert here would destroy the crash-safe artifact write it exists to validate.
+An aborted game is passed to the audit as ``truncated`` so a window-close does
+not manufacture a "terminated but no player reached 15 VP" violation.
 """
 
 from __future__ import annotations
@@ -1787,6 +1807,30 @@ def play_interactive(
     hud_log.append(_game_over_log_line(env.agent_player, you_vp, reveal_bot=reveal_bot))
     _safe_display_game_screen(view)
 
+    # ---- interactive rules audit (RECORDS, never asserts) ------------------
+    # ``run_all_invariants`` used to run only under ``--self-test``, consumed as
+    # ``assert not violations`` — which is exactly why a GUI-only rule-gap class
+    # survived: no played game was ever audited. It runs here, but it must never
+    # raise: the driver's whole contract is that artifacts are written even on
+    # abort, and an assert would destroy the record it exists to validate.
+    #
+    # An ABORTED game is passed through as truncated. ``check_terminal_state``
+    # otherwise reports "terminated but no player reached 15 VP" for every
+    # window-close, and an alarm that means "you closed the window" is an alarm
+    # the operator learns to ignore within two sessions.
+    rule_violations: list[str] | None
+    try:
+        from catan_rl.eval.rules_invariants import run_all_invariants
+
+        rule_violations = run_all_invariants(env.game, truncated=bool(truncated or aborted))
+    except Exception as exc:  # an audit fault must not cost the artifacts
+        print(f"[WARN] rules audit could not run: {exc!r}", flush=True)
+        rule_violations = None
+    if rule_violations:
+        print(f"[WARN] rules-invariant violations ({len(rule_violations)}):", flush=True)
+        for msg in rule_violations:
+            print(f"    - {msg}", flush=True)
+
     # ---- full-fidelity replay (new format) --------------------------------
     replay_path: str | None = None
     if recorder is not None:
@@ -1856,7 +1900,30 @@ def play_interactive(
             # WITHOUT the knights / longest-road panel facts and without the
             # on-screen move log, i.e. with strictly less public information than
             # a real table gives — a missing key means regime 1, not this one.
-            "hud": 2,
+            # Regime 3 adds the dev-deck-remaining readout and the greyed-out
+            # BUY DEV CARD button (both facts the bot already had).
+            "hud": 3,
+            # RULES epoch — distinct from ``hud`` on purpose. ``hud`` is what the
+            # human could SEE; this is what the human was ALLOWED TO DO. Epoch 2
+            # is the first in which the human's legal option set matches the
+            # bot's: a cancelled dev-card picker no longer strands a public
+            # played-counter, Knight resolves Largest Army before the robber
+            # legality set is computed, Road Builder cannot forfeit a free road
+            # to a stray click, and the human can no longer target THEMSELVES as
+            # a steal victim (which, being a net-zero self-transfer, silently
+            # forfeited the steal — the old rule was HARDER on the human, not
+            # merely different). A MISSING key means epoch 1, i.e. a game played
+            # under those rules; such games are not comparable to epoch-2 ones.
+            "rules_epoch": 2,
+            # Rules-invariant audit over the played game (``eval/rules_invariants``:
+            # 15 VP, 2 players, terminal state, Friendly Robber, no P2P trade,
+            # StackedDice, one dev card per turn). FALSE means the game broke a
+            # Colonist-1v1 rule and must not be scored. Recorded rather than
+            # asserted so an interrupted or non-conforming game still leaves a
+            # trace. NULL means the audit itself could not run. A MISSING key
+            # means the game predates the interactive audit, NOT that it passed.
+            "rules_ok": None if rule_violations is None else not rule_violations,
+            "rules_violations": rule_violations,
             # Finite-bank integrity. FALSE means the spec-009 invariant
             # `bank[R] + sum(hands[R]) == 19` broke during this game, so the bank
             # the bot OBSERVED was wrong and the game must never be scored.
