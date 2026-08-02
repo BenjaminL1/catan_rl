@@ -425,3 +425,31 @@ see per-seat rulesets above), any exploration machinery, any `engine/` edit
 `scripts/play_vs_model.py` pins `R0`, so its `"preroll": false` stamp and its
 "both seats post-roll only" docstring stay true; a human-side pre-roll window is
 a separate slice.
+
+### Follow-up slice (2026-08): the playtest harness moved to R1
+
+The closing line above — "`scripts/play_vs_model.py` pins `R0` … a human-side
+pre-roll window is a separate slice" — is now **stale**, and that slice has
+shipped. The harness opts into `RULESET_R1` on both seats and restores the
+human's window with legality **derived from the bot's own mask**:
+`HumanVsBotEnv._pre_roll_dev_options()` calls `_compute_masks(opponent_player,
+_opponent_env_state(roll_pending=True))` and filters the type mask through
+`PRE_ROLL_DEV_TYPES`, so the finite-bank YoP gate, the one-card-per-turn flag,
+the `newDevCards` promotion rule and the Road Builder exclusion apply to the
+human exactly as they do to the policy — seat symmetry by construction, not by
+a parallel card list. The menu is narrowed through a new optional
+`gui/view.catanGameView.dev_card_filter` (default `None` = today's behaviour)
+rather than by zeroing the hand, so a mid-window quit can neither capture nor
+leak a card. `_no_pre_roll` (the auto-played seat's suppression hook) is gone:
+with a real human window, suppressing the stand-in's Knight is what would
+create the asymmetry. Games stamp `"preroll": env.ruleset == RULESET_R1` plus
+`"ckpt_ruleset"`, and an R0 checkpoint seated here warns but is not refused —
+`DEFAULT_CKPT` is itself an unstamped R0 checkpoint still worth playing (so the
+DEFAULT invocation mismatches by construction; pass `--ckpt <R1-ckpt>` to avoid
+it), and an unreadable stamp must not stop a game. The check lives in
+`play_interactive`; `--self-test` returns from `main()` before it and never
+reads a stamp. Note also that the auto-played seat's `heuristic_pre_roll` gives
+it the window in KIND only (Knight, scripted) — a weaker model of the human's —
+and that clones DO now sample the modelled seat's pre-roll node, since
+`_opponent_pre_roll`'s snapshot branch no longer early-returns under R1.
+`engine/` is untouched and `PINNED_ENGINE_TREE` stays `261098d190c8`.
