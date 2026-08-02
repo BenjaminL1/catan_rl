@@ -1897,6 +1897,7 @@ def play_interactive(
     safety_cap = env.max_turns * 50
     n_steps = 0
     aborted = False
+    capped = False  # safety-cap exit: neither a win nor an abort
     while not terminated and not truncated:
         try:
             # Show a clear "bot thinking" flag before the (blocking) search so turns
@@ -1968,6 +1969,15 @@ def play_interactive(
             )
             n_steps += 1
             if n_steps > safety_cap:
+                # NEITHER a win NOR an abort — the one loop exit that is
+                # otherwise invisible. Left unflagged, the audit below runs with
+                # every flag False and ``check_terminal_state`` reports
+                # "terminated but no player reached 15 VP", writing
+                # ``rules_ok: false`` on a game that merely hit a harness cap.
+                # That is indistinguishable in the JSONL from a real Colonist
+                # rule break — exactly the false-alarm class this audit exists
+                # to avoid.
+                capped = True
                 print("[WARN] safety cap hit; ending.", flush=True)
                 break
         except BaseException as exc:
@@ -2029,8 +2039,25 @@ def play_interactive(
     try:
         from catan_rl.eval.rules_invariants import run_all_invariants
 
-        rule_violations = run_all_invariants(env.game, truncated=bool(truncated or aborted))
-    except Exception as exc:  # an audit fault must not cost the artifacts
+        # ``truncated`` and ``aborted`` are DISTINCT and must stay distinct:
+        # truncated = env turn-cap (always after that turn's roll, so no dev-card
+        # slack is owed); aborted = a window-close that can land mid-turn BEFORE
+        # the roll, which is the only case that legitimately needs the slack.
+        # Folding them together disarms the one-dev-card aggregate for every
+        # truncated eval game across the promotion and bake-off gates.
+        rule_violations = run_all_invariants(
+            env.game,
+            truncated=bool(truncated or capped),
+            aborted=bool(aborted),
+        )
+    except BaseException as exc:  # an audit fault must not cost the artifacts
+        # BaseException for the same reason as the play loop above: this block
+        # sits BETWEEN the abort handler and BOTH artifact writes, and the audit
+        # is not instantaneous (it walks the whole retained event stream and
+        # every player's buildings via check_friendly_robber), so a ^C can land
+        # inside it. Letting KeyboardInterrupt / SystemExit through here would
+        # destroy the very replay + JSONL writes the abort handler exists to
+        # protect. Nothing is re-raised; falling through to the writes is the point.
         print(f"[WARN] rules audit could not run: {exc!r}", flush=True)
         rule_violations = None
     if rule_violations:
@@ -2179,7 +2206,8 @@ def play_interactive(
             # and these artifacts are a salvage write, not a played-out game.
             # A MISSING key means the game predates the crash-safe write, when
             # an interrupted game produced NO record at all.
-            "partial": bool(aborted),
+            # A safety-cap exit is cut short too — same as an abort.
+            "partial": bool(aborted or capped),
             # Provenance. "ckpt" above is a path into a gitignored runs/ tree
             # under a keep_last_n rotation, so it may name different bytes
             # tomorrow, or none. NULL means it could not be read — never that

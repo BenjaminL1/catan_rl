@@ -17,7 +17,9 @@ Three divergences from the bot, all of which the bot's own path
 
 ``_animated_pick`` is a blocking pygame event loop, so it is replaced by a spy in
 every test here: a miss would hang the suite rather than fail it, and the spy is
-also what lets us assert on the spot set the human was OFFERED.
+also what lets us assert on the spot set the human was OFFERED. The victim
+picker has a second, independent blocking loop, so the auto-select test also
+poisons ``pygame.event.get`` — see its docstring.
 """
 
 from __future__ import annotations
@@ -73,7 +75,18 @@ def _settle_on_first_hex(game: Any, player: Any) -> int:
 
 
 class TestSelfIsNeverAVictim:
-    def test_the_robbing_player_is_filtered_out(self, view: Any) -> None:
+    def test_the_robbing_player_is_filtered_out(self, view: Any, monkeypatch: Any) -> None:
+        """Poisons ``pygame.event.get`` so a regression FAILS instead of HANGING.
+
+        This test passes today only because the self-filter reduces the
+        candidate set to zero, so ``choosePlayerToRob_display`` returns before
+        polling. If the self-filter AND the auto-select both regress — the exact
+        pre-change shape this test exists to pin — its ``while mouseClicked ==
+        False`` loop has no other exit and blocks forever. No timeout plugin is
+        installed here, and this repo has already lost a pytest process to
+        precisely that (found resident 1d22h). A pin that hangs the suite on the
+        regression it guards is worse than no pin.
+        """
         game, v = view
         human = _players(game)[0]
         hex_idx = _settle_on_first_hex(game, human)
@@ -81,6 +94,15 @@ class TestSelfIsNeverAVictim:
             "fixture is degenerate: the engine must offer the self-owned hex"
         )
         _spy_pick(v, lambda spots: hex_idx)
+        pygame.event.clear()
+
+        def _poisoned_get(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError(
+                "the picker polled for input: the acting player was not filtered "
+                "out, and this call would have blocked on a click"
+            )
+
+        monkeypatch.setattr(pygame.event, "get", _poisoned_get)
 
         picked_hex, victim = v.moveRobber_display(human, game.board.get_robber_spots())
 
@@ -92,14 +114,31 @@ class TestSelfIsNeverAVictim:
 
 
 class TestForcedVictimIsAutoSelected:
-    def test_one_surviving_victim_needs_no_click(self, view: Any) -> None:
+    def test_one_surviving_victim_needs_no_click(self, view: Any, monkeypatch: Any) -> None:
         """No MOUSEBUTTONDOWN is posted. Pre-change this blocked forever in
-        ``choosePlayerToRob_display``; the bot never prompts at all."""
+        ``choosePlayerToRob_display``; the bot never prompts at all.
+
+        Spying ``_animated_pick`` alone is not enough to make a regression
+        FAIL rather than HANG: ``choosePlayerToRob_display``'s own
+        ``while mouseClicked == False`` loop is still live, and it is what
+        blocks. The auto-select arm returns before ever polling, so poisoning
+        ``pygame.event.get`` for the duration turns "hangs forever" into a
+        one-line failure (this repo has lost a pytest process to exactly this,
+        and no timeout plugin is installed here).
+        """
         game, v = view
         human, opponent = _players(game)[:2]
         hex_idx = _settle_on_first_hex(game, opponent)
         _spy_pick(v, lambda spots: hex_idx)
         pygame.event.clear()
+
+        def _poisoned_get(*args: Any, **kwargs: Any) -> Any:
+            raise AssertionError(
+                "the picker polled for input: the single surviving victim was not "
+                "auto-selected, and this call would have blocked on a click"
+            )
+
+        monkeypatch.setattr(pygame.event, "get", _poisoned_get)
 
         _picked_hex, victim = v.moveRobber_display(human, game.board.get_robber_spots())
 

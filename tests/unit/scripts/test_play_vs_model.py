@@ -1550,9 +1550,35 @@ class TestInteractiveRulesAudit:
         )
 
     def test_the_abort_state_is_passed_through_to_the_audit(self) -> None:
+        """The two flags reach the audit SEPARATELY, and that separation matters.
+
+        This once pinned a single ``truncated or aborted``, which collapsed both
+        events into one. That was wrong in one direction only: ``truncated`` also
+        buys the one-dev-card-per-turn slack, and ``run_all_invariants`` is shared
+        with the promotion and bake-off gates, so folding abort into truncated
+        widened a correctness check for every bot-vs-bot caller. ``check_terminal_state``
+        is relaxed by either flag (both are legitimate non-wins); the dev-card
+        aggregate is relaxed by ``aborted`` alone. Keep them distinct at the call.
+        """
         src = _SCRIPT.read_text(encoding="utf-8")
         assert "run_all_invariants(" in src
-        assert "truncated or aborted" in src, "the audit must treat an aborted game as truncated"
+        # Balanced-paren scan, not ``.split(")")`` — the args are wrapped in
+        # ``bool(...)``, so a naive split stops at the FIRST inner paren and
+        # silently reads half the call.
+        tail = src.split("run_all_invariants(", 1)[1]
+        depth, end = 1, len(tail)
+        for i, ch in enumerate(tail):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                end = i
+                break
+        call = tail[:end]
+        assert "aborted=" in call, "the audit must be told the game was aborted"
+        assert "truncated=" in call, "the audit must be told the game was truncated"
+        assert "truncated or aborted" not in call, (
+            "abort must NOT be laundered in as truncated — that widens the "
+            "one-dev-card-per-turn slack for every eval caller, not just this driver"
+        )
         assert "assert not violations" not in src.split("--self-test")[0]
 
     def test_the_regime_stamps_are_bumped(self, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]

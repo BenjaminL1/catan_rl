@@ -66,6 +66,15 @@ heuristic seat is invisible to `rules_invariants.py:325-327`'s per-turn attribut
 self-play and eval game, not just human ones. Fix both. Verified safe: `env/hand_tracker.py:111-114`
 returns early for any non-`RESOURCE_CHANGE` event, so the transfer cannot be double-counted.
 
+**Implementation note (corrects the premise above).** Only ONE emitter was missing. The heuristic
+seat was already fixed on `main` before this spec was ratified: `agents/heuristic.py:409` emits
+`game.broadcast.monopoly(self.name, resource, total_stolen)`, landed in `159b748` ("feat(bc):
+bank-legality masking + BC coverage tests"). The "invisible in *every* self-play and eval game"
+claim was therefore false at ratification time, and the implementation correctly touches only
+`engine/player.py`. `tests/unit/gui/test_human_dev_card.py::TestMonopolyBroadcast::test_heuristic_monopoly_already_emits_it`
+pins the heuristic emitter as a characterization test so it cannot silently regress — a requirement
+already met, not a dropped one.
+
 ### D3 — Victim picker: filter self, auto-select the forced case, fail open
 
 `gui/view.py:691-701` receives `currentPlayer` and never uses it; `board.get_players_to_rob` is
@@ -135,6 +144,15 @@ same missing-key convention. Cheaper than it looks — `audit_events=True` is al
 game is exactly that shape (`runs/human_playtest/games.jsonl`, seed 512940688, `winner: null`,
 partial). Wired naively, D6 flags every interrupted game and the operator learns within two sessions
 that the alarm means "you closed the window."
+
+**Implementation note.** `check_terminal_state` was not the only check that fires on a clean abort.
+`check_one_dev_card_per_turn`'s aggregate pigeonhole granted its `+1` slack to a WINNER only, so a
+game aborted after a pre-roll dev play but before that turn's roll landed on `total == turns + 1`
+with `won == False` — a spurious violation on exactly the acceptance criterion this decision names
+(reachable via `_human_pre_roll` → `play_devCard` → robber picker → `sys.exit(0)` on `pygame.QUIT`).
+The check now takes `truncated` (default `False`) and `run_all_invariants` forwards it; the slack is
+`won or truncated`. Mechanism 1's per-turn attribution is untouched, so the D2-class straddle stays
+visible in aborted games too.
 
 ### D7 — Provenance for a changed rule set
 

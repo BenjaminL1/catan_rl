@@ -229,7 +229,9 @@ def check_stacked_dice(game: Any) -> None:
         )
 
 
-def check_one_dev_card_per_turn(game: Any) -> None:
+def check_one_dev_card_per_turn(
+    game: Any, *, truncated: bool = False, aborted: bool = False
+) -> None:
     """At most ONE non-VP dev card may be played per player per turn.
 
     Spec ``preroll-dev-cards-r1`` D11 — the invariant that would have caught
@@ -271,6 +273,12 @@ def check_one_dev_card_per_turn(game: Any) -> None:
        mechanism 1 exists: a *single* straddling double-play sits inside the
        slack, so only mechanism 1 sees it — which is precisely why mechanism 1
        has to cover Knight and not just the two self-naming cards.
+
+       The slack is granted to a player who WON (their pre-roll play ended the
+       game) and to every player when ``truncated=True`` (the game stopped —
+       turn cap or a GUI window-close — before that turn's roll was emitted).
+       It is withheld otherwise, which is what keeps the straddle visible in a
+       completed game.
 
     VP cards are excluded by construction: they are never *played*, and no
     ``vpPlayed`` counter exists.
@@ -339,9 +347,10 @@ def check_one_dev_card_per_turn(game: Any) -> None:
             + int(getattr(p, "roadBuilderPlayed", 0))
         )
         turns = rolls_by_player.get(getattr(p, "name", None), 0)
-        # The +1 slack exists for exactly ONE legitimate case: a pre-roll play
-        # that ends the game before its roll, so the turn is never counted.
-        # That can only happen to a WINNER — so only a winner gets the slack.
+        # The +1 slack exists for the legitimate cases where a pre-roll play
+        # has no roll to be counted against: the play ENDED the game (a
+        # winner), or the game stopped before that turn's roll ever happened
+        # (a truncated / aborted game — a window-close lands here).
         #
         # Why this matters, measured: with the slack granted unconditionally, a
         # D2-class straddle (pre-roll Monopoly -> roll -> main-phase Road
@@ -349,19 +358,40 @@ def check_one_dev_card_per_turn(game: Any) -> None:
         # flagged. Road Builder emits no broadcast event, so the per-turn
         # attribution in step 1 cannot see it either — this aggregate is the
         # only line of defence for that card, and unconditional slack blinded
-        # it. Restricting the slack to a winner closes the straddle while
-        # keeping the real case legal.
+        # it. Restricting the slack closes the straddle while keeping the real
+        # cases legal.
+        #
+        # THE SLACK KEYS OFF ``aborted``, NOT ``truncated`` — they are different
+        # events and conflating them disarms this check across the whole eval
+        # spine. ``truncated`` is env turn-cap exhaustion, raised by
+        # ``catan_env._check_terminal`` ONLY at a turn boundary AFTER that turn's
+        # roll — so a truncated game always has a DICE_ROLL for every counted
+        # turn and can never legitimately need the +1. It is also passed by
+        # ``eval/harness.py``, ``search/eval_search.py`` and
+        # ``human_data/engine_bridge.py``, whose violations feed the promotion
+        # and bake-off gates; granting slack there would make this aggregate
+        # toothless for every truncated eval game — and it is the ONLY defence
+        # against a Road Builder straddle, since Road Builder emits no broadcast
+        # event for step 1 to attribute (see
+        # ``tests/unit/eval/test_preroll_eval.py``, the
+        # ``test_a_road_builder_straddle_is_caught_by_the_aggregate`` pin).
+        #
+        # ``aborted`` is the genuinely un-rolled case: a GUI window-close can
+        # land mid-turn, before that turn's roll, so the turn is never counted
+        # while a pre-roll dev card was legitimately played. Only the interactive
+        # driver sets it.
         max_points = int(getattr(game, "maxPoints", 15))
         won = int(getattr(p, "victoryPoints", 0)) >= max_points
-        allowed = turns + 1 if won else turns
+        slack = won or aborted
+        allowed = turns + 1 if slack else turns
         if total > allowed:
             raise RulesInvariantViolation(
                 f"player {getattr(p, 'name', '?')!r} played {total} non-VP dev cards across "
                 f"{turns} rolled turns; at most one per turn allows {allowed}"
                 + (
-                    " (+1 slack applied: this player won, so a pre-roll play may have ended "
-                    "the game before its roll)"
-                    if won
+                    " (+1 slack applied: a pre-roll play may have ended the game, or the game "
+                    "stopped, before its roll)"
+                    if slack
                     else " (no slack: this player did not reach the win condition)"
                 )
             )
@@ -372,7 +402,7 @@ def check_one_dev_card_per_turn(game: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_all_invariants(game: Any, *, truncated: bool = False) -> list[str]:
+def run_all_invariants(game: Any, *, truncated: bool = False, aborted: bool = False) -> list[str]:
     """Run every check and return a list of violation messages.
 
     Empty list = all invariants passed. Callers may either re-raise via
@@ -392,9 +422,13 @@ def run_all_invariants(game: Any, *, truncated: bool = False) -> list[str]:
 
     _check(check_max_points_15, game)
     _check(check_two_players, game)
-    _check(check_terminal_state, game, truncated=truncated)
+    # BOTH flags relax THIS check: it asks "did the game end legitimately?",
+    # and a turn-cap stop and a window-close are both legitimate non-wins.
+    # The dev-card aggregate below is the one that must NOT accept
+    # ``truncated`` — see its slack comment.
+    _check(check_terminal_state, game, truncated=truncated or aborted)
     _check(check_friendly_robber, game)
     _check(check_no_p2p_trade, game)
     _check(check_stacked_dice, game)
-    _check(check_one_dev_card_per_turn, game)
+    _check(check_one_dev_card_per_turn, game, truncated=truncated, aborted=aborted)
     return violations
