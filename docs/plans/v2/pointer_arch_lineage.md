@@ -59,6 +59,43 @@ The new lineage is accepted only if BOTH hold:
 - (a) h2h vs `v11_cand` Wilson-LB > 0.50 at n=600 (in-lineage non-regression); AND
 - (b) the human-scoreboard opening metric ≥ v11's on the same eligible games.
 
+### Clause (a) — SATISFIED (recorded 2026-08-02)
+
+`selfplay_pointer_arch_v2/ckpt_000000500` (banked as `runs/anchors/ptr_v1_u500.pt`) vs
+`runs/anchors/v11_cand_u724.pt`:
+
+| | |
+|---|---|
+| Win rate | **0.7500** (450 / 600) |
+| Wilson 95% CI | **[0.7138, 0.7830]** — LB 0.7138 > 0.50, PASS |
+| Per-seat | seat0 0.7733 (n=300) · seat1 0.7267 (n=300); gap p≈0.19, noise |
+| Truncated / rules violations | 0 / 0 |
+| Engine tree | **`261098d190c8`** · board_geometry `70813dcf76fd` |
+| Ruleset epoch | **R0** (pre-roll dev cards NOT available to either seat) |
+
+Roughly +159 to +223 Elo over `v11_cand` (the CI, not the midpoint; a bilateral
+estimate against one frozen opponent, **not** ladder-transitive).
+
+**Why this is written here.** It was measured into
+`runs/logs/xarch_u500_vs_v11_n600.log`, which is **gitignored** — so until now the only
+record of the strongest result this project has produced lived in an untracked file, one
+`rm -rf runs/` from gone. `.claude/veriloop/specs/bank-fix-slice-and-champion-bank.md`
+D5 required this entry and it was never written.
+
+**Read the engine-tree line as historical, not reproducible-by-checkout.** The
+`human-path-conformance-fixes` slice edits `src/catan_rl/engine/player.py` and re-pins
+`PINNED_ENGINE_TREE` off `261098d190c8`. That does not invalidate the number: the change
+is confined to `player.play_devCard`, which has exactly two call sites — the legacy
+`playCatan` loop the RL stack never enters, and the human GUI harness — while
+`cross_arch_h2h` is bot-vs-bot through `_apply_main_action`, which is untouched. The
+measurement is therefore unaffected in substance; what it loses is the one-command
+equality check between this line and `git rev-parse HEAD:src/catan_rl/engine`.
+
+**Clause (b) is still unbuilt.** `src/catan_rl/human_data/opening_scoreboard.py` does not
+exist on `main` (it lives on the unmerged `feat/opening-scoreboard` branch), so the fork
+is not accepted — clause (a) alone does not accept it, and banking on (a) alone would be
+gate-shopping.
+
 The AC-7 inference-throughput gate (CPU search sims/s within 10% of the v11
 baseline, `scripts/bench_search_sims.py`) is a BLOCKER regardless of training
 metrics; run the harness on the baseline branch and on this branch on the same
