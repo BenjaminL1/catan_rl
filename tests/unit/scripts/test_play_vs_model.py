@@ -766,6 +766,51 @@ class TestHumanPreRollWindowR1:
         assert env.opponent_player.devCards["ROADBUILDER"] == 1
         assert "ROADBUILDER" not in human_cards
 
+    def test_each_card_maps_to_its_own_action_type(self) -> None:
+        """Drive ONE card at a time — set-equality pins cannot see a transposition.
+
+        ``_pre_roll_type_to_card`` asserts only ``set(mapping) ==
+        set(PRE_ROLL_DEV_TYPES)`` and ``set(mapping.values()) ==
+        set(PRE_ROLL_DEV_CARD_NAMES)``. A transposed mapping (PLAY_KNIGHT ->
+        "MONOPOLY", PLAY_MONOPOLY -> "KNIGHT") satisfies both. And
+        ``test_the_human_is_offered_exactly_what_the_bot_is`` cannot catch it
+        either: it applies the SAME mapping to both sides, so the two stay equal
+        while both are wrong.
+
+        The live consequence is the exact asymmetry this class exists to forbid:
+        a human holding only a KNIGHT would get the Monopoly filter, see the
+        Knight greyed and Monopoly at count 0, and be offered NOTHING at a node
+        where the bot's mask offers ``PLAY_KNIGHT`` — shippable fully green.
+
+        Dealing exactly one card at a time is what makes the pairing observable.
+        """
+        pytest.importorskip("torch")
+        from catan_rl.env.ruleset import PRE_ROLL_DEV_TYPES
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        _reach_agent_pre_roll(env)
+        human = env.opponent_player
+
+        for action_type, card in mod._pre_roll_type_to_card().items():
+            for name in list(human.devCards):
+                human.devCards[name] = 0
+            human.devCards[card] = 1
+            human.devCardPlayedThisTurn = False
+
+            offered_cards = env._pre_roll_dev_options()
+            assert offered_cards == {card}, (
+                f"holding only {card!r}, the human was offered {offered_cards!r} — "
+                "the type->card mapping is transposed"
+            )
+            bot_mask = env._compute_masks(human)["type"]
+            offered_types = {t for t in PRE_ROLL_DEV_TYPES if bool(bot_mask[t])}
+            assert offered_types == {action_type}, (
+                f"holding only {card!r}, the mask offers types {offered_types!r}, not "
+                f"{{{action_type}}} — mapping and mask disagree on the pairing"
+            )
+
     def test_a_depleted_bank_drops_year_of_plenty_from_both_seats(self) -> None:
         """Not the three names — the MASK. A bank with no legal YoP pair drops it.
 

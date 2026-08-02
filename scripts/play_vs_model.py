@@ -185,7 +185,23 @@ if TYPE_CHECKING:
 #: game was scored against could be deleted out from under the path by the next
 #: six saves. ``runs/`` is gitignored, so banking the copy (``bank_anchor``,
 #: policy-only slim) is an OPS step; only this repoint is tracked.
-DEFAULT_CKPT = "runs/anchors/ptr_v1_u500.pt"
+#: EPOCH-MATCHED to the harness. This file now runs ``RULESET_R1`` (both seats
+#: get a pre-roll dev-card window), so the default opponent is the policy that
+#: was TRAINED under R1 — ``selfplay_preroll_r1`` ``ckpt_000000300``, banked
+#: policy-only slim. Defaulting to the R0 champion here would mean playing R1
+#: rules against a policy that never saw the pre-roll node in training: it uses
+#: the window (measured 61% of pre-roll nodes, ``runs/analysis/preroll_histogram.json``)
+#: purely by generalisation from main-phase states, having received zero gradient
+#: there.
+#:
+#: NOT a strength claim. ``ptr_v1_u500`` remains the CHAMPION: this checkpoint
+#: FAILED its pre-registered accept gate against it — WR 0.5067, Wilson CI
+#: [0.4667, 0.5465], n=600 (``runs/analysis/d9_r1_vs_r0.json``), i.e. a coin flip.
+#: They are equally strong; only this one knows the ruleset you are playing.
+#: Pass ``--ckpt runs/anchors/ptr_v1_u500.pt`` to face the R0 champion instead —
+#: the harness prints a loud banner when the checkpoint's epoch and the
+#: harness's epoch disagree.
+DEFAULT_CKPT = "runs/anchors/ptr_r1_u300.pt"
 DEFAULT_SIMS = 400
 
 
@@ -1779,8 +1795,13 @@ def play_interactive(
     print("-" * 70, flush=True)
     print("  HOW TO PLAY (click with the mouse):", flush=True)
     print("   - Setup: click a highlighted circle (settlement) then a line (road).", flush=True)
-    print("   - Your turn: dice auto-roll; use the on-screen buttons. Click END", flush=True)
-    print("     TURN to pass to the bot. The bot then moves.", flush=True)
+    print("   - Turn start: if you hold a playable Knight / Year of Plenty /", flush=True)
+    print("     Monopoly, the game WAITS for you. Click PLAY DEV to use one", flush=True)
+    print("     BEFORE rolling, or ROLL DICE to skip it. (That pause is the", flush=True)
+    print("     pre-roll window, not a hang.) Road Builder is post-roll only,", flush=True)
+    print("     for you AND the bot.", flush=True)
+    print("   - Otherwise the dice roll automatically. Use the on-screen", flush=True)
+    print("     buttons, then click END TURN to pass to the bot.", flush=True)
     print("   - On a 7: discard menu pops up (>9 cards); then move robber + steal.", flush=True)
     if reveal_bot:
         print("-" * 70, flush=True)
@@ -2059,7 +2080,20 @@ def play_interactive(
             # under. A MISSING key means the game predates the field, when the
             # HUMAN had a window the bot structurally could not use, so its
             # result is not attributable. See preroll-dev-cards-r1.md.
-            "preroll": env.ruleset == RULESET_R1,
+            # BOTH seats, not just the agent's. The human's window is gated on
+            # the OPPONENT seat's epoch (``_pre_roll_dev_options`` ->
+            # ``_compute_masks(opponent_player)`` -> ``catan_env`` picks
+            # ``opponent_ruleset`` for that seat), and ``CatanEnv`` accepts an
+            # independent ``opponent_ruleset`` that ``__init__`` does not
+            # constrain. Deriving this from ``env.ruleset`` alone would let
+            # ``opponent_ruleset=R0`` record ``preroll: true`` for a game in
+            # which the human had no window — the record misrepresenting the
+            # regime it was played under, which is the one property this key
+            # exists to guarantee. Latent today (``play_interactive`` passes no
+            # ruleset kwargs and the CLI cannot reach it); one ``and`` to make
+            # it true by construction.
+            "preroll": env.ruleset == RULESET_R1
+            and (getattr(env, "opponent_ruleset", None) or env.ruleset) == RULESET_R1,
             # The epoch the CHECKPOINT was trained under (absent stamp => "R0").
             # A game where this differs from the harness epoch above seats the
             # policy under rules it never saw; the console warns, and this key
@@ -2215,7 +2249,15 @@ def main(argv: list[str] | None = None) -> int:
         "--sims", type=int, default=DEFAULT_SIMS, help="MCTS sims/move (default 400)."
     )
     parser.add_argument(
-        "--ckpt", type=str, default=DEFAULT_CKPT, help=f"Bot checkpoint (default: {DEFAULT_CKPT})."
+        "--ckpt",
+        type=str,
+        default=DEFAULT_CKPT,
+        help=(
+            f"Bot checkpoint (default: {DEFAULT_CKPT}, trained under RULESET_R1 — "
+            "the epoch this harness runs). Pass runs/anchors/ptr_v1_u500.pt to face "
+            "the R0 champion instead; a checkpoint/harness epoch mismatch prints a "
+            "banner and is recorded as ckpt_ruleset."
+        ),
     )
     parser.add_argument(
         "--seed",
