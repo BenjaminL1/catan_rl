@@ -1518,3 +1518,74 @@ class TestProvenanceKeys:
             assert sha is not None
             assert len(sha.removesuffix("-dirty")) == 40, sha
             assert got["ckpt_sha256"] == expected
+
+
+class TestInteractiveRulesAudit:
+    """``run_all_invariants`` runs on every PLAYED game, and only RECORDS.
+
+    It used to run solely under ``--self-test``, consumed as
+    ``assert not violations`` — which is exactly why a GUI-only rule-gap class
+    (stranded dev-card counters, a self-targetable robber) survived: no game a
+    human actually played was ever audited.
+
+    Two properties are load-bearing and pinned separately:
+
+    * it must NOT assert. The driver's whole contract is that both artifacts are
+      written even on abort, and an assert here would destroy the very record it
+      exists to validate; and
+    * an ABORTED game must be passed through as ``truncated``. Otherwise
+      ``check_terminal_state`` reports "terminated but no player reached 15 VP"
+      for every window-close, and an alarm meaning "you closed the window" is one
+      the operator learns to ignore within two sessions.
+    """
+
+    def test_an_aborted_game_records_a_clean_audit(self, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        record, _replay = TestCrashSafeArtifacts()._run(tmp_path, monkeypatch, exc=SystemExit(0))
+        assert record["partial"] is True
+        assert record["winner"] is None
+        assert record["rules_violations"] == [], record["rules_violations"]
+        assert record["rules_ok"] is True, (
+            "a window-close produced a spurious violation; the abort state is "
+            "not reaching check_terminal_state as `truncated`"
+        )
+
+    def test_the_abort_state_is_passed_through_to_the_audit(self) -> None:
+        """The two flags reach the audit SEPARATELY, and that separation matters.
+
+        This once pinned a single ``truncated or aborted``, which collapsed both
+        events into one. That was wrong in one direction only: ``truncated`` also
+        buys the one-dev-card-per-turn slack, and ``run_all_invariants`` is shared
+        with the promotion and bake-off gates, so folding abort into truncated
+        widened a correctness check for every bot-vs-bot caller. ``check_terminal_state``
+        is relaxed by either flag (both are legitimate non-wins); the dev-card
+        aggregate is relaxed by ``aborted`` alone. Keep them distinct at the call.
+        """
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert "run_all_invariants(" in src
+        # Balanced-paren scan, not ``.split(")")`` — the args are wrapped in
+        # ``bool(...)``, so a naive split stops at the FIRST inner paren and
+        # silently reads half the call.
+        tail = src.split("run_all_invariants(", 1)[1]
+        depth, end = 1, len(tail)
+        for i, ch in enumerate(tail):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                end = i
+                break
+        call = tail[:end]
+        assert "aborted=" in call, "the audit must be told the game was aborted"
+        assert "truncated=" in call, "the audit must be told the game was truncated"
+        assert "truncated or aborted" not in call, (
+            "abort must NOT be laundered in as truncated — that widens the "
+            "one-dev-card-per-turn slack for every eval caller, not just this driver"
+        )
+        assert "assert not violations" not in src.split("--self-test")[0]
+
+    def test_the_regime_stamps_are_bumped(self, tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+        """``hud`` is what the human could SEE; ``rules_epoch`` is what they were
+        ALLOWED TO DO. Both changed in this slice, and they are separate keys on
+        purpose — a later reader has to be able to screen games played under the
+        old (self-robbable, counter-leaking) rules."""
+        record, _replay = TestCrashSafeArtifacts()._run(tmp_path, monkeypatch, exc=SystemExit(0))
+        assert record["hud"] == 3
+        assert record["rules_epoch"] == 2

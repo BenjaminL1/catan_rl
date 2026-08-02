@@ -256,11 +256,13 @@ def _stub_game(events: list[dict], players: list[SimpleNamespace]) -> SimpleName
 
 
 def _stub_player(name: str, **counters: int) -> SimpleNamespace:
-    # ``victoryPoints`` defaults to 0 = did NOT win, so the aggregate check's
-    # +1 slack does not apply. The slack is winner-only on purpose: granted
-    # unconditionally it swallowed a pre-roll-Monopoly -> roll -> Road-Builder
-    # straddle exactly (total 2 <= turns + 1 = 2), and Road Builder emits no
-    # broadcast event, so the per-turn attribution cannot see it either.
+    # ``victoryPoints`` defaults to 0 = did NOT win, and these stubs are audited
+    # with the default ``truncated=False``, so the aggregate check's +1 slack
+    # does not apply. The slack is restricted to (winner OR truncated) on
+    # purpose: granted unconditionally it swallowed a pre-roll-Monopoly -> roll
+    # -> Road-Builder straddle exactly (total 2 <= turns + 1 = 2), and Road
+    # Builder emits no broadcast event, so the per-turn attribution cannot see
+    # it either.
     base = {
         "knightsPlayed": 0,
         "yopPlayed": 0,
@@ -360,8 +362,9 @@ def test_one_card_of_slack_is_allowed_for_a_game_ending_preroll_play() -> None:
     """A pre-roll Knight can win via Largest Army BEFORE that turn's roll is
     ever emitted, so ``plays == turns + 1`` must not be a violation.
 
-    The slack is WINNER-ONLY, so the player must actually have reached
-    ``maxPoints`` — that is the only way a turn can go unrolled."""
+    In a COMPLETED game the slack is winner-only, so the player must actually
+    have reached ``maxPoints`` — that is the only way a turn can go unrolled
+    (see ``test_an_aborted_game_gets_the_slack_too`` for the other way)."""
     events = [
         {"type": "DICE_ROLL", "player": "P1", "value": 8},
         {"type": "DICE_ROLL", "player": "P1", "value": 4},
@@ -385,6 +388,89 @@ def test_slack_is_denied_to_a_player_who_did_not_win() -> None:
         check_one_dev_card_per_turn(game)
 
 
+def test_an_aborted_game_gets_the_slack_too() -> None:
+    """D6, acceptance criterion 8: a window-close must NOT produce a spurious
+    violation — and ``check_terminal_state`` was not the only check that fired.
+
+    The GUI's pre-roll window plays the card BEFORE the roll: for a Knight,
+    ``play_devCard`` commits ``knightsPlayed`` and goes straight into the
+    robber picker, whose ``pygame.QUIT`` arm calls ``sys.exit(0)``. The counter
+    is incremented and that turn's DICE_ROLL is never emitted, so a perfectly
+    legal aborted game lands on ``total == turns + 1`` with ``won == False``
+    and used to be reported as a violation — the alarm that only ever means
+    "you closed the window". Every caller that passes ``truncated=True``
+    already knows the game did not run to a winner.
+    """
+    events = [
+        {"type": "DICE_ROLL", "player": "P2", "value": 5},
+        {"type": "DICE_ROLL", "player": "P1", "value": 8},  # one full turn each
+        {"type": "DICE_ROLL", "player": "P2", "value": 6},
+        # P1's pre-roll Knight, then the window closes before P1's own roll.
+        {"type": "MOVE_ROBBER", "player": "P1", "hex_idx": 3},
+    ]
+    players = [_stub_player("P1", knightsPlayed=2), _stub_player("P2")]
+    game = _stub_game(events, players)
+    # Nobody won and the last turn never rolled: total=2 > turns=1 without slack.
+    with pytest.raises(RulesInvariantViolation, match="no slack"):
+        check_one_dev_card_per_turn(game)
+    check_one_dev_card_per_turn(game, aborted=True)
+    # And the aggregator must forward the flag — the audit the GUI actually calls.
+    # (Other checks still fire on this bare stub; only the D11 message matters here.)
+    assert not [m for m in run_all_invariants(game, aborted=True) if "dev cards" in m]
+    assert [m for m in run_all_invariants(game, aborted=False) if "dev cards" in m]
+
+
+def test_truncation_alone_never_grants_the_slack() -> None:
+    """``truncated`` must NOT widen this aggregate. It is a different event.
+
+    Env turn-cap truncation is raised by ``catan_env._check_terminal`` only at a
+    turn boundary AFTER that turn's roll, so a truncated game always has a
+    DICE_ROLL for every counted turn and can never legitimately need the +1.
+
+    The distinction is load-bearing rather than pedantic: ``truncated=True`` is
+    passed by ``eval/harness.py``, ``search/eval_search.py`` and
+    ``human_data/engine_bridge.py``, whose violations feed the promotion and
+    bake-off gates. Keying the slack off it would make this aggregate toothless
+    for EVERY truncated eval game — and it is the only defence against a Road
+    Builder straddle, since Road Builder emits no broadcast event for the
+    per-turn attribution to see (see the straddle pin below).
+
+    Same fixture as the aborted case; only the flag differs.
+    """
+    events = [
+        {"type": "DICE_ROLL", "player": "P2", "value": 5},
+        {"type": "DICE_ROLL", "player": "P1", "value": 8},
+        {"type": "DICE_ROLL", "player": "P2", "value": 6},
+        {"type": "MOVE_ROBBER", "player": "P1", "hex_idx": 3},
+    ]
+    game = _stub_game(events, [_stub_player("P1", knightsPlayed=2), _stub_player("P2")])
+    with pytest.raises(RulesInvariantViolation, match="no slack"):
+        check_one_dev_card_per_turn(game, truncated=True)
+    assert [m for m in run_all_invariants(game, truncated=True) if "dev cards" in m], (
+        "truncation alone granted dev-card slack — the aggregate is disarmed "
+        "across every truncated eval game on the promotion/bake-off spine"
+    )
+
+
+def test_truncation_slack_does_not_blind_the_per_turn_straddle() -> None:
+    """The abort slack is one card of aggregate headroom, nothing more.
+
+    Mechanism 1 (exact per-turn attribution) is untouched by ``truncated``, so
+    a genuine double-play inside one turn still fires in an aborted game."""
+    events = [
+        {"type": "DICE_ROLL", "player": "P2", "value": 5},
+        {"type": "MONOPOLY", "player": "P1", "resource": "ORE", "count": 3},  # pre-roll
+        {"type": "DICE_ROLL", "player": "P1", "value": 8},
+        {"type": "YOP", "player": "P1", "resources": ["WOOD", "BRICK"]},  # same turn
+    ]
+    game = _stub_game(
+        events,
+        [_stub_player("P1", monopolyPlayed=1, yopPlayed=1), _stub_player("P2")],
+    )
+    with pytest.raises(RulesInvariantViolation, match="in one turn"):
+        check_one_dev_card_per_turn(game, truncated=True)
+
+
 def test_a_road_builder_straddle_is_caught_by_the_aggregate() -> None:
     """Pre-roll Monopoly -> roll -> main-phase Road Builder, all in one turn.
 
@@ -392,7 +478,8 @@ def test_a_road_builder_straddle_is_caught_by_the_aggregate() -> None:
     see it: Road Builder emits NO broadcast event, so per-turn attribution has
     nothing to attribute. Mechanism 2 is the only defence — and with the ``+1``
     slack granted unconditionally it absorbed this exactly (total 2 <= 2) and
-    the violation escaped. Winner-only slack closes it."""
+    the violation escaped. Restricting the slack to (winner OR truncated)
+    closes it: this game is neither."""
     events = [
         {"type": "DICE_ROLL", "player": "P2", "value": 5},
         {"type": "DICE_ROLL", "player": "P1", "value": 8},

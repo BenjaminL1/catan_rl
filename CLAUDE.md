@@ -75,8 +75,13 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
 - `src/catan_rl/eval/` — `harness.py` (symmetric-seat WR), `wilson.py`, `rules_invariants.py`.
 - `src/catan_rl/{bc,setup_phase,replay,agents,augmentation,checkpoint,cli}/` — BC, setup pretrain, replay/player_factory, heuristic agent, symmetry aug, checkpoint mgr, CLI entry.
 - `scripts/` — `train.py` (→ `catan_rl.cli.train`), `train_bc.py`, `generate_bc_dataset.py`, `migrate_checkpoint.py`, replay/record tools, `play_vs_model.py` (the v2 human-vs-policy GUI harness — bot panel is BLIND unless `--reveal-bot`, but always shows the
-  PUBLIC facts: knights played + longest-road length, plus an on-screen move log;
-  games log `"hud": 2` for that information regime. The harness runs **ruleset
+  PUBLIC facts: knights played + longest-road length, plus an on-screen move log,
+  the public-reveal-derived dev-deck remaining, and a BUY DEV CARD button greyed
+  on the bot's own mask predicate; games log `"hud": 3` for that information
+  regime, `"rules_epoch": 2` for the human's legal option set (which now matches
+  the bot's — see `.claude/veriloop/specs/human-path-conformance-fixes.md`), and
+  `"rules_ok"` / `"rules_violations"` from an interactive `rules_invariants`
+  audit that RECORDS and never asserts. The harness runs **ruleset
   `R1`**, so **BOTH seats get the one-card pre-roll dev window** (Knight / YoP /
   Monopoly, never Road Builder). The human's menu is narrowed by
   `_pre_roll_dev_options()`, which reads the very `compute_action_masks` type
@@ -95,7 +100,11 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   not refuse — `DEFAULT_CKPT` is itself an R0 checkpoint worth playing and an
   unreadable stamp must not stop a game, so the DEFAULT invocation mismatches
   by construction (pass `--ckpt <R1-ckpt>`). The check runs in
-  `play_interactive` only; `--self-test` returns before it.
+  `play_interactive` only; `--self-test` returns before it. That pre-roll
+  window is itself an option-set change, so it is part of **`rules_epoch` 2**
+  alongside the conformance fixes above — epoch 2 = R1 pre-roll + a dev-card
+  picker that no longer strands a public played-counter + a robber victim
+  picker that filters the human out.
   The human resource picker (`gui/view.get_resource_selection`) routes
   through the finite bank, the driver asserts `bank[R] + Σ hands[R] == 19` after
   every step and records `"bank_ok"`, an interrupted game still writes both

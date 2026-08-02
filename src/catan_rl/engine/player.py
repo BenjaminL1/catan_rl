@@ -401,9 +401,63 @@ class player:
         # Reset the new card list to blank
         self.newDevCards = []
 
+    def _commit_devCard(self, cardName, counterName):
+        """Spend ``cardName`` and bump its public play counter, atomically.
+
+        The ONE place any dev-card play mutates engine state. Calling it is the
+        point of no return: every cancellable choice must already be resolved.
+        """
+        self.devCards[cardName] -= 1
+        setattr(self, counterName, getattr(self, counterName) + 1)
+        self.devCardPlayedThisTurn = True
+
+    def _place_free_roads(self, game, count):
+        """Place up to ``count`` Road-Builder roads, NON-cancellably.
+
+        Mirrors the bot (``env/catan_env.py`` ``road_building_roads_left``): the
+        placement is only skipped when no legal road exists (or the player is out
+        of road pieces), never because a click missed. ``game.build`` is not used
+        here because its ``buildRoad_display`` call is cancellable outside setup,
+        and a cancelled placement would forfeit an already-spent free road.
+        """
+        for _ in range(count):
+            if self.roadsLeft < 1:
+                break
+            potentialRoadDict = game.board.get_potential_roads(self)
+            if not any(potentialRoadDict.values()):
+                break
+            roadToBuild = game.boardView.buildRoad_display(
+                self, potentialRoadDict, allow_cancel=False
+            )
+            if roadToBuild is None:  # only reachable from a headless/stub view
+                break
+            self.build_road(roadToBuild[0], roadToBuild[1], game.board, is_free=True)
+            game.boardView.displayGameScreen()
+
     # function to play a development card
     def play_devCard(self, game):
-        "Update game state"
+        """Play one development card, resolving EVERY choice before committing.
+
+        Invariant (the reason this function is shaped the way it is): **no
+        cancellable choice may follow a commit.** ``_commit_devCard`` is the sole
+        mutation point, and each branch reaches it only once its picker has
+        returned a real answer. A cancelled picker therefore leaves
+        ``devCards`` / ``knightsPlayed`` / ``yopPlayed`` / ``monopolyPlayed`` /
+        ``roadBuilderPlayed`` / ``devCardPlayedThisTurn`` completely untouched —
+        those counters are PUBLIC state the policy observes
+        (``policy/obs_encoder.py``) and ``eval/rules_invariants.py`` audits, so a
+        stranded increment is a durable lie about the game, not a cosmetic slip.
+
+        This mirrors the bot's shape in ``env/catan_env.py`` (which receives the
+        choice pre-resolved and commits in one block), including KNIGHT's
+        ordering: counter → ``check_largest_army`` → robber placement, so the
+        Friendly-Robber legality set is computed with Largest Army's +2 VP
+        already awarded. Both seats then see the same legal hexes from identical
+        positions.
+
+        The pickers are reached duck-typed through ``game.boardView``; this
+        module never imports pygame (see CLAUDE.md rule 8).
+        """
         # Check if player can play a devCard this turn
         if self.devCardPlayedThisTurn:
             # print('Already played 1 Dev Card this turn!')
@@ -426,30 +480,28 @@ class player:
             # print("Dev Card selection cancelled")
             return
 
-        self.devCardPlayedThisTurn = True
-
-        # print("Playing Dev Card:", devCardPlayed)
-        self.devCards[devCardPlayed] -= 1
-
-        # Logic for each Dev Card
-        if devCardPlayed == "KNIGHT":
-            game.robber(self)
-            self.knightsPlayed += 1
-
-        if devCardPlayed == "ROADBUILDER":
-            self.roadBuilderPlayed += 1
-            game.build(self, "ROAD", is_free=True)
-            game.boardView.displayGameScreen()
-            game.build(self, "ROAD", is_free=True)
-            game.boardView.displayGameScreen()
-
         # Resource List for Year of Plenty and Monopoly
         resource_list = ["BRICK", "WOOD", "WHEAT", "SHEEP", "ORE"]
 
+        # Logic for each Dev Card
+        if devCardPlayed == "KNIGHT":
+            # Commit BEFORE the pick, exactly as the bot does: the robber picker
+            # is already non-cancellable, and Largest Army must be resolved so
+            # the Friendly-Robber filter sees the awarded +2 VP.
+            self._commit_devCard("KNIGHT", "knightsPlayed")
+            game.check_largest_army(self)
+            game.robber(self)
+            return
+
+        if devCardPlayed == "ROADBUILDER":
+            self._commit_devCard("ROADBUILDER", "roadBuilderPlayed")
+            self._place_free_roads(game, 2)
+            return
+
         if devCardPlayed == "YEAROFPLENTY":
-            self.yopPlayed += 1
             # print("Resources available:", resource_list)
             if self.isAI:
+                self._commit_devCard("YEAROFPLENTY", "yopPlayed")
                 # AI Logic for YOP - Pick 2 random resources. The np.random.choice
                 # call is over the full list (RNG-identical to pre-bank); a pick
                 # the bank cannot supply is simply not granted (spec 009; matches
@@ -464,18 +516,18 @@ class player:
                     # print("AI chose YOP resource:", res)
                 game.log_yop(self, yop_resources)
             else:
-                # Use GUI to select 2 resources
+                # Use GUI to select 2 resources. The picker is transactional over
+                # resources + bank (it reverts every pick on cancel), so a None
+                # here means nothing at all happened.
                 result = game.boardView.get_resource_selection(self, "YOP", num_to_select=2)
                 if result is None:
-                    # Cancelled
-                    self.devCards[devCardPlayed] += 1
-                    self.devCardPlayedThisTurn = False
                     # print("Year of Plenty cancelled")
                     return
+                self._commit_devCard("YEAROFPLENTY", "yopPlayed")
                 game.log_yop(self, result)
+            return
 
         if devCardPlayed == "MONOPOLY":
-            self.monopolyPlayed += 1
             # print("Resources to Monopolize:", resource_list)
             if self.isAI:
                 # AI Logic for Monopoly - Pick random resource
@@ -486,13 +538,13 @@ class player:
                 resourceToMonopolize = game.boardView.get_resource_selection(self, "MONOPOLY")
 
                 if resourceToMonopolize is None:
-                    # Cancelled
-                    self.devCards[devCardPlayed] += 1
-                    self.devCardPlayedThisTurn = False
                     # print("Monopoly cancelled")
                     return
 
+            self._commit_devCard("MONOPOLY", "monopolyPlayed")
+
             # Loop over each player to Monopolize all resources
+            total_stolen = 0
             for player in list(game.playerQueue.queue):
                 if player != self:
                     numLost = player.resources[resourceToMonopolize]
@@ -500,6 +552,7 @@ class player:
                         continue
                     player.resources[resourceToMonopolize] = 0
                     self.resources[resourceToMonopolize] += numLost
+                    total_stolen += numLost
                     # Broadcast per-player resource changes if broadcaster exists
                     if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
                         # Victim loses numLost of that resource
@@ -514,6 +567,15 @@ class player:
                             delta={resourceToMonopolize: +numLost},
                             source="MONOPOLY",
                         )
+
+            # Structural MONOPOLY event, emitted UNCONDITIONALLY (including
+            # total_stolen == 0) to match the bot at ``env/catan_env.py``. Without
+            # it the play is invisible to ``eval/rules_invariants.py``'s per-turn
+            # dev-card attribution. Safe: ``env/hand_tracker.py`` early-returns on
+            # any non-RESOURCE_CHANGE event, so the transfer is not double-counted.
+            if getattr(self, "game", None) is not None and hasattr(self.game, "broadcast"):
+                self.game.broadcast.monopoly(self.name, resourceToMonopolize, total_stolen)
+            return
 
         return
 
