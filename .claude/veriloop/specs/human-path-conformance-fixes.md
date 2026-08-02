@@ -206,3 +206,89 @@ four-game corpus partitioned three ways compounds nothing.
 lineage (`runs/analysis/d9_r1_vs_r0.json`: WR 0.5067, CI [0.4667, 0.5465], FAIL) and whether the
 pointer-arch fork is accepted. Sequencing GUI conformance ahead of both is a choice, not an
 inheritance from the order the audit happened to run in.
+
+---
+
+## AMENDMENT (2026-08-02) — drift-lens blockers found after the build started
+
+The `/dev-loop` for this spec was already running when the drift review returned. These
+CORRECT the decisions above and take precedence. Verify each at merge; the running build
+does not have them.
+
+### A1 — D6 as written fires a FALSE violation on every mid-game call (blocker)
+
+`eval/rules_invariants.py:375` defaults `truncated: bool = False`, and `check_terminal_state`
+(`:110-115`) raises *"terminated game but no player reached 15 VP"* whenever nobody has won —
+i.e. on **every step until someone hits 15**. A naive interactive wiring spams `RULES VIOLATED`
+for an entire game. Passing `truncated=True` silences it but structurally disables the check.
+
+**Correction:** `check_terminal_state` must be EXCLUDED from the mid-game invocation (a `checks=`
+selector, or a `run_midgame_invariants`) and the full set run ONCE post-loop.
+
+The other checks are safe mid-game: `check_max_points_15`, `check_two_players`,
+`check_friendly_robber`, `check_stacked_dice` are live-state queries; `check_no_p2p_trade` and
+`check_one_dev_card_per_turn` walk the retained stream, and `audit_events=True` is already set.
+
+### A2 — D5 is ONE commit, not two (blocker)
+
+The two-commit sequencing in D5 is WRONG: it ships a knowingly-RED intermediate, violating the
+green-at-each-commit convention. The tree SHA is readable from the **staged index** without
+committing:
+
+    git add src/catan_rl/engine/player.py
+    git rev-parse "$(git write-tree):src/catan_rl/engine"
+
+Write that value into `eval/engine_parity.py` and commit **D1 + D2 + D5 together**.
+
+### A3 — `broadcast.monopoly` ordering is contractual (should-fix)
+
+`env/catan_env.py:707-712` documents that per-victim `RESOURCE_CHANGE` events fire BEFORE the
+structural `MONOPOLY`, and that "a consumer that groups them should buffer RESOURCE_CHANGEs until
+MONOPOLY arrives." `engine/player.py:496-516` emits per-victim changes inside the loop, so the
+`broadcast.monopoly(...)` call must go **after the loop closes**, carrying the summed total.
+Emitting it before or inside swaps one divergence for another.
+
+### A4 — D4 shows the deck TOTAL only, never per-type (should-fix)
+
+Total remaining is publicly derivable (`25 − total_bought`); the **per-type breakdown is not** —
+which is exactly why `policy/obs_encoder.py:387-391` uses the public-reveal formula and says the
+engine's `devCardStack` is "deliberately NOT read here." Showing per-type would hand the human
+information no Colonist player can derive and the bot does not have — inverting the asymmetry.
+
+Also note `tests/unit/gui/test_hand_panel.py:76-79` forbids any of
+`("Knight","VP","Mono","RB","YOP")` appearing in the blind panel: `"Dev deck: 12"` is fine,
+`"Dev deck: 12 (3 Knight)"` is RED.
+
+### A5 — Budget D4's pixels BEFORE writing it (should-fix)
+
+`tests/unit/gui/test_hand_panel.py:273-303` checks panel arithmetic against `_WINDOW_H = 800`, and
+the revealed bot panel already bottoms at y≈788. **One more 18px line ⇒ ~806 ⇒ RED.** Enlarging the
+window is `engine/board.py:139` — an ENGINE edit, i.e. a second re-pin. Fit it in the existing
+budget or move an existing line.
+
+### A6 — Add the counter assertion that would have caught this (should-fix)
+
+`tests/unit/gui/test_human_picker_bank.py:228-249` already asserts card refund, flag reset and bank
+restore on a YoP cancel — **but not `yopPlayed == 0`**. That single missing assertion is why the
+HIGH defect survived a slice that was specifically auditing this function. Add the counter
+assertions there, plus a Monopoly twin and a Road Builder case.
+
+### A7 — The existing corpus cannot be cleared retrospectively (record it)
+
+All 4 games in `runs/human_playtest/games.jsonl` were played on the buggy tree with **no marker** —
+unlike the bank break, which has `bank_ok` precisely because "a corrupt game is byte-indistinguishable
+from a clean one." Either mark them via the append-only sidecar, or state in writing that they are
+unusable for strength reads. Do not leave it implicit.
+
+### A8 — `make lint` is RED on the base tree, and it is not ours
+
+`scripts/export_dice_vectors.py:64` (B904), untracked in-progress work. Do not "fix" it to go green;
+distinguish it from anything this slice introduces.
+
+### A9 — Text-asserting tests that bite without warning
+
+`tests/unit/scripts/test_play_vs_model.py` contains raw-grep and `ast.parse` pins that a
+restructure trips silently: `:690` (exact two-call-site list for `.play_devCard(` — even a COMMENT
+mentioning it breaks the list), `:809-845` (every `while` containing `.step(` must contain a bare
+`check_bank` call — D6 restructuring `play_interactive` can trip this), `:1025-1042` (the handler
+must be `BaseException`), `:553-566` (every `deque` bounded, exactly one `EventCollector` — D4 risk).
