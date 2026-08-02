@@ -9,9 +9,17 @@ import pygame
 from catan_rl.engine.geometry import *
 from catan_rl.gui import render
 from catan_rl.gui import render_constants as RC
-from catan_rl.policy.obs_schema import DEV_DECK_INITIAL
 
 pygame.init()
+
+#: Dev cards in a fresh deck (14 Knight / 5 VP / 2 Mono / 2 RB / 2 YoP). Kept in
+#: sync with ``policy/obs_schema.DEV_DECK_INITIAL`` and the engine's
+#: ``board.devCardStack``, but deliberately NOT imported from either: importing
+#: any ``catan_rl.policy`` submodule executes ``policy/__init__``, which pulls in
+#: torch and would put the GUI on the mandatory side of a layering CLAUDE.md
+#: rule 8 keeps optional. ``tests/unit/gui/test_dev_button_state.py`` pins the
+#: equality against ``DEV_DECK_INITIAL`` so the duplication cannot drift.
+DEV_DECK_TOTAL = 25
 
 #: Leading (px) between hand-panel lines. 18, not 20: the revealed panel is 16
 #: lines and at 20px a REVEALED bot panel (drawn at y=460) would run past the
@@ -72,7 +80,7 @@ def public_dev_deck_remaining(player, opponent) -> int:
     ``board.devCardStack``, which is deck TRUTH and would tell the human how many
     cards sit in the opponent's hidden hand — information the bot does not get.
     """
-    total = sum(DEV_DECK_INITIAL)
+    total = DEV_DECK_TOTAL
     dev = getattr(player, "devCards", {}) or {}
     new_dev = getattr(player, "newDevCards", []) or []
     own_held = sum(int(v) for v in dev.values()) + len(new_dev)
@@ -803,8 +811,11 @@ class catanGameView:
 
         * **Fail open on an empty spot set**, mirroring ``env/masks.py`` (which
           sets all 19 tiles when the Friendly-Robber filter leaves nothing). The
-          pick below is ``allow_cancel=False`` with no ``pygame.QUIT`` arm, so an
-          empty set used to hard-lock the window instead of offering anything.
+          pick below is ``allow_cancel=False``, so an empty set used to leave the
+          human with no legal click and the turn unfinishable — a SOFT lock, not
+          a hard one: ``_animated_pick`` does handle ``pygame.QUIT`` (it exits),
+          and the driver's ``BaseException`` handler still salvages both
+          artifacts. The game was unplayable from there all the same.
         * **``currentPlayer`` is filtered out of the victim set.**
           ``board.get_players_to_rob`` is keyed on the hex alone, so the human's
           OWN building was offered as a steal target; ``steal_resource(self)`` is

@@ -10,8 +10,10 @@ Three divergences from the bot, all of which the bot's own path
 * With exactly one victim the picker still prompted, blocking on a click. The bot
   never prompts, and after self-filtering there is never a real choice in 1v1.
 * An empty robber-spot set reached ``_animated_pick(..., allow_cancel=False)``
-  with no matching rect and no QUIT arm — a hard window-lock. ``env/masks.py``
-  falls open to all 19 tiles instead.
+  with no matching rect, leaving the human no legal click and the turn
+  unfinishable — a SOFT lock (``_animated_pick`` does handle ``pygame.QUIT``, and
+  the driver salvages both artifacts on the way out), but unplayable all the
+  same. ``env/masks.py`` falls open to all 19 tiles instead.
 
 ``_animated_pick`` is a blocking pygame event loop, so it is replaced by a spy in
 every test here: a miss would hang the suite rather than fail it, and the spy is
@@ -118,7 +120,8 @@ class TestFailOpenOnEmptySpotSet:
     def test_an_empty_spot_set_offers_all_19_hexes(self, view: Any) -> None:
         """Mirrors ``env/masks.py``, which sets every tile when the
         Friendly-Robber filter leaves nothing. Pre-change the empty set reached a
-        non-cancellable picker with no clickable rect: a hard window-lock."""
+        non-cancellable picker with no clickable rect, so the turn could not be
+        finished (the window still closed on QUIT)."""
         game, v = view
         human = _players(game)[0]
         seen = _spy_pick(v, lambda spots: spots[0])

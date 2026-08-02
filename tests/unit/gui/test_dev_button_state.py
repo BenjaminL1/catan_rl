@@ -17,12 +17,21 @@ Both helpers are pure, so these tests need no pygame surface.
 
 from __future__ import annotations
 
+import os
+import pathlib
+import subprocess
+import sys
 from typing import Any
 
 import pytest
 
+import catan_rl
 from catan_rl.engine.game import catanGame
-from catan_rl.gui.view import dev_card_button_enabled, public_dev_deck_remaining
+from catan_rl.gui.view import (
+    DEV_DECK_TOTAL,
+    dev_card_button_enabled,
+    public_dev_deck_remaining,
+)
 from catan_rl.policy.obs_schema import DEV_DECK_INITIAL
 
 _COST = {"ORE": 1, "WHEAT": 1, "SHEEP": 1}
@@ -73,7 +82,9 @@ class TestDeckRemainingReadout:
     def test_full_deck_at_game_start(self, game: Any) -> None:
         human, opponent = _players(game)[:2]
 
-        assert public_dev_deck_remaining(human, opponent) == sum(DEV_DECK_INITIAL) == 25
+        assert public_dev_deck_remaining(human, opponent) == DEV_DECK_TOTAL == 25
+        # the duplicated constant may not drift from the obs's deck composition
+        assert sum(DEV_DECK_INITIAL) == DEV_DECK_TOTAL
 
     def test_own_held_and_both_seats_played_are_subtracted(self, game: Any) -> None:
         human, opponent = _players(game)[:2]
@@ -132,3 +143,27 @@ class TestRenderedButtonColour:
             human.resources[res] += amt
         game.board.bank_draw(_COST)
         assert self._button_colour(game, human) == pygame.Color("gold")
+
+
+class TestGuiLayering:
+    """CLAUDE.md rule 8: no RL/training path imports the GUI — and the GUI must
+    not import the policy package either. ``from catan_rl.policy.obs_schema
+    import ...`` executes ``policy/__init__``, which constructs the CatanPolicy
+    import chain and pulls in torch, so the deck size is duplicated as
+    ``view.DEV_DECK_TOTAL`` (pinned equal to ``DEV_DECK_INITIAL`` above) rather
+    than imported. This test is what makes the duplication safe to keep.
+    """
+
+    def test_importing_the_gui_does_not_pull_in_torch(self) -> None:
+        src = str(pathlib.Path(catan_rl.__file__).resolve().parent.parent)
+        code = (
+            "import os, sys\n"
+            "os.environ.setdefault('SDL_VIDEODRIVER', 'dummy')\n"
+            "import catan_rl.gui.view\n"
+            "print('TORCH', 'torch' in sys.modules)\n"
+        )
+        env = {**os.environ, "PYTHONPATH": src, "SDL_VIDEODRIVER": "dummy"}
+        out = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True, env=env, check=True
+        )
+        assert "TORCH False" in out.stdout
