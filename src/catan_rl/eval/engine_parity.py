@@ -31,7 +31,30 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 #: git object ids of the fork-unchanged engine tree + board_geometry blob (==
 #: the tree at ``_provenance.VENDOR_COMMIT`` == ``9692a79~1``). Update these ONLY
 #: after a deliberate engine change has been re-validated for cross-arch use.
-PINNED_ENGINE_TREE = "261098d190c88923639018b52f92f583a30d2081"
+#:
+#: RE-PIN LOG. Every entry must carry the re-VALIDATION argument; "I ran the
+#: guard and it passed" is circular and is not one.
+#:
+#: * ``261098d190c8`` -> ``08bd139cfa14`` (2026-08-02, human-path-conformance-fixes
+#:   D1/D2). ``engine/player.play_devCard`` was restructured so that no
+#:   cancellable choice follows a state commit. ``eval/legacy_arch/obs_encoder.py``
+#:   does read exactly the counters that move (``knightsPlayed`` / ``yopPlayed`` /
+#:   ``monopolyPlayed`` / ``roadBuilderPlayed``), so the tripwire firing is
+#:   correct. It is nonetheless UNREACHABLE from any cross-arch measurement:
+#:   ``play_devCard`` has exactly two call sites — ``engine/game.py``'s legacy
+#:   pygame loop, which the RL stack never enters, and ``scripts/play_vs_model.py``
+#:   (both pinned by ``tests/unit/scripts/test_play_vs_model.py``) — and
+#:   ``agents/heuristic.py`` deliberately routes around it through
+#:   ``heuristic_play_*``. ``cross_arch_h2h`` is bot-vs-bot through
+#:   ``env/catan_env._apply_main_action``, which this change does not touch. The
+#:   diff therefore moves the byte pin without changing any behaviour a
+#:   cross-arch measurement can observe; the vendored arch is re-validated
+#:   against the new engine by construction, not by re-running this guard.
+#:   (The DRAFT ``bank-fix-slice-and-champion-bank.md`` records a re-pin
+#:   ``261098d190c8 -> 3388b69026cb`` as landed 2026-07-28. It did not land: that
+#:   sha appears nowhere in the tree and the live constant was still
+#:   ``261098d190c8``. This log starts from the real value, not that one.)
+PINNED_ENGINE_TREE = "08bd139cfa14de1922e0105f31bfb7ee5e401ef3"
 PINNED_BOARD_GEOMETRY_BLOB = "70813dcf76fde390ef43b249bc50c7ea57e1b0ad"
 
 _ENGINE_PATH = "src/catan_rl/engine"
