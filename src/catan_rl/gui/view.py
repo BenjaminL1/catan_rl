@@ -211,6 +211,22 @@ class catanGameView:
         # this None -> nothing is drawn.
         self.move_log = None
 
+        # Optional: restrict which dev cards ``get_dev_card_selection`` will
+        # accept, as a set of engine ``devCards`` keys. ``None`` (the default,
+        # and what engine playCatan leaves it at) means UNRESTRICTED — the
+        # historic behaviour, unchanged. The pre-roll window in
+        # ``scripts/play_vs_model.py`` sets it to the human's legal pre-roll
+        # options so the menu offers exactly what the bot's action mask offers
+        # (Road Builder is excluded pre-roll; see ``env/ruleset.py``).
+        #
+        # It lives on the VIEW rather than as a ``play_devCard`` argument
+        # because ``engine/player.play_devCard`` calls
+        # ``boardView.get_dev_card_selection(self)`` with one argument and the
+        # engine is out of scope for that slice. It restricts the MENU, never
+        # the hand: nothing zeroes ``player.devCards``, so a mid-window quit
+        # cannot capture or leak a card and the on-screen count stays truthful.
+        self.dev_card_filter = None
+
         return None
 
     # Function to display the initial board
@@ -927,7 +943,18 @@ class catanGameView:
     def get_dev_card_selection(self, player):
         """
         Displays a dev card selection menu and handles user interaction.
+
+        ``self.dev_card_filter`` (default ``None`` = unrestricted) narrows what
+        the menu will accept: a card outside it is drawn DIMMED and its clicks
+        are ignored, exactly as an unsuppliable resource is in
+        ``get_resource_selection`` — and, as there, the title gains a
+        ``(greyed = not now)`` hint whenever a filter is in force, so a
+        swallowed click reads as a restriction rather than a freeze. Used by
+        the pre-roll window in
+        ``scripts/play_vs_model.py`` so the human is offered the same card set
+        the bot's action mask offers.
         """
+        allowed = self.dev_card_filter
         dev_cards = ["KNIGHT", "VP", "MONOPOLY", "ROADBUILDER", "YEAROFPLENTY"]
         abbreviations = {
             "KNIGHT": "K",
@@ -968,13 +995,23 @@ class catanGameView:
 
             # Draw Title
             title_text = "Select Development Card to Play"
+            if allowed is not None:
+                # Same contract as get_resource_selection's "(greyed = bank
+                # empty)": a swallowed click must be EXPLAINED, not read as a
+                # freeze. Kept short — the menu is 500px wide at font size 20.
+                title_text += "  (greyed = not now)"
             text_surf = self.font_menu.render(title_text, True, (0, 0, 0))
             self.screen.blit(text_surf, (menu_x + 10, menu_y + 10))
 
             # Draw Dev Cards
             for card in dev_cards:
                 rect = card_rects[card]
-                pygame.draw.rect(self.screen, (128, 128, 128), rect)  # Gray square
+                blocked = allowed is not None and card not in allowed
+                # Dimmed = not offered here (mirrors the unsuppliable-resource
+                # treatment in get_resource_selection). The COUNT below is still
+                # drawn truthfully — the hand is never altered.
+                shade = (90, 90, 90) if blocked else (128, 128, 128)
+                pygame.draw.rect(self.screen, shade, rect)  # Gray square
 
                 # Draw Abbreviation (Top)
                 abbr = abbreviations[card]
@@ -1022,6 +1059,9 @@ class catanGameView:
                     if clicked_card:
                         if clicked_card == "VP":
                             continue  # Do nothing for VP
+
+                        if allowed is not None and clicked_card not in allowed:
+                            continue  # Not offered in this window
 
                         if player.devCards[clicked_card] > 0:
                             if clicked_card == selected_card:

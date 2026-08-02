@@ -76,16 +76,27 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
 - `src/catan_rl/{bc,setup_phase,replay,agents,augmentation,checkpoint,cli}/` — BC, setup pretrain, replay/player_factory, heuristic agent, symmetry aug, checkpoint mgr, CLI entry.
 - `scripts/` — `train.py` (→ `catan_rl.cli.train`), `train_bc.py`, `generate_bc_dataset.py`, `migrate_checkpoint.py`, replay/record tools, `play_vs_model.py` (the v2 human-vs-policy GUI harness — bot panel is BLIND unless `--reveal-bot`, but always shows the
   PUBLIC facts: knights played + longest-road length, plus an on-screen move log;
-  games log `"hud": 2` for that information regime. **Both seats are POST-ROLL
-  ONLY** — the human's pre-roll dev-card window is gone, because `env/masks.py`
-  emits only `ROLL_DICE` while `roll_pending` so the policy structurally cannot
-  answer it, and the auto-played human seat (headless `--self-test`) has the base
-  env's `heuristic_pre_roll` suppressed so the auto-played seat matches the one
-  the human actually plays (MCTS clones are unaffected — a clone always carries a
-  snapshot opponent and the pre-roll is gated on there being none); games log
-  `"preroll": false` (a stopgap until
-  `preroll-dev-cards-r1`, which gives BOTH seats the window and needs a
-  retrain). The human resource picker (`gui/view.get_resource_selection`) routes
+  games log `"hud": 2` for that information regime. The harness runs **ruleset
+  `R1`**, so **BOTH seats get the one-card pre-roll dev window** (Knight / YoP /
+  Monopoly, never Road Builder). The human's menu is narrowed by
+  `_pre_roll_dev_options()`, which reads the very `compute_action_masks` type
+  mask the policy's own pre-roll node is built from (through the new optional
+  `gui/view.catanGameView.dev_card_filter`, default `None` = unrestricted), so
+  seat symmetry is structural rather than a parallel card list; the auto-played
+  human seat (headless `--self-test`) reaches the base env's
+  `heuristic_pre_roll` unchanged — the window in KIND, but NOT in extent
+  (Knight only, by a scripted rule), so the stand-in stays a weaker model of the
+  human's seat. MCTS clones never take that branch (a clone always carries a
+  snapshot opponent and the heuristic pre-roll is gated on there being none) but
+  are not untouched by `R1`: `_opponent_pre_roll`'s snapshot branch no longer
+  early-returns, so clones now sample the modelled seat's pre-roll node. Games
+  log `"preroll": true` **derived from `env.ruleset`**, plus `"ckpt_ruleset"`
+  (an absent checkpoint stamp ⇒ `R0`); an epoch mismatch warns loudly but does
+  not refuse — `DEFAULT_CKPT` is itself an R0 checkpoint worth playing and an
+  unreadable stamp must not stop a game, so the DEFAULT invocation mismatches
+  by construction (pass `--ckpt <R1-ckpt>`). The check runs in
+  `play_interactive` only; `--self-test` returns before it.
+  The human resource picker (`gui/view.get_resource_selection`) routes
   through the finite bank, the driver asserts `bank[R] + Σ hands[R] == 19` after
   every step and records `"bank_ok"`, an interrupted game still writes both
   artifacts with `"partial": true` (including the real window-close path, which

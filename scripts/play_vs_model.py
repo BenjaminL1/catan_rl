@@ -32,9 +32,12 @@ Each finished game is written TWICE (dual-write, deliberately):
   knights/longest-road HUD, no on-screen move log), the same read-a-missing-key
   convention as ``reveal_bot`` below. It also carries ``"bank_ok"`` (did the
   ``bank[R] + Σ hands[R] == 19`` conservation assert hold at every step),
-  ``"preroll": false`` (the pre-roll information regime — see below),
-  ``"partial"`` (the game was cut short), and the ``"git_sha"`` /
-  ``"ckpt_sha256"`` attribution pair; and
+  ``"preroll": true`` (the pre-roll information regime — DERIVED from
+  ``env.ruleset``, see below; a MISSING key means the game predates the field),
+  ``"ckpt_ruleset"`` (the ruleset epoch the seated CHECKPOINT was trained
+  under — an absent stamp in the checkpoint reads as ``"R0"``, and ``null``
+  means it could not be read), ``"partial"`` (the game was cut short), and the
+  ``"git_sha"`` / ``"ckpt_sha256"`` attribution pair; and
 * a full-fidelity ``Replay`` JSON under ``runs/human_playtest/replays/``,
   carrying BOTH players' move streams and the policy's per-decision internals,
   openable in the existing ``replay/viewer``. Its ``Metadata`` carries the same
@@ -44,21 +47,52 @@ BOTH artifacts are written even when the game is INTERRUPTED (window close,
 ``KeyboardInterrupt``, crash), marked ``partial`` — a cut-short game is a valid
 trace of the moves it contains but is NOT an outcome/strength read.
 
-**Both seats are POST-ROLL ONLY.** This harness PINS ruleset ``R0``
-(``env/ruleset.py``), under which ``env/masks.py`` emits only ``ROLL_DICE``
-while ``roll_pending``. ``R1`` — both seats get a pre-roll dev-card window — is
-NOT a code-level default anywhere (``CatanEnv``, ``EvalHarness`` and
-``RolloutConfig`` all default ``R0``); it is opted into per caller, and this
-harness deliberately does not, because it has no pre-roll UI for the human
-seat, so an R1 env here would give the BOT a window the human cannot use.
-Granting the window to exactly one seat is an asymmetry, not a courtesy, in
-either direction. The auto-played human seat (headless
-``--self-test``) likewise has the base env's ``heuristic_pre_roll`` suppressed,
-so the auto-played seat matches the one the human actually plays. (MCTS clones
-are unaffected: a clone always carries a snapshot opponent, and the pre-roll is
-gated on there being none.) Games record ``"preroll": false``, which stays
-TRUE under the R0 pin. Lifting it needs a human-side pre-roll window plus an
-R1-trained champion — a separate slice.
+**BOTH seats get the pre-roll dev-card window.** This harness opts into ruleset
+``R1`` (``env/ruleset.py``), under which each seat may play at most ONE card
+from ``PRE_ROLL_DEV_TYPES`` — Knight / Year of Plenty / Monopoly — before
+rolling. The earlier ``R0`` pin was an explicit STOPGAP taken because the human
+seat had no pre-roll UI; that UI now exists (``_human_pre_roll``), so the pin is
+gone. Seat symmetry is the binding invariant, in BOTH directions: a human-only
+window makes every human win unattributable ("the bot was not allowed to play
+its Knight"), and a bot-only window is the same bias mirrored.
+
+Symmetry here is by CONSTRUCTION, not by a parallel card list: the human's menu
+is restricted to ``_pre_roll_dev_options()``, which reads the very
+``compute_action_masks`` type mask the policy's own pre-roll node is built from
+(so the finite-bank YoP gate, the one-card-per-turn flag and everything else
+apply identically). **Road Builder is excluded on both seats** — the whitelist
+omits it because its two free roads would defer across the roll, a possible 7,
+the discard and the robber (see ``env/ruleset.py``); offering it to the human
+alone would be a capability the policy structurally lacks. The auto-played human
+seat (headless ``--self-test``) reaches the base env's ``heuristic_pre_roll``
+unchanged — the suppression hook is gone, so the stand-in now has the window in
+KIND. It does NOT match the human's in EXTENT: ``heuristic_pre_roll`` plays a
+KNIGHT only, by a scripted rule (the robber sits on its own hex), never YoP or
+Monopoly and never through ``compute_action_masks``, while the keyboard human is
+offered every card the mask allows. It is a strictly weaker model of the seat
+the human plays, not a copy of it. (MCTS clones never take that branch — a clone
+always carries a snapshot opponent and the heuristic pre-roll is gated on there
+being none — but they are NOT unaffected by R1: ``catan_env._opponent_pre_roll``
+early-returned in its SNAPSHOT branch under R0 and no longer does, so every
+clone now samples a pre-roll decision for the modelled human seat, paying a
+policy forward plus a search node on each opponent turn where that seat holds a
+whitelisted card.) Games record ``"preroll": true``, derived from
+``env.ruleset`` rather than written as a literal.
+
+CHECKPOINT EPOCH: a checkpoint trained under ``R0`` seated in an R1 harness is
+playing rules it never saw — its type head received exactly zero gradient at
+``roll_pending`` for its whole lineage, so it may burn Knights pre-roll. The
+JSONL carries ``ckpt_ruleset`` (an absent stamp in the checkpoint means ``R0``)
+and the console warns loudly on a mismatch. It WARNS rather than refuses for two
+reasons, neither of them ``--self-test`` (which returns from ``main()`` before
+``play_interactive`` and never reads a stamp): :data:`DEFAULT_CKPT` is itself an
+unstamped R0 checkpoint that is still worth playing against, and a checkpoint
+whose stamp cannot be read must never stop a game. **So the default invocation
+mismatches by construction** — pass ``--ckpt`` with an R1-trained checkpoint to
+play the ruleset the harness runs. Repointing the default is an owner call: the
+R1 lineage has not been banked into ``runs/anchors/``, and a default pointing
+into a rotating ``runs/train/.../checkpoints/`` tree would name different bytes
+tomorrow, or none.
 
 FIDELITY CAVEATS on that replay (do not discover these later):
 
@@ -74,6 +108,12 @@ FIDELITY CAVEATS on that replay (do not discover these later):
   verdict** — and it is the policy grading its own homework.
 * The binding constraint on this harness is **games played**, not bytes per
   game. One recorded game is not evidence of anything.
+* The replay's ``Metadata`` carries NO ruleset epoch — ``preroll`` and
+  ``ckpt_ruleset`` live only on the JSONL line, and ``R0`` is the code-level
+  default everywhere else, so a replay opened on its own reads as R0. Join
+  through the JSONL's ``replay_path`` to recover the regime. Stamping the
+  ``Metadata`` needs a ``REPLAY_SCHEMA_VERSION`` bump + migration, which
+  ``preroll-dev-cards-r1.md`` puts out of scope ("no replay-layer change").
 * Every line already in ``games.jsonl`` predates the blind default and was
   therefore played with the bot's FULL hand on screen. Those lines carry no
   ``reveal_bot`` key; treat a missing key as ``reveal_bot=true``, not as a
@@ -82,6 +122,7 @@ FIDELITY CAVEATS on that replay (do not discover these later):
 Run it (a display is required for the real game)::
 
     python scripts/play_vs_model.py                 # champion, raw policy, logged
+    python scripts/play_vs_model.py --ckpt <R1-ckpt>  # ...and no epoch mismatch
 
 Headless smoke (no display, no pygame window — auto-plays a legal human move so
 the full turn flow + win detection are exercised end-to-end)::
@@ -123,6 +164,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import secrets
 import sys
 from collections.abc import Callable, Sequence
@@ -294,14 +336,32 @@ def _make_bank_conservation_reporter(hud_log: Any) -> Callable[[Any], None]:
 # ---------------------------------------------------------------------------
 
 
-def _no_pre_roll(board: Any) -> None:
-    """Replacement for ``heuristicAIPlayer.heuristic_pre_roll`` on the human seat.
+@functools.cache
+def _pre_roll_type_to_card() -> dict[int, str]:
+    """Map each R1 pre-roll action type to its engine ``devCards`` key.
 
-    Bound onto the human player instance so the base env's pre-roll call
-    (``catan_env._run_opponent_turn``) is a no-op: the human at the keyboard has
-    no pre-roll window, so neither may the auto-played stand-in the bot's search
-    (and ``--self-test``) uses to model that seat."""
-    return None
+    The bot's pre-roll legality is a TYPE mask; the human's menu is keyed by
+    card NAME, so the window needs the bridge between them. Both endpoints are
+    asserted against ``env/ruleset.py`` on first use, so adding a card to
+    :data:`~catan_rl.env.ruleset.PRE_ROLL_DEV_TYPES` without adding it here
+    fails immediately instead of silently withholding it from the human.
+
+    Deliberately a cached FUNCTION, not a module-level constant: the imports it
+    needs pull in the policy package (hence torch), and importing this module —
+    for ``--self-test`` or from a test — must not force that, the same reason
+    :func:`_build_human_env_class` is a function.
+    """
+    from catan_rl.env.ruleset import PRE_ROLL_DEV_CARD_NAMES, PRE_ROLL_DEV_TYPES
+    from catan_rl.policy.obs_schema import ActionType
+
+    mapping = {
+        int(ActionType.PLAY_KNIGHT): "KNIGHT",
+        int(ActionType.PLAY_YOP): "YEAROFPLENTY",
+        int(ActionType.PLAY_MONOPOLY): "MONOPOLY",
+    }
+    assert set(mapping) == set(PRE_ROLL_DEV_TYPES), "drifted from PRE_ROLL_DEV_TYPES"
+    assert set(mapping.values()) == set(PRE_ROLL_DEV_CARD_NAMES)
+    return mapping
 
 
 def _build_human_env_class() -> type:
@@ -316,7 +376,7 @@ def _build_human_env_class() -> type:
     from catan_rl.engine.game import _HeadlessView
     from catan_rl.engine.player import player as PlainPlayer
     from catan_rl.env.catan_env import CatanEnv
-    from catan_rl.env.ruleset import RULESET_R0
+    from catan_rl.env.ruleset import RULESET_R1
 
     class HumanVsBotEnv(CatanEnv):
         """``CatanEnv`` whose internal opponent seat is played by a HUMAN.
@@ -328,16 +388,20 @@ def _build_human_env_class() -> type:
         """
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            # PIN the ruleset epoch to R0 (no pre-roll dev-card window on
-            # either seat) rather than inheriting whatever the default is.
-            # This harness's human seat has no pre-roll UI, so an R1 env would
-            # hand the BOT a
-            # window the human cannot use — the mirror image of the asymmetry
-            # this file exists to avoid — and would falsify both the
-            # "both seats are post-roll only" docstring above and the
-            # ``"preroll": false`` stamp on every recorded game. Giving the
-            # human seat the window is a separate slice.
-            kwargs.setdefault("ruleset", RULESET_R0)
+            # Opt into R1 (one pre-roll dev card per turn) rather than
+            # inheriting the library default, which is R0 for every other
+            # caller. The human seat now HAS a pre-roll UI (_human_pre_roll),
+            # restricted to exactly what the bot's own action mask offers, so
+            # both seats hold the same capability — the condition the earlier
+            # R0 pin was waiting on. Still a setdefault: a caller that passes
+            # an explicit epoch (a replay of an R0 game, say) keeps it, and
+            # ``opponent_ruleset`` follows ``ruleset`` unless also given.
+            #
+            # CAVEAT, not enforced here: this seats the checkpoint under the
+            # rules R1 names, which a checkpoint trained under R0 never saw.
+            # play_interactive stamps ``ckpt_ruleset`` and warns on a mismatch;
+            # it does not refuse, because --self-test runs on fresh weights.
+            kwargs.setdefault("ruleset", RULESET_R1)
             # Retain the broadcast stream: the self-test finishes with a full
             # ``run_all_invariants`` audit, whose event-stream checks silently
             # no-op without a log.
@@ -586,45 +650,42 @@ def _build_human_env_class() -> type:
                 self._log_move(f"You discarded {n_before - n_after} cards")
 
         def _run_opponent_turn(self) -> None:
-            """Run the human's whole turn. POST-ROLL dev cards only, like the bot.
+            """Run the human's whole turn, pre-roll dev-card window included.
 
-            KEEP IN SYNC with catan_env._run_opponent_turn — this override now
-            differs only in GUI plumbing (the human's discard / robber / main
-            phase go through the pygame windows). Clones (MCTS) + the headless
-            self-test never use the GUI, so they delegate to the base method —
-            with the base's heuristic pre-roll suppressed (below).
+            KEEP IN SYNC with catan_env._run_opponent_turn — this override
+            differs only in GUI plumbing (the human's pre-roll / discard /
+            robber / main phase go through pygame windows). Clones (MCTS) + the
+            headless self-test never use the GUI, so they delegate to the base
+            method verbatim, pre-roll and all.
 
-            There is deliberately NO pre-roll dev-card window. This harness PINS
-            ``RULESET_R0``, under which ``env/masks.py`` emits ONLY ``ROLL_DICE``
-            while ``roll_pending``, so the policy cannot play a Knight before
-            rolling here. (Under ``RULESET_R1`` — which
-            ``preroll-dev-cards-r1.md`` added and which no shipped checkpoint has
-            yet been trained under — it can; this harness does not opt in.) A
-            human window with no bot counterpart is the single largest bias in a
-            playtest: it makes every human win unattributable between "the policy
-            is weak here" and "the bot was not allowed to play its Knight". Both
-            seats are post-roll only in this harness, matching the ruleset every
-            banked champion was trained on. Once an R1 champion exists, playing
-            it here would mean seating it under rules it was not trained for —
-            lifting the pin needs a human-side pre-roll UI in the same slice.
+            The window sits exactly where the base env's ``_opponent_pre_roll``
+            does: AFTER ``updateDevCards()`` + the single
+            ``devCardPlayedThisTurn`` reset (so a card bought last turn is
+            playable and a card played here cannot be played again in the main
+            phase) and BEFORE ``rollDice()``, followed by the same
+            ``victoryPoints >= maxPoints`` guard — a pre-roll Knight can take
+            Largest Army and end the game, and the seat must not roll on past
+            its own win. That guard is NEW relative to the window this harness
+            carried before 6bc0cc2, which lacked it.
+
+            It offers exactly ``_pre_roll_dev_options()``: the bot's own mask,
+            per seat, so neither side holds a capability the other lacks. Road
+            Builder is excluded on both seats (``env/ruleset.py``).
             """
             if not self._use_gui():  # headless auto-play (--self-test)
-                # The base env plays a heuristic pre-roll Knight for the opponent
-                # seat whenever no snapshot drives it, so a headless auto-played
-                # human seat would pre-roll while the real human at the keyboard
-                # cannot — the same asymmetry D3 removed, reintroduced in the
-                # auto-play path.
+                # Delegate UNMODIFIED. The base env plays the heuristic's
+                # pre-roll Knight for this seat whenever no snapshot drives it,
+                # and that is now CORRECT: the human at the keyboard has a real
+                # pre-roll window, so suppressing the auto-played stand-in's
+                # would be what creates an asymmetry between the seat the bot's
+                # search models and the seat the human plays.
                 #
-                # SCOPE, measured not assumed: this does NOT cover MCTS clones.
+                # SCOPE, measured not assumed: this never concerned MCTS clones.
                 # ``search/mcts.py`` clone_env always ends with
                 # ``clone.set_snapshot_opponent(opponent)`` and ``search/agent.py``
                 # always builds a non-None FrozenSnapshotOpponent, while
-                # ``env/catan_env.py`` gates the pre-roll on
-                # ``_snapshot_opponent is None`` — so it can never fire in a clone
-                # (0 calls observed across a full search on pristine main).
-                base_opp: Any = self.opponent_player
-                if getattr(base_opp, "heuristic_pre_roll", None) is not None:
-                    base_opp.heuristic_pre_roll = _no_pre_roll
+                # ``env/catan_env.py`` gates the heuristic pre-roll on
+                # ``_snapshot_opponent is None`` — so it cannot fire in a clone.
                 super()._run_opponent_turn()
                 return
             game: Any = self.game
@@ -635,6 +696,11 @@ def _build_human_env_class() -> type:
             game.currentPlayer = opp
             opp.updateDevCards()
             opp.devCardPlayedThisTurn = False
+            self._human_pre_roll()
+            # A pre-roll Knight can win outright via Largest Army. Mirrors the
+            # guard in catan_env._run_opponent_turn (and the post-roll one below).
+            if opp.victoryPoints >= game.maxPoints:
+                return
             dice = game.rollDice()
             self.last_dice_roll = dice
             self._log_move(f"You rolled {dice}")
@@ -653,6 +719,98 @@ def _build_human_env_class() -> type:
             if opp.victoryPoints >= game.maxPoints:
                 return
             self._run_opponent_main_turn()
+
+        def _pre_roll_dev_options(self) -> set[str]:
+            """Dev cards the HUMAN may play at this pre-roll node, as card names.
+
+            Derived from ``compute_action_masks`` at the human seat's own
+            ``roll_pending`` node — the same function, the same
+            ``EnvObsState``, and (via ``_compute_masks``) the same per-seat
+            epoch the policy's pre-roll mask comes from. That is what makes
+            seat symmetry structural rather than a claim: it is not "Knight /
+            YoP / Monopoly", it is whatever the mask says, so the finite-bank
+            YoP gate (``masks._set_dev_card_legality`` needs a suppliable pair),
+            the one-card-per-turn flag and the ``newDevCards`` promotion rule
+            all apply to the human exactly as they do to the bot.
+
+            Empty ⇒ the pre-roll node is forced (``ROLL_DICE`` only) and the
+            window is skipped entirely — the overwhelmingly common case.
+            """
+            masks = self._compute_masks(
+                self.opponent_player, self._opponent_env_state(roll_pending=True)
+            )
+            type_mask = masks["type"]
+            return {
+                card for atype, card in _pre_roll_type_to_card().items() if bool(type_mask[atype])
+            }
+
+        def _human_pre_roll(self) -> None:
+            """Pre-roll window: ONE dev card before the dice, or roll straight on.
+
+            Mirrors the button loop in ``_human_interactive_main_turn`` but
+            limited to PLAY DEV / ROLL DICE, and with the dev-card menu narrowed
+            to ``_pre_roll_dev_options()`` via ``view.dev_card_filter``. The
+            filter restricts the MENU, never the hand — nothing zeroes
+            ``devCards``, so the QUIT path's ``sys.exit(0)`` and the partial
+            record it triggers cannot capture or leak a card, and the on-screen
+            counts stay truthful. It is cleared in a ``finally`` so a quit
+            cannot leak the restriction into the main-phase picker.
+
+            ``updateDevCards`` + the single ``devCardPlayedThisTurn`` reset
+            already ran in ``_run_opponent_turn``; the engine's ``play_devCard``
+            enforces one card per turn through that flag and drives the Knight's
+            robber move / YoP / Monopoly through their existing GUI paths.
+
+            The loop ends as soon as a card is played OR ROLL DICE is clicked:
+            one card is the whole allowance, so a menu left open past a play
+            could accept nothing.
+            """
+            import pygame  # local import — only needed in the interactive path
+
+            game: Any = self.game
+            assert game is not None
+            human = self._human_player()
+            options = self._pre_roll_dev_options()
+            if not options:
+                # Nothing playable: no window at all, so the ~95% of turns with
+                # an empty pre-roll keep today's single-click flow.
+                return
+            with self._ViewWindow(self) as view:
+                view.turn_banner = ("YOUR TURN - play a dev card or ROLL DICE", "forestgreen")
+                view.dev_card_filter = frozenset(options)
+                try:
+                    print(
+                        "\n[PRE-ROLL] You may play ONE of "
+                        f"{', '.join(sorted(options))} now (PLAY DEV), "
+                        "or ROLL DICE to continue.",
+                        flush=True,
+                    )
+                    view.displayGameScreen()
+                    clock = pygame.time.Clock()
+                    done = False
+                    while not done:
+                        clock.tick(60)
+                        for e in pygame.event.get():
+                            if e.type == pygame.QUIT:
+                                pygame.quit()
+                                sys.exit(0)
+                            if e.type != pygame.MOUSEBUTTONDOWN:
+                                continue
+                            before = _human_snapshot(human)
+                            if view.rollDice_button.collidepoint(e.pos):
+                                done = True
+                            elif view.playDevCard_button.collidepoint(e.pos):
+                                human.play_devCard(game)
+                                game.check_largest_army(human)
+                                game.check_longest_road(human)
+                                # The engine sets the flag only on a completed
+                                # play; a cancelled menu leaves the window open.
+                                done = bool(human.devCardPlayedThisTurn)
+                            self._log_human_action(before)
+                            view.displayGameScreen()
+                        pygame.display.update()
+                finally:
+                    view.dev_card_filter = None
 
         def _run_opponent_main_turn(self) -> None:
             """The human's full main turn (dice already rolled by the env caller)."""
@@ -687,8 +845,9 @@ def _build_human_env_class() -> type:
             import pygame  # local import — only needed in the interactive path
 
             # NOTE: updateDevCards + the SINGLE devCardPlayedThisTurn reset happen
-            # once in _run_opponent_turn, before the dice roll. Re-resetting here
-            # would let the human play a 2nd dev card in one turn.
+            # once in _run_opponent_turn, at the turn boundary — BEFORE the
+            # pre-roll window and the dice roll. Re-resetting here would let the
+            # human play a 2nd dev card in one turn (one pre-roll, one after).
             game: Any = self.game
             assert game is not None
             print(
@@ -1632,6 +1791,33 @@ def play_interactive(
     agent: Any = _load_search_agent(ckpt, sims, seed) if use_search else _load_raw_agent(ckpt, seed)
     move_log: list[dict[str, Any]] = []
     env: Any = HumanVsBotEnv(opponent_type="heuristic", max_turns=400)
+
+    # Checkpoint-vs-harness epoch. The harness runs R1 (both seats get the
+    # one-card pre-roll window); a checkpoint trained under R0 never saw that
+    # node, so a game against it is a transfer test, not a clean strength read.
+    # WARN, never refuse: the epoch stamp is absent from every pre-R1 checkpoint
+    # by construction, and the caller may deliberately want the comparison. The
+    # fact is persisted as ``ckpt_ruleset`` below so it survives the console.
+    from catan_rl.env.ruleset import RULESET_R1
+    from catan_rl.eval.harness import checkpoint_ruleset
+
+    try:
+        ckpt_epoch: str | None = checkpoint_ruleset(ckpt)
+    except Exception as exc:  # unreadable checkpoint must not stop a game
+        ckpt_epoch = None
+        print(f"[WARN] checkpoint ruleset could not be read: {exc!r}", flush=True)
+    if ckpt_epoch is not None and ckpt_epoch != env.ruleset:
+        print("  " + "!" * 66, flush=True)
+        print(
+            f"  !! EPOCH MISMATCH: this harness plays {env.ruleset} but the checkpoint",
+            flush=True,
+        )
+        print(
+            f"  !! was trained under {ckpt_epoch}. The pre-roll dev-card window is a",
+            flush=True,
+        )
+        print("  !! node it never saw. Recorded as ckpt_ruleset in the game log.", flush=True)
+        print("  " + "!" * 66, flush=True)
     # Must be set BEFORE reset: reset() can build the view (human drafts first).
     env._reveal_bot = reveal_bot
     # Register the view builder BEFORE reset. When the human drafts first
@@ -1865,13 +2051,20 @@ def play_interactive(
             # this key a corrupt game is byte-indistinguishable from a clean one.
             # A MISSING key means the game predates the check, not that it passed.
             "bank_ok": bool(check_bank.ok[0]),
-            # Pre-roll dev-card window. FALSE = neither seat had one, i.e. both
-            # played post-roll only, which is the ruleset the champion trained
-            # on. A MISSING key means the game predates this stopgap and the
-            # HUMAN had a pre-roll window the bot structurally could not use
-            # (env/masks.py emits only ROLL_DICE while roll_pending), so its
+            # Pre-roll dev-card window. TRUE = BOTH seats had the one-card
+            # Knight/YoP/Monopoly window (ruleset R1, Road Builder excluded);
+            # FALSE = both seats were post-roll only (R0). DERIVED from the env
+            # the game was actually played in, never written as a literal — the
+            # record must not be able to claim a regime the game did not run
+            # under. A MISSING key means the game predates the field, when the
+            # HUMAN had a window the bot structurally could not use, so its
             # result is not attributable. See preroll-dev-cards-r1.md.
-            "preroll": False,
+            "preroll": env.ruleset == RULESET_R1,
+            # The epoch the CHECKPOINT was trained under (absent stamp => "R0").
+            # A game where this differs from the harness epoch above seats the
+            # policy under rules it never saw; the console warns, and this key
+            # is what makes such a game identifiable after the fact.
+            "ckpt_ruleset": ckpt_epoch,
             # TRUE = the driver loop was interrupted (window closed, ^C, crash)
             # and these artifacts are a salvage write, not a played-out game.
             # A MISSING key means the game predates the crash-safe write, when

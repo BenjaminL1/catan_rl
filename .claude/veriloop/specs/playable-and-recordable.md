@@ -70,7 +70,8 @@ This is the single largest bias in a playtest: it makes every human win unattrib
 actually trained on. This is explicitly a stopgap: `.claude/veriloop/specs/preroll-dev-cards-r1.md`
 (RATIFIED) gives *both* seats the window and is the permanent fix; it requires a retrain and is
 not in this slice. Record the stopgap in the game record as `"preroll": false` so a future reader
-can separate these games from post-R1 ones.
+can separate these games from post-R1 ones. *(Stopgap CLOSED 2026-08 — see
+"D3 stopgap: CLOSED" below.)*
 
 ### D4 — A misclick must not destroy the game
 
@@ -125,6 +126,8 @@ already happened, and editing it would make it stop describing its own run.
 4. A bank-unsupplyable YoP pick is not grantable; cancelling a partial YoP restores the bank.
 5. `isAI = False` is live for the human seat, and no ordering exists where the flip precedes D1.
 6. No pre-roll window is reachable for either seat; the record carries `"preroll": false`.
+   *(Superseded 2026-08 — see "D3 stopgap: CLOSED" below: both seats have the window under
+   `R1` and the stamp is derived from `env.ruleset`.)*
 7. A simulated mid-game `SystemExit` still writes both artifacts with `partial=True`.
 8. The record carries a git SHA and a checkpoint sha256.
 9. `--self-test` passes end-to-end headless.
@@ -137,3 +140,16 @@ count. The tensor shape is unchanged, so the checkpoint loads and plays — but 
 it multiplies a live value by a weight that never received gradient. Games played now are sound
 for **bug-hunting and qualitative feel**; they are **not** a clean strength measurement. That
 resolves only when the policy is retrained under the current observation.
+
+## D3 stopgap: CLOSED (2026-08)
+
+D3 removed the human's pre-roll window explicitly "until R1 ships". It has:
+`preroll-dev-cards-r1.md` merged, a policy was trained under R1, and a
+follow-up slice flipped `scripts/play_vs_model.py` to `RULESET_R1` and restored
+the human window with legality identical to the bot's (Knight / YoP / Monopoly,
+never Road Builder), computed from the same `compute_action_masks` call the
+policy's pre-roll node uses. The `"preroll"` stamp is now derived from
+`env.ruleset` instead of the literal `false` this decision introduced; a missing
+key still means "predates the field". D3's binding intent — neither seat may
+hold a capability the other lacks, in either direction — is unchanged and is
+what the follow-up enforces.

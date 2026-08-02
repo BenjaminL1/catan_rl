@@ -648,11 +648,11 @@ class TestHumanSeatIsNotAI:
     / Year of Plenty through ``np.random.choice`` instead of the GUI picker. The
     harness flips it back on every reset. The flip is only safe because no
     deep-copied MCTS clone can reach the branch it changes: ``play_devCard`` has
-    exactly two call sites (the engine's ``playCatan`` human loop — unreachable
-    because the env builds ``render_mode=None`` — plus this script's single GUI
-    site, the main-turn PLAY DEV button; the pre-roll one was removed with the
-    pre-roll window), so a clone rollout never executes it. The pin for that is
-    ``test_play_devcard_has_only_the_two_audited_call_sites``: unreachability
+    exactly three call sites (the engine's ``playCatan`` human loop — unreachable
+    because the env builds ``render_mode=None`` — plus this script's two GUI
+    sites, the main-turn PLAY DEV button and the pre-roll window's), so a clone
+    rollout never executes it. The pin for that is
+    ``test_play_devcard_has_only_the_audited_call_sites``: unreachability
     is a STRUCTURAL property, and a runtime sentinel dropped into a scripted
     clone rollout could only ever re-confirm it (nothing under ``src/`` calls the
     method, so the sentinel is unreachable by construction regardless of the
@@ -687,7 +687,7 @@ class TestHumanSeatIsNotAI:
         assert clone._view_factory is None
         assert clone._use_gui() is False
 
-    def test_play_devcard_has_only_the_two_audited_call_sites(self) -> None:
+    def test_play_devcard_has_only_the_audited_call_sites(self) -> None:
         out = subprocess.run(
             ["git", "grep", "--untracked", "-n", r"\.play_devCard(", "--", "src", "scripts"],
             cwd=_REPO,
@@ -695,47 +695,351 @@ class TestHumanSeatIsNotAI:
             text=True,
             check=False,
         ).stdout.split("\n")
+        # One line per call site, so the harness appears TWICE: the main-turn
+        # PLAY DEV button and the pre-roll window. A new file appearing here is
+        # a new path into the ``isAI`` branch and must be audited.
         sites = sorted(line.split(":")[0] for line in out if line.strip())
         assert sites == [
+            "scripts/play_vs_model.py",
             "scripts/play_vs_model.py",
             "src/catan_rl/engine/game.py",
         ], sites
 
 
-class TestNoPreRollWindow:
-    """Neither seat may play a dev card before rolling (fairness stopgap).
+def _deal_pre_roll_hand(p) -> None:  # type: ignore[no-untyped-def]
+    """Put one of every dev card in ``p``'s PLAYABLE hand (post-``updateDevCards``)."""
+    for card in ("KNIGHT", "YEAROFPLENTY", "MONOPOLY", "ROADBUILDER"):
+        p.devCards[card] = 1
+    p.devCardPlayedThisTurn = False
 
-    ``env/masks.py`` returns ONLY ``ROLL_DICE`` while ``roll_pending``, and
-    ``env/catan_env.py`` no-ops anything else, so the POLICY structurally cannot
-    play a pre-roll Knight — not here and not anywhere in its training history.
-    The harness used to give the human that window anyway, which makes a human
-    win unattributable between "the policy is weak here" and "the bot was not
-    allowed to play its Knight". Both pins below are load-bearing: the first
-    proves the human window is gone, the second proves the bot-side asymmetry
-    the removal was justified by is real (delete it and the pin becomes an
-    unexamined claim in a docstring). See ``preroll-dev-cards-r1.md``.
+
+def _reach_agent_pre_roll(env) -> None:  # type: ignore[no-untyped-def]
+    """Step the env until the BOT (agent seat) faces a roll-pending node."""
+    for _ in range(200):
+        if env.roll_pending:
+            return
+        env.step(_first_legal_action(env))
+    raise AssertionError("never reached a roll-pending state")
+
+
+class TestHumanPreRollWindowR1:
+    """SEAT SYMMETRY: whatever the bot may play pre-roll, the human may too.
+
+    The harness now runs ``RULESET_R1`` (``env/ruleset.py``), under which BOTH
+    policy seats get a one-card pre-roll window over
+    :data:`~catan_rl.env.ruleset.PRE_ROLL_DEV_TYPES` (Knight / YoP / Monopoly;
+    Road Builder deliberately excluded). ``play_vs_model.py`` used to PIN ``R0``
+    as an explicit stopgap because its human seat had no pre-roll UI; the UI is
+    back, so the pin is gone.
+
+    The invariant is bidirectional. A human-only window makes every human win
+    unattributable ("the bot was not allowed to play its Knight"); a bot-only
+    window is the same bias pointing the other way. The tests below therefore
+    do not assert a hardcoded card list — they assert the human's offered set
+    EQUALS what ``compute_action_masks`` offers the bot at the same node, which
+    is also how the implementation derives it.
     """
 
-    def test_the_human_pre_roll_window_is_gone(self) -> None:
-        src = _SCRIPT.read_text(encoding="utf-8")
-        assert "_human_pre_roll" not in src, "the pre-roll window (or a call to it) survives"
-        assert "[PRE-ROLL]" not in src
+    def test_the_human_is_offered_exactly_what_the_bot_is(self) -> None:
+        """Same hand, same node, same options — computed independently per seat."""
+        pytest.importorskip("torch")
+        from catan_rl.env.ruleset import PRE_ROLL_DEV_TYPES
 
-    def test_the_auto_played_human_seat_never_pre_rolls(self) -> None:
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+
+        # The BOT's legal pre-roll set, straight from the mask builder.
+        _reach_agent_pre_roll(env)
+        _deal_pre_roll_hand(env.agent_player)
+        bot_type_mask = env._compute_masks(env.agent_player)["type"]
+        bot_cards = {
+            mod._pre_roll_type_to_card()[t] for t in PRE_ROLL_DEV_TYPES if bool(bot_type_mask[t])
+        }
+        assert bot_cards, "the bot has no pre-roll options; the pin would be vacuous"
+
+        # The HUMAN's offered set, with the identical hand.
+        _deal_pre_roll_hand(env.opponent_player)
+        human_cards = env._pre_roll_dev_options()
+
+        assert human_cards == bot_cards
+        assert env.opponent_player.devCards["ROADBUILDER"] == 1
+        assert "ROADBUILDER" not in human_cards
+
+    def test_a_depleted_bank_drops_year_of_plenty_from_both_seats(self) -> None:
+        """Not the three names — the MASK. A bank with no legal YoP pair drops it.
+
+        ``masks._set_dev_card_legality`` gates ``PLAY_YOP`` on bank stock, so a
+        human set built from a hardcoded card list would diverge from the bot's
+        here. Draining the bank into the OTHER seat's hand keeps the spec-009
+        conservation invariant intact.
+        """
+        pytest.importorskip("torch")
+        from catan_rl.env.ruleset import PRE_ROLL_DEV_TYPES
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        _reach_agent_pre_roll(env)
+        board = env.game.board
+        # Empty the bank into the agent's hand (conservation-preserving).
+        drained = {res: board.resourceBank[res] for res in board.resourceBank}
+        board.bank_draw(drained)
+        for res, amt in drained.items():
+            env.agent_player.resources[res] += amt
+        assert sum(board.resourceBank.values()) == 0
+
+        _deal_pre_roll_hand(env.agent_player)
+        _deal_pre_roll_hand(env.opponent_player)
+        bot_type_mask = env._compute_masks(env.agent_player)["type"]
+        bot_cards = {
+            mod._pre_roll_type_to_card()[t] for t in PRE_ROLL_DEV_TYPES if bool(bot_type_mask[t])
+        }
+        assert "YEAROFPLENTY" not in bot_cards, "bank is empty; YoP cannot be legal"
+        assert env._pre_roll_dev_options() == bot_cards
+
+    def test_the_type_to_card_mapping_cannot_drift_from_the_ruleset(self) -> None:
+        pytest.importorskip("torch")
+        from catan_rl.env.ruleset import PRE_ROLL_DEV_CARD_NAMES, PRE_ROLL_DEV_TYPES
+
+        mod = _load_module()
+        mapping = mod._pre_roll_type_to_card()
+        assert set(mapping) == set(PRE_ROLL_DEV_TYPES)
+        assert set(mapping.values()) == set(PRE_ROLL_DEV_CARD_NAMES)
+
+    def test_the_harness_runs_r1_on_both_seats(self) -> None:
+        pytest.importorskip("torch")
+        from catan_rl.env.ruleset import RULESET_R0, RULESET_R1
+
+        mod = _load_module()
+        cls = mod._build_human_env_class()
+        env = cls(opponent_type="heuristic", max_turns=50)
+        assert env.ruleset == RULESET_R1
+        assert env.opponent_ruleset == RULESET_R1
+        # Still a setdefault: an explicit epoch from the caller wins.
+        pinned = cls(opponent_type="heuristic", max_turns=50, ruleset=RULESET_R0)
+        assert pinned.ruleset == RULESET_R0
+
+    def test_the_policy_may_roll_or_play_a_whitelisted_dev_card(self) -> None:
+        """The R1 form of the old R0 pin: roll + whitelist, nothing less, nothing more."""
+        pytest.importorskip("torch")
+        from catan_rl.env.catan_env import ActionType
+        from catan_rl.env.ruleset import PRE_ROLL_DEV_TYPES
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        env.reset(seed=21, options={"agent_seat": 0})
+        _reach_agent_pre_roll(env)
+        _deal_pre_roll_hand(env.agent_player)
+        legal = {i for i, ok in enumerate(env.get_action_masks()["type"]) if ok}
+        assert int(ActionType.ROLL_DICE) in legal
+        # The subset half below is ALSO true under R0 (where legal == {ROLL_DICE}),
+        # so on its own it pins nothing. Knight and Monopoly carry no bank gate,
+        # so with the dealt hand they MUST be legal — that is the half that goes
+        # red if the harness ever slips back to R0.
+        assert int(ActionType.PLAY_KNIGHT) in legal
+        assert int(ActionType.PLAY_MONOPOLY) in legal
+        assert legal <= {int(ActionType.ROLL_DICE)} | set(PRE_ROLL_DEV_TYPES)
+        assert int(ActionType.PLAY_ROAD_BUILDER) not in legal
+        assert int(ActionType.END_TURN) not in legal
+        assert int(ActionType.BUILD_ROAD) not in legal
+
+    def test_one_dev_card_per_turn_survives_the_window(self) -> None:
+        """A pre-roll play closes the window AND the post-roll dev-card options.
+
+        The single ``devCardPlayedThisTurn`` reset lives at the turn boundary,
+        BEFORE the window, so nothing re-arms it after a pre-roll play.
+        """
+        pytest.importorskip("torch")
+        from catan_rl.env.catan_env import ActionType
+
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        human = env.opponent_player
+        human.isAI = False
+        env.game.currentPlayer = human
+        _deal_pre_roll_hand(human)
+        assert "MONOPOLY" in env._pre_roll_dev_options()
+
+        class _StubView:
+            def get_dev_card_selection(self, _p):  # type: ignore[no-untyped-def]
+                return "MONOPOLY"
+
+            def get_resource_selection(self, _p, mode, num_to_select=1):  # type: ignore[no-untyped-def]
+                # Monopoly takes a single resource name; YoP/discard take a list.
+                return "WHEAT" if mode == "MONOPOLY" else ["WHEAT"] * num_to_select
+
+            def displayGameScreen(self):  # type: ignore[no-untyped-def]
+                return None
+
+        saved, env.game.boardView = env.game.boardView, _StubView()
+        try:
+            human.play_devCard(env.game)
+        finally:
+            env.game.boardView = saved
+
+        assert human.devCardPlayedThisTurn is True
+        assert env._pre_roll_dev_options() == set()
+        # Post-roll (main-phase) masks offer no dev card either.
+        main_mask = env._compute_masks(human, env._opponent_env_state())["type"]
+        for t in (
+            ActionType.PLAY_KNIGHT,
+            ActionType.PLAY_YOP,
+            ActionType.PLAY_MONOPOLY,
+            ActionType.PLAY_ROAD_BUILDER,
+        ):
+            assert not bool(main_mask[int(t)]), t
+
+    def test_a_card_bought_this_turn_is_not_offered_until_the_next_one(self) -> None:
+        """``newDevCards`` promotion is the engine's, not a GUI re-implementation."""
+        pytest.importorskip("torch")
+        mod = _load_module()
+        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        human = env.opponent_player
+        human.devCards = dict.fromkeys(human.devCards, 0)
+        human.devCardPlayedThisTurn = False
+        human.newDevCards.append("KNIGHT")
+        assert "KNIGHT" not in env._pre_roll_dev_options()
+        human.updateDevCards()
+        human.devCardPlayedThisTurn = False
+        assert "KNIGHT" in env._pre_roll_dev_options()
+
+    def test_no_window_opens_when_nothing_is_playable(self) -> None:
+        """~95% of turns: skip the window entirely rather than show a dead menu."""
+        pytest.importorskip("torch")
+        mod = _load_module()
+        cls = mod._build_human_env_class()
+        env = cls(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        human = env.opponent_player
+        human.devCards = dict.fromkeys(human.devCards, 0)
+        human.devCardPlayedThisTurn = False
+        opened = [0]
+
+        class _CountingWindow:
+            def __init__(self, _env):  # type: ignore[no-untyped-def]
+                opened[0] += 1
+
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                raise AssertionError("a window opened with nothing to play")
+
+            def __exit__(self, *exc):  # type: ignore[no-untyped-def]
+                return None
+
+        saved = cls._ViewWindow
+        cls._ViewWindow = _CountingWindow  # type: ignore[misc]
+        try:
+            env._human_pre_roll()
+        finally:
+            cls._ViewWindow = saved  # type: ignore[misc]
+        assert opened[0] == 0
+
+    def test_the_window_hands_the_picker_exactly_the_pre_roll_options(self) -> None:
+        """The SEAM: ``_human_pre_roll`` -> ``view.dev_card_filter`` -> the menu.
+
+        ``_pre_roll_dev_options()`` is pinned above and ``dev_card_filter`` is
+        pinned in ``tests/unit/gui/test_dev_card_filter.py``, but the single
+        assignment that JOINS them is the only thing standing between the human
+        and a pre-roll Road Builder. Without this test, replacing it with
+        ``view.dev_card_filter = None`` leaves the whole suite green while the
+        menu offers ROADBUILDER — the exact asymmetry the window exists to
+        forbid. Driven headlessly: the real window is replaced by a stub that
+        swaps in a recording view, exactly as ``_ViewWindow`` swaps in the real
+        one.
+        """
+        pytest.importorskip("torch")
+        import pygame
+
+        mod = _load_module()
+        cls = mod._build_human_env_class()
+        env = cls(opponent_type="heuristic", max_turns=60)
+        env.reset(seed=21, options={"agent_seat": 0})
+        human = env.opponent_player
+        human.isAI = False
+        env.game.currentPlayer = human
+        _deal_pre_roll_hand(human)
+        options = env._pre_roll_dev_options()
+        assert "MONOPOLY" in options, "nothing playable; the pin would be vacuous"
+        assert "ROADBUILDER" not in options
+
+        seen: dict[str, frozenset[str] | None] = {}
+
+        class _RecordingView:
+            def __init__(self) -> None:
+                self.dev_card_filter: frozenset[str] | None = None
+                self.turn_banner: tuple[str, str] | None = None
+                self.rollDice_button = pygame.Rect(0, 0, 10, 10)
+                self.playDevCard_button = pygame.Rect(50, 50, 10, 10)
+
+            def displayGameScreen(self):  # type: ignore[no-untyped-def]
+                return None
+
+            def get_dev_card_selection(self, _p):  # type: ignore[no-untyped-def]
+                # What the human is actually offered, at the moment of the ask.
+                seen["filter"] = self.dev_card_filter
+                return "MONOPOLY"
+
+            def get_resource_selection(self, _p, mode, num_to_select=1):  # type: ignore[no-untyped-def]
+                return "WHEAT" if mode == "MONOPOLY" else ["WHEAT"] * num_to_select
+
+        view = _RecordingView()
+
+        class _StubWindow:
+            def __init__(self, e):  # type: ignore[no-untyped-def]
+                self.env = e
+                self.saved = None
+
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                self.saved = self.env.game.boardView
+                self.env.game.boardView = view
+                return view
+
+            def __exit__(self, *exc):  # type: ignore[no-untyped-def]
+                self.env.game.boardView = self.saved
+                return None
+
+        pygame.init()
+        pygame.display.set_mode((200, 200))
+        pygame.event.clear()
+        pygame.event.post(
+            pygame.event.Event(
+                pygame.MOUSEBUTTONDOWN, {"pos": view.playDevCard_button.center, "button": 1}
+            )
+        )
+        # Safety net in the SAME batch: if the PLAY DEV click ever stopped
+        # landing, the loop would spin forever rather than fail. The ROLL click
+        # is processed after it, so it cannot pre-empt the play.
+        pygame.event.post(
+            pygame.event.Event(
+                pygame.MOUSEBUTTONDOWN, {"pos": view.rollDice_button.center, "button": 1}
+            )
+        )
+        saved = cls._ViewWindow
+        cls._ViewWindow = _StubWindow  # type: ignore[misc]
+        try:
+            env._human_pre_roll()
+        finally:
+            cls._ViewWindow = saved  # type: ignore[misc]
+            pygame.event.clear()
+
+        assert human.devCardPlayedThisTurn is True, "the PLAY DEV click never landed"
+        assert seen["filter"] == frozenset(options), "the picker was offered the wrong set"
+        assert "ROADBUILDER" not in seen["filter"]
+        assert view.dev_card_filter is None, "the restriction leaked past the window"
+
+    def test_the_auto_played_human_seat_gets_the_same_window(self) -> None:
         """The seat the bot's SEARCH models must match the seat at the keyboard.
 
-        The GUI branch has no pre-roll window, but the headless branch delegates
-        to the base env, which plays ``heuristic_pre_roll`` for the opponent
-        whenever no snapshot drives it — i.e. headless auto-play such as
-        ``--self-test``. Left alone the auto-played human seat pre-rolls a Knight
-        while the real human at the keyboard cannot, which is the asymmetry D3
-        removed.
-
-        SCOPE: this is NOT about MCTS clones. A clone always carries a snapshot
-        opponent (``search/mcts.py`` clone_env → ``set_snapshot_opponent``), and
-        ``env/catan_env.py`` gates the pre-roll on ``_snapshot_opponent is None``,
-        so it cannot fire there."""
+        The headless branch delegates to the base env, whose ``_opponent_pre_roll``
+        plays the heuristic's pre-roll Knight. Suppressing it is now what would
+        create the asymmetry, so the suppression hook is gone.
+        """
         pytest.importorskip("torch")
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert "_no_pre_roll" not in src, "the pre-roll suppression hook survives"
+
         mod = _load_module()
         env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=60)
         env.reset(seed=21, options={"agent_seat": 0})
@@ -755,26 +1059,99 @@ class TestNoPreRollWindow:
                     break
         finally:
             type(env.opponent_player).heuristic_pre_roll = real
-        assert calls[0] == 0, f"{calls[0]} pre-roll windows on the human seat"
+        assert calls[0] > 0, "the auto-played human seat never reached its pre-roll"
 
-    def test_the_record_marks_the_game_post_roll_only(self) -> None:
-        assert '"preroll": False' in _SCRIPT.read_text(encoding="utf-8")
+    def test_the_win_guard_stops_the_turn_before_the_roll(self) -> None:
+        """A pre-roll Largest Army can END the game; the seat must not roll on.
 
-    def test_the_policy_may_only_roll_while_roll_pending(self) -> None:
+        Mirrors ``catan_env._run_opponent_turn``'s guard, which the pre-6bc0cc2
+        implementation of this window did not have.
+        """
         pytest.importorskip("torch")
-        from catan_rl.env.catan_env import ActionType
-
         mod = _load_module()
-        env = mod._build_human_env_class()(opponent_type="heuristic", max_turns=50)
+        cls = mod._build_human_env_class()
+        env = cls(opponent_type="heuristic", max_turns=60)
         env.reset(seed=21, options={"agent_seat": 0})
-        # Play out the snake draft until the bot faces its first roll.
-        for _ in range(200):
-            if env.roll_pending:
-                break
-            env.step(_first_legal_action(env))
-        assert env.roll_pending, "never reached a roll-pending state"
-        legal = [i for i, ok in enumerate(env.get_action_masks()["type"]) if ok]
-        assert legal == [int(ActionType.ROLL_DICE)], legal
+        env._auto_human = False
+        human = env.opponent_player
+        rolled = [0]
+
+        def _win_on_pre_roll(self):  # type: ignore[no-untyped-def]
+            self.opponent_player.victoryPoints = self.game.maxPoints
+
+        real_roll = type(env.game).rollDice
+
+        def _counting_roll(self):  # type: ignore[no-untyped-def]
+            rolled[0] += 1
+            return real_roll(self)
+
+        saved_pre = cls._human_pre_roll
+        cls._human_pre_roll = _win_on_pre_roll  # type: ignore[misc]
+        type(env.game).rollDice = _counting_roll
+        try:
+            env._use_gui = lambda: True  # type: ignore[method-assign]
+            env._run_opponent_turn()
+        finally:
+            cls._human_pre_roll = saved_pre  # type: ignore[misc]
+            type(env.game).rollDice = real_roll
+        assert rolled[0] == 0, "the seat rolled after already winning"
+        assert human.victoryPoints >= env.game.maxPoints
+
+    def test_the_record_derives_the_pre_roll_stamp_from_the_env(self) -> None:
+        """``"preroll"`` must describe the game actually played, not a literal."""
+        src = _SCRIPT.read_text(encoding="utf-8")
+        assert '"preroll": False' not in src
+        assert '"preroll": env.ruleset == RULESET_R1' in src
+
+    def test_a_played_game_is_recorded_as_pre_roll_enabled(
+        self,
+        tmp_path,
+        monkeypatch,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """End to end: the JSONL line of a real (headless) game says ``preroll: true``.
+
+        The source pin above cannot catch a stamp that never reaches the file,
+        and ``ckpt_ruleset`` must be present even when the checkpoint is
+        unreadable (here it is), because absence is how a reader tells "this
+        game predates the field" from "the epoch could not be read".
+        """
+        import json
+
+        pytest.importorskip("torch")
+        mod = _load_module()
+
+        class _StubAgent:
+            last_internals = None
+
+            def choose_action(self, env):  # type: ignore[no-untyped-def]
+                return _first_legal_action(env)
+
+        monkeypatch.setattr(mod, "_load_raw_agent", lambda ckpt, seed: _StubAgent())
+        monkeypatch.setattr(mod, "_hold_final_screen", lambda: None)
+
+        real_build = mod._build_human_env_class
+
+        def _headless_env_class():  # type: ignore[no-untyped-def]
+            cls = real_build()
+            # The real GUI windows block on mouse input; take the env's own
+            # headless branch (MCTS clones + ``--self-test`` take it too).
+            cls._use_gui = lambda self: False  # type: ignore[method-assign]
+            return cls
+
+        monkeypatch.setattr(mod, "_build_human_env_class", _headless_env_class)
+
+        log_path = tmp_path / "games.jsonl"
+        # human_seat=1 -> the BOT drafts first, so reset() needs no human input.
+        mod.play_interactive(
+            ckpt="unused",
+            sims=1,
+            seed=5,
+            human_seat=1,
+            log_path=str(log_path),
+        )
+        record = json.loads(log_path.read_text(encoding="utf-8").splitlines()[-1])
+        assert record["preroll"] is True
+        assert "ckpt_ruleset" in record
 
 
 class TestBankConservationGuard:
