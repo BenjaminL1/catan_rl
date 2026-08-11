@@ -165,6 +165,8 @@ def _replay_to_dict(replay: Replay) -> dict[str, Any]:
             "reveal_bot": replay.metadata.reveal_bot,
             "git_sha": replay.metadata.git_sha,
             "ckpt_sha256": replay.metadata.ckpt_sha256,
+            "setup_observed": replay.metadata.setup_observed,
+            "human_authored": replay.metadata.human_authored,
         },
         "board_static": _board_static_to_dict(replay.board_static),
         "steps": [_step_to_dict(s) for s in replay.steps],
@@ -259,6 +261,14 @@ def _replay_from_dict(payload: dict[str, Any], *, strict: bool) -> Replay:
             # clean, so a consumer must treat a missing value as unattributed.
             git_sha=None if d.get("git_sha") is None else str(d["git_sha"]),
             ckpt_sha256=None if d.get("ckpt_sha256") is None else str(d["ckpt_sha256"]),
+            # An ABSENT key means the four setup steps were SYNTHESIZED — the
+            # only assembly that existed before the flag. Never default it True.
+            setup_observed=bool(d.get("setup_observed", False)),
+            # An ABSENT key means the human seat's authorship was never
+            # attested. Never default it True: the label exporter refuses on
+            # this flag, and a permissive default would let an auto-played
+            # (heuristic) draft through as an owner label.
+            human_authored=bool(d.get("human_authored", False)),
         )
 
     def _board_static(d: dict[str, Any]) -> BoardStatic:

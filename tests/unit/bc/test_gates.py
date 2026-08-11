@@ -206,3 +206,130 @@ def test_tost_rejects_invalid_inputs() -> None:
         tost_wr_equivalence(wr_bc=0.5, wr_self=0.5, n=0)  # n must be > 0
     with pytest.raises(ValueError):
         tost_wr_equivalence(wr_bc=0.5, wr_self=0.5, n=600, equivalence_margin=-0.04)
+
+
+# ---------------------------------------------------------------------------
+# D7 — human-opening fine-tune gates
+# ---------------------------------------------------------------------------
+
+
+class _Game:
+    def __init__(self, seed: int, agent_seat: int, won: bool) -> None:
+        self.seed = seed
+        self.agent_seat = agent_seat
+        self.won = won
+
+
+class _Result:
+    def __init__(self, games) -> None:  # type: ignore[no-untyped-def]
+        self.games = tuple(games)
+
+
+def _paired(n: int, ft_wins, pre_wins):  # type: ignore[no-untyped-def]
+    ft = _Result([_Game(i, i % 2, bool(ft_wins[i])) for i in range(n)])
+    pre = _Result([_Game(i, i % 2, bool(pre_wins[i])) for i in range(n)])
+    return ft, pre
+
+
+class TestSetupAgreementGate:
+    def test_bar_is_the_calibrated_max_not_a_flat_floor(self) -> None:
+        from catan_rl.bc.gates import setup_agreement_gate
+
+        # A weak baseline leaves the 0.30 floor binding.
+        low = setup_agreement_gate(agreements=[True] * 13 + [False] * 27, baseline=0.10)
+        assert low["bar"] == pytest.approx(0.30)
+        # A strong baseline raises the bar to baseline + 0.10.
+        high = setup_agreement_gate(agreements=[True] * 13 + [False] * 27, baseline=0.45)
+        assert high["bar"] == pytest.approx(0.55)
+
+    def test_passes_on_the_point_estimate_and_reports_the_ci(self) -> None:
+        from catan_rl.bc.gates import setup_agreement_gate
+
+        got = setup_agreement_gate(agreements=[True] * 20 + [False] * 20, baseline=0.20)
+        assert got["n"] == 40
+        assert got["point"] == pytest.approx(0.5)
+        assert got["bar"] == pytest.approx(0.30)
+        assert got["passes"] is True
+        assert got["ci_lower"] < got["point"] < got["ci_upper"]
+        # At 40 held-out scenarios the estimate is worth roughly +-14pp; the gate
+        # reports that so a marginal result reads "more labels", not "lower bar".
+        assert 0.10 < got["noise_half_width"] < 0.20
+
+    def test_a_candidate_below_the_bar_fails(self) -> None:
+        from catan_rl.bc.gates import setup_agreement_gate
+
+        got = setup_agreement_gate(agreements=[True] * 8 + [False] * 32, baseline=0.20)
+        assert got["passes"] is False
+        assert got["margin_over_bar"] < 0
+
+    def test_empty_held_out_set_is_refused(self) -> None:
+        from catan_rl.bc.gates import setup_agreement_gate
+
+        with pytest.raises(ValueError, match="no held-out scenarios"):
+            setup_agreement_gate(agreements=[], baseline=0.2)
+
+
+class TestPairedWrNonInferiority:
+    def test_a_neutral_candidate_passes(self) -> None:
+        """The whole point of D7.2: an identical candidate must not fail ~50% of
+        the time the way a point-estimate ``WR_ft >= WR_pre`` gate does."""
+        from catan_rl.bc.gates import paired_wr_non_inferiority
+
+        wins = [i % 2 == 0 for i in range(200)]
+        ft, pre = _paired(200, wins, wins)
+        got = paired_wr_non_inferiority(finetuned=ft, pre=pre)
+        assert got["delta"] == pytest.approx(0.0)
+        assert got["passes"] is True
+        assert got["n_pairs"] == 200
+
+    def test_a_ten_point_regression_fails(self) -> None:
+        from catan_rl.bc.gates import paired_wr_non_inferiority
+
+        pre_wins = [True] * 120 + [False] * 80
+        ft_wins = [True] * 100 + [False] * 100  # -10pp, all on shared seeds
+        ft, pre = _paired(200, ft_wins, pre_wins)
+        got = paired_wr_non_inferiority(finetuned=ft, pre=pre)
+        assert got["delta"] == pytest.approx(-0.10)
+        assert got["ci_lower"] < -0.05
+        assert got["passes"] is False
+
+    def test_arithmetic_matches_a_hand_computed_ci(self) -> None:
+        from catan_rl.bc.gates import _inv_normal_cdf, paired_wr_non_inferiority
+
+        pre_wins = [True] * 50 + [False] * 50
+        ft_wins = [True] * 48 + [False] * 52
+        ft, pre = _paired(100, ft_wins, pre_wins)
+        got = paired_wr_non_inferiority(finetuned=ft, pre=pre)
+        deltas = np.array(
+            [float(ft_wins[i]) - float(pre_wins[i]) for i in range(100)], dtype=np.float64
+        )
+        se = deltas.std(ddof=1) / np.sqrt(100)
+        z = _inv_normal_cdf(0.975)
+        assert got["delta"] == pytest.approx(deltas.mean())
+        assert got["ci_lower"] == pytest.approx(deltas.mean() - z * se)
+        assert got["ci_upper"] == pytest.approx(deltas.mean() + z * se)
+
+    def test_mismatched_seed_plans_raise_rather_than_unpair(self) -> None:
+        from catan_rl.bc.gates import UnpairableEvalError, paired_wr_non_inferiority
+
+        ft = _Result([_Game(i, 0, True) for i in range(10)])
+        pre = _Result([_Game(i + 5, 0, True) for i in range(10)])
+        with pytest.raises(UnpairableEvalError, match="not seed-paired"):
+            paired_wr_non_inferiority(finetuned=ft, pre=pre)
+
+    def test_duplicate_seed_seat_keys_raise(self) -> None:
+        from catan_rl.bc.gates import UnpairableEvalError, paired_wr_non_inferiority
+
+        dup = _Result([_Game(1, 0, True), _Game(1, 0, False)])
+        with pytest.raises(UnpairableEvalError, match="duplicate"):
+            paired_wr_non_inferiority(finetuned=dup, pre=dup)
+
+    def test_the_same_seed_played_from_both_seats_pairs_separately(self) -> None:
+        """``(seed, agent_seat)`` — not seed alone. The harness plays every seed
+        from both seats, and collapsing them would halve the pair count."""
+        from catan_rl.bc.gates import paired_wr_non_inferiority
+
+        ft = _Result([_Game(1, 0, True), _Game(1, 1, False)])
+        pre = _Result([_Game(1, 0, True), _Game(1, 1, True)])
+        got = paired_wr_non_inferiority(finetuned=ft, pre=pre)
+        assert got["n_pairs"] == 2

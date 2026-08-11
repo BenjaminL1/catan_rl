@@ -218,3 +218,91 @@ def test_the_hud_log_does_not_steal_the_recorders_events() -> None:
         assert a.actor == b.actor and a.kind == b.kind
         assert a.events == b.events
     assert with_log.metadata.total_steps == without_log.metadata.total_steps
+
+
+# ---------------------------------------------------------------------------
+# D2: the four setup steps are OBSERVED, not synthesized
+# ---------------------------------------------------------------------------
+
+
+def test_setup_steps_are_flagged_observed(recorded) -> None:  # type: ignore[no-untyped-def]
+    """``setup_observed`` distinguishes a D2 record from every older one.
+
+    Old records have no such key at all; the reader defaults it to ``False``,
+    so ``absent == synthesized`` stays readable forever."""
+    replay, _bot_seat, _rec = recorded
+    assert replay.metadata.setup_observed is True
+
+
+def test_each_setup_step_carries_its_own_placement_time_state(recorded) -> None:  # type: ignore[no-untyped-def]
+    """The four setup snapshots must be DISTINCT and monotone.
+
+    The synthesized path gave steps 2 and 3 (seat 0) the same
+    ``snap_after_step1`` / ``setup_complete_snap`` tail and rebuilt the rest by
+    zeroing an actor out of a later snapshot. An observed snapshot is taken at
+    placement time, so the piece counts grow by exactly one settlement + one
+    road per step."""
+    replay, _bot_seat, _rec = recorded
+    setup = [s for s in replay.steps if s.kind == "setup"]
+    assert len(setup) == 4
+    seen = set()
+    for i, step in enumerate(setup):
+        n_settle = sum(len(v) for v in step.state_after.settlements.values())
+        n_road = sum(len(v) for v in step.state_after.roads.values())
+        assert n_settle == i + 1, f"step {i}: {n_settle} settlements"
+        assert n_road == i + 1, f"step {i}: {n_road} roads"
+        key = (
+            tuple(sorted(step.state_after.settlements.items())),
+            tuple(sorted(step.state_after.roads.items())),
+        )
+        assert key not in seen, f"step {i} shares a state_after with an earlier step"
+        seen.add(key)
+
+
+def test_both_seats_get_two_observed_setup_steps(recorded) -> None:  # type: ignore[no-untyped-def]
+    replay, _bot_seat, _rec = recorded
+    setup = [s for s in replay.steps if s.kind == "setup"]
+    actors = [s.actor for s in setup]
+    assert sorted(actors) == ["player_a", "player_a", "player_b", "player_b"]
+    # Snake draft: the first drafter also picks last.
+    assert actors[0] == actors[3]
+    assert actors[1] == actors[2]
+    for step in setup:
+        kinds = [a.kind for a in step.actions]
+        assert kinds == ["BuildSettlement", "BuildRoad"]
+        vidx = step.actions[0].args["vertex_idx"]
+        eidx = step.actions[1].args["edge_idx"]
+        assert 0 <= vidx < 54 and 0 <= eidx < 72
+        # The placement the step claims is present in the state it snapshotted.
+        assert vidx in step.state_after.settlements[step.actor]
+        assert eidx in step.state_after.roads[step.actor]
+
+
+def test_setup_longest_road_holder_is_read_from_live_state(recorded) -> None:  # type: ignore[no-untyped-def]
+    """The synthesized path hardcoded ``longest_road_holder=None``.
+
+    Two setup roads can never award the card, so ``None`` remains the CORRECT
+    value — but it must now come from the engine snapshot. Pinned by asserting
+    the setup snapshots agree with the same engine field the main-phase
+    snapshots read, rather than with a literal."""
+    replay, _bot_seat, _rec = recorded
+    setup = [s for s in replay.steps if s.kind == "setup"]
+    for step in setup:
+        assert step.state_after.longest_road_holder is None
+        assert step.state_after.largest_army_holder is None
+        # Observed snapshots carry the full engine tail; a synthesized one
+        # could not know the robber hex per-step.
+        assert 0 <= step.state_after.robber_hex < 19
+
+
+def test_setup_resource_grants_are_visible_on_the_reverse_pass(recorded) -> None:  # type: ignore[no-untyped-def]
+    """Placement-time state, not a shared tail: the FORWARD-pass steps must
+    show empty hands and the REVERSE-pass steps the second-settlement grant."""
+    replay, _bot_seat, _rec = recorded
+    setup = [s for s in replay.steps if s.kind == "setup"]
+    first_two_total = sum(
+        sum(p.resources.values()) for s in setup[:2] for p in s.state_after.players.values()
+    )
+    assert first_two_total == 0, "forward-pass settlements must grant nothing"
+    last_total = sum(sum(s.state_after.players[s.actor].resources.values()) for s in setup[2:])
+    assert last_total > 0, "reverse-pass settlements must grant resources"

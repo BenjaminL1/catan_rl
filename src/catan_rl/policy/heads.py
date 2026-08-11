@@ -434,6 +434,62 @@ class CatanActionHeads(nn.Module):
     # Off-policy evaluation (PPO / BC)
     # ------------------------------------------------------------------
 
+    def masked_log_dists(
+        self,
+        trunk: torch.Tensor,
+        action: torch.Tensor,
+        masks: dict[str, torch.Tensor],
+        nodes: dict[str, torch.Tensor],
+        is_setup: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        """Return the six FULL masked log-distributions at one action context.
+
+        Additive accessor (spec ``setup-labeling-and-champion-finetune`` D5).
+        ``evaluate_actions`` gathers its per-head log-probs out of exactly these
+        tensors, so the two can never drift; nothing about the module's
+        parameters or state-dict shape changes.
+
+        **These distributions are CONDITIONAL, not marginal.** Three heads take
+        the chosen action as context — corner on the action TYPE (settle vs
+        city), resource1 on the type, resource2 on the type AND the chosen
+        resource1 — so what comes back is the distribution each head would
+        produce *given the reference action's upstream choices*, which is
+        precisely the object PPO's importance ratio and BC's per-head CE are
+        built from. A caller measuring a divergence between two policies must
+        say so (the fine-tune's anchor term does).
+
+        Args:
+            trunk: (B, trunk_dim).
+            action: (B, 6) int64 — the reference action supplying head context.
+            masks: dict of bool tensors per :data:`MASK_KEYS` schema.
+            nodes: per-node GNN states for the corner/edge/tile pointer heads.
+            is_setup: (B,) / (B,1) float threaded to the corner FiLM context.
+
+        Returns:
+            ``{"type": (B, 13), "corner": (B, 54), "edge": (B, 72),
+            "tile": (B, 19), "resource1": (B, 5), "resource2": (B, 5)}`` of
+            masked log-probabilities.
+        """
+        type_idx, _corner_idx, _edge_idx, _tile_idx, res1_idx, _res2_idx = action.unbind(dim=-1)
+        corner_ctx = self._corner_context(type_idx, is_setup)
+        return {
+            "type": masked_log_softmax(self.type_head(trunk), masks["type"]),
+            "corner": masked_log_softmax(
+                self.corner_head(trunk, nodes["v"], corner_ctx),
+                self._corner_mask(type_idx, masks),
+            ),
+            "edge": masked_log_softmax(self.edge_head(trunk, nodes["e"]), masks["edge"]),
+            "tile": masked_log_softmax(self.tile_head(trunk, nodes["h"]), masks["tile"]),
+            "resource1": masked_log_softmax(
+                self.resource1_head(trunk, self._resource1_context(type_idx)),
+                self._resource1_mask(type_idx, masks),
+            ),
+            "resource2": masked_log_softmax(
+                self.resource2_head(trunk, self._resource2_context(type_idx, res1_idx)),
+                self._resource2_mask(type_idx, res1_idx, masks),
+            ),
+        }
+
     def evaluate_actions(
         self,
         trunk: torch.Tensor,
@@ -455,20 +511,19 @@ class CatanActionHeads(nn.Module):
         Returns:
             dict with keys ``log_prob`` (B,), ``entropy`` (B,),
             ``per_head_log_prob`` (B, 6), ``per_head_entropy`` (B, 6),
-            ``relevance`` (B, 6).
+            ``relevance`` (B, 6), and ``log_dist/<head>`` for each of the six
+            heads (the full masked log-distributions from
+            :meth:`masked_log_dists`, which every value above is derived from).
         """
         type_idx, corner_idx, edge_idx, tile_idx, res1_idx, res2_idx = action.unbind(dim=-1)
 
-        type_logp = masked_log_softmax(self.type_head(trunk), masks["type"])
-        corner_ctx = self._corner_context(type_idx, is_setup)
-        corner_logits = self.corner_head(trunk, nodes["v"], corner_ctx)
-        corner_logp = masked_log_softmax(corner_logits, self._corner_mask(type_idx, masks))
-        edge_logp = masked_log_softmax(self.edge_head(trunk, nodes["e"]), masks["edge"])
-        tile_logp = masked_log_softmax(self.tile_head(trunk, nodes["h"]), masks["tile"])
-        res1_logits = self.resource1_head(trunk, self._resource1_context(type_idx))
-        res1_logp = masked_log_softmax(res1_logits, self._resource1_mask(type_idx, masks))
-        res2_logits = self.resource2_head(trunk, self._resource2_context(type_idx, res1_idx))
-        res2_logp = masked_log_softmax(res2_logits, self._resource2_mask(type_idx, res1_idx, masks))
+        dists = self.masked_log_dists(trunk, action, masks, nodes, is_setup)
+        type_logp = dists["type"]
+        corner_logp = dists["corner"]
+        edge_logp = dists["edge"]
+        tile_logp = dists["tile"]
+        res1_logp = dists["resource1"]
+        res2_logp = dists["resource2"]
 
         per_head_logp = torch.stack(
             [
@@ -498,13 +553,18 @@ class CatanActionHeads(nn.Module):
         joint_logp = (per_head_logp * relevance).sum(dim=-1)
         joint_entropy = (per_head_ent * relevance).sum(dim=-1)
 
-        return {
+        out = {
             "log_prob": joint_logp,
             "entropy": joint_entropy,
             "per_head_log_prob": per_head_logp,
             "per_head_entropy": per_head_ent,
             "relevance": relevance,
         }
+        # Flat ``log_dist/<head>`` keys rather than a nested dict, so the return
+        # type stays ``dict[str, Tensor]`` and every existing consumer (PPO, BC)
+        # is untouched. Additive: nothing reads these unless it asks for them.
+        out.update({f"log_dist/{name}": dist for name, dist in dists.items()})
+        return out
 
 
 # ---------------------------------------------------------------------------

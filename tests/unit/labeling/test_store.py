@@ -92,7 +92,9 @@ class TestLoadScenarios:
         append_scenario(original, path)
         loaded = load_scenarios(path)
         assert len(loaded) == 1
-        assert loaded[0] == original
+        # v2 (D3) fills the OPTIONAL provenance fields at READ time; the row on
+        # disk is byte-identical to what was appended.
+        assert loaded[0] == {**original, "source": "tool", "ruleset": "R0"}
 
     def test_loads_multiple_rows_in_order(self, tmp_path: Path) -> None:
         path = tmp_path / "scenarios.jsonl"

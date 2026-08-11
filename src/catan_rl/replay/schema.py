@@ -609,6 +609,40 @@ class Metadata:
     ``keep_last_n`` rotation, so tomorrow the same path may hold different
     bytes, or nothing at all."""
 
+    setup_observed: bool = False
+    """v2. ``True`` when the four SETUP steps were OBSERVED at placement time —
+    each carrying the engine snapshot taken when that placement happened, with
+    ``longest_road_holder`` / ``largest_army_holder`` / ``robber_hex`` read live
+    rather than hardcoded, and the reverse-pass grant landing on the step that
+    caused it.
+
+    ``False`` — and, in JSON, an ABSENT key — means the setup steps were
+    SYNTHESIZED from the action tuples by
+    :func:`catan_rl.replay.recorder_loop.setup_steps_seat_0` /
+    :func:`~catan_rl.replay.recorder_loop.setup_steps_seat_1`, which hardcode
+    ``longest_road_holder=None`` and share a snapshot tail across steps. That is
+    still the assembly the non-interactive ``record_game`` uses, so ``False`` is
+    a fidelity statement about the opening, NOT a defect flag.
+
+    Defaulted so every replay written before the flag existed keeps loading —
+    and reads, correctly, as synthesized."""
+
+    human_authored: bool = False
+    """v2. ``True`` when the ``kind="human"`` seat was driven by a PERSON.
+
+    ``kind="human"`` alone does not attest that. ``scripts/play_vs_model.py``
+    stamps that seat unconditionally, and under ``--self-test``
+    (``env._auto_human``) the same seat is auto-played by the base env's
+    built-in opponent — the HEURISTIC's opening, in a record that otherwise
+    looks exactly like a played game.
+
+    This flag is the attestation
+    :func:`catan_rl.labeling.from_record.extract_rows` refuses on, because the
+    owner directive is absolute: heuristic openings must not influence policy
+    openings, so a heuristic-authored draft must never enter the label corpus.
+    ``False`` — and, in JSON, an ABSENT key — means "not attested", which is the
+    correct reading for every record written before the flag existed."""
+
 
 @dataclass(frozen=True, slots=True)
 class Replay:

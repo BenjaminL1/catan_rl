@@ -20,8 +20,22 @@ import os
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION: int = 1
-"""Current JSONL schema version. Bump on backward-incompatible changes."""
+SCHEMA_VERSION: int = 2
+"""Current JSONL schema version. Bump on backward-incompatible changes.
+
+v2 (spec ``setup-labeling-and-champion-finetune`` D3) adds two OPTIONAL
+provenance fields — ``source`` (``"tool"`` | ``"game"``) and ``ruleset`` —
+populated at READ time for v1 rows by :func:`_migrate_row`.
+``_REQUIRED_FIELDS`` is unchanged, so a v1 row written by the labeling tool
+keeps loading untouched and the file on disk is never rewritten."""
+
+_V2_DEFAULTS: dict[str, Any] = {"source": "tool", "ruleset": "R0"}
+"""Read-time defaults for the fields v2 added.
+
+``source="tool"`` is the correct value for every v1 row: the records→labels
+adapter did not exist when they were written, so the labeling UI was the only
+writer. ``ruleset="R0"`` matches the epoch ``ScenarioGenerator`` pins — it
+builds every mask with ``RULESET_R0``."""
 
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
@@ -105,13 +119,17 @@ def load_scenarios(path: Path) -> list[dict[str, Any]]:
 def _migrate_row(row: dict[str, Any]) -> dict[str, Any]:
     """In-memory migration of older schema versions to the current.
 
-    v1 is the current schema; no migrations active. Adding fields in a
-    future schema_version=2 would patch defaults here.
+    v1 → v2 fills the OPTIONAL provenance fields from :data:`_V2_DEFAULTS`.
+    The returned dict keeps its original ``schema_version`` — the value records
+    what was WRITTEN, and the file on disk is never rewritten (see the module
+    docstring); only the in-memory view is completed.
+
+    Defaults are applied to any row missing them, not just to rows stamped v1,
+    so a hand-edited or partially-written row cannot hand a consumer a
+    ``KeyError`` on a field the schema calls optional.
     """
-    version = row.get("schema_version", 1)
-    if version == SCHEMA_VERSION:
-        return row
-    # Placeholder: future migrations go here.
+    for key, default in _V2_DEFAULTS.items():
+        row.setdefault(key, default)
     return row
 
 
@@ -164,3 +182,31 @@ def repair_jsonl(path: Path) -> int:
         with path.open("rb+") as f:
             f.truncate(truncate_to)
         return len(data) - truncate_to
+
+
+def held_out_split(
+    labels: list[dict[str, Any]], *, frac: float = 0.2, seed: int = 0
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split label rows into ``(train, held_out)`` BY ``game_seed``.
+
+    Splitting by seed, not by row, is what stops a draft's position-4 label
+    landing in the held-out set while the position-1 label it is conditioned on
+    was trained on — which would make the D7 gate-1 agreement number optimistic.
+
+    This lives HERE, next to the label store, because it has exactly one
+    definition and two consumers that must never disagree: the converter
+    (:func:`catan_rl.labeling.to_shard.convert`, which EXCLUDES the held-out
+    seeds from the shard) and the gate CLI (``scripts/eval_setup_agreement.py``,
+    which measures on them). A second copy of this arithmetic anywhere is how a
+    gate silently starts reporting memorisation.
+    """
+    import numpy as np
+
+    seeds = sorted({int(row["game_seed"]) for row in labels})
+    rng = np.random.default_rng(seed)
+    rng.shuffle(seeds)
+    n_held = max(1, round(len(seeds) * frac)) if seeds else 0
+    held_seeds = set(seeds[:n_held])
+    held = [r for r in labels if int(r["game_seed"]) in held_seeds]
+    train = [r for r in labels if int(r["game_seed"]) not in held_seeds]
+    return train, held
