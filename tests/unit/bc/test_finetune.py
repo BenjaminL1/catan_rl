@@ -15,7 +15,6 @@ import pytest
 import torch
 
 from catan_rl.bc.finetune import FinetuneConfig, finetune, held_out_anchor_kl
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.labeling.to_shard import convert
 
@@ -36,7 +35,7 @@ def corpus(tmp_path_factory) -> dict:  # type: ignore[no-untyped-def]
         assert scenario is not None
         vertex = int(rng.choice(np.flatnonzero(scenario.legal_settlement_corners)))
         edge = int(rng.choice(np.flatnonzero(scenario.compute_legal_road_edges(vertex))))
-        session.submit(vertex, edge, Archetype.BALANCED)
+        session.submit(vertex, edge)
     session.quit()
 
     shard_dir = root / "shard"

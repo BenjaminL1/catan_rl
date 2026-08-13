@@ -45,7 +45,6 @@ from pathlib import Path
 from typing import Any
 
 from catan_rl.env.ruleset import RULESET_R0
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.store import SCHEMA_VERSION, append_scenario, load_scenarios
 
 _NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://catan-rl/labeling/from_record")
@@ -142,11 +141,6 @@ def extract_rows(replay: Any, *, labeler_id: str) -> list[dict[str, Any]]:
                     "draft_position": position,
                     "acting_player": acting,
                     "prior_picks": [dict(p) for p in picks],
-                    # A played game declares no strategic intent — the tool's
-                    # archetype prompt has no counterpart here. ``other`` is the
-                    # honest value; inferring one from the placement would put a
-                    # guess in a field the owner is the only authority on.
-                    "archetype": Archetype.OTHER.value,
                     "settlement_vertex": vertex,
                     "road_edge": edge,
                     "decision_time_ms": 0,

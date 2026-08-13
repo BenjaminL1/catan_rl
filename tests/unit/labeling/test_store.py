@@ -37,7 +37,6 @@ def _example_row() -> dict:
         "draft_position": 1,
         "acting_player": 1,
         "prior_picks": [],
-        "archetype": "balanced",
         "settlement_vertex": 23,
         "road_edge": 45,
         "decision_time_ms": 47200,
@@ -113,6 +112,27 @@ class TestLoadScenarios:
     def test_missing_file_returns_empty_list(self, tmp_path: Path) -> None:
         path = tmp_path / "does_not_exist.jsonl"
         assert load_scenarios(path) == []
+
+    def test_legacy_archetype_row_still_loads_and_new_row_omits_it(self, tmp_path: Path) -> None:
+        """Rows on the owner's disk carry ``archetype``; new rows do not.
+
+        The archetype categories were dropped from the labeling flow. The field
+        is no longer required and is never written, but the file is never
+        rewritten either — so a row that still has the key must keep loading,
+        with the key passed through verbatim.
+        """
+        path = tmp_path / "scenarios.jsonl"
+        legacy = {**_example_row(), "scenario_id": "legacy", "archetype": "balanced"}
+        append_scenario(legacy, path)
+        current = {**_example_row(), "scenario_id": "current"}
+        assert "archetype" not in current
+        append_scenario(current, path)
+
+        loaded = load_scenarios(path)
+        assert [r["scenario_id"] for r in loaded] == ["legacy", "current"]
+        assert loaded[0]["archetype"] == "balanced"
+        assert "archetype" not in loaded[1]
+        assert loaded[1] == {**current, "source": "tool", "ruleset": "R0"}
 
     def test_schema_version_field_present_on_every_row(self, tmp_path: Path) -> None:
         path = tmp_path / "scenarios.jsonl"
@@ -209,7 +229,6 @@ while True:
         "draft_position": 1,
         "acting_player": 1,
         "prior_picks": [],
-        "archetype": "balanced",
         "settlement_vertex": 1,
         "road_edge": 1,
         "decision_time_ms": 0,

@@ -79,8 +79,9 @@ basin-mass + board-ore robustness rows).
 
 ### 2.1 The archetype featurizer (frozen)
 
-`src/catan_rl/human_data/opening_archetypes.py` (named to avoid colliding with the
-existing `labeling/archetypes.py` — council), committed before PRE-GATE-0 executes.
+`src/catan_rl/human_data/opening_archetypes.py` (originally named to avoid colliding
+with `labeling/archetypes.py`, which has since been deleted — the labeling tool no
+longer records archetype categories), committed before PRE-GATE-0 executes.
 Spec identical to v4 §2.1 (pair-share semantics, 5 buckets with precedence
 ORE_ENGINE ≥0.45 / WOOD_BRICK ≥0.45 / PORT_LED / BALANCED_HIGH ≥26 pips /
 BALANCED_LOW; zero-pip ⇒ BALANCED_LOW; 26-pip boundary sanity-checked against

@@ -38,7 +38,6 @@ def test_v1_rows_load_and_get_defaulted_provenance(tmp_path: Path) -> None:
         "draft_position": 1,
         "acting_player": 0,
         "prior_picks": [],
-        "archetype": "balanced",
         "settlement_vertex": 3,
         "road_edge": 5,
     }

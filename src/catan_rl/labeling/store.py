@@ -47,10 +47,15 @@ _REQUIRED_FIELDS: tuple[str, ...] = (
     "draft_position",
     "acting_player",
     "prior_picks",
-    "archetype",
     "settlement_vertex",
     "road_edge",
 )
+"""Fields every row must carry to be appendable.
+
+``archetype`` was removed from this list when the strategy-archetype categories
+were dropped from the labeling flow. Rows already on disk still carry the key and
+keep loading untouched — the file is never rewritten (see the module docstring),
+and :func:`load_scenarios` passes unknown keys through verbatim."""
 
 
 def append_scenario(scenario: dict[str, Any], path: Path) -> None:

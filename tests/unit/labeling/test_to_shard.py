@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 
 from catan_rl.labeling import to_shard
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.policy.obs_schema import MASK_KEYS, ActionType
 
@@ -32,7 +31,7 @@ def labels(tmp_path_factory) -> Path:  # type: ignore[no-untyped-def]
         legal = np.flatnonzero(scenario.legal_settlement_corners)
         vertex = int(rng.choice(legal))
         edges = np.flatnonzero(scenario.compute_legal_road_edges(vertex))
-        session.submit(vertex, int(rng.choice(edges)), Archetype.BALANCED)
+        session.submit(vertex, int(rng.choice(edges)))
     session.quit()
     return session.scenarios_path
 
@@ -223,7 +222,7 @@ def multi_seed_labels(tmp_path_factory) -> Path:  # type: ignore[no-untyped-def]
         legal = np.flatnonzero(scenario.legal_settlement_corners)
         vertex = int(rng.choice(legal))
         edges = np.flatnonzero(scenario.compute_legal_road_edges(vertex))
-        session.submit(vertex, int(rng.choice(edges)), Archetype.BALANCED)
+        session.submit(vertex, int(rng.choice(edges)))
     session.quit()
     assert len({int(r["game_seed"]) for r in load_scenarios(session.scenarios_path)}) >= 2
     return session.scenarios_path
