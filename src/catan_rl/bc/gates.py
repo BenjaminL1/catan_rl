@@ -13,10 +13,22 @@ compound gate has three sub-gates:
 Both tests are calibrated against measured baselines from preflight
 E0.2 (``runs/preflight/e02/distribution.json``). The thresholds
 (``alpha``, ``equivalence_margin``) live in ``configs/bc.yaml``.
+
+The module also hosts the **human-opening fine-tune** gates (spec
+``setup-labeling-and-champion-finetune`` D7), a separate pair with their own
+arithmetic:
+
+  * :func:`setup_agreement_gate` — held-out top-1 settlement agreement against a
+    calibrated bar, reported with a binomial CI; and
+  * :func:`paired_wr_non_inferiority` — a CI-based non-inferiority test on
+    paired-seed full-game WR, replacing that plan's point-estimate gate pair.
+
+Neither has been RUN: both wait on a >=200-scenario label corpus.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -244,3 +256,145 @@ def _inv_normal_cdf(p: float) -> float:
         * q
         / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
     )
+
+
+# ---------------------------------------------------------------------------
+# D7 — human-opening fine-tune gates
+# (spec ``setup-labeling-and-champion-finetune``)
+# ---------------------------------------------------------------------------
+
+
+class UnpairableEvalError(RuntimeError):
+    """Two eval runs cannot be paired seed-for-seed. Never silently unpaired."""
+
+
+def setup_agreement_gate(
+    *,
+    agreements: Sequence[bool] | np.ndarray,
+    baseline: float,
+    alpha: float = 0.05,
+) -> dict[str, Any]:
+    """Held-out top-1 settlement agreement against the owner's labels.
+
+    The bar is ``max(0.30, baseline + 0.10)`` — the calibration clause from
+    ``setup_labeling.md`` §9 that the plan had dropped. A flat 0.30 alone is
+    passable by a champion that already agrees 0.28 of the time by accident; the
+    ``baseline + 0.10`` term is what makes the gate measure the fine-tune rather
+    than the prior.
+
+    The binomial CI is reported, not gated on, and that asymmetry is deliberate.
+    At the ~40 held-out scenarios a 200-scenario corpus affords, the point
+    estimate carries roughly +-14pp of noise, so a marginal result's remedy is
+    MORE LABELS — not a lower bar, and not a CI-lower-bound gate that a
+    genuinely-improved candidate would fail for lack of data.
+
+    Args:
+        agreements: per-scenario booleans — did the policy's argmax settlement
+            match the owner's label?
+        baseline: the SAME statistic measured on the pre-fine-tune champion.
+        alpha: significance level for the reported CI.
+
+    Returns:
+        ``{"point", "ci_lower", "ci_upper", "bar", "baseline", "n", "passes",
+        "margin_over_bar", "noise_half_width"}``.
+    """
+    from catan_rl.eval.wilson import wilson_interval
+
+    arr = np.asarray(agreements, dtype=bool)
+    n = int(arr.shape[0])
+    if n == 0:
+        raise ValueError("setup_agreement_gate: no held-out scenarios")
+    wins = int(arr.sum())
+    ci = wilson_interval(wins=wins, n=n, alpha=alpha)
+    bar = max(0.30, float(baseline) + 0.10)
+    return {
+        "point": ci.point,
+        "ci_lower": ci.lower,
+        "ci_upper": ci.upper,
+        "noise_half_width": ci.half_width,
+        "bar": bar,
+        "baseline": float(baseline),
+        "n": n,
+        "passes": ci.point >= bar,
+        "margin_over_bar": ci.point - bar,
+    }
+
+
+def _outcome_key(game: Any) -> tuple[int, int]:
+    return int(game.seed), int(game.agent_seat)
+
+
+def paired_wr_non_inferiority(
+    *,
+    finetuned: Any,
+    pre: Any,
+    margin: float = 0.05,
+    alpha: float = 0.05,
+) -> dict[str, Any]:
+    """Paired-seed non-inferiority of the fine-tuned WR against the champion's.
+
+    PASS iff the CI lower bound on ``WR_ft - WR_pre`` is strictly greater than
+    ``-margin``.
+
+    This REPLACES ``setup_labeling.md`` §9's Gate-2/Gate-3 pair. Gate 3 asked for
+    a point estimate ``WR_ft >= WR_pre``, which a perfectly neutral candidate
+    fails about half the time (at n=600 the paired SE is ~2pp), and the -5pp
+    Gate 2 underneath it was then vacuous. A CI-based non-inferiority test asks
+    the question the owner actually has: *is the midgame provably not worse?*
+
+    Pairing is by ``(seed, agent_seat)``, which is why both runs must be driven
+    over the same seed/seat plan: an unpaired comparison throws away the
+    variance reduction that makes a 5pp margin detectable at all. Mismatched
+    plans RAISE — failing closed beats reporting a number whose pairing is a
+    fiction.
+
+    Args:
+        finetuned: an ``eval.harness.EvalResult`` (or anything with ``.games``)
+            for the candidate.
+        pre: the same for the pre-fine-tune champion.
+        margin: non-inferiority margin, as an absolute win-rate difference.
+        alpha: significance level for the two-sided CI.
+
+    Returns:
+        ``{"delta", "ci_lower", "ci_upper", "margin", "n_pairs", "wr_ft",
+        "wr_pre", "passes"}``.
+    """
+    ft_games = {_outcome_key(g): g for g in finetuned.games}
+    pre_games = {_outcome_key(g): g for g in pre.games}
+    if len(ft_games) != len(finetuned.games) or len(pre_games) != len(pre.games):
+        raise UnpairableEvalError(
+            "duplicate (seed, agent_seat) in an eval result — pairing would be ambiguous"
+        )
+    if set(ft_games) != set(pre_games):
+        only_ft = sorted(set(ft_games) - set(pre_games))[:5]
+        only_pre = sorted(set(pre_games) - set(ft_games))[:5]
+        raise UnpairableEvalError(
+            f"eval runs are not seed-paired: {len(only_ft)} (seed, seat) keys only in the "
+            f"candidate (e.g. {only_ft}) and {len(only_pre)} only in the baseline "
+            f"(e.g. {only_pre}). Re-run both over the same seed plan."
+        )
+
+    keys = sorted(ft_games)
+    deltas = np.asarray(
+        [float(ft_games[k].won) - float(pre_games[k].won) for k in keys], dtype=np.float64
+    )
+    n = int(deltas.shape[0])
+    if n < 2:
+        raise UnpairableEvalError(f"need at least 2 paired games, got {n}")
+    mean = float(deltas.mean())
+    # Sample SD with Bessel's correction; the paired differences are the unit of
+    # analysis, so this is a one-sample CI on their mean.
+    sd = float(deltas.std(ddof=1))
+    se = sd / float(np.sqrt(n))
+    z = _inv_normal_cdf(1.0 - alpha / 2.0)
+    lower, upper = mean - z * se, mean + z * se
+    return {
+        "delta": mean,
+        "ci_lower": lower,
+        "ci_upper": upper,
+        "margin": float(margin),
+        "n_pairs": n,
+        "wr_ft": float(np.mean([float(ft_games[k].won) for k in keys])),
+        "wr_pre": float(np.mean([float(pre_games[k].won) for k in keys])),
+        "passes": lower > -float(margin),
+    }

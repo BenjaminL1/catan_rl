@@ -38,6 +38,7 @@ def bc_loss(
     batch: dict[str, torch.Tensor],
     value_weight: float = 0.10,
     belief_weight: float = 0.05,
+    value_row_mask: torch.Tensor | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compose the BC training loss from a single policy forward pass.
 
@@ -53,6 +54,19 @@ def bc_loss(
             safeguard fires).
         belief_weight: ``L_belief`` coefficient (default 0.05 per the
             unanimous panel vote).
+        value_row_mask: optional (B,) 0/1 float or bool tensor selecting which
+            rows contribute to ``L_value``. ``None`` (the default) is every row
+            and reproduces the previous behaviour BIT-IDENTICALLY — pinned by
+            ``tests/unit/bc/test_loss.py``.
+
+            It exists for the human-label fine-tune (spec
+            ``setup-labeling-and-champion-finetune`` D5): a hand-labeled opening
+            carries NO outcome, so its ``z_disc`` is a filler zero. Regressing
+            the value head toward that filler would teach the champion that
+            every labeled opening is a dead draw. Masking the row out is not the
+            same as weighting it down — the mean is renormalised over the
+            contributing rows, so mixing in human rows cannot shrink the value
+            signal the real rows carry.
 
     Returns:
         Dict of scalar tensors:
@@ -82,9 +96,16 @@ def bc_loss(
         per_head_losses[f"policy/{name}"] = head_loss
         policy_total = policy_total + head_loss
 
-    # Value MSE.
+    # Value MSE, over the contributing rows only.
     value_pred = policy_out["value"]  # (B,)
-    value_loss = F.mse_loss(value_pred, batch["z_disc"])
+    if value_row_mask is None:
+        value_loss = F.mse_loss(value_pred, batch["z_disc"])
+    else:
+        rows = value_row_mask.to(value_pred.dtype).reshape(-1)
+        sq = (value_pred - batch["z_disc"]) ** 2
+        # ``clamp_min(1.0)`` keeps an all-masked batch at a finite zero instead
+        # of NaN — the human-only fine-tune batches are exactly that case.
+        value_loss = (sq * rows).sum() / rows.sum().clamp_min(1.0)
 
     # Belief soft-CE.
     belief_logits = policy_out["belief_logits"]  # (B, 5)

@@ -109,13 +109,20 @@ tomorrow, or none.
 
 FIDELITY CAVEATS on that replay (do not discover these later):
 
-* The four SETUP steps are **SYNTHESIZED, not observed** — ``setup_steps_seat_0/1``
-  reconstruct the placements from action tuples and hardcode
-  ``longest_road_holder=None``. The OPENING is the least faithful part of the
-  record, which is exactly the phase under suspicion.
+* The four SETUP steps are **OBSERVED** (spec ``setup-labeling-and-champion-finetune``
+  D2). Every broadcast event of the snake draft is snapshotted AS IT FIRES, and
+  each setup step carries the engine state at ITS OWN placement — including the
+  reverse-pass resource grant and the live ``longest_road_holder`` /
+  ``largest_army_holder`` / ``robber_hex`` tail. Nothing is reconstructed from
+  action tuples and no field is hardcoded. Records written this way carry
+  ``metadata.setup_observed = True``; an ABSENT flag (older records) means the
+  four setup steps were SYNTHESIZED by ``setup_steps_seat_0/1`` and are the
+  least faithful part of that record.
 * ``state_after`` is **shared** across every sub-step produced by one
-  ``env.step`` (the human's whole turn is folded inside the bot's step). Actions
-  and events ARE attributed per acting seat; only the board snapshot is shared.
+  ``env.step`` in the MAIN phase (the human's whole turn is folded inside the
+  bot's step). Actions and events ARE attributed per acting seat; only the
+  main-phase board snapshot is shared. The four setup steps are exempt — see
+  the bullet above.
 * The recorded per-decision softmax reads roughly ``0.97 END_TURN`` at most
   steps. It is a hypothesis generator for contested decisions, **never a
   verdict** — and it is the policy grading its own homework.
@@ -1374,6 +1381,122 @@ class _DetachedSubscriber:
         return None
 
 
+def _observed_setup_steps(
+    *,
+    timeline: list[Any],
+    seat_to_actor: dict[str, str],
+) -> list[Any]:
+    """Assemble the four setup :class:`ReplayStep` s from OBSERVED snapshots.
+
+    ``timeline`` is the chronologically ordered list of engine snapshots taken
+    during the snake draft: one right after ``env.reset`` (which, when the human
+    drafts first, already contains their opening placement), one per broadcast
+    event of the draft, and the ``SETUP_COMPLETE`` snapshot last.
+
+    Nothing here is reconstructed from the action tuples the policy emitted.
+    A placement's vertex / edge is read off the FIRST snapshot in which it
+    appears, and its ``state_after`` is the LAST snapshot before the next
+    placement's settlement appears (the ``SETUP_COMPLETE`` snapshot for the
+    fourth). That boundary is what makes the reverse-pass resource grant land on
+    the step that caused it instead of on a shared tail, and it is why
+    ``longest_road_holder`` is an engine read rather than the ``None`` literal
+    ``setup_steps_seat_0/1`` hardcoded.
+
+    Raises:
+        RuntimeError: if the timeline does not contain exactly four
+            settlement + four road first-appearances, or if a placement's road
+            was laid by a different actor than its settlement. Both mean engine
+            drift, and a silently mis-assembled opening is worse than a crash.
+    """
+    from catan_rl.replay.schema import SubAction
+
+    actors = sorted(set(seat_to_actor.values()))
+    settle_first: list[tuple[int, str, int]] = []
+    road_first: list[tuple[int, str, int]] = []
+    seen_settle: set[tuple[str, int]] = set()
+    seen_road: set[tuple[str, int]] = set()
+    for i, snap in enumerate(timeline):
+        for actor in actors:
+            for vertex in snap.settlements.get(actor, ()):
+                if (actor, vertex) not in seen_settle:
+                    seen_settle.add((actor, vertex))
+                    settle_first.append((i, actor, int(vertex)))
+            for edge in snap.roads.get(actor, ()):
+                if (actor, edge) not in seen_road:
+                    seen_road.add((actor, edge))
+                    road_first.append((i, actor, int(edge)))
+    if len(settle_first) != 4 or len(road_first) != 4:
+        raise RuntimeError(
+            f"recorder: observed setup timeline has {len(settle_first)} settlements and "
+            f"{len(road_first)} roads, expected 4 and 4. Engine drift suspected."
+        )
+
+    steps: list[Any] = []
+    for k in range(4):
+        s_idx, actor, vertex = settle_first[k]
+        r_idx, road_actor, edge = road_first[k]
+        if road_actor != actor:
+            raise RuntimeError(
+                f"recorder: setup placement {k} has settlement by {actor!r} but road by "
+                f"{road_actor!r}. Engine drift suspected."
+            )
+        # Everything up to (but not including) the next placement's settlement
+        # belongs to THIS placement — the reverse-pass grant included.
+        end = (settle_first[k + 1][0] - 1) if k + 1 < 4 else (len(timeline) - 1)
+        # Fail closed on a boundary that lands BEFORE the placement it is meant
+        # to snapshot. That happens if two placements first appear at the SAME
+        # timeline index (no broadcast event between them) — at k=0 ``end``
+        # becomes -1 and ``timeline[-1]`` would silently hand back the
+        # SETUP_COMPLETE snapshot, i.e. all four steps sharing a tail: exactly
+        # the synthesized-assembly defect D2 removes, re-entering by accident.
+        if end < max(s_idx, r_idx):
+            raise RuntimeError(
+                f"recorder: setup placement {k} spans timeline indices "
+                f"settlement={s_idx} road={r_idx} but its state_after boundary is "
+                f"{end}. Two placements share a snapshot index. Engine drift suspected."
+            )
+        steps.append(
+            _replay_step_setup(
+                step_idx=k,
+                actor=actor,
+                vertex_idx=vertex,
+                edge_idx=edge,
+                state_after=timeline[end],
+                sub_action_cls=SubAction,
+            )
+        )
+    return steps
+
+
+def _replay_step_setup(
+    *,
+    step_idx: int,
+    actor: str,
+    vertex_idx: int,
+    edge_idx: int,
+    state_after: Any,
+    sub_action_cls: Any,  # injected so the schema import stays local to the caller
+) -> Any:
+    from catan_rl.replay.recorder_loop import _replay_step
+
+    return _replay_step(
+        step_idx=step_idx,
+        kind="setup",
+        actor=actor,
+        dice_roll=None,
+        actions=(
+            sub_action_cls(kind="BuildSettlement", args={"vertex_idx": vertex_idx}),
+            sub_action_cls(kind="BuildRoad", args={"edge_idx": edge_idx}),
+        ),
+        events=(),
+        log_lines=(
+            f"{actor} placed settlement at {vertex_idx}",
+            f"{actor} placed road at {edge_idx}",
+        ),
+        state_after=state_after,
+    )
+
+
 class _RecorderSubscriber:
     """Broadcast subscriber that refuses to be cloned.
 
@@ -1414,17 +1537,26 @@ class _HumanGameRecorder:
 
     FIDELITY CAVEATS — read these before drawing conclusions from a record:
 
-    * **The four SETUP steps are SYNTHESIZED, not observed.**
-      ``setup_steps_seat_0/1`` reconstruct the placements from the action
-      tuples and hardcode ``longest_road_holder=None``. The OPENING is
-      therefore the LEAST faithful part of the record — which is unfortunate,
-      because the opening is exactly the phase under suspicion.
-    * **``state_after`` is SHARED across every sub-step produced by one
-      ``env.step``.** The human's whole turn is folded inside the bot's
+    * **The four SETUP steps are OBSERVED** (spec D2). ``on_event`` snapshots
+      the live engine on EVERY broadcast of the snake draft, and
+      :func:`_observed_setup_steps` walks that timeline: a placement's vertex /
+      edge is the one that FIRST APPEARS in a snapshot, and its ``state_after``
+      is the last snapshot before the next placement begins. So each step
+      carries the state at its own placement — reverse-pass grant included —
+      and ``longest_road_holder`` / ``largest_army_holder`` / ``robber_hex``
+      come from the engine rather than from a literal. ``setup_steps_seat_0/1``
+      (which reconstructed placements from action tuples and hardcoded
+      ``longest_road_holder=None``) are no longer on this path; they remain the
+      NON-interactive ``recorder_loop.record_game`` path's assembly.
+      ``metadata.setup_observed`` is ``True`` on records written here; the flag
+      is ABSENT on every older record, which is what keeps the two
+      distinguishable forever.
+    * **``state_after`` is SHARED across every MAIN-phase sub-step produced by
+      one ``env.step``.** The human's whole turn is folded inside the bot's
       ``env.step``, so a human step and the bot step that contains it carry the
       same end-of-``env.step`` board. Per-step ``actions`` / ``events`` ARE
       correctly attributed (per-actor diff + acting-seat partition); only the
-      board snapshot is a shared tail.
+      board snapshot is a shared tail. Setup steps are exempt (above).
     * **``policy_internals`` is a hypothesis generator, never a verdict.** The
       13-way type softmax reads roughly ``0.97 END_TURN`` at most steps and is
       informative only at contested decisions; and a policy explaining its own
@@ -1470,6 +1602,10 @@ class _HumanGameRecorder:
         self._collector = EventCollector()
         self._collector.subscribe(env.game.broadcast)
         self._setup_complete_snaps: list[Any] = []
+        #: D2: one engine snapshot per broadcast event of the snake draft, taken
+        #: AS THE EVENT FIRES. ``_observed_setup_steps`` walks this to give each
+        #: setup step its own placement-time state.
+        self._setup_snaps: list[Any] = []
         # NOT ``self.on_event``: a bound method survives ``deepcopy`` as the
         # original function rebound to a copy of this recorder, which would put
         # the whole record inside every MCTS clone. See _RecorderSubscriber.
@@ -1484,9 +1620,7 @@ class _HumanGameRecorder:
         self.steps: list[Any] = []
         self._step_idx = 0
         self._env_step_idx = 0
-        self._setup_sub_idx: dict[int, int] = {}
         self._setup_internals: dict[int, Any] = {}
-        self._snap_after_step1: Any = None
         self._prev_snap: Any = self._snap_after_reset
         #: Bot decisions seen vs decisions whose internals reached a step. Equal
         #: whenever the agent supplies internals at all; a gap means silent loss.
@@ -1497,9 +1631,23 @@ class _HumanGameRecorder:
 
     def on_event(self, event: dict) -> None:
         """Broadcast callback. Invoked through :class:`_RecorderSubscriber`,
-        never subscribed directly — see that class for why."""
+        never subscribed directly — see that class for why.
+
+        During the snake draft EVERY event is snapshotted (D2). The engine emits
+        ``BUILD`` with ``location=-1`` — a documented sentinel, because only the
+        env owns the integer index maps — so the placement can only be recovered
+        by diffing snapshots, and the grants that follow a reverse-pass
+        settlement arrive as separate ``RESOURCE_CHANGE`` events. Snapshotting
+        per event (a dozen or so per game, once) is what lets
+        :func:`_observed_setup_steps` cut the timeline at the right places.
+        ``SETUP_COMPLETE`` ends the window, so the opponent's first MAIN turn —
+        which rides inside the same ``env.step`` when the bot drafts first —
+        never leaks into it.
+        """
         if event.get("type") == self._setup_complete_type:
             self._setup_complete_snaps.append(self._snap_now())
+        elif not self._setup_complete_snaps:
+            self._setup_snaps.append(self._snap_now())
 
     def _snap_now(self) -> Any:
         return self._snapshot_step_state(
@@ -1525,15 +1673,14 @@ class _HumanGameRecorder:
         if internals is not None:
             self.n_bot_decisions += 1
         if i < 4:
-            # Setup: corner head for the settlements (steps 0, 2), edge head for
-            # the roads (steps 1, 3).
-            self._setup_sub_idx[i] = int(action[1]) if i % 2 == 0 else int(action[2])
             # The opening is the phase under suspicion: keep the internals for
-            # the four setup decisions too (they are attached to the two
-            # synthesized agent setup steps in _finish_setup).
+            # the four setup decisions (they are attached to the two OBSERVED
+            # bot setup steps in _finish_setup). D2: the action tuples are NOT
+            # retained — the steps are assembled from placement-time snapshots,
+            # and keeping the tuple bookkeeping alive would leave the
+            # synthesized-assembly input in the file wearing a live-looking
+            # name.
             self._setup_internals[i] = internals
-            if i == 1:
-                self._snap_after_step1 = self._snap_now()
             if i == 3:
                 self._finish_setup()
             return
@@ -1542,8 +1689,6 @@ class _HumanGameRecorder:
     def _finish_setup(self) -> None:
         from catan_rl.replay.recorder_loop import (
             consume_main_event_block,
-            setup_steps_seat_0,
-            setup_steps_seat_1,
             split_at_setup_complete,
         )
 
@@ -1553,26 +1698,14 @@ class _HumanGameRecorder:
                 f"{len(self._setup_complete_snaps)}. Engine drift suspected."
             )
         setup_complete_snap = self._setup_complete_snaps[0]
-        pairs = [
-            (self._setup_sub_idx[0], self._setup_sub_idx[1]),
-            (self._setup_sub_idx[2], self._setup_sub_idx[3]),
-        ]
-        assert self._snap_after_step1 is not None
-        if self._bot_seat == 0:
-            setup_steps, _lines = setup_steps_seat_0(
-                agent_actions=pairs,
-                snap_after_step1=self._snap_after_step1,
-                setup_complete_snap=setup_complete_snap,
-                seat_to_actor=self.seat_to_actor,
-            )
-        else:
-            setup_steps, _lines = setup_steps_seat_1(
-                agent_actions=pairs,
-                snap_after_reset=self._snap_after_reset,
-                snap_after_step1=self._snap_after_step1,
-                setup_complete_snap=setup_complete_snap,
-                seat_to_actor=self.seat_to_actor,
-            )
+        # D2: OBSERVED assembly. ``_snap_after_reset`` heads the timeline
+        # because, when the human drafts first, their opening placement happens
+        # inside ``env.reset`` — before this recorder exists to hear it — and
+        # that snapshot is the only observation of it.
+        setup_steps = _observed_setup_steps(
+            timeline=[self._snap_after_reset, *self._setup_snaps, setup_complete_snap],
+            seat_to_actor=self.seat_to_actor,
+        )
         # Each agent setup step folds ONE settlement + ONE road decision
         # (env.steps 0/1, then 2/3), in order.
         bot_actor = self.seat_to_actor["Agent"]
@@ -1717,7 +1850,10 @@ class _HumanGameRecorder:
             seat_index=self._bot_seat,
         )
         # kind="human" is a first-class record value; labelling the person
-        # "heuristic" to fit the old enum would poison every consumer.
+        # "heuristic" to fit the old enum would poison every consumer. It is a
+        # SEAT description, though, not an attestation that a person sat in it —
+        # under ``--self-test`` the base env auto-plays this seat. The
+        # ``human_authored`` flag below is the attestation.
         human_spec = PlayerSpec(
             kind="human",
             ckpt_path=None,
@@ -1750,6 +1886,17 @@ class _HumanGameRecorder:
             # ``runs/`` tree, so the FILE is hashed as well.
             git_sha=_git_sha(),
             ckpt_sha256=_ckpt_sha256(ckpt),
+            # D2: this harness assembles the opening from placement-time
+            # snapshots. Records without the flag are the SYNTHESIZED kind.
+            setup_observed=True,
+            # D3 attestation. ``env._auto_human`` is the ``--self-test`` path,
+            # where this seat is auto-played by the base env's built-in
+            # (heuristic) opponent — including its OPENING. Such a record is a
+            # valid trace but carries NO owner decision, and the label exporter
+            # must refuse it: heuristic openings must not influence policy
+            # openings. Read off the env rather than passed in, so the flag
+            # cannot drift from the thing it describes.
+            human_authored=not bool(getattr(env, "_auto_human", False)),
         )
         return Replay(
             schema_version=REPLAY_SCHEMA_VERSION,
@@ -2407,7 +2554,9 @@ def main(argv: list[str] | None = None) -> int:
         type=str,
         default="runs/human_playtest/replays",
         help="Write a full-fidelity Replay JSON per game here (set empty to "
-        "disable). NOTE: the four SETUP steps are SYNTHESIZED, not observed.",
+        "disable). The four SETUP steps are OBSERVED at placement time and the "
+        "record carries metadata.setup_observed=true; records WITHOUT that flag "
+        "predate the fix and carry synthesized setup steps.",
     )
     parser.add_argument(
         "--self-test",

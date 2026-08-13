@@ -24,7 +24,7 @@ This doc is the planning equivalent of `v2_step3_bc.md` / `v2_step4_ppo.md` / `v
 ## Outputs
 
 - `data/labels/setup/v1/scenarios.jsonl` — append-only raw labels. One JSON object per line. **The durable artefact**; schema-versioned so future obs-schema changes do not invalidate the data.
-- `data/labels/setup/v1/sessions/<uuid>/manifest.json` — per-session metadata (start/end time, labeler id, scenario count, archetype histogram). Per-scenario `state.pkl` checkpoints for resume-on-crash.
+- `data/labels/setup/v1/sessions/<uuid>/manifest.json` — per-session metadata (start/end time, labeler id, scenario count). Per-scenario `state.pkl` checkpoints for resume-on-crash.
 - `data/bc/human_setup_finetune/{manifest.json, shard_*.npz}` — converter output, `BcDataset`-compatible shards.
 - `runs/bc/v1_human_finetune/<run_id>/{best.pt, scalars/}` — fine-tune outputs (TensorBoard scalars + best checkpoint).
 - `runs/eval_setup_agreement/<run_id>/agreement.json` — held-out 20% val: BC top-1 match against the user's labels per snake-draft position.
@@ -68,7 +68,7 @@ Two checks. Both pass or labeling does not start. This is the analogue of `v2_de
 
 The decisive factor: `src/catan_rl/gui/` (v2-ported, currently used for the human-playable smoke) already has a working hex renderer with the 54-vertex / 72-edge pixel-coordinate math. Reusing that math via a thin adapter is ~1 day of work; rebuilding the same math in SVG/Canvas is ~2-3 days. Pygame wins on build cost without losing the visual quality required for the throughput target. The CLAUDE.md rule 8 ban on `gui/` imports applies only to RL paths (`bc/`, `policy/`, `env/`, `ppo/`, ...); `labeling/` is outside that ring and is *explicitly allowed* to import from `gui/`.
 
-**Carry-forward**: if the user labels > 5 scenarios at consistently > 3 min each (the §0 throughput sanity), reassess. The most likely simplification at that point is dropping the archetype dropdown to a single-key shortcut (`b/o/h/r/x` for balanced/OWS/OWS-hybrid/road-builder/other).
+**Carry-forward**: if the user labels > 5 scenarios at consistently > 3 min each (the §0 throughput sanity), reassess. **AS BUILT** the strategy-archetype categories were removed from the flow entirely (owner decision, 2026-08): the tool asks for a settlement + a road and nothing else, so a scenario costs two clicks and a submit.
 
 ---
 
@@ -96,7 +96,7 @@ Side effect of (c): every "scenario" is one of the four snake-draft positions, a
 - NPZ is what `bc/loader.py` consumes. Going JSONL → NPZ at conversion time means the obs schema can change later (Step 4 might add an obs key) and we re-run the converter without re-labeling.
 - The cost of the indirection is one extra script (`scripts/convert_labels_to_bc_shard.py`); the benefit is decoupling label-time from training-time schema.
 
-**JSONL row schema (v1)**:
+**JSONL row schema (v2 — current)**:
 
 ```json
 {
@@ -111,15 +111,21 @@ Side effect of (c): every "scenario" is one of the four snake-draft positions, a
   "prior_picks": [                        // empty for draft_position==1
     {"player": 1, "settlement_vertex": 17, "road_edge": 30}
   ],
-  "archetype": "balanced",                // from labeling/archetypes.py enum
   "settlement_vertex": 23,                // user's pick
   "road_edge": 45,                        // user's pick
   "decision_time_ms": 47200,              // wall-clock between scenario shown and submit
-  "notes": ""                             // optional, ≤ 200 chars
+  "notes": "",                            // optional, ≤ 200 chars
+  "quality_flag": "",                     // "fast" when decision_time_ms < 15000
+  "source": "tool",                       // v2: "tool" (labeling UI) | "game" (D3 record export)
+  "ruleset": "R0"                         // v2: the epoch the label is replayable under
 }
 ```
 
-Schema versioning: bumping `schema_version` triggers a migration step in `labeling/store.py:load_scenarios`. v1 → v2 migrations are append-only field additions; field removals require a major-version bump and an explicit migration script.
+(`schema_version` is `2` on rows written today; the two v2 fields are OPTIONAL and are filled at READ time for v1 rows.)
+
+**AS BUILT** — the `"archetype"` field is gone (owner decision, 2026-08). It was never read by `to_shard.py` or by `bc/**`; it was UI/store metadata only. New rows simply omit the key and it is no longer in `store._REQUIRED_FIELDS`. Rows already on disk still carry it and still load — the file is never rewritten and `load_scenarios` passes the extra key through verbatim (pinned by `test_store.py::test_legacy_archetype_row_still_loads_and_new_row_omits_it`). No `schema_version` bump: a field that stopped being WRITTEN is not a field whose meaning changed, and every consumer already ignored it.
+
+Schema versioning: bumping `schema_version` triggers a migration step in `labeling/store.py:load_scenarios`. v1 → v2 was exactly that — append-only field additions (`source`, `ruleset`), no rewrite of the file on disk. Field removals require a major-version bump and an explicit migration script.
 
 ---
 
@@ -130,7 +136,7 @@ data/labels/setup/v1/
 ├── scenarios.jsonl                       (raw labels, append-only)
 └── sessions/
     └── <session-uuid>/
-        ├── manifest.json                 (start/end time, labeler, count, archetype histogram)
+        ├── manifest.json                 (start/end time, labeler, count)
         └── inflight_state.pkl            (current scenario state, for crash-resume; cleared on session end)
 
 data/bc/human_setup_finetune/
@@ -213,8 +219,7 @@ class LabelingSession:
     def start(self) -> None: ...
     def current_scenario(self) -> Scenario | None: ...
     def submit(self, settlement_vertex: int, road_edge: int,
-               archetype: Archetype, notes: str = "",
-               decision_time_ms: int = 0) -> None: ...
+               notes: str = "", decision_time_ms: int = 0) -> None: ...
     def skip(self) -> None: ...
     def quit(self) -> None: ...
     def resume(self) -> bool:
@@ -249,7 +254,7 @@ class LabelingSession:
 |              Prior picks: solid blue (P1) / red (P2)      |
 |                                                            |
 +------------------------------------------------------------+
-|  Archetype: [▼ balanced]  Notes: [_________________]     |  Bottom bar
+|  Notes: [_________________]                              |  Bottom bar
 |  [Submit (S)]  [Skip (K)]  [Undo (U)]  [Quit (Q)]        |
 +------------------------------------------------------------+
 ```
@@ -309,7 +314,11 @@ def repair_jsonl(path: Path) -> int:
 
 Using append mode + a single `write()` for a < 1 KB row is atomic on POSIX (`write(2)` to an `O_APPEND` fd is atomic for writes ≤ PIPE_BUF, and ext4/HFS+/APFS honor this for small writes). Tested under simulated SIGKILL in `tests/unit/labeling/test_store.py::test_atomic_append_under_sigkill`. For paranoia, `repair_jsonl(...)` is called on every session start: if the last line doesn't parse as JSON, it's truncated.
 
-**Schema migration**: `load_scenarios` reads `schema_version` per row. v1 is the current target. Future migrations (e.g., v1→v2 adds `belief_target_at_pick`) populate missing fields with defaults at read time. **The on-disk file is never rewritten by the migration** — JSONL stays in its as-written state forever, migrations happen in memory at read time. This is non-negotiable: the raw labels are the durable artefact.
+**Schema migration**: `load_scenarios` reads `schema_version` per row. **v2 is the current target** (`SCHEMA_VERSION = 2`, spec `setup-labeling-and-champion-finetune` D3): it adds two OPTIONAL provenance fields — `source` (`"tool"` | `"game"`) and `ruleset` (`"R0"`) — which `_migrate_row` fills at read time for v1 rows. `_REQUIRED_FIELDS` is unchanged, so every v1 row keeps loading. **The on-disk file is never rewritten by the migration** — JSONL stays in its as-written state forever, migrations happen in memory at read time. This is non-negotiable: the raw labels are the durable artefact.
+
+**Second writer (D3)**: `catan_rl/labeling/from_record.py` exports the owner's two setup decisions out of a `scripts/play_vs_model.py` replay into this same store with `source="game"`, so playtesting grows the corpus as a side effect. It REFUSES a record that is not `metadata.setup_observed`, is `partial`, has no `human` seat, or is not `metadata.human_authored` — a reconstructed placement is not a label, and neither is one a bot made.
+
+That last refusal is the load-bearing one. `play_vs_model.py` stamps `PlayerSpec(kind="human")` on the non-bot seat UNCONDITIONALLY, but under `--self-test` (`env._auto_human`) the base env AUTO-PLAYS that seat with its built-in heuristic, opening included — a record that is structurally indistinguishable from a played game. Without the attestation the adapter would convert heuristic openings into owner labels, violating the directive that heuristic openings must not influence policy openings. `human_authored` is written by the recorder off the live env flag, serialised by `replay/io.py`, and an ABSENT key reads as `False` (never attested). CLI: `scripts/export_game_labels.py`; a file that fails to LOAD is reported as a skip with its reason rather than aborting the directory scan.
 
 ---
 
@@ -319,34 +328,116 @@ Using append mode + a single `write()` for a < 1 KB row is atomic on POSIX (`wri
 
 ```bash
 python scripts/convert_labels_to_bc_shard.py \
-  --jsonl data/labels/setup/v1/scenarios.jsonl \
-  --output-dir data/bc/human_setup_finetune/ \
-  --shard-size 5000 \
-  --seed 0
+  --labels data/labels/setup/v1/scenarios.jsonl \
+  --out data/bc/human_openings/v1 \
+  --held-out-frac 0.2          # default; 0 disables the split
 ```
+
+**AS BUILT** (spec `setup-labeling-and-champion-finetune` D4). Logic lives in
+`src/catan_rl/labeling/to_shard.py`; the script is a thin CLI per repo
+convention. Four corrections to the behaviour described below:
+
+* **the held-out split is decided HERE, not at gate time.** With
+  `--held-out-frac > 0` the labels are split by `game_seed`
+  (`labeling/store.py::held_out_split`) and only the TRAIN half is written into
+  the shard; the withheld `game_seed`s are stamped into the manifest as
+  `held_out_game_seeds`, and `scripts/eval_setup_agreement.py` reads them from
+  there. `bc/finetune.py` reads the same manifest field and excludes those
+  seeds from the anchor rollouts too, so a held-out opening reaches the
+  candidate through NO path. If the split were re-derived at eval time over the
+  same JSONL — as an earlier revision of this slice did — Gate 1 would score the
+  candidate on rows it was fine-tuned on, i.e. report memorisation as
+  generalisation in the one gate whose stated remedy for a marginal result is
+  MORE LABELS. `--held-out-frac 0` produces a shard with no held-out set, and
+  the gate CLI then REFUSES it rather than inventing one;
+
+* the obs dict is **12 keys, not 10** — the ten float members plus
+  `opponent_kind` / `opponent_policy_id` (`bc/loader.py`), which the plan
+  predates;
+* every human row is **duplicated across each opponent kind** the gates and the
+  successor self-play use (`DEFAULT_OPPONENT_KINDS`), because the policy
+  conditions on an opponent-id embedding and a single-kind stamp would leave the
+  openings unexpressed under the others. Duplicates share a `game_id` so
+  `train_val_split` cannot straddle a scenario;
+* the **road row's obs is built on the POST-settlement state** (the plan was
+  silent). The road head's legal set is defined by the settlement just placed,
+  so a pre-settlement obs would train the policy to pick a road from a position
+  it never occupies — and the labeled edge would not even be legal there.
+
+A human corpus is hundreds of scenarios, so ONE shard is written rather than the
+streaming multi-shard layout `bc.dataset` needs for millions of heuristic rows;
+`--shard-size` is therefore not a flag.
 
 **Behavior**:
 1. Read every JSONL row via `store.load_scenarios`.
 2. For each row:
    - Reconstruct `catanGame(seed=row["game_seed"])`.
    - Replay `row["prior_picks"]` through the engine (snake-draft order).
-   - At the user's decision point, run `obs_encoder.compute_obs(...)` on the current state → 10-key obs dict.
-   - Build the 12-key mask dict via `compute_action_masks(...)` (must match what the UI showed at label time; pinned by `tests/integration/test_labels_to_npz_pipeline.py::test_mask_roundtrip`).
+   - At the user's decision point, run the current `ObsEncoder.build_obs(...)` on the reconstructed state → **12-key** obs dict (see AS BUILT above).
+   - Build the 12-key mask dict via `compute_action_masks(...)` (must match what the UI showed at label time). **AS BUILT**: `to_shard._obs_and_mask` calls `compute_action_masks` on the replayed state itself, so there is no separate stored mask to round-trip against and no `test_mask_roundtrip`; what the tests pin instead is that a labeled pick is LEGAL under that mask (`tests/unit/labeling/test_to_shard.py::test_an_illegal_label_is_refused_not_dropped`, `::test_the_road_row_sees_the_board_after_its_own_settlement`).
    - Build the 6-head action tensor: `[type=BuildSettlement, corner=row["settlement_vertex"], edge=irrelevant, tile=irrelevant, res1=irrelevant, res2=irrelevant]` for the settlement step; a *separate* row for the road step: `[type=BuildRoad, corner=irrelevant, edge=row["road_edge"], ...]`. **Two NPZ rows per JSONL scenario** — the BC loss is relevance-weighted so this is the natural shape.
    - Set `belief_target` to the env's GT at the decision state (typically uniform-zero at setup phase since no dev cards drawn yet — the obs encoder handles this).
    - Set `z_disc = 0.0` (no game-outcome label; the value-loss weight zeros out per §F.2).
 3. Pack rows into NPZ shards of `--shard-size` rows each (default 5000 — smaller than the BC pipeline's 5000-games-per-shard since human labels are precious).
 4. Write `manifest.json` matching `bc/dataset.py:generate_dataset`'s output format so `BcDataset(data_dir=...)` loads it identically. This includes the `forced_rule_version` / `ruleset_version` stamps (`policy/obs_schema.FORCED_RULE_VERSION` / `RULESET_VERSION`) — `bc.loader.load_manifest` raises `StaleCorpusError` on an unstamped or stale manifest, so a converter that omits them produces an unloadable corpus.
 
-**Key invariant**: the obs emitted by the converter MUST equal what `obs_encoder.py` emits on the reconstructed state at the moment of decision. This is the load-bearing claim of the entire pipeline — if it fails, the BC fine-tune trains on out-of-distribution obs. Pinned by `tests/integration/test_labels_to_npz_pipeline.py::test_per_row_obs_equals_encoder_output`.
+**Key invariant**: the obs emitted by the converter MUST equal what `obs_encoder.py` emits on the reconstructed state at the moment of decision. This is the load-bearing claim of the entire pipeline — if it fails, the BC fine-tune trains on out-of-distribution obs. Pinned by `tests/unit/labeling/test_to_shard.py::test_row_obs_equals_the_encoder_on_the_replayed_state` (the planned `tests/integration/test_labels_to_npz_pipeline.py` was not built — see §8.6).
 
-**Determinism**: the converter must produce bit-identical shards across runs given the same JSONL + seed. Pinned by `test_labels_to_npz_pipeline.py::test_converter_determinism`.
+**Determinism**: every ARRAY the converter emits must be bit-identical across
+runs given the same JSONL. Byte-identical *files* are explicitly NOT claimed —
+`np.savez_compressed` stamps each ZIP member with the local time. Pinned by
+`tests/unit/labeling/test_to_shard.py::test_conversion_is_deterministic`; the
+load-bearing obs pin is
+`::test_row_obs_equals_the_encoder_on_the_replayed_state`.
 
 ---
 
 ## F. BC fine-tune integration (`src/catan_rl/bc/finetune.py`)
 
-**Surface**:
+> **SUPERSEDED — read this box before F.1-F.4.** The lean opening program
+> (adopted 2026-08-10) and spec `setup-labeling-and-champion-finetune` D5
+> replace this section's premise. The owner's labels are the **SOLE** opening
+> teacher; there is NO heuristic-corpus mixing and NO corpus regeneration, so
+> F.1's `WeightedConcatDataset` and its 50x weight do not exist. The fine-tune
+> target is the **champion directly** (`runs/anchors/ptr_v1_u500.pt`), not
+> `checkpoints/bc/best.pt`.
+>
+> Anti-forgetting is instead an **online self-distillation KL** against a frozen
+> copy of the champion, evaluated on freshly sampled NON-setup states drawn from
+> games whose setups are FORCED to labeled openings
+> (`catan_rl/bc/anchor_states.py`). Anchoring on ordinary self-play states would
+> constrain the distribution the fine-tune LEAVES rather than the one it moves
+> toward. Simplifying the anchor to hard-label self-BC is a spec violation.
+>
+> Two properties of the anchor states are load-bearing and easy to lose. (i) The
+> games are **cycled across every `opponent_kind` the shard moves**
+> (`ANCHOR_OPPONENT_KINDS == to_shard.DEFAULT_OPPONENT_KINDS`; only the obs stamp
+> varies, the seat is always driven by the heuristic) — the fine-tune's gradient
+> reaches all three id-conditional slices, so an anchor read only under
+> `HEURISTIC` would leave drift in the two slices the successor self-play runs
+> under unmeasured and unpenalised. (ii) The openings withheld for Gate 1 are
+> **excluded** (`sample_anchor_states(..., exclude_game_seeds=...)`, fed from the
+> shard manifest), because a held-out opening that shapes the candidate through
+> the KL term is not held out.
+>
+> An honest limitation, NOT fixed here: once the forced opening is placed, the
+> remaining plies are walked with a **uniformly random legal action**, so the
+> anchor covers "reachable from the owner's openings", not the champion's
+> on-policy midgame. `held_out_anchor_kl` inherits the same walker, so AC5's
+> bound is a bound on that distribution.
+>
+> F.2 survives in substance: the value loss is zeroed **per row** on human rows,
+> via the new optional `value_row_mask` on `bc.loss.bc_loss` (default `None` =
+> the previous behaviour, bit-identically).
+>
+> Epoch (D6): `ptr_v1_u500.pt` carries no ruleset stamp, so the lineage is
+> **R0**; the candidate is stamped R0 explicitly. Deliverables (D8): the label
+> corpus, the candidate checkpoint, and a frozen copy designated the
+> **human-opening prior** — which the successor self-play slice MUST be able to
+> KL-anchor to at setup nodes, or the installed openings are expected to decay
+> on contact with PPO.
+
+**Surface (as planned; superseded above)**:
 
 ```python
 def finetune(
@@ -372,7 +463,7 @@ def finetune(
 
 Same as `bc/loss.py` — relevance-weighted CE per head, value MSE @ 0.1, belief soft-CE @ 0.05. **For human-label rows**, the value-loss weight is multiplied by 0 (the `z_disc` field is 0 by construction because we don't have a game outcome). This zero-multiplier is implemented via a per-row `value_loss_mask` boolean in the batch dict; the loss is `mse * value_loss_mask.float()`. No special-casing in the loss code path; the mask handles it.
 
-**Test**: `tests/unit/bc/test_finetune_loss.py::test_value_loss_zero_for_human_rows` — construct a batch with 50% heuristic + 50% human; assert the value-loss term equals the value-loss term computed on the heuristic-only half (the human half contributes exactly zero).
+**Test**: **AS BUILT** the mask is the optional `value_row_mask` argument on `bc.loss.bc_loss` (not a batch-dict key), pinned by `tests/unit/bc/test_loss.py::test_value_row_mask_default_is_bit_identical_to_the_old_behaviour` and `::test_value_row_mask_zeroes_the_value_term_for_masked_rows`. The mean is renormalised over the CONTRIBUTING rows (so mixing human rows in cannot shrink the value signal the real rows carry), with a `clamp_min(1.0)` on the denominator so an ALL-masked batch — which is exactly what the human-only fine-tune sends — yields a finite zero rather than NaN. The planned `test_finetune_loss.py` mixed-batch assertion does not exist because §F.1's heuristic/human mixing does not; `tests/unit/bc/test_finetune.py::test_value_loss_is_zero_on_human_rows` pins the same property end-to-end.
 
 ### F.3 Optimizer + schedule
 
@@ -388,7 +479,11 @@ Same as `bc/loss.py` — relevance-weighted CE per head, value MSE @ 0.1, belief
 
 ### F.4 Validation
 
-20% of the human labels (stratified by `(draft_position, archetype)`) are held out. The training loop logs every 200 steps:
+**AS BUILT**: 20% of the human labels are held out **by `game_seed`, at CONVERSION time** (`--held-out-frac`, above), not stratified by `draft_position` and not re-derived at eval time. Splitting by seed is what stops a draft's position-4 label landing in the held-out set while the position-1 label it is conditioned on was trained on; splitting in the converter is what makes "held out" a property of the CHECKPOINT rather than of one code path. `bc/finetune.py` trains on the resulting shard and — reading `held_out_game_seeds` back from its manifest — keeps the same seeds out of the anchor rollouts.
+
+The per-step logging below is the source plan's design and is **not built**: `finetune()` writes a `history.json` (per-step `total` / `policy` / `value` / `anchor_kl`), and agreement is measured once, after the fact, by `scripts/eval_setup_agreement.py`.
+
+
 - `finetune/val_nll_human_only` — NLL on the human-only val split.
 - `finetune/val_top1_settlement` — top-1 corner-head match for setup-phase rows. **This is the load-bearing metric** for §6 Gate 1.
 - `finetune/val_top1_road` — top-1 edge-head match.
@@ -403,21 +498,33 @@ src/catan_rl/labeling/             (new package; allowed to import gui/)
 ├── __init__.py
 ├── scenario_gen.py                Per §A. Generator yielding scenarios from a board+seed.
 ├── session.py                     Per §B. Session manager + manifest + resume.
-├── store.py                       Per §D. JSONL persistence + atomic append + repair.
+├── store.py                       Per §D. JSONL persistence + atomic append + repair + `held_out_split` (the ONE definition of the split, shared by converter and gate).
 ├── ui.py                          Per §C. Pygame UI layer.
-└── archetypes.py                  Enum: {balanced, OWS, OWS_hybrid, road_builder, other}.
+├── from_record.py                 D3. play_vs_model record → label rows (source="game").
+└── to_shard.py                    D4 (§E logic). Label store → BC shard; imports no gui/.
 
 src/catan_rl/bc/
-└── finetune.py                    Per §F. BC fine-tune (~150 LOC).
+├── finetune.py                    D5. Champion fine-tune + online self-distillation anchor.
+├── anchor_states.py               D5. Non-setup anchor states from FORCED labeled openings.
+├── loss.py                        D5. `bc_loss(..., value_row_mask=...)` (optional, default None).
+└── gates.py                       D7. `setup_agreement_gate` + `paired_wr_non_inferiority`.
 
 scripts/
 ├── label_setup.py                 CLI entry: `python scripts/label_setup.py [--session-size 20]`.
-├── convert_labels_to_bc_shard.py  Per §E. JSONL → NPZ.
-└── eval_setup_agreement.py        Held-out 20%: BC vs human top-1 agreement per draft position.
+├── convert_labels_to_bc_shard.py  Per §E / D4. Thin CLI over `labeling/to_shard.py`.
+├── export_game_labels.py          D3. Thin CLI over `labeling/from_record.py`.
+└── eval_setup_agreement.py        D7 gate 1: held-out top-1 agreement, candidate vs baseline. Takes `--shard-dir` and reads the held-out seeds out of its manifest; refuses a shard that withheld nothing.
 
-configs/
-├── labeling.yaml                  Defaults: data dir, archetype list, session size, time-flag threshold.
-└── bc_human_finetune.yaml         BC fine-tune config (extends bc.yaml).
+configs/                           **NEITHER FILE EXISTS — neither was built.**
+├── labeling.yaml                  Planned defaults (data dir, session size,
+│                                  time-flag threshold). The labeling defaults live in code
+│                                  and §B's per-session cap was dropped (sessions are
+│                                  unlimited), so the file has no remaining content.
+└── bc_human_finetune.yaml         Planned fine-tune config. AS BUILT the fine-tune is
+                                   configured by the `bc/finetune.py::FinetuneConfig`
+                                   dataclass, passed explicitly by the caller — a one-shot
+                                   champion fine-tune is a decision, never a side effect of
+                                   a default config file.
 
 tests/
 ├── unit/labeling/
@@ -425,19 +532,19 @@ tests/
 │   ├── test_session.py            Per §8.2.
 │   ├── test_store.py              Per §8.3.
 │   ├── test_ui.py                 Per §8.4 (SDL_VIDEODRIVER=dummy).
-│   └── test_archetypes.py         Enum sanity.
+│   ├── test_from_record.py        D3 adapter + store v2 (AS BUILT).
+│   └── test_to_shard.py           D4 converter incl. the load-bearing obs pin (AS BUILT).
 ├── unit/bc/
-│   ├── test_finetune_dataset.py   §F.1 WeightedConcatDataset frequency.
-│   └── test_finetune_loss.py      §F.2 value-loss masking.
+│   ├── test_finetune.py           D5: smoke, R0 stamp, value-zero, anchor bound (AS BUILT).
+│   ├── test_loss.py               D5 `value_row_mask` (AS BUILT; F.1 mixing does not exist).
+│   └── test_gates.py              D7 gate arithmetic (AS BUILT).
 └── integration/
-    ├── test_labeling_smoke.py     End-to-end with mocked user input.
-    ├── test_labels_to_npz_pipeline.py    JSONL → NPZ → BcDataset.
-    └── test_bc_finetune_smoke.py  Tiny ckpt + 50 human samples → 100 fine-tune steps.
+    └── test_labeling_smoke.py     End-to-end with mocked user input.
 
 data/labels/setup/v1/scenarios.jsonl       (created at runtime)
 data/labels/setup/v1/sessions/<uuid>/      (created per session)
-data/bc/human_setup_finetune/              (generated by converter)
-runs/bc/v1_human_finetune/                 (BC fine-tune outputs)
+data/bc/human_openings/v1/                 (generated by converter)
+runs/finetune/human_openings/              (candidate.pt + human_opening_prior.pt + history.json)
 ```
 
 ---
@@ -489,12 +596,33 @@ End-to-end: spawn a `LabelingSession`, mock `pygame.event.get` to emit a hardcod
 
 ### 8.6 `tests/integration/test_labels_to_npz_pipeline.py`
 
+> **NOT BUILT — the coverage landed as `tests/unit/labeling/test_to_shard.py`.** The
+> converter reconstructs the engine state itself and calls the real encoder, so the
+> planned integration seam has no extra state to cross and the pins run as unit tests:
+> `::test_row_obs_equals_the_encoder_on_the_replayed_state` (the load-bearing one),
+> `::test_two_rows_per_scenario_settlement_then_road`,
+> `::test_conversion_is_deterministic` (arrays, not bytes — see §E),
+> `::test_shard_loads_through_bcdataset_with_no_stale_corpus_error`, plus the
+> held-out-split pins §E AS BUILT describes. `test_mask_roundtrip` has no AS BUILT
+> counterpart (§E explains why).
+
 - `test_per_row_obs_equals_encoder_output`: write 10 JSONL rows, run converter, load via `BcDataset`, for each row assert `dataset[i]["obs"]` equals `obs_encoder.compute_obs(reconstructed_state)`. **The load-bearing test of the entire pipeline.**
 - `test_mask_roundtrip`: same setup, assert `dataset[i]["mask"]` equals `compute_action_masks(reconstructed_state)`.
 - `test_converter_determinism`: run converter twice on the same JSONL, assert NPZ shards are byte-identical.
 - `test_two_rows_per_scenario`: 5 JSONL rows produce 10 NPZ rows (one settle + one road per scenario).
 
 ### 8.7 `tests/integration/test_bc_finetune_smoke.py`
+
+> **NOT BUILT — superseded, and the coverage landed as `tests/unit/bc/test_finetune.py`.**
+> The heuristic-canary assertions below presuppose the §F.1 heuristic/human MIXING that
+> the §F SUPERSEDED box removes: there is no `val_nll_heuristic_only` because there are no
+> heuristic rows. Anti-forgetting is asserted instead as a bound on the self-distillation
+> anchor (`::test_the_anchor_term_bounds_non_setup_drift`), alongside
+> `::test_smoke_finetune_runs_end_to_end`, `::test_the_candidate_is_stamped_r0`,
+> `::test_value_loss_is_zero_on_human_rows`, and the anchor-scope pins
+> (`::test_anchor_states_are_never_setup_states`,
+> `::test_anchor_states_span_every_opponent_kind_the_shard_moves`,
+> `::test_held_out_openings_never_reach_the_anchor_rollouts`).
 
 - Load a tiny BC checkpoint (`tests/fixtures/bc_tiny.pt` — 4-layer scaled-down policy, ~10k params).
 - Generate 50 mock human-label samples + 100 mock heuristic samples.
@@ -504,7 +632,7 @@ End-to-end: spawn a `LabelingSession`, mock `pygame.event.get` to emit a hardcod
 ### 8.8 Test-budget commentary
 
 Targets the patterns that bit `bc/dataset.py` and the hex-board UI risk class:
-- **Silent action-filtering after state transition**: `test_labels_to_npz_pipeline.py::test_per_row_obs_equals_encoder_output` — if the converter caches stale env_state, this fails.
+- **Silent action-filtering after state transition**: `test_to_shard.py::test_row_obs_equals_the_encoder_on_the_replayed_state` — if the converter caches stale env_state, this fails. (`::test_the_road_row_sees_the_board_after_its_own_settlement` is the same risk on the road step, where a stale pre-settlement state would make the labeled edge illegal.)
 - **Click coordinate mismatch**: §0.2 preflight + `test_ui.py::test_click_on_legal_vertex_registers` (the 126-centroid fixture is the durable form).
 - **JSONL corruption on crash**: `test_store.py::test_atomic_append_under_sigkill` + `test_repair_jsonl_truncates_malformed_trailing_line`.
 - **Schema drift across labeling and training**: schema_version field + read-time migration; pinned by `test_store.py::test_schema_version_field_present`.
@@ -512,6 +640,35 @@ Targets the patterns that bit `bc/dataset.py` and the hex-board UI risk class:
 ---
 
 ## 9. Acceptance gate
+
+> **SUPERSEDED for the human-opening fine-tune** by spec
+> `setup-labeling-and-champion-finetune` D7, implemented in `bc/gates.py`:
+>
+> * **Gate 1** keeps its shape but the bar is the CALIBRATED
+>   `max(0.30, pre_finetune_baseline + 0.10)` — the clause below that the later
+>   plan revision had dropped — and the result is reported WITH a binomial CI
+>   (`setup_agreement_gate`). The CI is information, not a second gate: at the
+>   ~40 held-out scenarios a 200-scenario corpus affords the estimate carries
+>   roughly +-14pp, so a marginal result's remedy is MORE LABELS.
+> * **Gates 2 and 3 are replaced by ONE test**: a CI-based non-inferiority check
+>   on paired-seed full-game WR, PASS iff the lower bound on
+>   `WR_ft - WR_pre` exceeds `-0.05` (`paired_wr_non_inferiority`). Gate 3 as
+>   written failed a perfectly neutral candidate about half the time (paired SE
+>   ~2pp at n=600), which made the -5pp Gate 2 beneath it vacuous. There is no
+>   midgame-position eval in this repo; full-game WR is the metric.
+> * **Gate 1's held-out set is the converter's**, read from the shard manifest's
+>   `held_out_game_seeds` (see §E AS BUILT). The gate CLI refuses a shard that
+>   withheld nothing rather than re-deriving a split of its own.
+> * **Gate 1 is measured under `opponent_kind = HEURISTIC`**, stamped explicitly
+>   by `finetune.setup_agreement`. `to_shard.rows_for_label` returns
+>   PRE-duplication rows whose `opponent_kind` is the encoder default
+>   `OPP_KIND_UNKNOWN` — the one kind `DEFAULT_OPPONENT_KINDS` deliberately
+>   excludes from the shard — so reading the gate there would measure the single
+>   opponent-id conditional slice the fine-tune never trains, and D4's own
+>   reasoning says that slice need not agree. `HEURISTIC` is both in the shard
+>   and the kind Gate 2's full-game eval plays.
+> * Both gates run **R0** and only once **>=200 labeled scenarios exist**. As of
+>   this slice neither has been RUN — only the code landed.
 
 Compound gate. **The fine-tuned BC checkpoint is promoted to the Step-4 anchor warm-start iff all three sub-gates pass.** Until promotion, the existing pure-heuristic BC checkpoint remains the Step-4 anchor.
 
@@ -551,7 +708,7 @@ This is a **floor**, not a ceiling. The fine-tune doesn't need to win more games
 
 | Phase | Days |
 |---|---|
-| Scaffolding (scenario_gen, store, session, archetypes, configs) | 1 |
+| Scaffolding (scenario_gen, store, session, configs) | 1 |
 | Pygame UI (renderer adapter + click handler + state machine) | 2 |
 | Converter (JSONL → NPZ) | 0.5 |
 | BC fine-tune integration | 1 |
@@ -568,20 +725,20 @@ This is a **floor**, not a ceiling. The fine-tune doesn't need to win more games
 | Risk | Likelihood | Severity | Mitigation |
 |---|---|---|---|
 | Opponent prior-pick quality (if heuristic chosen) | **N/A — §2 picks user-labels-both-sides** | High | User-labels-both-sides is the chosen path; no heuristic opponent in labeled data. |
-| UI complexity creep | Medium | Medium | Hard 5-day engineering cap. If pygame UI takes > 3 days for the click handler alone, simplify the archetype dropdown to a single-key shortcut. No multi-session, no auth, single-user. |
+| UI complexity creep | Medium | Medium | Hard 5-day engineering cap. **AS BUILT** the only per-scenario inputs are the settlement and road clicks — the archetype control was removed rather than simplified. No multi-session, no auth, single-user. |
 | Schema drift between labeling and BC training | High | Medium | Store `game_seed` + `prior_picks` so the obs is **regenerable** via the converter at any future obs-schema version. JSONL on-disk never rewritten by migrations. |
 | User commitment threshold | High | High | §STOP/RESUME minimum-yield gate (200 scenarios) before BC fine-tune; below that, validation-only use. The data is durable regardless of final use. |
 | Labeling fatigue → late-session data quality drops | Medium | Medium | Sessions are user-paced (no auto-cap); UI shows session timer + scenario count so the user can self-monitor. `quality_flag = "fast"` for sub-15-second decisions surfaces individual rows for spot-check audit. If fatigue is observed in spot-checks, the user can adopt their own per-session cadence; the plan does not enforce one. |
 | Click-handler legal-mask drift from env masks | Low | High | Single source of truth: UI calls `compute_action_masks` at click time; cannot diverge. §0.2 preflight pins all 126 centroids. |
 | JSONL append corruption on crash | Low | Medium | Atomic POSIX append for sub-PIPE_BUF rows + `repair_jsonl` on every session start. `test_store.py::test_atomic_append_under_sigkill` pinning. |
 | User loses interest, abandons after 50 scenarios | High | Medium | Plan acceptable degraded use (validation-only at 50-100 scenarios); 200 is the full-integration gate. Labels durable regardless. |
-| Per-scenario throughput slower than user expectation | Low | Low | §0 preflight throughput spike with 5 throwaway scenarios; if labeling feels slow, simplify archetype dropdown to single-key shortcut (`b/o/h/r/x`). UI quality flag surfaces individual fast-decision rows passively. |
+| Per-scenario throughput slower than user expectation | Low | Low | §0 preflight throughput spike with 5 throwaway scenarios. **AS BUILT** the archetype control was removed outright, so a scenario is two clicks and a submit. UI quality flag surfaces individual fast-decision rows passively. |
 | Pygame click coordinate mapping bugs | Medium | High | §0.2 preflight + 126-centroid pinning test. The `src/catan_rl/gui/` renderer's vertex/edge centroid tables are the single source of truth. |
 | Fine-tune over-amplifies human signal (Gate 2 regression) | Medium | Medium | `human_weight=50.0` is configurable; diagnosis ladder § Gate 2 sweeps to 10-20×. Head-only fine-tune is the fallback if encoder updates are the issue. |
-| User labels are inconsistent (e.g. preference shifts mid-labeling) | Medium | Medium | `quality_flag` + decision-time logging; spot-check at 100 scenarios; archetype field lets us slice by intent if a preference shift is identified. |
+| User labels are inconsistent (e.g. preference shifts mid-labeling) | Medium | Medium | `quality_flag` + decision-time logging; spot-check at 100 scenarios. **AS BUILT** there is no archetype field to slice intent by — a preference shift is diagnosed from the picks and their timestamps. |
 | Fine-tune catastrophically forgets gameplay (Gate 3 collapse) | Low | High | `WeightedConcatDataset` keeps heuristic samples in every batch; `n_steps=5000` is conservative; LR=5e-5 (1/6 of Step 3); head-only fine-tune is the fallback. |
-| Converter produces obs that diverges from training-time obs | Low | High | `test_labels_to_npz_pipeline.py::test_per_row_obs_equals_encoder_output` is the load-bearing pin — converter and `obs_encoder.py` share code paths; any drift fails the test. |
-| Setup-agreement metric is too easy to game | Medium | Low | Top-1 corner match is computed on a held-out 20% of scenarios the model never trained on; gaming requires memorizing the held-out split, which the train/val split prevents by construction (stratified by scenario_id). |
+| Converter produces obs that diverges from training-time obs | Low | High | `tests/unit/labeling/test_to_shard.py::test_row_obs_equals_the_encoder_on_the_replayed_state` is the load-bearing pin — converter and `obs_encoder.py` share code paths; any drift fails the test. |
+| Setup-agreement metric is too easy to game | Medium | Low | Top-1 corner match is computed on a held-out 20% of scenarios the model never trained on; gaming requires memorizing the held-out split, which the train/val split prevents by construction. **AS BUILT**: the split is by `game_seed` and is applied by the CONVERTER, which writes only the train half into the shard and names the withheld seeds in the manifest — "never trained on" is therefore a property of the checkpoint, not an assumption about the eval script. |
 | §9 30% top-1 calibration is wrong | Medium | Low | If pre-fine-tune BC baseline measures > 25%, plan revises the gate upward to `baseline + 0.10`. Measurement-driven, not a fixed number. |
 
 ---
@@ -590,8 +747,8 @@ This is a **floor**, not a ceiling. The fine-tune doesn't need to win more games
 
 | Where | What to verify | Human decision |
 |---|---|---|
-| **Pre-labeling smoke** (after scaffolding lands) | Run 3-5 throwaway scenarios end-to-end. JSONL written correctly. No crashes. UI clicks land on correct vertices/edges (the §0.2 preflight asserts this; the smoke is the human-in-the-loop confirmation). | **Approve labeling kickoff.** |
-| **After 50 labeled scenarios** | Hand-inspect 5 random rows. Check: recorded settlement+road match the user's intent? Archetype field sensibly populated? Decision times in the 30s-180s range? | OK → continue. NOT OK → fix bugs before more data is collected (the bad 50 may be salvageable or may need to be discarded; decide per-row). |
+| **Pre-labeling smoke** (after scaffolding lands) | **DONE (2026-08-10, D1).** 5 throwaway scenarios end-to-end under `SDL_VIDEODRIVER=dummy`: rows well-formed at `schema_version` 2 with `source="tool"` / `ruleset="R0"`; snake order `[0,1,1,0]` then a fresh board seed at pick 5; vertex- and edge-click index maps verified round-trip in both directions; a truncated trailing line repaired by `repair_jsonl` (26 bytes) and the session resumed with all 5 rows intact. No pointer-arch drift surfaced; the 78-test labeling suite stayed green. The remaining human-in-the-loop half is the owner clicking a real board. | **Approve labeling kickoff.** |
+| **After 50 labeled scenarios** | Hand-inspect 5 random rows. Check: recorded settlement+road match the user's intent? Decision times in the 30s-180s range? | OK → continue. NOT OK → fix bugs before more data is collected (the bad 50 may be salvageable or may need to be discarded; decide per-row). |
 | **After 100 labeled scenarios** | Spot-check 10 rows manually for data quality + schema correctness. Run `convert_labels_to_bc_shard.py` end-to-end. Confirm `BcDataset(data_dir=...)` loads without exceptions. | OK → continue to 200. NOT OK → fix converter; possibly re-label. |
 | **After 200 labeled scenarios** | Validation-only use is unlocked. The plan can commit to BC fine-tune integration. | Decide: continue to 500 (production fine-tune dataset) OR stop at 200 for validation-only use. |
 | **After 500 labeled scenarios** | Run end-to-end BC fine-tune pilot. Measure pre-fine-tune vs post-fine-tune top-1 settlement match on the 20% val split. Run heuristic-WR eval (Gates 2 + 3). | **PASS Gate 1+2+3 → promote fine-tuned BC to Step-4 anchor warm-start.** **FAIL Gate 1 → diagnose per §9 ladder.** **FAIL Gate 2 or 3 → drop `human_weight` or head-only fine-tune; retry.** |

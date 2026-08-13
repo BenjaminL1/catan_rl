@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from catan_rl.labeling.archetypes import Archetype
+from catan_rl.env.ruleset import RULESET_R0
 from catan_rl.labeling.scenario_gen import Scenario, ScenarioGenerator
 from catan_rl.labeling.store import (
     SCHEMA_VERSION,
@@ -56,7 +56,7 @@ class LabelingSession:
         session.start()
         while (scenario := session.current_scenario()) is not None:
             ...  # render scenario; collect user pick
-            session.submit(settlement_vertex=..., road_edge=..., archetype=...)
+            session.submit(settlement_vertex=..., road_edge=...)
         session.quit()
     """
 
@@ -145,7 +145,6 @@ class LabelingSession:
         self,
         settlement_vertex: int,
         road_edge: int,
-        archetype: Archetype,
         notes: str = "",
         decision_time_ms: int = 0,
     ) -> None:
@@ -175,12 +174,17 @@ class LabelingSession:
             "draft_position": scenario.draft_position,
             "acting_player": scenario.acting_player_idx,
             "prior_picks": [p.to_dict() for p in scenario.prior_picks],
-            "archetype": archetype.value,
             "settlement_vertex": int(settlement_vertex),
             "road_edge": int(road_edge),
             "decision_time_ms": int(decision_time_ms),
             "notes": notes,
             "quality_flag": "fast" if decision_time_ms and decision_time_ms < 15000 else "",
+            # Schema v2 (D3). Stamped explicitly rather than left to the
+            # reader's default, so a row written today names its own
+            # provenance: this is the TOOL path, and ``ScenarioGenerator``
+            # builds every mask with ``RULESET_R0``.
+            "source": "tool",
+            "ruleset": RULESET_R0,
         }
         # Apply to engine BEFORE persisting — if the pick is illegal,
         # the row never lands.

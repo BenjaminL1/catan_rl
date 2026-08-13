@@ -321,3 +321,39 @@ def test_bc_loss_no_nan_or_inf() -> None:
     loss = bc_loss(policy_out=out, batch=batch)
     for k, v in loss.items():
         assert torch.isfinite(v).all(), f"{k} contains NaN/inf"
+
+
+# ---------------------------------------------------------------------------
+# D5 — optional per-row value mask (spec setup-labeling-and-champion-finetune)
+# ---------------------------------------------------------------------------
+
+
+def test_value_row_mask_default_is_bit_identical_to_the_old_behaviour() -> None:
+    """Backwards compatibility: the new parameter must be invisible when unset."""
+    from catan_rl.bc.loss import bc_loss
+
+    policy = CatanPolicy().eval()
+    batch = _synth_batch(8, [ActionType.END_TURN] * 8)
+    out = policy.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
+    without = bc_loss(policy_out=out, batch=batch)
+    all_ones = bc_loss(policy_out=out, batch=batch, value_row_mask=torch.ones_like(batch["z_disc"]))
+    assert torch.allclose(without["value"], all_ones["value"], atol=0, rtol=1e-6)
+    assert torch.allclose(without["total"], all_ones["total"], atol=0, rtol=1e-6)
+
+
+def test_value_row_mask_zeroes_the_value_term_for_masked_rows() -> None:
+    from catan_rl.bc.loss import bc_loss
+
+    policy = CatanPolicy().eval()
+    batch = _synth_batch(8, [ActionType.END_TURN] * 8)
+    out = policy.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
+    none_ = bc_loss(policy_out=out, batch=batch, value_row_mask=torch.zeros_like(batch["z_disc"]))
+    assert float(none_["value"].item()) == 0.0
+
+    # Masking is not down-weighting: the mean is renormalised over the
+    # contributing rows, so half-masking cannot shrink the surviving signal.
+    half = torch.zeros_like(batch["z_disc"])
+    half[:4] = 1.0
+    got = bc_loss(policy_out=out, batch=batch, value_row_mask=half)["value"]
+    expected = ((out["value"][:4] - batch["z_disc"][:4]) ** 2).mean()
+    assert torch.allclose(got, expected, rtol=1e-6)

@@ -27,26 +27,10 @@ import numpy as np
 
 from catan_rl.gui import render
 from catan_rl.gui import render_constants as RC
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 
 PHASE_SETTLEMENT_PICK = "settlement_pick"
 PHASE_ROAD_PICK = "road_pick"
-
-# Archetype shortcut letters (first letter of the value, with 'h' for
-# OWS_HYBRID since 'o' is taken by OWS).
-_ARCHETYPE_BY_KEY: dict[str, Archetype] = {
-    "b": Archetype.BALANCED,
-    "o": Archetype.OWS,
-    "h": Archetype.OWS_HYBRID,
-    "r": Archetype.ROAD_BUILDER,
-    "x": Archetype.OTHER,
-}
-
-
-def archetype_from_key(key: str) -> Archetype | None:
-    """Map a single-letter keypress to an Archetype, or None if unknown."""
-    return _ARCHETYPE_BY_KEY.get(key.lower())
 
 
 def nearest_vertex(
@@ -198,7 +182,6 @@ class LabelingUIState:
 
     def submit(
         self,
-        archetype: Archetype,
         notes: str = "",
         decision_time_ms: int = 0,
     ) -> None:
@@ -209,7 +192,6 @@ class LabelingUIState:
         self.session.submit(
             settlement_vertex=self.selected_settlement,
             road_edge=self.selected_road,
-            archetype=archetype,
             notes=notes,
             decision_time_ms=decision_time_ms,
         )
@@ -267,8 +249,6 @@ class LabelingUI:
         self.font = pygame.font.SysFont(None, 24)
         self.font_small = pygame.font.SysFont(None, 18)
         self.font_large = pygame.font.SysFont(None, 32)
-        # Selected archetype defaults to BALANCED; user can change with key.
-        self.current_archetype = Archetype.BALANCED
         # Wall-clock per scenario.
         self._scenario_start_ms = self._now_ms()
 
@@ -351,21 +331,13 @@ class LabelingUI:
             self._skip()
         elif unicode == "u":
             self.state.undo()
-        else:
-            # Archetype shortcut.
-            arch = archetype_from_key(unicode)
-            if arch is not None:
-                self.current_archetype = arch
         return True
 
     def _try_submit(self) -> None:
         if not self.state.is_ready_to_submit():
             return
         elapsed_ms = self._now_ms() - self._scenario_start_ms
-        self.state.submit(
-            archetype=self.current_archetype,
-            decision_time_ms=elapsed_ms,
-        )
+        self.state.submit(decision_time_ms=elapsed_ms)
         self._scenario_start_ms = self._now_ms()
 
     def _skip(self) -> None:
@@ -526,13 +498,10 @@ class LabelingUI:
     def _render_bottom_bar(self, scenario: Any) -> None:
         del scenario  # not yet used in bottom bar; kept for symmetry.
         y0 = self.screen_size[1] - 80
-        # Archetype + shortcut hints.
-        text1 = f"Archetype: {self.current_archetype.value}    [B/O/H/R/X to change]"
-        text2 = "[click vertex → click edge → S submit]    [K skip]    [U undo]    [Q quit]"
-        s1 = self.font.render(text1, True, _TEXT_COLOR)
-        s2 = self.font_small.render(text2, True, _TEXT_COLOR)
-        self.screen.blit(s1, (16, y0))
-        self.screen.blit(s2, (16, y0 + 30))
+        # Shortcut hints.
+        text = "[click vertex → click edge → S submit]    [K skip]    [U undo]    [Q quit]"
+        surf = self.font_small.render(text, True, _TEXT_COLOR)
+        self.screen.blit(surf, (16, y0))
 
     def _render_done_message(self) -> None:
         surf = self.font_large.render(

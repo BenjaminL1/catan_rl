@@ -20,7 +20,6 @@ import pytest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.labeling.store import load_scenarios
 from catan_rl.labeling.ui import LabelingUI
@@ -86,7 +85,6 @@ def test_full_draft_via_simulated_clicks(tmp_path: Path) -> None:
         assert row["draft_position"] == draft_pos
         assert row["settlement_vertex"] == s_idx
         assert row["road_edge"] == e_idx
-        assert row["archetype"] == "balanced"
         assert row["labeler_id"] == "ben"
 
 
@@ -107,7 +105,7 @@ def test_skip_jumps_to_fresh_board(tmp_path: Path) -> None:
 
 
 @pytest.mark.integration
-def test_archetype_keypress_updates_current_archetype(tmp_path: Path) -> None:
+def test_unbound_keypress_is_ignored_and_q_quits(tmp_path: Path) -> None:
     import pygame
 
     session = LabelingSession(data_dir=tmp_path, labeler_id="ben", session_seed=2026)
@@ -119,15 +117,12 @@ def test_archetype_keypress_updates_current_archetype(tmp_path: Path) -> None:
             self.key = key
             self.unicode = unicode
 
-    # Press 'o' → OWS.
-    ui._handle_keydown(FakeEvent(pygame.K_o, "o"))
-    assert ui.current_archetype is Archetype.OWS
-    # Press 'r' → road builder.
-    ui._handle_keydown(FakeEvent(pygame.K_r, "r"))
-    assert ui.current_archetype is Archetype.ROAD_BUILDER
-    # Press 'z' → unknown, no change.
-    ui._handle_keydown(FakeEvent(pygame.K_z, "z"))
-    assert ui.current_archetype is Archetype.ROAD_BUILDER
+    # Letters that used to select an archetype are now unbound: the loop
+    # keeps running and nothing on the board changes.
+    seed_before = session.current_scenario().game_seed
+    for key, char in ((pygame.K_o, "o"), (pygame.K_r, "r"), (pygame.K_z, "z")):
+        assert ui._handle_keydown(FakeEvent(key, char)) is True
+    assert session.current_scenario().game_seed == seed_before
     # Press 'q' → quit signal.
     cont = ui._handle_keydown(FakeEvent(pygame.K_q, "q"))
     assert cont is False

@@ -112,7 +112,22 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   calls `pygame.quit()` before `sys.exit(0)` — the post-loop redraw is guarded),
   and every record carries `"git_sha"` (`-dirty`-suffixed on a modified tree) +
   `"ckpt_sha256"`. `DEFAULT_CKPT` is the BANKED `runs/anchors/ptr_v1_u500.pt`,
-  never a live `runs/train/**` path under `keep_last_n` rotation).
+  never a live `runs/train/**` path under `keep_last_n` rotation.
+  The replay's four SETUP steps are **OBSERVED** at placement time (spec
+  `setup-labeling-and-champion-finetune` D2): every draft broadcast is
+  snapshotted as it fires and `_observed_setup_steps` gives each step the engine
+  state at its OWN placement — reverse-pass grant included, `longest_road_holder`
+  read live rather than hardcoded. Such records carry
+  `metadata.setup_observed = true`; an ABSENT flag means the older SYNTHESIZED
+  assembly (`recorder_loop.setup_steps_seat_0/1`, still the non-interactive
+  `record_game` path). Records also carry `metadata.human_authored` — the
+  attestation that a PERSON drove the human seat, written from `env._auto_human`
+  (under `--self-test` the base env auto-plays that seat with its HEURISTIC,
+  opening included, while still stamping `PlayerSpec(kind="human")`); an absent
+  key reads as `false`. `catan_rl.labeling.from_record` exports the human seat's
+  two setup decisions out of an observed, human-authored record into the
+  labeling JSONL store and REFUSES anything else — heuristic openings must never
+  reach the opening corpus).
   (No v1 `evaluate.py`.)
 - `configs/` — `ppo_default.yaml`, `bc.yaml`. `docs/plans/v2/` — current roadmap.
 

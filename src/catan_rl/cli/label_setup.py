@@ -18,8 +18,6 @@ Controls inside the app:
   - K = skip current draft and jump to a fresh board.
   - U = undo last pick within the current scenario.
   - Q = quit.
-  - B / O / H / R / X = set archetype (Balanced / OWS / OWS-hybrid /
-    Road-builder / Other).
 
 Data:
   - Labels appended to ``<data-dir>/scenarios.jsonl``.

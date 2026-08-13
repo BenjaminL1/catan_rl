@@ -146,3 +146,40 @@ def test_player_block_dim_arithmetic_is_pinned() -> None:
     assert S.RESERVED_PLAYER_SLOTS == 8
     assert S.PLAYER_BASE_DIM + S.CURR_EXTRA_DIM + S.CURR_RESERVED_SLOTS == S.CURR_PLAYER_DIM == 67
     assert S.PLAYER_BASE_DIM + S.OPP_EXTRA_DIM + S.RESERVED_PLAYER_SLOTS == S.NEXT_PLAYER_DIM == 69
+
+
+# ---------------------------------------------------------------------------
+# D5 — masked_log_dists is the single source of truth for evaluate_actions
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_actions_gathers_from_masked_log_dists() -> None:
+    """The additive accessor and the per-head log-probs cannot drift: the second
+    is a ``gather`` of the first, and the pin says so numerically."""
+    import torch
+
+    from catan_rl.policy import CatanPolicy
+    from catan_rl.policy.obs_schema import ActionType
+    from tests.unit.bc.test_loss import _synth_batch
+
+    policy = CatanPolicy().eval()
+    batch = _synth_batch(
+        6,
+        [
+            ActionType.BUILD_SETTLEMENT,
+            ActionType.BUILD_ROAD,
+            ActionType.END_TURN,
+            ActionType.BUILD_CITY,
+            ActionType.BUY_DEV_CARD,
+            ActionType.MOVE_ROBBER,
+        ],
+    )
+    out = policy.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
+    names = ("type", "corner", "edge", "tile", "resource1", "resource2")
+    for head, name in enumerate(names):
+        dist = out[f"log_dist/{name}"]
+        idx = batch["action"][:, head]
+        gathered = dist.gather(-1, idx.unsqueeze(-1)).squeeze(-1)
+        assert torch.equal(gathered, out["per_head_log_prob"][:, head]), name
+        # A masked log-distribution normalises over its legal support.
+        assert torch.allclose(dist.exp().sum(dim=-1), torch.ones(dist.shape[0]), atol=1e-5), name

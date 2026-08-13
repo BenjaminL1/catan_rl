@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 
 
@@ -57,7 +56,6 @@ class TestSubmit:
         session.submit(
             settlement_vertex=settlement,
             road_edge=road,
-            archetype=Archetype.BALANCED,
             notes="",
             decision_time_ms=1000,
         )
@@ -70,7 +68,6 @@ class TestSubmit:
         assert row["settlement_vertex"] == settlement
         assert row["road_edge"] == road
         assert row["draft_position"] == 1
-        assert row["archetype"] == "balanced"
         assert row["labeler_id"] == "ben"
         assert row["session_id"] == session.session_id
         assert row["game_seed"] is not None
@@ -85,7 +82,6 @@ class TestSubmit:
         session.submit(
             settlement_vertex=settlement,
             road_edge=road,
-            archetype=Archetype.BALANCED,
         )
         s2 = session.current_scenario()
         assert s2 is not None
@@ -105,7 +101,6 @@ class TestSubmit:
             session.submit(
                 settlement_vertex=settlement,
                 road_edge=road,
-                archetype=Archetype.BALANCED,
             )
         # First four picks share a seed; the fifth pick must come from a
         # new board (different seed) at draft_position 1.
@@ -122,7 +117,6 @@ class TestSubmit:
             session.submit(
                 settlement_vertex=settlement,
                 road_edge=road,
-                archetype=Archetype.BALANCED,
             )
             assert session.scenarios_completed == i + 1
 
@@ -168,7 +162,6 @@ class TestResume:
             session1.submit(
                 settlement_vertex=settlement,
                 road_edge=road,
-                archetype=Archetype.BALANCED,
             )
         session1.quit()
 
@@ -202,7 +195,6 @@ class TestUnlimitedSessions:
             session.submit(
                 settlement_vertex=settlement,
                 road_edge=road,
-                archetype=Archetype.BALANCED,
             )
         # Still has more scenarios available.
         assert session.current_scenario() is not None

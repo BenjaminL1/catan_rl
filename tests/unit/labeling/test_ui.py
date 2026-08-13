@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from catan_rl.labeling.archetypes import Archetype
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.labeling.ui import (
     PHASE_ROAD_PICK,
@@ -86,7 +85,6 @@ class TestStateMachineTransitions:
         session.submit(
             settlement_vertex=settlement,
             road_edge=road,
-            archetype=Archetype.BALANCED,
         )
         # Now at pick 2. Try clicking on the illegal vertex.
         state = LabelingUIState(session)
@@ -153,7 +151,7 @@ class TestSubmitFromState:
         session = _make_session(tmp_path)
         state = LabelingUIState(session)
         with pytest.raises(RuntimeError):
-            state.submit(archetype=Archetype.BALANCED)
+            state.submit()
 
     def test_submit_when_ready_writes_row_and_advances(self, tmp_path: Path) -> None:
         session = _make_session(tmp_path)
@@ -165,7 +163,7 @@ class TestSubmitFromState:
         edges = scenario.compute_legal_road_edges(settlement)
         road = int(np.where(edges)[0][0])
         state.select_road(road)
-        state.submit(archetype=Archetype.BALANCED)
+        state.submit()
         # JSONL row written.
         scenarios_path = tmp_path / "scenarios.jsonl"
         assert scenarios_path.exists()
@@ -219,19 +217,3 @@ class TestPortRendering:
         assert resources == {"BRICK", "WOOD", "WHEAT", "SHEEP", "ORE"}, (
             f"missing resources in port set: {resources}"
         )
-
-
-class TestArchetypeShortcut:
-    def test_archetype_first_letter_lookup(self) -> None:
-        from catan_rl.labeling.ui import archetype_from_key
-
-        assert archetype_from_key("b") is Archetype.BALANCED
-        assert archetype_from_key("o") is Archetype.OWS
-        assert archetype_from_key("h") is Archetype.OWS_HYBRID
-        assert archetype_from_key("r") is Archetype.ROAD_BUILDER
-        assert archetype_from_key("x") is Archetype.OTHER
-
-    def test_unknown_key_returns_none(self) -> None:
-        from catan_rl.labeling.ui import archetype_from_key
-
-        assert archetype_from_key("z") is None

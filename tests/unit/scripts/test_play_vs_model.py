@@ -1589,3 +1589,114 @@ class TestInteractiveRulesAudit:
         record, _replay = TestCrashSafeArtifacts()._run(tmp_path, monkeypatch, exc=SystemExit(0))
         assert record["hud"] == 3
         assert record["rules_epoch"] == 2
+
+
+# ---------------------------------------------------------------------------
+# D2 — OBSERVED setup assembly (spec setup-labeling-and-champion-finetune)
+# ---------------------------------------------------------------------------
+
+
+def _snap(settlements, roads, *, resources=None, robber_hex=9, longest=None):  # type: ignore[no-untyped-def]
+    from catan_rl.replay.schema import PlayerStateSnapshot, StepStateSnapshot
+
+    resources = resources or {}
+    players = {
+        a: PlayerStateSnapshot(
+            name=a,
+            vp=len(settlements.get(a, ())),
+            resources=dict(resources.get(a, {})),
+            dev_cards_hand={},
+            dev_cards_played={},
+        )
+        for a in ("player_a", "player_b")
+    }
+    return StepStateSnapshot(
+        settlements={k: tuple(v) for k, v in settlements.items()},
+        cities={"player_a": (), "player_b": ()},
+        roads={k: tuple(v) for k, v in roads.items()},
+        robber_hex=robber_hex,
+        players=players,
+        longest_road_holder=longest,
+        largest_army_holder=None,
+    )
+
+
+def _draft_timeline(first: str):  # type: ignore[no-untyped-def]
+    """A snake-draft snapshot timeline: ``first`` picks 1st and 4th.
+
+    Deliberately includes a post-road snapshot per placement (the reverse-pass
+    resource grant fires as its own broadcast), which is the state each of the
+    last two steps must carry."""
+    second = "player_b" if first == "player_a" else "player_a"
+    s: dict[str, list[int]] = {"player_a": [], "player_b": []}
+    r: dict[str, list[int]] = {"player_a": [], "player_b": []}
+    res: dict[str, dict[str, int]] = {"player_a": {}, "player_b": {}}
+    timeline = [_snap(s, r)]
+    for k, (actor, vtx, edge) in enumerate(
+        [(first, 10, 20), (second, 11, 21), (second, 12, 22), (first, 13, 23)]
+    ):
+        s[actor].append(vtx)
+        timeline.append(_snap(s, r, resources=res))  # settlement BUILD
+        r[actor].append(edge)
+        timeline.append(_snap(s, r, resources=res))  # road BUILD
+        if k >= 2:  # reverse pass grants, as a SEPARATE later event
+            res[actor] = {"WOOD": 1, "ORE": 1}
+            timeline.append(_snap(s, r, resources=res))
+    return timeline, first, second
+
+
+@pytest.mark.parametrize("first", ["player_a", "player_b"])
+def test_observed_setup_steps_pairs_each_placement_with_its_own_state(first: str) -> None:
+    """Both seatings. Each step must carry the state AT ITS OWN placement —
+    counts grow by one, and the reverse-pass grant lands on the granting step
+    rather than on a shared setup-complete tail."""
+    mod = _load_module()
+    timeline, first_actor, second_actor = _draft_timeline(first)
+    steps = mod._observed_setup_steps(
+        timeline=timeline,
+        seat_to_actor={"Agent": "player_a", "Opponent": "player_b"},
+    )
+    assert [s.actor for s in steps] == [first_actor, second_actor, second_actor, first_actor]
+    assert [s.actions[0].args["vertex_idx"] for s in steps] == [10, 11, 12, 13]
+    assert [s.actions[1].args["edge_idx"] for s in steps] == [20, 21, 22, 23]
+    assert [s.step_idx for s in steps] == [0, 1, 2, 3]
+    for i, step in enumerate(steps):
+        assert step.kind == "setup"
+        assert sum(len(v) for v in step.state_after.settlements.values()) == i + 1
+        assert sum(len(v) for v in step.state_after.roads.values()) == i + 1
+    # Forward pass: no grant yet. Reverse pass: the grant is ON the step.
+    for step in steps[:2]:
+        assert sum(step.state_after.players[step.actor].resources.values()) == 0
+    for step in steps[2:]:
+        assert sum(step.state_after.players[step.actor].resources.values()) == 2
+
+
+def test_observed_setup_steps_reads_the_engine_tail_not_a_literal() -> None:
+    """``setup_steps_seat_0/1`` hardcoded ``longest_road_holder=None``; the
+    observed assembly must pass through whatever the engine snapshot says."""
+    mod = _load_module()
+    timeline, _f, _s = _draft_timeline("player_a")
+    timeline[-1] = _snap(
+        dict(timeline[-1].settlements),
+        dict(timeline[-1].roads),
+        robber_hex=3,
+        longest="player_a",
+    )
+    steps = mod._observed_setup_steps(
+        timeline=timeline,
+        seat_to_actor={"Agent": "player_a", "Opponent": "player_b"},
+    )
+    assert steps[3].state_after.longest_road_holder == "player_a"
+    assert steps[3].state_after.robber_hex == 3
+    assert steps[0].state_after.longest_road_holder is None
+
+
+def test_observed_setup_steps_refuses_a_short_timeline() -> None:
+    """Engine drift must crash, not silently mis-assemble the opening."""
+    mod = _load_module()
+    timeline, _f, _s = _draft_timeline("player_a")
+    with pytest.raises(RuntimeError, match="observed setup timeline"):
+        mod._observed_setup_steps(
+            timeline=timeline[:4],
+            seat_to_actor={"Agent": "player_a", "Opponent": "player_b"},
+        )
