@@ -20,6 +20,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+from catan_rl.env.ruleset import RULESET_R0
+
 SCHEMA_VERSION: int = 2
 """Current JSONL schema version. Bump on backward-incompatible changes.
 
@@ -29,13 +31,15 @@ populated at READ time for v1 rows by :func:`_migrate_row`.
 ``_REQUIRED_FIELDS`` is unchanged, so a v1 row written by the labeling tool
 keeps loading untouched and the file on disk is never rewritten."""
 
-_V2_DEFAULTS: dict[str, Any] = {"source": "tool", "ruleset": "R0"}
+_V2_DEFAULTS: dict[str, Any] = {"source": "tool", "ruleset": RULESET_R0}
 """Read-time defaults for the fields v2 added.
 
 ``source="tool"`` is the correct value for every v1 row: the records→labels
 adapter did not exist when they were written, so the labeling UI was the only
-writer. ``ruleset="R0"`` matches the epoch ``ScenarioGenerator`` pins — it
-builds every mask with ``RULESET_R0``."""
+writer. The ruleset default is :data:`~catan_rl.env.ruleset.RULESET_R0`
+IMPORTED, not the literal ``"R0"`` — it must mean the same epoch
+``ScenarioGenerator`` pins (it builds every mask with ``RULESET_R0``), and a
+literal would keep saying "R0" if that constant were ever renamed."""
 
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",

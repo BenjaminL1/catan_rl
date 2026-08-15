@@ -128,6 +128,13 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   two setup decisions out of an observed, human-authored record into the
   labeling JSONL store and REFUSES anything else — heuristic openings must never
   reach the opening corpus).
+  Setup-labeling / champion-fine-tune CLIs (spec
+  `setup-labeling-and-champion-finetune`): `label_setup.py` (the labeling tool),
+  `export_game_labels.py` (D3 record→label adapter), `convert_labels_to_bc_shard.py`
+  (D4 label store → BC shard; `--held-out-frac` defaults to 0.2 and the library
+  `to_shard.convert` now matches), `eval_setup_agreement.py` (D7 gate 1) and
+  `eval_wr_non_inferiority.py` (D7 gate 2 — two identically-seeded `EvalHarness`
+  rounds into `paired_wr_non_inferiority`; refuses unless BOTH checkpoints are R0).
   (No v1 `evaluate.py`.)
 - `configs/` — `ppo_default.yaml`, `bc.yaml`. `docs/plans/v2/` — current roadmap.
 

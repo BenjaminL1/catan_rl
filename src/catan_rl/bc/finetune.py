@@ -5,7 +5,7 @@ without damaging its midgame.
 
 The objective
 -------------
-``L = L_BC(human rows) + kl_coef · KL_anchor``
+``L = L_BC(human rows) + kl_coef · KL_anchor + anchor_value_coef · MSE_value``
 
 * ``L_BC`` is the ordinary BC loss over the human shard, with the **value loss
   zeroed per row** (``bc_loss(..., value_row_mask=...)``): a hand-labeled
@@ -32,9 +32,25 @@ The objective
   reader mistakes it for one.
 
   **Where the states come from** is not a detail either: they are rolled out
-  from games whose setups are FORCED to the owner's labeled openings (see
-  :mod:`catan_rl.bc.anchor_states`), so the anchor covers the distribution the
-  fine-tune moves TOWARD rather than the one it leaves.
+  from games whose setups are FORCED to the owner's labeled openings AND walked
+  forward by the FROZEN CHAMPION ITSELF (see :mod:`catan_rl.bc.anchor_states`),
+  so the anchor covers the distribution the fine-tune moves TOWARD rather than
+  the one it leaves — and covers it on-policy rather than a few random plies off
+  it.
+
+* ``MSE_value`` is the frozen-VALUE guard, on the same states and out of the
+  same pair of forward passes (:func:`anchor_terms`). The six action heads are
+  not the whole champion: the deployed search reads the value head through
+  ``sigma(3.22V - 1.14)``, so a value head free to drift while every action head
+  is pinned is a deployment-visible regression the KL term structurally cannot
+  see.
+
+Held-out gating (D7)
+--------------------
+:func:`finetune` REFUSES a shard whose manifest withheld no ``game_seed``
+(:class:`UngatedShardError`) unless ``FinetuneConfig.allow_ungated`` is set. The
+gate CLI already refuses such a shard — but it refuses after the run, when the
+labels are spent on a candidate no held-out measurement can read.
 
 Epoch (D6)
 ----------
@@ -54,8 +70,9 @@ from __future__ import annotations
 
 import json
 import random
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -103,6 +120,37 @@ class FinetuneConfig:
     At 1.0 the same setup cut held-out drift to ~0.19x the unanchored control.
     ``tests/unit/bc/test_finetune.py`` pins the effect at this default."""
 
+    anchor_value_coef: float = 10.0
+    """Weight on the frozen-VALUE guard, ``MSE(V_ft, V_frozen)`` over the same
+    anchor states. The six action heads are not the whole champion: the deployed
+    search reads the value head through ``sigma(3.22V - 1.14)``
+    (:mod:`catan_rl.search`), so a value head that drifts while the policy heads
+    are pinned is a deployment-visible regression the KL term cannot see.
+
+    NOT the same order as ``kl_coef``, and the difference is measured, not
+    guessed. Squared-error on a scalar in roughly ``[-1, 1]`` is an order of
+    magnitude smaller than the summed six-head KL, so at ``1.0`` the term
+    carries too little gradient to matter. MEASURED on the mock corpus while
+    building this module (60 steps, lr 1e-3, refresh on, three seeds; held-out
+    value MSE, mean over seeds):
+
+    ===========  ==================
+    coefficient  held-out value MSE
+    ===========  ==================
+    0.0          0.090
+    10.0         0.0060
+    50.0         0.0078
+    100.0        0.0039
+    ===========  ==================
+
+    ``10.0`` is the smallest weight that cut drift on EVERY seed (~0.07x the
+    unguarded control) while leaving the action-head KL where the unguarded run
+    left it. Beyond it the value number stops improving and the KL starts
+    swinging seed to seed — the ``clip_grad_norm_(0.5)`` budget hazard the
+    ``kl_coef`` note describes, arriving here too.
+    ``tests/unit/bc/test_finetune.py::test_the_anchor_bounds_value_drift_too``
+    pins the effect at this default."""
+
     anchor_batch: int = 16
     n_anchor_states: int = 256
     anchor_refresh_every: int = 50
@@ -120,10 +168,23 @@ class FinetuneConfig:
     """CPU by default per the repo device policy (eval is pinned to CPU; this is
     a few hundred small-batch steps, not a training run)."""
 
-    history: dict[str, Any] = field(default_factory=dict)
+    allow_ungated: bool = False
+    """Train on a shard that withheld NOTHING. Off by default, and refusing is
+    the point: a candidate fine-tuned on every label cannot be read by D7 gate 1
+    at all, and by the time ``scripts/eval_setup_agreement.py`` notices, the
+    training run is already spent. Setting this True is legitimate (the labels
+    may deliberately all be in-sample for a final build), but it is a DECISION —
+    recorded in ``history.json`` as ``allow_ungated`` / ``held_out_gated``."""
 
 
-def _build_policy(ckpt_path: Path, device: torch.device) -> CatanPolicy:
+def build_policy(ckpt_path: Path, device: torch.device) -> CatanPolicy:
+    """Load ``ckpt_path`` into a fresh :class:`CatanPolicy` on ``device``.
+
+    Public because the gate CLIs (``scripts/eval_setup_agreement.py``,
+    ``scripts/eval_wr_non_inferiority.py``) load the same checkpoints the
+    fine-tune does, and a second loader would be a second place for the
+    geometry-before-state-dict ordering below to be got wrong.
+    """
     from catan_rl.checkpoint import load_checkpoint
 
     policy = CatanPolicy()
@@ -137,18 +198,36 @@ def _build_policy(ckpt_path: Path, device: torch.device) -> CatanPolicy:
     return policy
 
 
-def anchor_kl(
+@dataclass(frozen=True)
+class AnchorTerms:
+    """Both halves of the anchor, from ONE pair of forward passes."""
+
+    kl: torch.Tensor
+    """Relevance-weighted sum of the six per-head conditional KLs."""
+
+    value_mse: torch.Tensor
+    """``MSE(V_fine-tuned, V_frozen)`` on the same states."""
+
+
+def anchor_terms(
     trainable: CatanPolicy,
     frozen: CatanPolicy,
     batch: dict[str, Any],
-) -> torch.Tensor:
-    """Relevance-weighted sum of the six per-head conditional KLs.
+) -> AnchorTerms:
+    """Anchor KL **and** value drift, computed together.
 
     ``KL(fine-tuned ‖ frozen)`` — the fine-tuned policy is the one being held in
     place, so it is the distribution the expectation is taken under. Heads the
     reference action type does not use contribute nothing (their masks are
     all-False and ``masked_log_softmax`` would hand back a uniform placeholder —
     noise wearing the shape of an opinion).
+
+    The value term rides along because both policies' ``forward`` already emits
+    ``"value"``: a separate function would double the forward passes to
+    re-derive a number this one already has in hand. It is the guard the six
+    action heads do not provide — the deployed search squashes this head through
+    ``sigma(3.22V - 1.14)``, so unconstrained value drift changes deployed
+    behaviour even with every action head pinned.
     """
     out_ft = trainable.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
     with torch.no_grad():
@@ -165,7 +244,11 @@ def anchor_kl(
         per_row = (log_p.exp() * (log_p - log_q)).sum(dim=-1)
         rel = relevance[:, h_idx]
         total = total + (per_row * rel).sum() / rel.sum().clamp_min(1.0)
-    return total
+
+    value_mse = torch.nn.functional.mse_loss(
+        out_ft["value"].reshape(-1), out_fz["value"].reshape(-1)
+    )
+    return AnchorTerms(kl=total, value_mse=value_mse)
 
 
 def _anchor_batch_tensors(
@@ -192,13 +275,17 @@ def _anchor_batch_tensors(
     return {"obs": obs, "mask": mask, "action": action}
 
 
+class UngatedShardError(RuntimeError):
+    """The shard withheld nothing, so the candidate it produces is ungateable."""
+
+
 def _shard_held_out_seeds(shard_dir: Path) -> tuple[int, ...]:
     """The ``game_seed`` s the converter withheld from ``shard_dir``.
 
     Empty for a shard built with ``held_out_frac=0`` (and for the pre-split
     manifests), which is the honest reading: nothing was withheld, so nothing
-    needs excluding here — ``scripts/eval_setup_agreement.py`` is the place that
-    refuses to gate such a shard.
+    needs excluding. :func:`_require_gated_shard` is what decides whether that is
+    acceptable.
     """
     manifest = Path(shard_dir) / "manifest.json"
     if not manifest.is_file():
@@ -207,13 +294,92 @@ def _shard_held_out_seeds(shard_dir: Path) -> tuple[int, ...]:
     return tuple(int(s) for s in payload.get("held_out_game_seeds", ()))
 
 
+def _require_gated_shard(shard_dir: Path, *, allow_ungated: bool) -> tuple[int, ...]:
+    """Refuse a shard that withheld nothing, unless the caller said so.
+
+    ``scripts/eval_setup_agreement.py`` already refuses such a shard — but it
+    refuses at GATE time, when the fine-tune has run and every label is spent on
+    a candidate no held-out measurement can read. The same refusal here costs a
+    re-run of the converter and nothing else.
+
+    Missing-manifest and empty-set are reported separately: the first is a
+    malformed shard directory, the second a deliberate ``--held-out-frac 0``.
+    """
+    manifest = Path(shard_dir) / "manifest.json"
+    if not manifest.is_file():
+        if allow_ungated:
+            return ()
+        raise UngatedShardError(
+            f"{shard_dir} has no manifest.json, so nothing can say which game_seeds "
+            f"were withheld for the D7 gate-1 measurement. Rebuild it with "
+            f"scripts/convert_labels_to_bc_shard.py, or pass allow_ungated=True to "
+            f"train a deliberately ungateable candidate."
+        )
+    seeds = _shard_held_out_seeds(shard_dir)
+    if not seeds and not allow_ungated:
+        payload = json.loads(manifest.read_text())
+        how = (
+            "carries no 'held_out_game_seeds' key"
+            if "held_out_game_seeds" not in payload
+            else "has an EMPTY held-out set (--held-out-frac 0)"
+        )
+        raise UngatedShardError(
+            f"{manifest} {how}, so every label is in-sample and D7 gate 1 would "
+            f"report memorisation rather than generalisation. Re-run "
+            f"scripts/convert_labels_to_bc_shard.py with --held-out-frac > 0, or "
+            f"pass allow_ungated=True to make that trade-off explicitly."
+        )
+    return seeds
+
+
 def _human_row_value_mask(batch: dict[str, Any]) -> torch.Tensor:
     """Every row of the human shard is value-less. Explicit, not implied."""
     return torch.zeros_like(batch["z_disc"])
 
 
 def finetune(config: FinetuneConfig) -> dict[str, Any]:
-    """Run the fine-tune and write the D8 deliverables. Returns the history dict."""
+    """Run the fine-tune and write the D8 deliverables. Returns the history dict.
+
+    Raises:
+        UngatedShardError: if ``config.shard_dir`` withheld nothing and
+            ``config.allow_ungated`` is False.
+    """
+    # The shard's manifest names the game_seeds the converter WITHHELD for the
+    # D7 gate-1 measurement. Checked BEFORE anything expensive: a shard that
+    # withheld nothing produces a candidate no held-out gate can read, and the
+    # cheap moment to say so is now.
+    #
+    # The same seeds are excluded from the anchor rollouts below: forcing a
+    # held-out opening into the anchor states would let it shape the candidate
+    # through the KL term, and the gate would again be measuring a position the
+    # fine-tune had seen.
+    held_out_seeds = _require_gated_shard(config.shard_dir, allow_ungated=config.allow_ungated)
+    with _global_rng_restored():
+        return _finetune(config, held_out_seeds)
+
+
+@contextmanager
+def _global_rng_restored() -> Iterator[None]:
+    """Snapshot and restore the process-global RNGs around the run.
+
+    Mirrors ``EvalHarness.run``. :func:`_finetune` SEEDS numpy's global, the
+    stdlib ``random`` and torch (the engine's ``StackedDice`` and the heuristic
+    opponent read the first two), which is what makes a candidate checkpoint
+    reproducible — but leaving those streams re-seeded on exit would make
+    whatever runs next depend on whether a fine-tune happened first.
+    """
+    np_state = np.random.get_state()
+    py_state = random.getstate()
+    torch_state = torch.random.get_rng_state()
+    try:
+        yield
+    finally:
+        np.random.set_state(np_state)
+        random.setstate(py_state)
+        torch.random.set_rng_state(torch_state)
+
+
+def _finetune(config: FinetuneConfig, held_out_seeds: tuple[int, ...]) -> dict[str, Any]:
     from catan_rl.checkpoint import save_policy_only
 
     device = torch.device(config.device)
@@ -227,18 +393,11 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
     torch.manual_seed(config.seed)
     rng = np.random.default_rng(config.seed)
 
-    trainable = _build_policy(config.ckpt_path, device)
+    trainable = build_policy(config.ckpt_path, device)
     trainable.train()
-    frozen = _build_policy(config.ckpt_path, device)
+    frozen = build_policy(config.ckpt_path, device)
     frozen.eval()
     frozen.requires_grad_(False)
-
-    # The shard's manifest names the game_seeds the converter WITHHELD for the
-    # D7 gate-1 measurement. They are excluded from the anchor rollouts too:
-    # forcing a held-out opening into the anchor states would let it shape the
-    # candidate through the KL term, and the gate would again be measuring a
-    # position the fine-tune had seen.
-    held_out_seeds = _shard_held_out_seeds(config.shard_dir)
 
     dataset = BcDataset(config.shard_dir, aug_prob=0.0, seed=config.seed)
     loader = DataLoader(
@@ -251,10 +410,14 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
     )
     optimizer = AdamW(trainable.parameters(), lr=config.lr, weight_decay=1e-4)
 
+    # The walker is the FROZEN copy (D5): a trainable walker would make the
+    # anchor's state distribution drift with the very update the term bounds.
     anchor = sample_anchor_states(
         config.labels_path,
+        policy=frozen,
         n_states=config.n_anchor_states,
         rng=rng,
+        device=device,
         exclude_game_seeds=held_out_seeds,
     )
     history: list[dict[str, float]] = []
@@ -266,8 +429,10 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
             if config.anchor_refresh_every and step and step % config.anchor_refresh_every == 0:
                 anchor = sample_anchor_states(
                     config.labels_path,
+                    policy=frozen,
                     n_states=config.n_anchor_states,
                     rng=rng,
+                    device=device,
                     exclude_game_seeds=held_out_seeds,
                 )
             batch = _to_device(batch, device)
@@ -279,8 +444,12 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
                 value_row_mask=_human_row_value_mask(batch),
             )
             idx = rng.choice(len(anchor), size=min(config.anchor_batch, len(anchor)), replace=False)
-            kl = anchor_kl(trainable, frozen, _anchor_batch_tensors(anchor, idx, device))
-            total = losses["total"] + config.kl_coef * kl
+            terms = anchor_terms(trainable, frozen, _anchor_batch_tensors(anchor, idx, device))
+            total = (
+                losses["total"]
+                + config.kl_coef * terms.kl
+                + config.anchor_value_coef * terms.value_mse
+            )
 
             optimizer.zero_grad(set_to_none=True)
             total.backward()
@@ -293,7 +462,8 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
                     "total": float(total.item()),
                     "policy": float(losses["policy"].item()),
                     "value": float(losses["value"].item()),
-                    "anchor_kl": float(kl.item()),
+                    "anchor_kl": float(terms.kl.item()),
+                    "anchor_value_mse": float(terms.value_mse.item()),
                 }
             )
             step += 1
@@ -315,6 +485,7 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
             "finetune": "human_openings",
             "base_ckpt": str(config.ckpt_path),
             "kl_coef": config.kl_coef,
+            "anchor_value_coef": config.anchor_value_coef,
         },
     )
     # D8 deliverable (iii): a FROZEN copy designated the human-opening prior. It
@@ -340,6 +511,12 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
         "n_rows": len(dataset),
         "ruleset": "R0",
         "held_out_game_seeds": sorted(held_out_seeds),
+        # Whether this candidate is gateable at all, recorded in the artefact
+        # rather than inferable from an empty list: an empty ``held_out_game_seeds``
+        # with ``allow_ungated`` False is impossible, and with it True is a
+        # decision someone made.
+        "held_out_gated": bool(held_out_seeds),
+        "allow_ungated": bool(config.allow_ungated),
     }
     (config.out_dir / "history.json").write_text(json.dumps(out_history, indent=2))
     return out_history
@@ -355,6 +532,15 @@ def _to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     return out
 
 
+@dataclass(frozen=True)
+class AnchorDrift:
+    """A held-out drift measurement. Both terms, plus what it was measured on."""
+
+    kl: float
+    value_mse: float
+    n_states: int
+
+
 def held_out_anchor_kl(
     candidate_path: Path,
     base_path: Path,
@@ -364,26 +550,55 @@ def held_out_anchor_kl(
     seed: int = 1234,
     device: str = "cpu",
     exclude_game_seeds: Sequence[int] = (),
-) -> float:
-    """Mean per-state anchor KL between a candidate and the base champion.
+) -> AnchorDrift:
+    """Held-out anchor drift between a candidate and the base champion.
+
+    ``kl`` is the SAME quantity :func:`anchor_terms` optimises — a
+    relevance-normalised SUM of the six per-head conditional KLs at one reference
+    action context per state, averaged over states within each head. It is not a
+    mean per-state joint KL; there is no tractable joint over six autoregressive
+    heads to take a mean of. ``value_mse`` is the frozen-value guard's term.
 
     Evaluated on anchor states sampled with a DIFFERENT seed than training used,
     so the number is a held-out drift measurement rather than the training term
     read back. Pass the shard's ``held_out_game_seeds`` to keep the same
     openings out of this measurement that the fine-tune kept out of training.
+
+    The walker is the BASE champion — the same frozen policy the fine-tune
+    anchored against, so the measurement is taken on the distribution the anchor
+    was defined over rather than on the candidate's own.
+
+    The process-global RNGs are seeded and restored around the call: this now
+    consumes the torch stream through ``policy.sample``, so without that the
+    number would depend on what ran before it and the measurement would perturb
+    whatever runs after.
     """
     torch_device = torch.device(device)
-    candidate = _build_policy(candidate_path, torch_device)
-    candidate.eval()
-    base = _build_policy(base_path, torch_device)
-    base.eval()
-    rng = np.random.default_rng(seed)
-    states = sample_anchor_states(
-        labels_path, n_states=n_states, rng=rng, exclude_game_seeds=exclude_game_seeds
-    )
-    with torch.no_grad():
-        batch = _anchor_batch_tensors(states, np.arange(len(states)), torch_device)
-        return float(anchor_kl(candidate, base, batch).item())
+    with _global_rng_restored():
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        candidate = build_policy(candidate_path, torch_device)
+        candidate.eval()
+        base = build_policy(base_path, torch_device)
+        base.eval()
+        rng = np.random.default_rng(seed)
+        states = sample_anchor_states(
+            labels_path,
+            policy=base,
+            n_states=n_states,
+            rng=rng,
+            device=torch_device,
+            exclude_game_seeds=exclude_game_seeds,
+        )
+        with torch.no_grad():
+            batch = _anchor_batch_tensors(states, np.arange(len(states)), torch_device)
+            terms = anchor_terms(candidate, base, batch)
+        return AnchorDrift(
+            kl=float(terms.kl.item()),
+            value_mse=float(terms.value_mse.item()),
+            n_states=len(states),
+        )
 
 
 def setup_agreement(
@@ -418,7 +633,7 @@ def setup_agreement(
     kind = OPP_KIND_HEURISTIC if opponent_kind is None else int(opponent_kind)
 
     torch_device = torch.device(device)
-    policy = _build_policy(ckpt_path, torch_device)
+    policy = build_policy(ckpt_path, torch_device)
     policy.eval()
 
     out: list[bool] = []

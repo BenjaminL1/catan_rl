@@ -2037,7 +2037,8 @@ def play_interactive(
     view.displayGameScreen()
 
     # Full-fidelity record of BOTH players' streams (see _HumanGameRecorder for
-    # the fidelity caveats — the synthesized opening especially).
+    # the fidelity caveats). The opening is no longer synthesized: D2 records the
+    # four observed setup steps per seat at placement time.
     recorder = _HumanGameRecorder(env, bot_seat=bot_seat) if replay_dir else None
 
     terminated = truncated = False

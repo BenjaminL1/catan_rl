@@ -39,7 +39,9 @@ def labels(tmp_path_factory) -> Path:  # type: ignore[no-untyped-def]
 @pytest.fixture(scope="module")
 def shard_dir(tmp_path_factory, labels: Path) -> Path:  # type: ignore[no-untyped-def]
     out = tmp_path_factory.mktemp("shard")
-    to_shard.convert(labels, out)
+    # EXPLICIT 0.0: ``convert`` now withholds 20% by default, and this fixture
+    # is the "whole corpus" one every downstream row-count assertion counts on.
+    to_shard.convert(labels, out, held_out_frac=0.0)
     return out
 
 
@@ -166,8 +168,8 @@ def test_conversion_is_deterministic(labels: Path, tmp_path: Path) -> None:
     import numpy as np
 
     a, b = tmp_path / "a", tmp_path / "b"
-    to_shard.convert(labels, a)
-    to_shard.convert(labels, b)
+    to_shard.convert(labels, a, held_out_frac=0.0)
+    to_shard.convert(labels, b, held_out_frac=0.0)
     with np.load(a / "shard_00000.npz") as za, np.load(b / "shard_00000.npz") as zb:
         assert sorted(za.files) == sorted(zb.files)
         for key in za.files:
@@ -199,7 +201,7 @@ def test_empty_store_is_refused(tmp_path: Path) -> None:
     empty = tmp_path / "scenarios.jsonl"
     empty.write_text("")
     with pytest.raises(to_shard.LabelConversionError, match="no label rows"):
-        to_shard.convert(empty, tmp_path / "out")
+        to_shard.convert(empty, tmp_path / "out", held_out_frac=0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +235,25 @@ def test_a_split_needs_more_than_one_seed_and_says_so(labels: Path, tmp_path: Pa
     shard, or (worse) a full one whose gate would then be in-sample."""
     with pytest.raises(to_shard.LabelConversionError, match="no training rows"):
         to_shard.convert(labels, tmp_path / "nope", held_out_frac=0.5)
+
+
+def test_the_default_withholds_a_held_out_set(multi_seed_labels: Path, tmp_path: Path) -> None:
+    """The CLI has always defaulted to 0.2; the library defaulted to 0.0, so any
+    caller that did not repeat the flag built an ungateable shard. The default is
+    the one the gates require."""
+    manifest = to_shard.convert(multi_seed_labels, tmp_path / "default")
+    assert manifest["held_out_frac"] == 0.2
+    assert manifest["held_out_game_seeds"]
+
+
+def test_a_single_seed_corpus_now_fails_closed_under_the_default(
+    labels: Path, tmp_path: Path
+) -> None:
+    """Owned consequence of the new default: ``held_out_split`` always withholds
+    at least one seed, so a one-draft corpus has no training half left. Failing
+    closed is right — a shard whose gate is in-sample is worse than no shard."""
+    with pytest.raises(to_shard.LabelConversionError, match="no training rows"):
+        to_shard.convert(labels, tmp_path / "single")
 
 
 def test_held_out_seeds_are_excluded_from_the_shard_and_named_in_the_manifest(

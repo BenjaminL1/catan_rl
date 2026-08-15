@@ -333,3 +333,45 @@ class TestPairedWrNonInferiority:
         pre = _Result([_Game(1, 0, True), _Game(1, 1, True)])
         got = paired_wr_non_inferiority(finetuned=ft, pre=pre)
         assert got["n_pairs"] == 2
+
+
+class TestPairingAgainstRealEvalRuns:
+    """The synthetic tests above pin the arithmetic; this one pins the PREMISE.
+
+    ``paired_wr_non_inferiority`` raises unless both runs cover the same
+    ``(seed, agent_seat)`` keys, and the whole D7.2 gate rests on two real
+    ``EvalHarness`` rounds at one seed producing exactly that. Nothing in the
+    synthetic doubles would notice if the harness stopped deriving its seeds
+    from ``self.seed`` + the opponent label.
+    """
+
+    @staticmethod
+    def _tiny_report():  # type: ignore[no-untyped-def]
+        import torch
+
+        from catan_rl.eval.harness import EvalHarness
+        from catan_rl.policy import CatanPolicy
+        from catan_rl.policy.board_geometry import build_geometry
+
+        torch.manual_seed(0)
+        policy = CatanPolicy()
+        policy.set_board_geometry(build_geometry().as_dict_of_tensors())
+        policy.eval()
+        harness = EvalHarness(
+            opponent_types=("random",),
+            n_games_per_seat=1,
+            seed=17,
+            max_turns=8,
+            audit_rules=False,
+        )
+        return harness.run(policy).by_opponent("random")
+
+    def test_two_real_harness_runs_at_one_seed_pair_cleanly(self) -> None:
+        from catan_rl.bc.gates import paired_wr_non_inferiority
+
+        first = self._tiny_report()
+        second = self._tiny_report()
+        assert first is not None and second is not None
+        got = paired_wr_non_inferiority(finetuned=first, pre=second, margin=0.05)
+        assert got["n_pairs"] == 2  # one game per seat
+        assert got["delta"] == pytest.approx(0.0)

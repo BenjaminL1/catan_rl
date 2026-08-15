@@ -333,7 +333,7 @@ def convert(
     *,
     opponent_kinds: tuple[int, ...] = DEFAULT_OPPONENT_KINDS,
     shard_name: str = "shard_00000.npz",
-    held_out_frac: float = 0.0,
+    held_out_frac: float = 0.2,
     split_seed: int = 0,
 ) -> dict[str, Any]:
     """Convert a label store into a single BC shard + manifest in ``out_dir``.
@@ -356,7 +356,21 @@ def convert(
     agreement on rows the candidate was fine-tuned on — memorisation, read as
     generalisation, in exactly the gate whose stated remedy for a marginal
     result is MORE LABELS. Leaving ``held_out_frac=0`` produces a shard with no
-    held-out set at all, and the gate CLI then REFUSES to run against it.
+    held-out set at all, which ``bc.finetune.finetune`` and the gate CLI both
+    REFUSE (the former unless ``allow_ungated=True``).
+
+    **The default is 0.2, matching ``scripts/convert_labels_to_bc_shard.py``.**
+    It used to be 0.0, so every caller that did not repeat the flag — the
+    library's own tests included — built a shard no gate could honestly read.
+    The gated split is the normal case; skipping it is the decision.
+
+    Fail-closed consequence, owned: :func:`~catan_rl.labeling.store.held_out_split`
+    always withholds at least one ``game_seed``, so a corpus with a SINGLE seed
+    now raises :class:`LabelConversionError` ("no training rows") under the
+    default. That is the right failure — a one-draft corpus cannot produce both a
+    training half and an honest gate, and a shard whose gate is in-sample is
+    worse than no shard. Pass ``held_out_frac=0.0`` explicitly to convert such a
+    corpus whole.
 
     Returns the manifest dict (also written to ``out_dir/manifest.json``).
     """
