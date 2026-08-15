@@ -84,8 +84,15 @@ from torch.utils.data import DataLoader
 from catan_rl.bc.anchor_states import sample_anchor_states
 from catan_rl.bc.loader import BcDataset, bc_collate
 from catan_rl.bc.loss import bc_loss
+
+# The torch-RNG snapshot/restore pair lives in ``eval.harness`` and is IMPORTED
+# rather than re-derived (``eval.cross_arch`` already does the same):
+# ``torch.manual_seed`` reseeds every backend, so a second copy of the
+# cpu+cuda+mps list would be a second place for one to be forgotten.
+from catan_rl.eval.harness import _restore_torch_rng, _snapshot_torch_rng
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.board_geometry import build_geometry
+from catan_rl.policy.obs_schema import AUTOREGRESSIVE_HEAD, MASK_KEY_FOR
 
 _HEAD_NAMES: tuple[str, ...] = ("type", "corner", "edge", "tile", "resource1", "resource2")
 
@@ -208,6 +215,51 @@ class AnchorTerms:
     value_mse: torch.Tensor
     """``MSE(V_fine-tuned, V_frozen)`` on the same states."""
 
+    head_relevance: torch.Tensor
+    """(6,) — the per-head DENOMINATORS :attr:`kl` was normalised by, in
+    :data:`_HEAD_NAMES` order.
+
+    Reported because the sum alone cannot distinguish "this head did not drift"
+    from "this head had no rows". A batch of pure ``END_TURN`` / ``ROLL_DICE``
+    nodes constrains nothing but the type head, and its anchor KL is small for
+    that reason rather than because the placement heads are pinned."""
+
+
+def _head_coverage(masks: dict[str, torch.Tensor], action: torch.Tensor) -> torch.Tensor:
+    """(B, 6) float — 1.0 where a head's own mask offers at least one legal index.
+
+    An all-False head mask is not a constrained head: ``masked_log_softmax``
+    hands BOTH policies the same uniform placeholder, so that row's KL is
+    identically zero. ``PLAY_KNIGHT``'s ``tile`` head is the live case — the
+    ``tile`` mask is only ever written in the env's robber-placement branch
+    (``env/masks.py``), which is a different node, so it is all-False at every
+    node offering ``PLAY_KNIGHT``. Counting those rows in the tile denominator
+    divides real drift by a larger number and reports the anchor as tighter than
+    it is.
+
+    Head 0 (``type``) is always covered: ``compute_action_masks`` falls back to
+    ``END_TURN`` rather than emitting an empty type mask.
+    """
+    any_legal = {
+        key: mask.reshape(mask.shape[0], -1).any(dim=-1).cpu().numpy()
+        for key, mask in masks.items()
+    }
+    types = action[:, 0].cpu().numpy()
+    cover = np.ones((len(types), len(_HEAD_NAMES)), dtype=np.float32)
+    for row, action_type in enumerate(types):
+        for head in range(1, len(_HEAD_NAMES)):
+            key = MASK_KEY_FOR[action_type][head]
+            if key is None:  # head irrelevant for this type; relevance zeroes it
+                continue
+            legal = bool(any_legal[key][row])
+            if head == AUTOREGRESSIVE_HEAD and key == "resource2_yop":
+                # ``MASK_KEY_FOR[..][5]`` names only the BASE key; a doubled YoP
+                # pick is routed to ``resource2_yop_same`` instead, so the head
+                # is covered if EITHER offers an index.
+                legal = legal or bool(any_legal["resource2_yop_same"][row])
+            cover[row, head] = float(legal)
+    return torch.as_tensor(cover, device=action.device)
+
 
 def anchor_terms(
     trainable: CatanPolicy,
@@ -232,7 +284,11 @@ def anchor_terms(
     out_ft = trainable.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
     with torch.no_grad():
         out_fz = frozen.evaluate_actions(batch["obs"], batch["action"], batch["mask"])
-    relevance = out_ft["relevance"]  # (B, 6)
+    # Relevance says the head CONTRIBUTES to this action type's joint log-prob;
+    # coverage says its mask actually offered a choice. A head that is relevant
+    # but entirely masked contributes an identically-zero KL, so leaving it in
+    # the denominator would report the anchor as tighter than it is.
+    relevance = out_ft["relevance"] * _head_coverage(batch["mask"], batch["action"])
 
     total = relevance.new_zeros(())
     for h_idx, name in enumerate(_HEAD_NAMES):
@@ -248,7 +304,7 @@ def anchor_terms(
     value_mse = torch.nn.functional.mse_loss(
         out_ft["value"].reshape(-1), out_fz["value"].reshape(-1)
     )
-    return AnchorTerms(kl=total, value_mse=value_mse)
+    return AnchorTerms(kl=total, value_mse=value_mse, head_relevance=relevance.detach().sum(dim=0))
 
 
 def _anchor_batch_tensors(
@@ -273,6 +329,11 @@ def _anchor_batch_tensors(
         np.stack([states[i]["action"] for i in idx]).astype(np.int64), device=device
     )
     return {"obs": obs, "mask": mask, "action": action}
+
+
+def _head_relevance_dict(counts: torch.Tensor) -> dict[str, float]:
+    """The (6,) coverage vector as a NAMED mapping, for the JSON artefacts."""
+    return dict(zip(_HEAD_NAMES, (float(x) for x in counts.tolist()), strict=True))
 
 
 class UngatedShardError(RuntimeError):
@@ -362,21 +423,27 @@ def finetune(config: FinetuneConfig) -> dict[str, Any]:
 def _global_rng_restored() -> Iterator[None]:
     """Snapshot and restore the process-global RNGs around the run.
 
-    Mirrors ``EvalHarness.run``. :func:`_finetune` SEEDS numpy's global, the
-    stdlib ``random`` and torch (the engine's ``StackedDice`` and the heuristic
-    opponent read the first two), which is what makes a candidate checkpoint
-    reproducible — but leaving those streams re-seeded on exit would make
-    whatever runs next depend on whether a fine-tune happened first.
+    :func:`_finetune` SEEDS numpy's global, the stdlib ``random`` and torch (the
+    engine's ``StackedDice`` and the heuristic opponent read the first two),
+    which is what makes a candidate checkpoint reproducible — but leaving those
+    streams re-seeded on exit would make whatever runs next depend on whether a
+    fine-tune happened first.
+
+    The torch half goes through ``eval.harness``'s ``_snapshot_torch_rng`` /
+    ``_restore_torch_rng``, which cover **cpu + cuda + mps**. That matters even
+    though this routine runs on CPU by default: ``torch.manual_seed`` reseeds
+    EVERY backend's generator, so restoring the CPU state alone would hand back
+    one stream and leave a caller's MPS/CUDA stream clobbered.
     """
     np_state = np.random.get_state()
     py_state = random.getstate()
-    torch_state = torch.random.get_rng_state()
+    torch_state = _snapshot_torch_rng()
     try:
         yield
     finally:
         np.random.set_state(np_state)
         random.setstate(py_state)
-        torch.random.set_rng_state(torch_state)
+        _restore_torch_rng(torch_state)
 
 
 def _finetune(config: FinetuneConfig, held_out_seeds: tuple[int, ...]) -> dict[str, Any]:
@@ -420,7 +487,7 @@ def _finetune(config: FinetuneConfig, held_out_seeds: tuple[int, ...]) -> dict[s
         device=device,
         exclude_game_seeds=held_out_seeds,
     )
-    history: list[dict[str, float]] = []
+    history: list[dict[str, Any]] = []
     step = 0
     while step < config.steps:
         for batch in loader:
@@ -464,6 +531,10 @@ def _finetune(config: FinetuneConfig, held_out_seeds: tuple[int, ...]) -> dict[s
                     "value": float(losses["value"].item()),
                     "anchor_kl": float(terms.kl.item()),
                     "anchor_value_mse": float(terms.value_mse.item()),
+                    # The denominators ``anchor_kl`` was normalised by. Without
+                    # them a small KL is unreadable: it could mean the heads were
+                    # held in place, or that this batch offered them no rows.
+                    "anchor_head_relevance": _head_relevance_dict(terms.head_relevance),
                 }
             )
             step += 1
@@ -540,8 +611,16 @@ class AnchorDrift:
     value_mse: float
     n_states: int
 
+    head_relevance: dict[str, float]
+    """Per-head denominators behind :attr:`kl`, keyed by head name.
 
-def held_out_anchor_kl(
+    ``n_states`` alone does not say WHICH heads the measurement could see. A
+    drift number whose ``corner`` count is 0 says nothing about the placement
+    behaviour the anchor exists to protect, and the caller can only tell by
+    reading this."""
+
+
+def held_out_anchor_drift(
     candidate_path: Path,
     base_path: Path,
     labels_path: Path,
@@ -558,6 +637,12 @@ def held_out_anchor_kl(
     action context per state, averaged over states within each head. It is not a
     mean per-state joint KL; there is no tractable joint over six autoregressive
     heads to take a mean of. ``value_mse`` is the frozen-value guard's term.
+
+    Read ``head_relevance`` before reading ``kl``. The sum is normalised per
+    head, so a head that no sampled state exercised contributes nothing and is
+    indistinguishable from a head that did not drift. On a short walk the corner
+    head in particular is reached on a fraction of a percent of states, so a
+    small ``kl`` is NOT by itself a statement about settlement placement.
 
     Evaluated on anchor states sampled with a DIFFERENT seed than training used,
     so the number is a held-out drift measurement rather than the training term
@@ -598,6 +683,7 @@ def held_out_anchor_kl(
             kl=float(terms.kl.item()),
             value_mse=float(terms.value_mse.item()),
             n_states=len(states),
+            head_relevance=_head_relevance_dict(terms.head_relevance),
         )
 
 

@@ -432,7 +432,7 @@ load-bearing obs pin is
 > openings — not merely "reachable from" them. The walker SAMPLES, matching the
 > deployed rollout/eval paths (`eval.harness._play_one_game`), and is the frozen
 > copy rather than the trainable one, so the anchor's state distribution is not a
-> moving target that drifts with the update it bounds. `held_out_anchor_kl`
+> moving target that drifts with the update it bounds. `held_out_anchor_drift`
 > inherits the same walker (it walks with the BASE champion). The argument has no
 > default on purpose: a defaulted walker is how the forbidden random fallback
 > would come back silently.

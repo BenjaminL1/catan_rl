@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 
-from catan_rl.bc.finetune import FinetuneConfig, finetune, held_out_anchor_kl
+from catan_rl.bc.finetune import FinetuneConfig, finetune, held_out_anchor_drift
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.labeling.to_shard import convert
 
@@ -117,8 +117,8 @@ def test_value_loss_is_zero_on_human_rows(corpus: dict, tmp_path: Path) -> None:
 
 
 def test_the_anchor_term_bounds_non_setup_drift(corpus: dict, tmp_path: Path) -> None:
-    """The bound test is NOT vacuous: an identically-configured run with
-    ``kl_coef=0`` must blow through the same bound."""
+    """The bound test is NOT vacuous: an identically-configured run with the
+    whole anchor switched OFF must blow through the same bound."""
     # ``kl_coef`` is the PRODUCTION default (1.0). Only the learning rate is
     # inflated, so the unanchored control has room to move the midgame inside a
     # 60-step test. Anchor refresh is ON: with a fixed pool the fine-tune simply
@@ -127,7 +127,15 @@ def test_the_anchor_term_bounds_non_setup_drift(corpus: dict, tmp_path: Path) ->
     # test would otherwise report as the anchor "not working".
     common = dict(lr=1e-3, steps=60, anchor_refresh_every=10, n_anchor_states=64, anchor_batch=16)
     anchored_run = finetune(_config(corpus, tmp_path / "anchored", kl_coef=1.0, **common))
-    finetune(_config(corpus, tmp_path / "free", kl_coef=0.0, **common))
+    # The control drops ``anchor_value_coef`` TOO. With ``kl_coef=0`` alone the
+    # frozen-VALUE guard stays at its 10.0 default, and a value head pinned to
+    # the champion's drags the SHARED TRUNK with it — so the "unanchored" control
+    # would still be partly anchored and the ratio below would understate the
+    # anchor rather than test it.
+    free_run = finetune(
+        _config(corpus, tmp_path / "free", kl_coef=0.0, anchor_value_coef=0.0, **common)
+    )
+    assert all(entry["anchor_value_mse"] >= 0.0 for entry in free_run["steps"])
 
     # AC5's "held-out" is only true if something was actually withheld AND the
     # measurement excludes it. The seeds come from the run's own history, which
@@ -136,18 +144,21 @@ def test_the_anchor_term_bounds_non_setup_drift(corpus: dict, tmp_path: Path) ->
     assert held, "the fixture shard must withhold a seed for this to mean anything"
     assert set(held) == set(corpus["held_out"])
 
-    anchored = held_out_anchor_kl(
+    # 256 states, not 32: at 32 the per-head coverage below shows the road and
+    # robber heads carrying ONE row between them, so the bound was a statement
+    # about the type head with a rounding error attached.
+    anchored = held_out_anchor_drift(
         tmp_path / "anchored" / "candidate.pt",
         corpus["ckpt"],
         corpus["labels"],
-        n_states=32,
+        n_states=256,
         exclude_game_seeds=held,
     )
-    free = held_out_anchor_kl(
+    free = held_out_anchor_drift(
         tmp_path / "free" / "candidate.pt",
         corpus["ckpt"],
         corpus["labels"],
-        n_states=32,
+        n_states=256,
         exclude_game_seeds=held,
     )
     # The bound is CALIBRATED off the control rather than hardcoded: an absolute
@@ -161,7 +172,25 @@ def test_the_anchor_term_bounds_non_setup_drift(corpus: dict, tmp_path: Path) ->
     )
     # Absolute sanity so a collapse of BOTH runs to ~0 cannot pass vacuously.
     assert free.kl > 1e-3, f"unanchored drift {free.kl} is too small to test against"
-    assert anchored.n_states == free.n_states == 32
+    assert anchored.n_states == free.n_states == 256
+    # The scalar above is a SUM over six heads, so a small value can mean the
+    # anchor held OR that the head was never exercised. Pin the coverage, so the
+    # bound is a claim about placement behaviour rather than about the type head
+    # with a ``clamp_min(1.0)`` denominator standing in for the rest.
+    for head in ("type", "edge", "tile"):
+        for name, drift in (("anchored", anchored), ("free", free)):
+            assert drift.head_relevance[head] > 0, (
+                f"the {head} head had NO covered anchor row in the {name} run, so "
+                f"the drift bound says nothing about it ({drift.head_relevance})"
+            )
+    # HONEST LIMIT, recorded rather than asserted away: the corner (settlement /
+    # city) head is reached on ~0.5% of anchor states even at 256, because a
+    # randomly-initialised walker rarely accumulates a settlement's four
+    # resources inside ``max_steps_per_game``. So this bound does NOT cover
+    # settlement placement, and a production run at ``n_anchor_states=256`` has
+    # the same blind spot. Surfacing it is the point of the per-head report; a
+    # ``> 0`` assertion here would only pin a coin flip.
+    assert "corner" in anchored.head_relevance
 
 
 def test_the_anchor_bounds_value_drift_too(corpus: dict, tmp_path: Path) -> None:
@@ -184,7 +213,7 @@ def test_the_anchor_bounds_value_drift_too(corpus: dict, tmp_path: Path) -> None
         )
         for name, bucket in (("guarded", guarded), ("unguarded", unguarded)):
             bucket.append(
-                held_out_anchor_kl(
+                held_out_anchor_drift(
                     tmp_path / f"{name}_{tag}" / "candidate.pt",
                     corpus["ckpt"],
                     corpus["labels"],
@@ -213,6 +242,128 @@ def test_history_records_the_anchor_value_term(corpus: dict, tmp_path: Path) -> 
     assert payload["steps"]
     for entry in payload["steps"]:
         assert entry["anchor_value_mse"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Per-head anchor coverage — the relevance-normalised SUM hides which heads
+# the term actually constrained
+# ---------------------------------------------------------------------------
+
+
+def test_history_records_per_head_anchor_coverage(corpus: dict, tmp_path: Path) -> None:
+    """A single relevance-normalised sum cannot distinguish "this head did not
+    drift" from "this head had no rows". Record the denominators."""
+    import json
+
+    from catan_rl.bc.finetune import _HEAD_NAMES
+
+    finetune(_config(corpus, tmp_path / "run"))
+    payload = json.loads((tmp_path / "run" / "history.json").read_text())
+    assert payload["steps"]
+    for entry in payload["steps"]:
+        coverage = entry["anchor_head_relevance"]
+        assert set(coverage) == set(_HEAD_NAMES)
+        assert all(count >= 0.0 for count in coverage.values())
+        # Every action has a type, so that head is covered on every row.
+        assert coverage["type"] > 0.0
+
+
+def test_an_entirely_masked_head_is_not_counted_as_covered() -> None:
+    """``PLAY_KNIGHT`` is the live case: the type is legal while the ``tile``
+    mask is all-False (it is only ever written in the robber-placement branch),
+    so both policies get the same uniform placeholder and the head's KL is
+    identically zero. Counting that row in the tile denominator divides real
+    drift by a bigger number and reports the anchor as tighter than it is."""
+    from catan_rl.bc.finetune import _HEAD_NAMES, _head_coverage
+    from catan_rl.policy.obs_schema import MASK_KEYS, ActionType
+
+    def _masks(tile_legal: bool) -> dict:
+        from catan_rl.policy.obs_schema import HEAD_DIMS
+
+        dims = dict(HEAD_DIMS)
+        sizes = {
+            "type": dims["type"],
+            "corner_settlement": dims["corner"],
+            "corner_city": dims["corner"],
+            "edge": dims["edge"],
+            "tile": dims["tile"],
+        }
+        out = {}
+        for key in MASK_KEYS:
+            size = sizes.get(key, dims["resource1"])
+            row = torch.zeros(1, size, dtype=torch.bool)
+            if key != "tile" or tile_legal:
+                row[0, 0] = True
+            out[key] = row
+        return out
+
+    action = torch.tensor([[ActionType.PLAY_KNIGHT, 0, 0, 0, 0, 0]], dtype=torch.int64)
+    tile = _HEAD_NAMES.index("tile")
+
+    assert float(_head_coverage(_masks(tile_legal=False), action)[0, tile]) == 0.0
+    # Not vacuous: the SAME row with one legal hex is covered.
+    assert float(_head_coverage(_masks(tile_legal=True), action)[0, tile]) == 1.0
+
+
+def test_the_finetune_restores_every_torch_backend_rng(corpus: dict, tmp_path: Path) -> None:
+    """``_finetune`` calls ``torch.manual_seed``, which reseeds EVERY backend's
+    generator — not just the CPU one it samples on. Snapshotting only CPU would
+    leave an MPS/CUDA stream clobbered for whatever runs next."""
+    from catan_rl.eval.harness import _snapshot_torch_rng
+
+    before = _snapshot_torch_rng()
+    finetune(_config(corpus, tmp_path / "run"))
+    after = _snapshot_torch_rng()
+
+    assert set(before) == set(after)
+    for backend, state in before.items():
+        got = after[backend]
+        if isinstance(state, list):  # cuda: one state per device
+            assert all(torch.equal(a, b) for a, b in zip(state, got, strict=True)), backend
+        else:
+            assert torch.equal(state, got), backend
+
+    # Non-vacuity: ``torch.manual_seed`` really does move every one of these, so
+    # the equality above is a restore rather than a no-op.
+    torch.manual_seed(12345)
+    moved = _snapshot_torch_rng()
+    try:
+        for backend, state in before.items():
+            if isinstance(state, list):
+                pairs = zip(state, moved[backend], strict=True)
+                assert any(not torch.equal(a, b) for a, b in pairs), backend
+            else:
+                assert not torch.equal(state, moved[backend]), backend
+    finally:
+        from catan_rl.eval.harness import _restore_torch_rng
+
+        _restore_torch_rng(before)
+
+
+def test_held_out_anchor_drift_restores_every_torch_backend_rng(
+    corpus: dict, tmp_path: Path
+) -> None:
+    """Same contract on the measurement side: reading a drift number must not
+    perturb the stream of whatever runs after it."""
+    from catan_rl.eval.harness import _snapshot_torch_rng
+
+    finetune(_config(corpus, tmp_path / "run"))
+    before = _snapshot_torch_rng()
+    held_out_anchor_drift(
+        tmp_path / "run" / "candidate.pt",
+        corpus["ckpt"],
+        corpus["labels"],
+        n_states=8,
+        exclude_game_seeds=corpus["held_out"],
+    )
+    after = _snapshot_torch_rng()
+    assert set(before) == set(after)
+    for backend, state in before.items():
+        got = after[backend]
+        if isinstance(state, list):
+            assert all(torch.equal(a, b) for a, b in zip(state, got, strict=True)), backend
+        else:
+            assert torch.equal(state, got), backend
 
 
 def test_anchor_states_are_never_setup_states(corpus: dict) -> None:
@@ -512,6 +663,29 @@ def test_finetune_refuses_a_shard_with_no_manifest(corpus: dict, tmp_path: Path)
     (bare / "manifest.json").unlink()
     with pytest.raises(UngatedShardError, match=r"no manifest\.json"):
         finetune(_config(corpus, tmp_path / "run", shard_dir=bare))
+
+
+def test_finetune_refuses_a_legacy_manifest_with_no_held_out_key(
+    corpus: dict, tmp_path: Path
+) -> None:
+    """A manifest written BEFORE the split existed carries no
+    ``held_out_game_seeds`` key at all. That is a third defect — not a missing
+    manifest, and not a deliberate ``--held-out-frac 0`` — and the message must
+    say which, because the remedy (re-convert with a current converter) differs
+    from "you asked for no split"."""
+    import json
+
+    from catan_rl.bc.finetune import UngatedShardError
+
+    legacy = tmp_path / "legacy_shard"
+    convert(corpus["labels"], legacy, held_out_frac=0.5)
+    manifest = legacy / "manifest.json"
+    payload = json.loads(manifest.read_text())
+    assert payload.pop("held_out_game_seeds")
+    manifest.write_text(json.dumps(payload))
+
+    with pytest.raises(UngatedShardError, match="carries no 'held_out_game_seeds' key"):
+        finetune(_config(corpus, tmp_path / "run", shard_dir=legacy))
 
 
 def test_allow_ungated_is_an_explicit_escape_recorded_in_the_history(
