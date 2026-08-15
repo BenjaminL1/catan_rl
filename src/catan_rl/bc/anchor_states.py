@@ -15,6 +15,27 @@ matters is free to move. So every anchor state here is rolled out from a real
 labeled opening, replayed into the engine by
 :func:`catan_rl.human_data.engine_bridge.rebuild_env`.
 
+**The walker is the FROZEN CHAMPION, and it is a REQUIRED argument.** Once the
+labeled opening is on the board, every subsequent ply decides which midgame the
+anchor is actually read on. A uniformly-random legal walker leaves the forced
+opening as the only champion-shaped thing about the trajectory: two plies later
+the position is one no policy would occupy, so the term bounds drift on a
+distribution the deployment never visits — the same failure D5 names for anchor
+sets drawn from ordinary self-play, one level down. The walker therefore takes
+no default; a defaulted one is precisely how the forbidden random fallback would
+come back silently.
+
+*Sampled, not greedy.* The deployed paths SAMPLE — ``eval.harness`` calls
+``policy.sample`` at every ply (``harness.py``'s ``_play_one_game``), as does the
+PPO rollout collector — so the sampled distribution IS the champion's on-policy
+state distribution, which is the one the anchor is meant to hold in place. A
+greedy walker would anchor a distribution no deployed path ever visits, which is
+the same off-distribution failure this module rejects one level up.
+
+*Frozen, not trainable.* Walking with the policy under optimisation would make
+the anchor's state distribution a moving target that drifts with the very update
+the term exists to bound, and would sample from a ``train()``-mode network.
+
 Only NON-setup states are collected. Setup contexts are the ones the human rows
 are teaching; anchoring them to the champion would cancel the fine-tune out.
 
@@ -31,23 +52,29 @@ from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
+import torch
 
 from catan_rl.env.ruleset import RULESET_R0
 from catan_rl.human_data.engine_bridge import BridgeState, SeatPlacement, rebuild_env
 from catan_rl.labeling.scenario_gen import Pick, ScenarioGenerator
 from catan_rl.labeling.store import load_scenarios
 from catan_rl.labeling.to_shard import DEFAULT_OPPONENT_KINDS
+from catan_rl.policy import CatanPolicy
 from catan_rl.policy.obs_schema import (
-    AUTOREGRESSIVE_HEAD,
     HEAD_RELEVANCE,
     MASK_KEY_FOR,
     N_OPP_POLICY_SLOTS,
     OPP_KIND_HEURISTIC,
-    ActionType,
     action_masked_legal,
 )
+from catan_rl.policy.obs_tensor import masks_to_torch, obs_to_torch
 
 ENGINE_RESOURCES: tuple[str, ...] = ("ORE", "BRICK", "WHEAT", "WOOD", "SHEEP")
+
+#: Walker device default. A module-level singleton because a ``torch.device``
+#: call in an argument default is evaluated at import time (ruff B008); CPU is
+#: the repo's eval-side device policy and this is a batch-1 forward per ply.
+_CPU_DEVICE = torch.device("cpu")
 
 #: Opponent-id stamps the anchor states are spread across.
 #:
@@ -179,68 +206,77 @@ def _bridge_state(
     )
 
 
-def _candidates(masks: dict[str, np.ndarray], action_type: int, head: int, res1: int) -> np.ndarray:
-    """Legal indices for one RELEVANT head, routed exactly as the mask schema says."""
-    if head == AUTOREGRESSIVE_HEAD:
-        # Head 5 mirrors ``heads._resource2_mask`` (see ``action_masked_legal``).
-        if action_type == ActionType.BANK_TRADE:
-            cand = np.flatnonzero(np.asarray(masks["resource2_trade"], dtype=bool))
-            return cand[cand != res1]
-        same = np.flatnonzero(np.asarray(masks["resource2_yop_same"], dtype=bool))
-        diff = np.flatnonzero(np.asarray(masks["resource2_yop"], dtype=bool))
-        return np.concatenate([same[same == res1], diff[diff != res1]])
-    key = MASK_KEY_FOR[action_type][head]
-    assert key is not None  # relevance implies a routed mask key
-    return np.flatnonzero(np.asarray(masks[key], dtype=bool))
+def _has_unsatisfiable_head(masks: dict[str, np.ndarray], action_type: int) -> bool:
+    """True iff a head this type needs has NO legal index at all.
 
+    ``PLAY_KNIGHT`` is the live case, and the mechanism is structural rather
+    than situational: ``env/masks.py`` writes ``tile_mask`` in the
+    ``robber_placement_pending`` block ALONE, and that block returns
+    immediately. Every node that offers ``PLAY_KNIGHT`` is a different node, so
+    its ``tile`` mask is all-False **always** — not only when the Friendly
+    Robber happens to protect every hex. (The Friendly-Robber branch in fact
+    does the opposite: at a robber-placement node it FILLS an empty mask with
+    ``tile_mask[:] = True`` rather than leaving it empty.)
 
-def _sample_legal_action(masks: dict[str, np.ndarray], rng: np.random.Generator) -> list[int]:
-    """A uniformly random LEGAL action under ``masks``.
+    Meanwhile ``HEAD_RELEVANCE`` marks ``tile`` relevant for ``PLAY_KNIGHT``, so
+    :func:`action_masked_legal` reports the sampled index as illegal on every
+    such row. The env does not care — its ``PLAY_KNIGHT`` branch ignores
+    ``tile_idx`` entirely (it sets ``robber_placement_pending`` and the
+    placement is a separate decision) — and ``heads.masked_log_softmax``
+    documents its uniform-placeholder fallback for exactly this shape of row.
 
-    The anchor term measures how far the fine-tuned policy has moved from the
-    champion AT a state; the policy that walked the game there does not enter
-    that measurement, so a cheap legal walker is enough and keeps the sampler
-    free of a second forward pass per step.
-
-    Sub-head indices are routed through the shared ``MASK_KEY_FOR`` /
-    ``HEAD_RELEVANCE`` tables rather than a hand-written key list, so a mask
-    schema change cannot leave this walker emitting actions the env silently
-    no-ops on. The result is checked against :func:`action_masked_legal` — the
-    same gate the BC writer uses — before it is returned.
-
-    Raises:
-        NoLabeledOpeningsError: if no legal action exists at all, which would
-            mean the env handed back an empty type mask.
+    That is a pre-existing disagreement between the schema table and the env's
+    apply path, not something this sampler introduces or is placed to fix; it is
+    named here so the legality pin below stays a pin on DRIFT rather than a
+    refusal of shipped behaviour.
     """
-    legal_types = np.flatnonzero(np.asarray(masks["type"], dtype=bool))
-    if legal_types.size == 0:  # pragma: no cover - the env always offers one
-        raise NoLabeledOpeningsError("env offered no legal action type")
-    # Random order, then deterministic exhaustion: a type whose relevant
-    # sub-head has an empty mask is skipped rather than emitted illegally.
-    order = list(rng.permutation(legal_types))
-    for a_type in order:
-        action = [int(a_type), 0, 0, 0, 0, 0]
-        ok = True
-        for head in range(1, 6):
-            if not HEAD_RELEVANCE[int(a_type)][head]:
-                continue
-            cand = _candidates(masks, int(a_type), head, action[4])
-            if cand.size == 0:
-                ok = False
-                break
-            action[head] = int(rng.choice(cand))
-        if ok and action_masked_legal(masks, action):
-            return action
-    raise NoLabeledOpeningsError(  # pragma: no cover - defensive
-        "no legal action could be assembled from the env's masks"
-    )
+    for head in range(1, len(HEAD_RELEVANCE[action_type])):
+        if not HEAD_RELEVANCE[action_type][head]:
+            continue
+        key = MASK_KEY_FOR[action_type][head]
+        assert key is not None  # relevance implies a routed mask key
+        if not np.asarray(masks[key], dtype=bool).any():
+            return True
+    return False
+
+
+def _policy_action(
+    policy: CatanPolicy,
+    obs: dict[str, np.ndarray],
+    masks: dict[str, np.ndarray],
+    device: torch.device,
+) -> list[int]:
+    """One action SAMPLED from ``policy`` at this node.
+
+    The emitted action is checked against :func:`action_masked_legal` — the same
+    gate the BC writer uses — whenever that check is answerable (see
+    :func:`_has_unsatisfiable_head`). The heads already mask, so this is a cheap
+    pin against mask-key / head-schema drift rather than a correction: a failure
+    means the policy's mask routing and the env's have diverged, which must
+    surface loudly rather than as a silent env no-op.
+    """
+    with torch.no_grad():
+        out = policy.sample(
+            obs_to_torch(obs, device, add_batch=True),
+            masks_to_torch(masks, device, add_batch=True),
+        )
+    action = [int(x) for x in out["action"].reshape(-1).tolist()]
+    if not action_masked_legal(masks, action) and not _has_unsatisfiable_head(masks, action[0]):
+        raise NoLabeledOpeningsError(  # pragma: no cover - defensive
+            f"the walker sampled {action}, which is illegal under the env's masks "
+            f"even though every relevant head had a legal index — the policy's "
+            f"mask routing and the env's disagree"
+        )
+    return action
 
 
 def sample_anchor_states(
     labels_path: str | Path,
     *,
+    policy: CatanPolicy,
     n_states: int,
     rng: np.random.Generator,
+    device: torch.device = _CPU_DEVICE,
     max_steps_per_game: int = 60,
     exclude_game_seeds: Iterable[int] = (),
     opponent_kinds: tuple[int, ...] = ANCHOR_OPPONENT_KINDS,
@@ -249,17 +285,35 @@ def sample_anchor_states(
 
     Games are started from labeled openings (both seatings, so the anchor is not
     a one-seat view), stamped across ``opponent_kinds`` (so the term covers the
-    same id-conditional slices the human shard moves), and walked forward with
-    legal actions.
+    same id-conditional slices the human shard moves), and walked forward by
+    ``policy`` — see the module docstring for why the walker is the frozen
+    champion, sampled, and not defaultable.
 
     ``exclude_game_seeds`` drops the drafts withheld for the D7 gate-1
     measurement, so a held-out opening reaches the candidate through no path at
     all.
 
+    Args:
+        policy: the FROZEN champion. Required; ``rng`` still drives the opening /
+            seat / opponent-kind choice, but the plies come from the policy's own
+            (torch-seeded) sampling stream.
+
     Raises:
         NoLabeledOpeningsError: if the corpus holds no complete draft. There is
             deliberately no heuristic/random fallback.
     """
+    # The module docstring's "frozen, not trainable" is a contract, so check it
+    # rather than trusting every caller to have remembered. A ``train()``-mode
+    # walker samples through the training-time forward path, which is not the
+    # distribution the deployed champion occupies — and it is a silent defect:
+    # the states still look plausible.
+    if policy.training:
+        raise ValueError(
+            "sample_anchor_states was handed a policy in train() mode; the walker "
+            "must be the FROZEN champion in eval() mode, or the anchor's state "
+            "distribution is not the one the deployment visits"
+        )
+
     openings = complete_openings(labels_path, exclude_game_seeds=exclude_game_seeds)
     if not openings:
         raise NoLabeledOpeningsError(
@@ -294,7 +348,7 @@ def sample_anchor_states(
                 break
             masks = env.get_action_masks()
             obs = env._get_obs()
-            action = _sample_legal_action(masks, rng)
+            action = _policy_action(policy, obs, masks, device)
             out.append(
                 {
                     "obs": {k: np.asarray(v) for k, v in obs.items()},

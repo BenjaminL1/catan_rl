@@ -284,7 +284,11 @@ def test_a_game_sourced_row_converts_through_the_shard_converter(replay, tmp_pat
         assert int(settle.action[1]) == int(row["settlement_vertex"])
         assert int(road.action[2]) == int(row["road_edge"])
 
-    manifest = convert(dest, tmp_path / "shard")
+    # EXPLICIT 0.0: one exported game is one ``game_seed``, and ``convert``'s
+    # default now withholds a seed — which for a single-seed corpus leaves no
+    # training half. This test is about the adapter's rows reaching the shard,
+    # so it wants the whole corpus.
+    manifest = convert(dest, tmp_path / "shard", held_out_frac=0.0)
     assert manifest["label_source_counts"] == {"game": 2}
     assert manifest["n_scenarios"] == 2
 

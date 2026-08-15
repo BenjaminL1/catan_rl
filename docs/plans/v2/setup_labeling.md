@@ -330,7 +330,7 @@ That last refusal is the load-bearing one. `play_vs_model.py` stamps `PlayerSpec
 python scripts/convert_labels_to_bc_shard.py \
   --labels data/labels/setup/v1/scenarios.jsonl \
   --out data/bc/human_openings/v1 \
-  --held-out-frac 0.2          # default; 0 disables the split
+  --held-out-frac 0.2          # default (library and CLI); 0 disables the split
 ```
 
 **AS BUILT** (spec `setup-labeling-and-champion-finetune` D4). Logic lives in
@@ -348,8 +348,14 @@ convention. Four corrections to the behaviour described below:
   same JSONL — as an earlier revision of this slice did — Gate 1 would score the
   candidate on rows it was fine-tuned on, i.e. report memorisation as
   generalisation in the one gate whose stated remedy for a marginal result is
-  MORE LABELS. `--held-out-frac 0` produces a shard with no held-out set, and
-  the gate CLI then REFUSES it rather than inventing one;
+  MORE LABELS. `--held-out-frac 0` produces a shard with no held-out set, which
+  BOTH `bc/finetune.py::finetune` (unless `allow_ungated=True`) and the gate CLI
+  REFUSE rather than inventing one. `to_shard.convert`'s own default is **0.2**,
+  matching the CLI — it used to be 0.0, so any caller that did not repeat the
+  flag built an ungateable shard. Fail-closed consequence: `held_out_split`
+  always withholds at least one seed, so a SINGLE-seed corpus now raises
+  `LabelConversionError` under the default (pass `held_out_frac=0.0` explicitly
+  to convert such a corpus whole);
 
 * the obs dict is **12 keys, not 10** — the ten float members plus
   `opponent_kind` / `opponent_policy_id` (`bc/loader.py`), which the plan
@@ -420,11 +426,43 @@ load-bearing obs pin is
 > shard manifest), because a held-out opening that shapes the candidate through
 > the KL term is not held out.
 >
-> An honest limitation, NOT fixed here: once the forced opening is placed, the
-> remaining plies are walked with a **uniformly random legal action**, so the
-> anchor covers "reachable from the owner's openings", not the champion's
-> on-policy midgame. `held_out_anchor_kl` inherits the same walker, so AC5's
-> bound is a bound on that distribution.
+> (iii) The plies after the forced opening are walked by the **FROZEN CHAMPION
+> ITSELF** (`sample_anchor_states(..., policy=...)`, a REQUIRED argument), so the
+> anchor covers the champion's on-policy midgame downstream of the owner's
+> openings — not merely "reachable from" them. The walker SAMPLES, matching the
+> deployed rollout/eval paths (`eval.harness._play_one_game`), and is the frozen
+> copy rather than the trainable one, so the anchor's state distribution is not a
+> moving target that drifts with the update it bounds. `held_out_anchor_drift`
+> inherits the same walker (it walks with the BASE champion). The argument has no
+> default on purpose: a defaulted walker is how the forbidden random fallback
+> would come back silently.
+>
+> The anchor also carries a **frozen-VALUE guard**: `anchor_terms` returns
+> `KL` and `MSE(V_ft, V_frozen)` from one pair of forward passes, and the
+> objective is `L_BC + kl_coef*KL + anchor_value_coef*MSE_value`
+> (`anchor_value_coef` default **10.0**, set by measurement — see the field
+> docstring). The six action heads are not the whole champion: the deployed
+> search reads the value head through `sigma(3.22V - 1.14)`, so unconstrained
+> value drift is a deployment-visible regression the KL term structurally cannot
+> see.
+>
+> `anchor_terms` also reports **per-head coverage** — the denominators the
+> relevance-normalised KL was divided by, carried on `AnchorTerms`, `AnchorDrift`
+> and every `history.json` step. Without it the scalar is unreadable: a small KL
+> can mean the heads held OR that the sampled states never exercised them. Heads
+> whose own mask is entirely False are excluded from those denominators
+> (`PLAY_KNIGHT`'s `tile` mask is all-False at every node offering it, since
+> `env/masks.py` writes `tile_mask` only in the robber-placement branch), because
+> their KL is identically zero and counting them understates measured drift.
+> MEASURED consequence, worth knowing before reading a drift number: on a walk
+> from a randomly-initialised stand-in the **corner head is reached on ~0.5% of
+> anchor states even at 256**, so the anchor bound says little about settlement
+> placement at the default `n_anchor_states`.
+>
+> `finetune()` REFUSES a shard whose manifest withheld no `game_seed`
+> (`UngatedShardError`) unless `FinetuneConfig.allow_ungated=True`. The gate CLI
+> refuses such a shard too — but only after the run, when the labels are already
+> spent on a candidate no held-out measurement can read.
 >
 > F.2 survives in substance: the value loss is zeroed **per row** on human rows,
 > via the new optional `value_row_mask` on `bc.loss.bc_loss` (default `None` =
@@ -481,7 +519,7 @@ Same as `bc/loss.py` — relevance-weighted CE per head, value MSE @ 0.1, belief
 
 **AS BUILT**: 20% of the human labels are held out **by `game_seed`, at CONVERSION time** (`--held-out-frac`, above), not stratified by `draft_position` and not re-derived at eval time. Splitting by seed is what stops a draft's position-4 label landing in the held-out set while the position-1 label it is conditioned on was trained on; splitting in the converter is what makes "held out" a property of the CHECKPOINT rather than of one code path. `bc/finetune.py` trains on the resulting shard and — reading `held_out_game_seeds` back from its manifest — keeps the same seeds out of the anchor rollouts.
 
-The per-step logging below is the source plan's design and is **not built**: `finetune()` writes a `history.json` (per-step `total` / `policy` / `value` / `anchor_kl`), and agreement is measured once, after the fact, by `scripts/eval_setup_agreement.py`.
+The per-step logging below is the source plan's design and is **not built**: `finetune()` writes a `history.json` (per-step `total` / `policy` / `value` / `anchor_kl` / `anchor_value_mse` / `anchor_head_relevance`, plus run-level `candidate` / `human_opening_prior` / `n_rows` / `ruleset` / `held_out_game_seeds` / `held_out_gated` / `allow_ungated`), and agreement is measured once, after the fact, by `scripts/eval_setup_agreement.py`.
 
 
 - `finetune/val_nll_human_only` — NLL on the human-only val split.
@@ -504,8 +542,8 @@ src/catan_rl/labeling/             (new package; allowed to import gui/)
 └── to_shard.py                    D4 (§E logic). Label store → BC shard; imports no gui/.
 
 src/catan_rl/bc/
-├── finetune.py                    D5. Champion fine-tune + online self-distillation anchor.
-├── anchor_states.py               D5. Non-setup anchor states from FORCED labeled openings.
+├── finetune.py                    D5. Champion fine-tune + online self-distillation anchor — `anchor_terms` returns KL **and** frozen-value MSE; REFUSES an ungated shard (`UngatedShardError`) unless `allow_ungated=True`.
+├── anchor_states.py               D5. Non-setup anchor states from FORCED labeled openings, walked forward by the FROZEN CHAMPION (`policy=` is REQUIRED — no default walker).
 ├── loss.py                        D5. `bc_loss(..., value_row_mask=...)` (optional, default None).
 └── gates.py                       D7. `setup_agreement_gate` + `paired_wr_non_inferiority`.
 
@@ -513,7 +551,8 @@ scripts/
 ├── label_setup.py                 CLI entry: `python scripts/label_setup.py [--session-size 20]`.
 ├── convert_labels_to_bc_shard.py  Per §E / D4. Thin CLI over `labeling/to_shard.py`.
 ├── export_game_labels.py          D3. Thin CLI over `labeling/from_record.py`.
-└── eval_setup_agreement.py        D7 gate 1: held-out top-1 agreement, candidate vs baseline. Takes `--shard-dir` and reads the held-out seeds out of its manifest; refuses a shard that withheld nothing.
+├── eval_setup_agreement.py        D7 gate 1: held-out top-1 agreement, candidate vs baseline. Takes `--shard-dir` and reads the held-out seeds out of its manifest; refuses a shard that withheld nothing.
+└── eval_wr_non_inferiority.py     D7 gate 2: two identically-seeded `EvalHarness` rounds (candidate, baseline) vs the heuristic, fed to `paired_wr_non_inferiority`. Refuses unless BOTH checkpoints are stamped R0.
 
 configs/                           **NEITHER FILE EXISTS — neither was built.**
 ├── labeling.yaml                  Planned defaults (data dir, session size,
@@ -667,6 +706,13 @@ Targets the patterns that bit `bc/dataset.py` and the hex-board UI risk class:
 >   opponent-id conditional slice the fine-tune never trains, and D4's own
 >   reasoning says that slice need not agree. `HEURISTIC` is both in the shard
 >   and the kind Gate 2's full-game eval plays.
+> * **Gate 2 is run by `scripts/eval_wr_non_inferiority.py`.** It builds two
+>   identically-configured `EvalHarness` rounds (`opponent_types=("heuristic",)`,
+>   one shared `--seed`), whose seed plans derive from `self.seed` + the opponent
+>   label alone and are therefore paired by construction; a plan that ever
+>   stopped matching raises `UnpairableEvalError` rather than reporting an
+>   unpaired number. It refuses unless BOTH checkpoints read back R0 from
+>   `checkpoint_ruleset` — fail closed, never annotate.
 > * Both gates run **R0** and only once **>=200 labeled scenarios exist**. As of
 >   this slice neither has been RUN — only the code landed.
 
