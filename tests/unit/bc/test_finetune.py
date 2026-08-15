@@ -268,6 +268,22 @@ def test_history_records_per_head_anchor_coverage(corpus: dict, tmp_path: Path) 
         assert coverage["type"] > 0.0
 
 
+def _empty_masks() -> dict:
+    """One all-False row for every mask key, at its schema width."""
+    from catan_rl.policy.obs_schema import HEAD_DIMS, MASK_KEYS
+
+    dims = dict(HEAD_DIMS)
+    width = {"type": dims["type"], "edge": dims["edge"], "tile": dims["tile"]}
+    return {
+        key: torch.zeros(
+            1,
+            width.get(key, dims["corner"] if key.startswith("corner") else dims["resource1"]),
+            dtype=torch.bool,
+        )
+        for key in MASK_KEYS
+    }
+
+
 def test_an_entirely_masked_head_is_not_counted_as_covered() -> None:
     """``PLAY_KNIGHT`` is the live case: the type is legal while the ``tile``
     mask is all-False (it is only ever written in the robber-placement branch),
@@ -275,27 +291,14 @@ def test_an_entirely_masked_head_is_not_counted_as_covered() -> None:
     identically zero. Counting that row in the tile denominator divides real
     drift by a bigger number and reports the anchor as tighter than it is."""
     from catan_rl.bc.finetune import _HEAD_NAMES, _head_coverage
-    from catan_rl.policy.obs_schema import MASK_KEYS, ActionType
+    from catan_rl.policy.obs_schema import ActionType
 
     def _masks(tile_legal: bool) -> dict:
-        from catan_rl.policy.obs_schema import HEAD_DIMS
-
-        dims = dict(HEAD_DIMS)
-        sizes = {
-            "type": dims["type"],
-            "corner_settlement": dims["corner"],
-            "corner_city": dims["corner"],
-            "edge": dims["edge"],
-            "tile": dims["tile"],
-        }
-        out = {}
-        for key in MASK_KEYS:
-            size = sizes.get(key, dims["resource1"])
-            row = torch.zeros(1, size, dtype=torch.bool)
-            if key != "tile" or tile_legal:
-                row[0, 0] = True
-            out[key] = row
-        return out
+        masks = _empty_masks()
+        masks["type"][0, ActionType.PLAY_KNIGHT] = True
+        if tile_legal:
+            masks["tile"][0, 0] = True
+        return masks
 
     action = torch.tensor([[ActionType.PLAY_KNIGHT, 0, 0, 0, 0, 0]], dtype=torch.int64)
     tile = _HEAD_NAMES.index("tile")
@@ -303,6 +306,29 @@ def test_an_entirely_masked_head_is_not_counted_as_covered() -> None:
     assert float(_head_coverage(_masks(tile_legal=False), action)[0, tile]) == 0.0
     # Not vacuous: the SAME row with one legal hex is covered.
     assert float(_head_coverage(_masks(tile_legal=True), action)[0, tile]) == 1.0
+
+
+def test_the_autoregressive_head_coverage_follows_the_resource1_pick() -> None:
+    """Head 5's effective mask is NOT its base key: ``heads._resource2_mask``
+    clears index ``r1`` for a bank trade (a same-resource trade is a strict
+    loss). A base-key-only reading would call the head covered when the one
+    legal index is exactly the one the autoregressive rule removes."""
+    from catan_rl.bc.finetune import _HEAD_NAMES, _head_coverage
+    from catan_rl.policy.obs_schema import ActionType
+
+    def _masks(legal_r2: int) -> dict:
+        masks = _empty_masks()
+        masks["type"][0, ActionType.BANK_TRADE] = True
+        masks["resource1_trade"][0, 0] = True
+        masks["resource2_trade"][0, legal_r2] = True
+        return masks
+
+    res2 = _HEAD_NAMES.index("resource2")
+    # r1 = 0, and the only legal r2 IS 0 — which the trade rule clears.
+    action = torch.tensor([[ActionType.BANK_TRADE, 0, 0, 0, 0, 0]], dtype=torch.int64)
+    assert float(_head_coverage(_masks(legal_r2=0), action)[0, res2]) == 0.0
+    # The same row with the legal index anywhere else IS covered.
+    assert float(_head_coverage(_masks(legal_r2=3), action)[0, res2]) == 1.0
 
 
 def test_the_finetune_restores_every_torch_backend_rng(corpus: dict, tmp_path: Path) -> None:

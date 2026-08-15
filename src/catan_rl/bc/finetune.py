@@ -99,7 +99,7 @@ from catan_rl.bc.loss import bc_loss
 from catan_rl.eval.harness import _restore_torch_rng, _snapshot_torch_rng
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.board_geometry import build_geometry
-from catan_rl.policy.obs_schema import AUTOREGRESSIVE_HEAD, MASK_KEY_FOR
+from catan_rl.policy.obs_schema import AUTOREGRESSIVE_HEAD, MASK_KEY_FOR, ActionType
 
 _HEAD_NAMES: tuple[str, ...] = ("type", "corner", "edge", "tile", "resource1", "resource2")
 
@@ -269,25 +269,33 @@ def _head_coverage(masks: dict[str, torch.Tensor], action: torch.Tensor) -> torc
 
     Head 0 (``type``) is always covered: ``compute_action_masks`` falls back to
     ``END_TURN`` rather than emitting an empty type mask.
+
+    Head 5 is AUTOREGRESSIVE, so ``MASK_KEY_FOR[..][5]`` names only its BASE key
+    and the effective mask is rebuilt here exactly as
+    ``heads._resource2_mask`` does — ``BANK_TRADE`` clears index ``r1``,
+    ``PLAY_YOP`` swaps in ``resource2_yop_same`` at it. Approximating with the
+    base key alone would call a head covered whose only legal index the
+    autoregressive rule then removes.
     """
-    any_legal = {
-        key: mask.reshape(mask.shape[0], -1).any(dim=-1).cpu().numpy()
-        for key, mask in masks.items()
-    }
-    types = action[:, 0].cpu().numpy()
-    cover = np.ones((len(types), len(_HEAD_NAMES)), dtype=np.float32)
-    for row, action_type in enumerate(types):
+    arrays = {key: mask.reshape(mask.shape[0], -1).cpu().numpy() for key, mask in masks.items()}
+    act = action.cpu().numpy()
+    cover = np.ones((act.shape[0], len(_HEAD_NAMES)), dtype=np.float32)
+    for row in range(act.shape[0]):
+        action_type = int(act[row, 0])
         for head in range(1, len(_HEAD_NAMES)):
             key = MASK_KEY_FOR[action_type][head]
             if key is None:  # head irrelevant for this type; relevance zeroes it
                 continue
-            legal = bool(any_legal[key][row])
-            if head == AUTOREGRESSIVE_HEAD and key == "resource2_yop":
-                # ``MASK_KEY_FOR[..][5]`` names only the BASE key; a doubled YoP
-                # pick is routed to ``resource2_yop_same`` instead, so the head
-                # is covered if EITHER offers an index.
-                legal = legal or bool(any_legal["resource2_yop_same"][row])
-            cover[row, head] = float(legal)
+            if head == AUTOREGRESSIVE_HEAD:
+                res1 = int(act[row, 4])
+                effective = arrays[key][row].copy()
+                if action_type == ActionType.BANK_TRADE:
+                    effective[res1] = False
+                else:  # PLAY_YOP — the only other resource2-relevant type
+                    effective[res1] = arrays["resource2_yop_same"][row][res1]
+                cover[row, head] = float(effective.any())
+                continue
+            cover[row, head] = float(arrays[key][row].any())
     return torch.as_tensor(cover, device=action.device)
 
 
