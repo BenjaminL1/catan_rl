@@ -66,7 +66,13 @@ def main(argv: list[str] | None = None) -> int:
         "--margin",
         type=float,
         default=0.05,
-        help="Non-inferiority margin. PASS iff the CI lower bound on WR_ft - WR_pre exceeds it.",
+        help=(
+            "Non-inferiority margin, as an absolute win-rate difference. PASS iff the "
+            "CI lower bound on WR_ft - WR_pre exceeds MINUS this (spec D7.2) — i.e. "
+            "the candidate is provably not worse by more than the margin. It is NOT a "
+            "superiority test: a candidate slightly behind on the point estimate "
+            "passes, which is the question the owner actually has."
+        ),
     )
     parser.add_argument("--max-turns", type=int, default=400)
     parser.add_argument("--device", type=str, default="cpu")
@@ -99,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             ruleset=RULESET_R0,
         )
         result = harness.run(policy).by_opponent(HEURISTIC)
-        if result is None:  # pragma: no cover - the harness always returns the one matchup
+        if result is None:
             raise SystemExit(f"no '{HEURISTIC}' matchup in the eval report for {path}")
         return result
 

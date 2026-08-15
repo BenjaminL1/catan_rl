@@ -31,6 +31,13 @@ The objective
   :meth:`catan_rl.policy.heads.CatanActionHeads.masked_log_dists` so no later
   reader mistakes it for one.
 
+  Because that sum is normalised PER HEAD, its magnitude alone cannot tell a
+  head that held still from a head no sampled state exercised. So
+  :func:`anchor_terms` also reports the per-head denominators
+  (:attr:`AnchorTerms.head_relevance`), and heads whose own mask is entirely
+  False — whose KL is identically zero, ``PLAY_KNIGHT``'s ``tile`` being the
+  live case — are kept OUT of them.
+
   **Where the states come from** is not a detail either: they are rolled out
   from games whose setups are FORCED to the owner's labeled openings AND walked
   forward by the FROZEN CHAMPION ITSELF (see :mod:`catan_rl.bc.anchor_states`),
@@ -120,11 +127,30 @@ class FinetuneConfig:
     training run; the anchor term bounds drift but does not license a large LR."""
 
     kl_coef: float = 1.0
-    """Keep this MODERATE. Measured while building this module: raising it to
-    10x-200x does not tighten the anchor, it destabilises the optimisation —
-    with ``clip_grad_norm_(0.5)`` a huge KL coefficient consumes the whole
-    gradient budget and held-out drift comes out WORSE than an unanchored run.
-    At 1.0 the same setup cut held-out drift to ~0.19x the unanchored control.
+    """Weight on the anchor KL. RE-MEASURED on the mock corpus after the
+    per-head coverage fix (60 steps, lr 1e-3, refresh on,
+    ``anchor_value_coef=10.0``, seeds 3/4/5; held-out anchor KL at
+    ``n_states=256``, mean over seeds). The control is a FULLY unanchored run —
+    both coefficients at zero, since a run with the value guard still on is only
+    half a control:
+
+    ===========  ==================  =========
+    coefficient  held-out anchor KL  x control
+    ===========  ==================  =========
+    0.0 (ctrl)   1.2955              1.00x
+    1.0          0.6020              0.46x
+    10.0         0.0453              0.03x
+    100.0        0.0496              0.04x
+    200.0        0.0543              0.04x
+    ===========  ==================  =========
+
+    The default stays at ``1.0``, the value the spec's numbers were produced
+    under — but note what the table says and an earlier revision of this
+    docstring denied: on this corpus the anchor keeps TIGHTENING to ~10 and then
+    flattens; ``clip_grad_norm_(0.5)`` does not make a large coefficient come out
+    worse than the control. Raising the default is therefore a live option for
+    the real run, and it wants its own measurement — this is a mock corpus with a
+    randomly-initialised stand-in, not ``ptr_v1_u500.pt``.
     ``tests/unit/bc/test_finetune.py`` pins the effect at this default."""
 
     anchor_value_coef: float = 10.0
@@ -136,25 +162,29 @@ class FinetuneConfig:
 
     NOT the same order as ``kl_coef``, and the difference is measured, not
     guessed. Squared-error on a scalar in roughly ``[-1, 1]`` is an order of
-    magnitude smaller than the summed six-head KL, so at ``1.0`` the term
-    carries too little gradient to matter. MEASURED on the mock corpus while
-    building this module (60 steps, lr 1e-3, refresh on, three seeds; held-out
-    value MSE, mean over seeds):
+    magnitude smaller than the summed six-head KL, so a weight near ``kl_coef``
+    leaves the term carrying too little gradient to matter. RE-MEASURED on the
+    mock corpus after the per-head coverage fix, which changed the KL
+    denominators and so changed the gradient this term competes with (60 steps,
+    lr 1e-3, refresh on, ``kl_coef=1.0``, seeds 3/4/5; held-out value MSE at
+    ``n_states=256``, mean over seeds):
 
     ===========  ==================
     coefficient  held-out value MSE
     ===========  ==================
-    0.0          0.090
-    10.0         0.0060
-    50.0         0.0078
-    100.0        0.0039
+    0.0          0.0638
+    1.0          0.0126
+    10.0         0.0045
+    50.0         0.0057
+    100.0        0.0050
     ===========  ==================
 
-    ``10.0`` is the smallest weight that cut drift on EVERY seed (~0.07x the
-    unguarded control) while leaving the action-head KL where the unguarded run
-    left it. Beyond it the value number stops improving and the KL starts
-    swinging seed to seed — the ``clip_grad_norm_(0.5)`` budget hazard the
-    ``kl_coef`` note describes, arriving here too.
+    ``10.0`` is the smallest weight at the FLOOR of that curve: ~14x below the
+    unguarded control, ~2.8x below ``1.0``, and cutting drift on EVERY seed
+    (0.0047 / 0.0044 / 0.0044 vs 0.0054 / 0.1297 / 0.0561). 50 and 100 do not
+    improve on it — 0.0057 / 0.0050 is seed noise around the same floor, not a
+    trend — so a larger weight buys nothing and spends more of the
+    ``clip_grad_norm_(0.5)`` budget on a term that has already converged.
     ``tests/unit/bc/test_finetune.py::test_the_anchor_bounds_value_drift_too``
     pins the effect at this default."""
 

@@ -454,6 +454,30 @@ def test_the_walkers_choice_is_not_overridden(corpus: dict) -> None:
         assert int(np.asarray(state["action"]).reshape(-1)[0]) == int(legal_types[-1])
 
 
+def test_the_anchor_sampler_refuses_a_train_mode_walker(corpus: dict) -> None:
+    """ "Frozen, not trainable" is a contract in the module docstring, and a
+    ``train()``-mode walker breaks it silently — the collected states still look
+    plausible, they are just not the distribution the deployment occupies."""
+    from catan_rl.bc.anchor_states import sample_anchor_states
+
+    policy = _walker(corpus)
+    policy.train()
+    with pytest.raises(ValueError, match="train\\(\\) mode"):
+        sample_anchor_states(
+            corpus["labels"], policy=policy, n_states=2, rng=np.random.default_rng(0)
+        )
+    # Not vacuous: the same call in eval() mode goes through.
+    policy.eval()
+    assert (
+        len(
+            sample_anchor_states(
+                corpus["labels"], policy=policy, n_states=2, rng=np.random.default_rng(0)
+            )
+        )
+        == 2
+    )
+
+
 def test_the_anchor_sampler_has_no_policy_default(corpus: dict) -> None:
     """A defaulted walker is how the random fallback the module docstring forbids
     would come back — silently, under a name that says otherwise."""

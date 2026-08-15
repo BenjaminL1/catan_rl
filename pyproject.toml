@@ -166,7 +166,13 @@ ignore = ["E741", "RUF012"]
 quote-style = "double"
 
 [tool.mypy]
-python_version = "3.11"
+# The TARGET version mypy checks AGAINST — not an interpreter requirement.
+# ``requires-python`` stays ">=3.11" and ruff stays on ``py311``, so nothing
+# here licenses 3.12-only syntax at runtime. CI runs mypy under a 3.11
+# interpreter and that is fine: ``python_version`` only selects which bundled
+# typeshed mypy reads, and third-party packages are resolved from whichever
+# site-packages mypy is invoked in either way.
+python_version = "3.12"
 ignore_missing_imports = true
 follow_imports = "silent"
 warn_unused_ignores = true

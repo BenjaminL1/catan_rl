@@ -25,13 +25,12 @@ sets drawn from ordinary self-play, one level down. The walker therefore takes
 no default; a defaulted one is precisely how the forbidden random fallback would
 come back silently.
 
-*Sampled, not greedy.* The deployed rollout and eval paths sample
-(``eval.harness._play_one_game``, the PPO rollout collector), so the sampled
-distribution IS the champion's on-policy state distribution — the one the anchor
-is meant to hold in place. Greedy would anchor a distribution no deployed path
-visits and, over a handful of labeled openings x 2 seats x 3 opponent kinds,
-would make every refresh replay the same few trajectories, defeating
-``anchor_refresh_every``.
+*Sampled, not greedy.* The deployed paths SAMPLE — ``eval.harness`` calls
+``policy.sample`` at every ply (``harness.py``'s ``_play_one_game``), as does the
+PPO rollout collector — so the sampled distribution IS the champion's on-policy
+state distribution, which is the one the anchor is meant to hold in place. A
+greedy walker would anchor a distribution no deployed path ever visits, which is
+the same off-distribution failure this module rejects one level up.
 
 *Frozen, not trainable.* Walking with the policy under optimisation would make
 the anchor's state distribution a moving target that drifts with the very update
@@ -210,14 +209,21 @@ def _bridge_state(
 def _has_unsatisfiable_head(masks: dict[str, np.ndarray], action_type: int) -> bool:
     """True iff a head this type needs has NO legal index at all.
 
-    The env can offer a type whose relevant sub-head mask is entirely False —
-    ``PLAY_KNIGHT`` under the Friendly Robber is the live case: the type is legal
-    (a knight is in hand) while ``tile`` is empty because every hex is protected.
-    ``heads.masked_log_softmax`` documents its uniform-placeholder fallback for
-    exactly that row, the env's ``PLAY_KNIGHT`` branch ignores ``tile_idx``
-    entirely (it sets ``robber_placement_pending`` and the placement is a
-    separate decision), and :func:`action_masked_legal` — which reads the shared
-    ``HEAD_RELEVANCE`` table — reports the sampled index as illegal regardless.
+    ``PLAY_KNIGHT`` is the live case, and the mechanism is structural rather
+    than situational: ``env/masks.py`` writes ``tile_mask`` in the
+    ``robber_placement_pending`` block ALONE, and that block returns
+    immediately. Every node that offers ``PLAY_KNIGHT`` is a different node, so
+    its ``tile`` mask is all-False **always** — not only when the Friendly
+    Robber happens to protect every hex. (The Friendly-Robber branch in fact
+    does the opposite: at a robber-placement node it FILLS an empty mask with
+    ``tile_mask[:] = True`` rather than leaving it empty.)
+
+    Meanwhile ``HEAD_RELEVANCE`` marks ``tile`` relevant for ``PLAY_KNIGHT``, so
+    :func:`action_masked_legal` reports the sampled index as illegal on every
+    such row. The env does not care — its ``PLAY_KNIGHT`` branch ignores
+    ``tile_idx`` entirely (it sets ``robber_placement_pending`` and the
+    placement is a separate decision) — and ``heads.masked_log_softmax``
+    documents its uniform-placeholder fallback for exactly this shape of row.
 
     That is a pre-existing disagreement between the schema table and the env's
     apply path, not something this sampler introduces or is placed to fix; it is
@@ -296,6 +302,18 @@ def sample_anchor_states(
         NoLabeledOpeningsError: if the corpus holds no complete draft. There is
             deliberately no heuristic/random fallback.
     """
+    # The module docstring's "frozen, not trainable" is a contract, so check it
+    # rather than trusting every caller to have remembered. A ``train()``-mode
+    # walker samples through the training-time forward path, which is not the
+    # distribution the deployed champion occupies — and it is a silent defect:
+    # the states still look plausible.
+    if policy.training:
+        raise ValueError(
+            "sample_anchor_states was handed a policy in train() mode; the walker "
+            "must be the FROZEN champion in eval() mode, or the anchor's state "
+            "distribution is not the one the deployment visits"
+        )
+
     openings = complete_openings(labels_path, exclude_game_seeds=exclude_game_seeds)
     if not openings:
         raise NoLabeledOpeningsError(

@@ -446,6 +446,19 @@ load-bearing obs pin is
 > value drift is a deployment-visible regression the KL term structurally cannot
 > see.
 >
+> `anchor_terms` also reports **per-head coverage** — the denominators the
+> relevance-normalised KL was divided by, carried on `AnchorTerms`, `AnchorDrift`
+> and every `history.json` step. Without it the scalar is unreadable: a small KL
+> can mean the heads held OR that the sampled states never exercised them. Heads
+> whose own mask is entirely False are excluded from those denominators
+> (`PLAY_KNIGHT`'s `tile` mask is all-False at every node offering it, since
+> `env/masks.py` writes `tile_mask` only in the robber-placement branch), because
+> their KL is identically zero and counting them understates measured drift.
+> MEASURED consequence, worth knowing before reading a drift number: on a walk
+> from a randomly-initialised stand-in the **corner head is reached on ~0.5% of
+> anchor states even at 256**, so the anchor bound says little about settlement
+> placement at the default `n_anchor_states`.
+>
 > `finetune()` REFUSES a shard whose manifest withheld no `game_seed`
 > (`UngatedShardError`) unless `FinetuneConfig.allow_ungated=True`. The gate CLI
 > refuses such a shard too — but only after the run, when the labels are already
@@ -506,7 +519,7 @@ Same as `bc/loss.py` — relevance-weighted CE per head, value MSE @ 0.1, belief
 
 **AS BUILT**: 20% of the human labels are held out **by `game_seed`, at CONVERSION time** (`--held-out-frac`, above), not stratified by `draft_position` and not re-derived at eval time. Splitting by seed is what stops a draft's position-4 label landing in the held-out set while the position-1 label it is conditioned on was trained on; splitting in the converter is what makes "held out" a property of the CHECKPOINT rather than of one code path. `bc/finetune.py` trains on the resulting shard and — reading `held_out_game_seeds` back from its manifest — keeps the same seeds out of the anchor rollouts.
 
-The per-step logging below is the source plan's design and is **not built**: `finetune()` writes a `history.json` (per-step `total` / `policy` / `value` / `anchor_kl` / `anchor_value_mse`, plus run-level `candidate` / `human_opening_prior` / `n_rows` / `ruleset` / `held_out_game_seeds` / `held_out_gated` / `allow_ungated`), and agreement is measured once, after the fact, by `scripts/eval_setup_agreement.py`.
+The per-step logging below is the source plan's design and is **not built**: `finetune()` writes a `history.json` (per-step `total` / `policy` / `value` / `anchor_kl` / `anchor_value_mse` / `anchor_head_relevance`, plus run-level `candidate` / `human_opening_prior` / `n_rows` / `ruleset` / `held_out_game_seeds` / `held_out_gated` / `allow_ungated`), and agreement is measured once, after the fact, by `scripts/eval_setup_agreement.py`.
 
 
 - `finetune/val_nll_human_only` — NLL on the human-only val split.
