@@ -159,7 +159,7 @@ def _replay_to_scenario(label: dict[str, Any]) -> tuple[ScenarioGenerator, Any, 
     return gen, scenario, tracker
 
 
-def _obs_and_mask(
+def obs_and_mask_for_scenario(
     *,
     gen: ScenarioGenerator,
     scenario: Any,
@@ -187,6 +187,15 @@ def _obs_and_mask(
         ruleset=RULESET_R0,
     )
     return obs, mask
+
+
+_obs_and_mask = obs_and_mask_for_scenario
+"""Backwards-compatible private alias.
+
+The public name exists because the D5 forced-opening probe has to derive u500's
+OWN setup picks through the very encoder + mask path the labels were converted
+with — a second copy of that wiring is how a probe silently starts asking the
+policy a differently-encoded question."""
 
 
 def rows_for_label(label: dict[str, Any], *, game_id: int) -> list[_Row]:
@@ -335,6 +344,7 @@ def convert(
     shard_name: str = "shard_00000.npz",
     held_out_frac: float = 0.2,
     split_seed: int = 0,
+    duplicate_policy: str = "refuse",
 ) -> dict[str, Any]:
     """Convert a label store into a single BC shard + manifest in ``out_dir``.
 
@@ -372,9 +382,40 @@ def convert(
     worse than no shard. Pass ``held_out_frac=0.0`` explicitly to convert such a
     corpus whole.
 
+    Duplicated decision points are refused, exactly as the fit path refuses them
+    ------------------------------------------------------------------------
+    ``duplicate_policy`` is handed straight to
+    :func:`catan_rl.setup_phase.fit.training_rows`, so the shard converter and
+    the scorer fit apply ONE rule to one corpus. Excluding ``replay_of`` rows
+    alone is not enough: the store already contains a free replay written BEFORE
+    ``replay_of`` existed, whose 20 rows carry no link and would otherwise enter
+    the shard as a second, contradictory target for 20 positions already in it —
+    the exact double-counting the ``replay_of`` filter is here to prevent, live
+    on the only corpus that exists. ``"first-labeled"`` is the sanctioned escape
+    hatch and is stamped into the manifest.
+
     Returns the manifest dict (also written to ``out_dir/manifest.json``).
     """
-    all_labels = load_scenarios(Path(labels_path))
+    # Imported lazily: ``setup_phase.fit`` pulls in the scorer feature stack,
+    # which this module does not otherwise need, and a module-level import would
+    # make every ``bc`` consumer of ``to_shard`` pay for it.
+    from catan_rl.setup_phase.fit import FitError, training_rows
+
+    # D0 replay rows are EXCLUDED here for the same reason
+    # ``setup_phase.fit.training_rows`` excludes them: a replay re-labels a
+    # position already in the corpus, so keeping both would emit the same
+    # ``(game_seed, draft_position)`` twice with CONTRADICTORY targets (a replay
+    # is only informative when the owner picks differently) and silently
+    # up-weight exactly the positions that happened to be replayed. The same
+    # call also enforces ``duplicate_policy`` on UN-annotated re-labels.
+    raw_labels = load_scenarios(Path(labels_path))
+    try:
+        all_labels = training_rows(raw_labels, duplicate_policy=duplicate_policy)
+    except FitError as exc:
+        raise LabelConversionError(str(exc)) from exc
+    n_duplicates_dropped = len([r for r in raw_labels if r.get("replay_of") is None]) - len(
+        all_labels
+    )
     if not all_labels:
         raise LabelConversionError(f"no label rows found in {labels_path}")
 
@@ -438,6 +479,11 @@ def convert(
         # ``scripts/eval_setup_agreement.py`` fails closed on a missing key.
         "held_out_frac": float(held_out_frac),
         "split_seed": int(split_seed),
+        # How un-annotated duplicate (game_seed, draft_position) rows were
+        # handled. Stamped because "first-labeled" silently drops labels, and a
+        # shard that cannot say whether it did is not auditable.
+        "duplicate_policy": duplicate_policy,
+        "n_duplicate_rows_dropped": int(n_duplicates_dropped),
         "held_out_game_seeds": held_out_seeds,
         "n_held_out_scenarios": len({str(r["scenario_id"]) for r in held}),
         "label_source_counts": source_counts,

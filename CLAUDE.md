@@ -132,10 +132,73 @@ trading API must state how it preserves the 1v1 ruleset, or be rejected.
   `setup-labeling-and-champion-finetune`): `label_setup.py` (the labeling tool),
   `export_game_labels.py` (D3 record→label adapter), `convert_labels_to_bc_shard.py`
   (D4 label store → BC shard; `--held-out-frac` defaults to 0.2 and the library
-  `to_shard.convert` now matches), `eval_setup_agreement.py` (D7 gate 1) and
+  `to_shard.convert` now matches. `convert` routes through
+  `setup_phase.fit.training_rows`, so it applies the SAME `--duplicate-policy`
+  the scorer fit does — default `refuse` — and stamps `duplicate_policy` /
+  `n_duplicate_rows_dropped` into the manifest. Filtering on `replay_of` alone
+  was a no-op on the live corpus, whose pre-`replay_of` free replay carries no
+  link, so 20 contradictory duplicate targets would have entered the shard),
+  `eval_setup_agreement.py` (D7 gate 1) and
   `eval_wr_non_inferiority.py` (D7 gate 2 — two identically-seeded `EvalHarness`
   rounds into `paired_wr_non_inferiority`; refuses unless BOTH checkpoints are R0).
   (No v1 `evaluate.py`.)
+  Setup-SCORER CLIs (spec `setup-scorer-and-blind-reveal`, label store
+  **schema v3**): `label_setup.py` gains `--replay-session <id>` (D0
+  self-consistency replay — re-presents a past session's exact boards, records
+  the owner's new pick but advances the draft with the ORIGINAL pick so every
+  position stays identical, linked by `replay_of`; REFUSES `--scorer-weights`,
+  because a reveal overlay mid-replay anchors the owner on the scorer during the
+  one owner-vs-owner measurement every later bar is read against),
+  `--scorer-weights <path>` (blind-then-**reveal**: the overlay is assigned only
+  AFTER `session.submit` returns, undo is inert once it is up, skip never
+  reveals) and `--no-reveal`
+  (the D3 anchoring CONTROL — rows carry **none** of the five scorer fields
+  `scorer_version` / `scorer_top1` / `scorer_rank_of_pick` / `agree` /
+  `reveal_mode`, and it REQUIRES `--scorer-weights` because the manifest's
+  version stamp is what makes a control pick countable; the manifest records the
+  mode + live scorer version so the gate finds the arm by `session_id` join).
+  The owner tags every submit through **two submit keys** — `S` = "close call",
+  `B` = "clear **best**" — writing the sixth v3 field `pick_clarity ∈ {clear,
+  close}` in BOTH arms (it is the owner's statement, not the scorer's; untagged
+  legacy rows read as `close`). `S`, the key the owner already has in muscle
+  memory, keeps the CONSERVATIVE tag: only `clear` picks face D4's ≥70% top-1
+  bar, so the reflexive keystroke must not be the strict one. The reveal shows
+  the scorer's **probabilities**, not bare picks, and is painted on the board it GRADED
+  (`LabelingUIState.reveal_scenario`, captured before the submit that advances
+  the draft) — an overlay on the next position would be an anchoring leak D3's
+  control is meant to detect, not absorb. New: `fit_setup_scorer.py` (D2,
+  → `data/setup_phase/scorer_weights_v1.json`; replay rows excluded, and it
+  REFUSES duplicate `(game_seed, draft_position)` rows that carry no
+  `replay_of` unless you pass `--on-duplicate first-labeled`, which is stamped
+  into provenance — the corpus already contains one pre-`replay_of` free
+  replay), `report_label_consistency.py` (D0 labeler-noise ceiling; it names
+  its `--estimator` — `linked` / `free_replay` / `same_position` — and prints
+  all three side by side, because the banked D0 35% is the **`free_replay`**
+  number: session `553464b8` predates `replay_of`, so the corpus has ZERO
+  linked pairs and the `same_position` estimator reads 75% on the same rows),
+  `eval_scorer_vs_u500.py` (**D4 exam v2**, amended + owner-ratified 2026-08-21:
+  PRIMARY metric = paired mean **log-probability** of the owner's pick, not
+  top-1 agreement — D0 measured a ~35% labeler ceiling (`free_replay`
+  estimator, n=20) the pilot scorer already sat at. PASS = ≥150 fresh picks
+  **AND** D3's ≥20% no-reveal control satisfied **AND** overall paired log-prob
+  CI lower bound > 0 **AND** picks-2-4 delta > 0
+  **AND** ≥70% top-1 on `clear`-tagged picks (the clause reports
+  `clear_top1_bar_status` ∈ {`satisfied`, `below_bar`, `unmeasured`} — an exam
+  with fewer than `MIN_CLEAR_PICKS` clear tags still fails CLOSED, but says
+  "tag some picks" rather than "the scorer is bad"); `close` picks report top-3
+  containment; a calibration block reads scorer top-1 margin against the
+  clarity tags; the 300-pick kill bar keys on picks-2-4 paired LOG-PROB. If the
+  reveal and no-reveal arms diverge the verdict falls back to the no-reveal
+  picks alone. Every clause is itemised in `report["pass_clauses"]`),
+  `run_forced_opening_probe.py` (D5 ΔWR probe; machine time — the treatment
+  forces **only the agent seat's** four picks to the scorer while the other seat
+  drafts with the policy and responds, because forcing both seats makes each
+  arm 0.5 by symmetry and ΔWR identically zero) and `scripts/dev/fit_scorer_pilot.py` (a
+  RECONSTRUCTION of the 2026-08-15 pilot fit — provenance, not authority).
+  The scorer itself (`src/catan_rl/setup_phase/{scorer,scorer_features,fit,gate,wr_probe}.py`)
+  is **vehicle-neutral** (D7): board in, vertex/edge scores out, no checkpoint
+  and no `bc`/`gui`/trainer import — so it feeds either the synthetic-corpus
+  fine-tune or setup-node search priors, an owner decision AFTER the gate.
 - `configs/` — `ppo_default.yaml`, `bc.yaml`. `docs/plans/v2/` — current roadmap.
 
 ## Action space (6 autoregressive heads)

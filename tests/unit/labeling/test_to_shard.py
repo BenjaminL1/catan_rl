@@ -297,3 +297,69 @@ def test_no_split_requested_means_an_empty_held_out_set_not_a_missing_key(
     manifest = json.loads((shard_dir / "manifest.json").read_text())
     assert manifest["held_out_game_seeds"] == []
     assert manifest["held_out_frac"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Duplicate decision points: the shard path and the fit path apply ONE rule
+# ---------------------------------------------------------------------------
+def _duplicate_last_row(labels: Path, tmp_path: Path) -> Path:
+    """A store whose final position is labeled twice with DIFFERENT targets.
+
+    This is the pre-``replay_of`` free replay in miniature: the duplicate row
+    carries no link, so an exclusion keyed on ``replay_of`` alone does not see
+    it.
+    """
+    import json
+
+    from catan_rl.labeling.store import load_scenarios
+
+    rows = [dict(r) for r in load_scenarios(labels)]
+    dup = dict(rows[-1])
+    dup["scenario_id"] = "duplicate-of-the-last-position"
+    dup["labeled_at"] = "2099-01-01T00:00:00Z"
+    # A different target — a re-label is only interesting when it disagrees, and
+    # that disagreement is exactly what must not be trained on twice.
+    legal = [v for v in range(54) if v != int(dup["settlement_vertex"])]
+    dup["settlement_vertex"] = legal[0]
+    out = tmp_path / "scenarios.jsonl"
+    out.write_text("\n".join(json.dumps(r) for r in [*rows, dup]) + "\n")
+    return out
+
+
+def test_convert_refuses_an_unlinked_duplicate_position(labels: Path, tmp_path: Path) -> None:
+    """``setup_phase.fit.training_rows`` refuses this corpus; so must the shard.
+
+    Two consumers of one corpus disagreeing about what a duplicate means is how
+    a scorer and the network it teaches end up trained on different data.
+    """
+    store = _duplicate_last_row(labels, tmp_path)
+    with pytest.raises(to_shard.LabelConversionError, match="two NON-replay rows"):
+        to_shard.convert(store, tmp_path / "out", held_out_frac=0.0)
+
+
+def test_first_labeled_is_the_sanctioned_escape_hatch_and_is_stamped(
+    labels: Path, tmp_path: Path
+) -> None:
+    store = _duplicate_last_row(labels, tmp_path)
+    manifest = to_shard.convert(
+        store, tmp_path / "out2", held_out_frac=0.0, duplicate_policy="first-labeled"
+    )
+    assert manifest["duplicate_policy"] == "first-labeled"
+    assert manifest["n_duplicate_rows_dropped"] == 1
+    # The dropped row is the LATER one, so the shard still holds one row per
+    # position — not the duplicate's contradictory target on top of it.
+    assert manifest["n_scenarios"] == 4
+
+
+def test_the_default_policy_matches_the_fit_path(labels: Path, tmp_path: Path) -> None:
+    """The default is not merely permissive-by-accident: it is fit's default."""
+    from catan_rl.setup_phase import fit
+
+    store = _duplicate_last_row(labels, tmp_path)
+    from catan_rl.labeling.store import load_scenarios
+
+    with pytest.raises(fit.FitError, match="two NON-replay rows"):
+        fit.training_rows(load_scenarios(store))
+    manifest = to_shard.convert(labels, tmp_path / "clean", held_out_frac=0.0)
+    assert manifest["duplicate_policy"] == "refuse"
+    assert manifest["n_duplicate_rows_dropped"] == 0

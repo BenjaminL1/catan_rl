@@ -81,7 +81,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
@@ -100,6 +100,9 @@ from catan_rl.eval.harness import _restore_torch_rng, _snapshot_torch_rng
 from catan_rl.policy import CatanPolicy
 from catan_rl.policy.board_geometry import build_geometry
 from catan_rl.policy.obs_schema import AUTOREGRESSIVE_HEAD, MASK_KEY_FOR, ActionType
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle guard
+    from catan_rl.setup_phase.scorer import PickGrade
 
 _HEAD_NAMES: tuple[str, ...] = ("type", "corner", "edge", "tile", "resource1", "resource2")
 
@@ -734,6 +737,9 @@ def setup_agreement(
 ) -> list[bool]:
     """Per-label top-1 settlement agreement for the policy at ``ckpt_path``.
 
+    A thin view over :func:`setup_pick_grades`; D4 v2's exam grades the
+    DISTRIBUTION (paired mean log-probability), so new callers want the grades.
+
     The position is rebuilt through the SAME converter path the training shard
     uses (:func:`catan_rl.labeling.to_shard.rows_for_label`), so an agreement
     number can never be measured on a differently-encoded state than the one the
@@ -751,8 +757,32 @@ def setup_agreement(
     means ``OPP_KIND_HEURISTIC`` — a kind the shard DOES carry, and the one the
     D7 gate-2 full-game eval plays.
     """
+    return [
+        g.agree
+        for g in setup_pick_grades(ckpt_path, labels, device=device, opponent_kind=opponent_kind)
+    ]
+
+
+def setup_pick_grades(
+    ckpt_path: Path,
+    labels: list[dict[str, Any]],
+    *,
+    device: str = "cpu",
+    opponent_kind: int | None = None,
+) -> list[PickGrade]:
+    """Per-label :class:`~catan_rl.setup_phase.scorer.PickGrade` for ``ckpt_path``.
+
+    The champion's ``log_dist/corner`` head IS a masked log-distribution over
+    the legal vertices, so it is graded by the very same function that grades
+    the scorer's masked-softmax scores. D4 v2's paired comparison is therefore
+    two readings of one arithmetic, not two arithmetics that happen to agree on
+    the easy cases.
+
+    Docstring for the opponent-kind stamp: see :func:`setup_agreement`.
+    """
     from catan_rl.labeling.to_shard import UNKNOWN_POLICY_ID, rows_for_label
     from catan_rl.policy.obs_schema import OPP_KIND_HEURISTIC
+    from catan_rl.setup_phase.scorer import grade_scores
 
     kind = OPP_KIND_HEURISTIC if opponent_kind is None else int(opponent_kind)
 
@@ -760,7 +790,7 @@ def setup_agreement(
     policy = build_policy(ckpt_path, torch_device)
     policy.eval()
 
-    out: list[bool] = []
+    out: list[PickGrade] = []
     for label in labels:
         settle_row, _road_row = rows_for_label(label, game_id=0)
         obs = {
@@ -783,6 +813,6 @@ def setup_agreement(
         action = torch.as_tensor(settle_row.action, device=torch_device).unsqueeze(0)
         with torch.no_grad():
             head_out = policy.evaluate_actions(obs, action, mask)
-        top1 = head_out["log_dist/corner"].argmax(dim=-1).item()
-        out.append(top1 == int(label["settlement_vertex"]))
+        scores = head_out["log_dist/corner"][0].detach().cpu().numpy().astype(np.float64)
+        out.append(grade_scores(scores, int(label["settlement_vertex"])))
     return out

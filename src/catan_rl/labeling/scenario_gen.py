@@ -316,11 +316,17 @@ class ScenarioGenerator:
 # ---------------------------------------------------------------------------
 
 
-def _build_index_maps(
+def build_index_maps(
     board: catanBoard,
 ) -> tuple[dict[Any, int], dict[tuple[str, str], int]]:
     """Same canonical ordering as ``CatanEnv._build_index_maps`` and
-    ``bc.dataset._build_index_maps``."""
+    ``bc.dataset._build_index_maps``.
+
+    PUBLIC because the setup scorer needs the same canonical edge ordering the
+    labels were written in (spec ``setup-scorer-and-blind-reveal`` D1). A fourth
+    private copy of this arithmetic is how an edge index silently starts meaning
+    a different edge in one consumer than in another.
+    """
     vertex_to_idx = {px: idx for idx, px in board.vertex_index_to_pixel_dict.items()}
     seen: set[tuple[str, str]] = set()
     edge_to_idx: dict[tuple[str, str], int] = {}
@@ -332,6 +338,10 @@ def _build_index_maps(
                 seen.add(key)
                 edge_to_idx[key] = len(edge_to_idx)
     return vertex_to_idx, edge_to_idx
+
+
+_build_index_maps = build_index_maps
+"""Backwards-compatible private alias (pre-existing call sites + tests)."""
 
 
 def _build_idx_to_edge_pixel_pair(

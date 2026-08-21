@@ -28,9 +28,28 @@ import numpy as np
 from catan_rl.gui import render
 from catan_rl.gui import render_constants as RC
 from catan_rl.labeling.session import LabelingSession
+from catan_rl.labeling.store import (
+    PICK_CLARITY_CLEAR,
+    PICK_CLARITY_CLOSE,
+    REVEAL_MODE_REVEAL,
+)
+from catan_rl.setup_phase.scorer import (
+    SetupScorer,
+    probabilities,
+    rank_of,
+    top_k,
+)
 
 PHASE_SETTLEMENT_PICK = "settlement_pick"
 PHASE_ROAD_PICK = "road_pick"
+PHASE_REVEAL = "reveal"
+"""Post-submit overlay showing the scorer's opinion beside the owner's pick.
+
+Reached ONLY from :meth:`LabelingUIState.submit`, and only after
+``session.submit`` has returned — i.e. after the row is durably on disk. There
+is no other assignment to ``LabelingUIState.reveal`` anywhere, which is what
+makes "the reveal never precedes the submit" a property of the code rather than
+a discipline (spec ``setup-scorer-and-blind-reveal`` D3)."""
 
 
 def nearest_vertex(
@@ -102,6 +121,20 @@ class LabelingUIState:
     selected_road: int | None = None
     last_click_rejected: bool = False
     last_click_rejected_time_ms: int = 0
+    #: The fitted scorer whose opinion is revealed after a submit. ``None``
+    #: disables the overlay entirely (and writes no scorer fields).
+    scorer: SetupScorer | None = None
+    #: The reveal payload for the just-submitted pick, or ``None``. Assigned in
+    #: exactly one place: after ``session.submit`` returns.
+    reveal: dict[str, Any] | None = None
+    #: The scenario the reveal payload GRADES — captured before the submit, so
+    #: the overlay is painted on the board that was labeled. ``session.submit``
+    #: advances the snake draft, so ``session.current_scenario()`` is already
+    #: the NEXT decision point by the time the overlay is drawn; rendering
+    #: against it would put the scorer's rings on the board the owner is about
+    #: to label, which is not a display bug but an anchoring leak of exactly the
+    #: kind D3's control exists to detect.
+    reveal_scenario: Any | None = None
     # Cache of the legal-roads mask after a settlement is selected.
     _cached_legal_roads: np.ndarray | None = field(default=None)
 
@@ -110,6 +143,8 @@ class LabelingUIState:
         self.selected_settlement = None
         self.selected_road = None
         self.last_click_rejected = False
+        self.reveal = None
+        self.reveal_scenario = None
         self._cached_legal_roads = None
 
     def current_legal_settlements(self) -> set[int]:
@@ -170,8 +205,13 @@ class LabelingUIState:
     def undo(self) -> None:
         """Revert the most recent pick within the current scenario.
 
-        Cannot undo a submitted scenario (use skip on the next one).
+        Cannot undo a submitted scenario (use skip on the next one), and is a
+        NO-OP once the reveal is up: the row is already on disk, so an "undo"
+        there could only mean "re-pick after seeing the answer" — which is the
+        exact contamination the blind-first design exists to prevent.
         """
+        if self.phase == PHASE_REVEAL:
+            return
         if self.selected_road is not None:
             self.selected_road = None
         elif self.selected_settlement is not None:
@@ -184,21 +224,112 @@ class LabelingUIState:
         self,
         notes: str = "",
         decision_time_ms: int = 0,
+        pick_clarity: str = PICK_CLARITY_CLOSE,
     ) -> None:
+        """Persist the pick, THEN (and only then) show the scorer's opinion.
+
+        The payload is computed into a LOCAL before the write — it has to be, it
+        goes into the row — but it is not visible anywhere until
+        ``session.submit`` has returned. If the append raises, ``self.reveal``
+        stays ``None`` and the phase is unchanged, so a failed write cannot leak
+        the answer for a pick that was never recorded.
+
+        ``pick_clarity`` is the owner's own D3 tag ("clear best" vs "close
+        call"), bound to two submit keys in :class:`LabelingUI`. It is written
+        in BOTH arms — it is the owner's statement about the position, not the
+        scorer's about the pick.
+        """
         if not self.is_ready_to_submit():
             raise RuntimeError("not ready to submit (settlement + road both required)")
         assert self.selected_settlement is not None
         assert self.selected_road is not None
+        scenario = self.session.current_scenario()
+        payload = self._scorer_payload(scenario, self.selected_settlement, self.selected_road)
+        row_fields = None if payload is None else payload["row_fields"]
         self.session.submit(
             settlement_vertex=self.selected_settlement,
             road_edge=self.selected_road,
             notes=notes,
             decision_time_ms=decision_time_ms,
+            scorer_fields=row_fields,
+            pick_clarity=pick_clarity,
         )
+        if payload is None or self.session.reveal_mode != REVEAL_MODE_REVEAL:
+            self.reset_for_new_scenario()
+            return
+        self.reveal = payload["display"]
+        # Pin the board the reveal describes. ``session.submit`` has already
+        # advanced the draft, so this is the ONLY handle on the graded position.
+        self.reveal_scenario = scenario
+        self.phase = PHASE_REVEAL
+        self.selected_settlement = None
+        self.selected_road = None
+        self._cached_legal_roads = None
+
+    def dismiss_reveal(self) -> None:
+        """Close the overlay and move on to the next decision point."""
+        if self.phase != PHASE_REVEAL:
+            return
         self.reset_for_new_scenario()
 
+    def _scorer_payload(self, scenario: Any, vertex: int, edge: int) -> dict[str, Any] | None:
+        """Grade the just-made pick. Returns ``None`` when no scorer is loaded."""
+        if self.scorer is None or scenario is None:
+            return None
+        board = scenario.game.board
+        v_scores = self.scorer.score_vertices(
+            board,
+            scenario.prior_picks,
+            int(scenario.acting_player_idx),
+            scenario.legal_settlement_corners,
+        )
+        v_top = top_k(v_scores, 3)
+        legal_roads = scenario.compute_legal_road_edges(vertex)
+        e_scores = self.scorer.score_edges(
+            board,
+            scenario.prior_picks,
+            int(scenario.acting_player_idx),
+            scenario.legal_settlement_corners,
+            vertex,
+            legal_roads,
+        )
+        e_top = top_k(e_scores, 3)
+        v_probs = probabilities(v_scores)
+        e_probs = probabilities(e_scores)
+        row_fields = {
+            "scorer_version": self.scorer.version,
+            "scorer_top1": int(v_top[0]),
+            "scorer_rank_of_pick": rank_of(v_scores, vertex),
+            "agree": bool(v_top[0] == vertex),
+            "reveal_mode": self.session.reveal_mode,
+        }
+        # D3 (amended): the reveal shows the scorer's PROBABILITIES, not bare
+        # picks. A bare top-1 reads as an assertion; a distribution that says
+        # "0.31 / 0.28 / 0.25" reads as the near-tie D0 measured, which is the
+        # thing the owner needs to see to judge whether the scorer is wrong or
+        # merely undecided.
+        return {
+            "row_fields": row_fields,
+            "display": {
+                **row_fields,
+                "settlement_top3": [int(v) for v in v_top],
+                "settlement_top3_probs": [float(v_probs[int(v)]) for v in v_top],
+                "owner_settlement_prob": float(v_probs[int(vertex)]),
+                "road_top1": int(e_top[0]) if e_top else None,
+                "road_top3": [int(e) for e in e_top],
+                "road_top3_probs": [float(e_probs[int(e)]) for e in e_top],
+                "owner_road_prob": float(e_probs[int(edge)]),
+                "owner_settlement": int(vertex),
+                "owner_road": int(edge),
+            },
+        }
+
     def skip(self) -> None:
-        """Abandon the current draft, advance to a fresh board."""
+        """Abandon the current draft, advance to a fresh board.
+
+        Never sets ``reveal``: a skipped position was never submitted, so there
+        is nothing to grade and nothing the owner is owed an answer to.
+        """
         self.session.skip()
         self.reset_for_new_scenario()
 
@@ -225,6 +356,15 @@ _PRIOR_PICK_ROAD_WIDTH = 6
 _TEXT_COLOR = (235, 235, 235)
 """Top-bar / bottom-bar text on the dark canvas overlay."""
 
+_REVEAL_TOP1_COLOR = (255, 140, 0)
+"""Orange ring / line for the scorer's top-1 in the post-submit reveal."""
+
+_REVEAL_TOPK_COLOR = (150, 90, 30)
+"""Dimmed ring for the scorer's ranks 2-3."""
+
+_REVEAL_OWNER_COLOR = (60, 200, 255)
+"""Wide ring around the owner's own pick, so the reveal is a COMPARISON."""
+
 
 class LabelingUI:
     """Pygame UI driver. Call :meth:`run` to enter the event loop."""
@@ -234,6 +374,7 @@ class LabelingUI:
         session: LabelingSession,
         screen_size: tuple[int, int] = (1100, 900),
         click_radius: float = 22.0,
+        scorer: SetupScorer | None = None,
     ) -> None:
         import pygame  # Local import: pygame is an optional dependency.
 
@@ -244,7 +385,7 @@ class LabelingUI:
         self.screen_size = screen_size
         self.click_radius = click_radius
         self.session = session
-        self.state = LabelingUIState(session)
+        self.state = LabelingUIState(session, scorer=scorer)
         # Fonts.
         self.font = pygame.font.SysFont(None, 24)
         self.font_small = pygame.font.SysFont(None, 18)
@@ -280,6 +421,10 @@ class LabelingUI:
 
     def _handle_click(self, pos: tuple[int, int]) -> None:
         click_x, click_y = pos
+        if self.state.phase == PHASE_REVEAL:
+            self.state.dismiss_reveal()
+            self._scenario_start_ms = self._now_ms()
+            return
         scenario = self.session.current_scenario()
         if scenario is None:
             return
@@ -325,19 +470,43 @@ class LabelingUI:
 
         if key == K:
             return False  # quit
+        if self.state.phase == PHASE_REVEAL:
+            # Any other key dismisses. Undo is deliberately inert here.
+            if unicode != "u":
+                self.state.dismiss_reveal()
+                self._scenario_start_ms = self._now_ms()
+            return True
         if unicode == "s":
-            self._try_submit()
+            self._try_submit(PICK_CLARITY_CLOSE)
+        elif unicode == "b":
+            self._try_submit(PICK_CLARITY_CLEAR)
         elif unicode == "k":
             self._skip()
         elif unicode == "u":
             self.state.undo()
         return True
 
-    def _try_submit(self) -> None:
+    def _try_submit(self, pick_clarity: str = PICK_CLARITY_CLOSE) -> None:
+        """Submit with the owner's clarity tag (D3's two submit keys).
+
+        ``S`` — the pre-existing submit key — means "close call"; ``B`` means
+        "clear BEST". Two keys rather than a prompt because the tag has to cost
+        nothing: a modal question after every pick would be paid 150+ times and
+        would be answered carelessly, which is worse than not asking.
+
+        **``S`` deliberately carries the CONSERVATIVE tag.** ``close`` is what
+        the store reads for an untagged row (``store._V3_DEFAULTS``) and what
+        every default in the stack spells, because only ``clear`` picks are held
+        to D4's >=70% top-1 bar. ``S`` has meant plain "submit" for the whole
+        292-label corpus, so binding it to ``clear`` would let reflex populate
+        the strict subset with close calls — contaminating the one bar the spec
+        says is "revisable only upward". Asserting "clear best" is worth one
+        deliberate, unfamiliar keystroke; not asserting it must stay free.
+        """
         if not self.state.is_ready_to_submit():
             return
         elapsed_ms = self._now_ms() - self._scenario_start_ms
-        self.state.submit(decision_time_ms=elapsed_ms)
+        self.state.submit(decision_time_ms=elapsed_ms, pick_clarity=pick_clarity)
         self._scenario_start_ms = self._now_ms()
 
     def _skip(self) -> None:
@@ -349,6 +518,17 @@ class LabelingUI:
     # ------------------------------------------------------------------
 
     def _render(self) -> None:
+        if self.state.phase == PHASE_REVEAL and self.state.reveal is not None:
+            # Paint the GRADED board, not the next one. ``session.submit`` has
+            # already advanced the draft, so ``current_scenario()`` here is the
+            # position the owner has not seen yet.
+            graded = self.state.reveal_scenario
+            if graded is not None:
+                self._render_board(graded)
+                self._render_top_bar(graded)
+                self._render_bottom_bar(graded)
+                self._render_reveal(graded, self.state.reveal)
+                return
         scenario = self.session.current_scenario()
         if scenario is None:
             # Done-state still gets water + cream message for visual continuity.
@@ -499,9 +679,74 @@ class LabelingUI:
         del scenario  # not yet used in bottom bar; kept for symmetry.
         y0 = self.screen_size[1] - 80
         # Shortcut hints.
-        text = "[click vertex → click edge → S submit]    [K skip]    [U undo]    [Q quit]"
+        text = (
+            "[click vertex → click edge → S submit (CLOSE call) / B submit CLEAR best]"
+            "    [K skip]    [U undo]    [Q quit]"
+        )
         surf = self.font_small.render(text, True, _TEXT_COLOR)
         self.screen.blit(surf, (16, y0))
+
+    def _render_reveal(self, scenario: Any, reveal: dict[str, Any]) -> None:
+        """Draw the post-submit overlay: the scorer's picks beside the owner's.
+
+        Drawn from ``state.reveal`` only, which is populated exactly once, after
+        the durable write, and against ``state.reveal_scenario`` — the position
+        that was GRADED, not whatever the session advanced to. Nothing here
+        reads the scorer directly."""
+        pygame = self._pygame
+        vertex_pixels = self._vertex_pixels(scenario)
+        top3 = reveal.get("settlement_top3") or []
+        for rank, vidx in enumerate(top3):
+            if vidx not in vertex_pixels:
+                continue
+            vx, vy = vertex_pixels[vidx]
+            colour = _REVEAL_TOP1_COLOR if rank == 0 else _REVEAL_TOPK_COLOR
+            pygame.draw.circle(self.screen, colour, (int(vx), int(vy)), 13, 3)
+        road_top1 = reveal.get("road_top1")
+        if road_top1 is not None:
+            v1, v2 = scenario._idx_to_edge_pixel_pair[int(road_top1)]
+            pygame.draw.line(
+                self.screen,
+                _REVEAL_TOP1_COLOR,
+                (int(v1.x), int(v1.y)),
+                (int(v2.x), int(v2.y)),
+                4,
+            )
+        owner_vertex = reveal.get("owner_settlement")
+        if owner_vertex is not None and int(owner_vertex) in vertex_pixels:
+            ox, oy = vertex_pixels[int(owner_vertex)]
+            pygame.draw.circle(self.screen, _REVEAL_OWNER_COLOR, (int(ox), int(oy)), 17, 3)
+        verdict = "AGREE" if reveal.get("agree") else "DIFFER"
+        probs = reveal.get("settlement_top3_probs") or []
+        ranked = ", ".join(f"{v} {p:.0%}" for v, p in zip(top3, probs, strict=False))
+        own_prob = reveal.get("owner_settlement_prob")
+        own_text = "—" if own_prob is None else f"{float(own_prob):.0%}"
+        lines = [
+            f"scorer {reveal.get('scorer_version')} — {verdict}   [any key to continue]",
+            f"settlement p: {ranked}",
+            (f"your pick {owner_vertex}: p={own_text}  (rank {reveal.get('scorer_rank_of_pick')})"),
+        ]
+        road_probs = reveal.get("road_top3_probs") or []
+        if road_probs:
+            own_road_prob = reveal.get("owner_road_prob")
+            own_road_text = "—" if own_road_prob is None else f"{float(own_road_prob):.0%}"
+            lines.append(
+                f"road p: {reveal.get('road_top1')} {road_probs[0]:.0%}  "
+                f"your road {reveal.get('owner_road')}: p={own_road_text}"
+            )
+        surfaces = [self.font.render(line, True, _TEXT_COLOR) for line in lines]
+        pad = 8
+        width = max(surf.get_width() for surf in surfaces)
+        height = sum(surf.get_height() for surf in surfaces)
+        pygame.draw.rect(
+            self.screen,
+            (20, 20, 20),
+            (16 - pad, 40 - pad, width + 2 * pad, height + 2 * pad),
+        )
+        y = 40
+        for surf in surfaces:
+            self.screen.blit(surf, (16, y))
+            y += surf.get_height()
 
     def _render_done_message(self) -> None:
         surf = self.font_large.render(

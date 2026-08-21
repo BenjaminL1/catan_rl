@@ -138,7 +138,7 @@ def complete_openings(
     return out
 
 
-def _bridge_state(
+def bridge_state_for_opening(
     opening: LabeledOpening, *, agent_seat: int, opp_kind: int = OPP_KIND_HEURISTIC
 ) -> BridgeState:
     """Describe ``opening`` as a post-setup :class:`BridgeState`.
@@ -204,6 +204,16 @@ def _bridge_state(
         # fine-tune extends is R0. Pinned, not defaulted.
         ruleset=RULESET_R0,
     )
+
+
+_bridge_state = bridge_state_for_opening
+"""Backwards-compatible private alias.
+
+The public name exists because the D5 forced-opening win-rate probe builds the
+very same post-setup state from a DERIVED opening rather than a labeled one.
+The seat that DRIVES the opponent is swapped by the probe with
+``dataclasses.replace(state, opponent_type=...)``, so this function keeps its
+single meaning."""
 
 
 def _has_unsatisfiable_head(masks: dict[str, np.ndarray], action_type: int) -> bool:

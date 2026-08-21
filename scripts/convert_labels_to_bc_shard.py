@@ -62,6 +62,18 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--split-seed", type=int, default=0)
+    parser.add_argument(
+        "--duplicate-policy",
+        choices=("refuse", "first-labeled"),
+        default="refuse",
+        help=(
+            "How to handle repeated (game_seed, draft_position) rows that carry "
+            "no replay_of. 'refuse' (default) matches scripts/fit_setup_scorer.py, "
+            "so the shard and the scorer are built from the same corpus under the "
+            "same rule; 'first-labeled' keeps the earliest of each and stamps that "
+            "choice into the manifest."
+        ),
+    )
     args = parser.parse_args(argv)
 
     manifest = convert(
@@ -70,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
         opponent_kinds=tuple(args.opponent_kinds),
         held_out_frac=args.held_out_frac,
         split_seed=args.split_seed,
+        duplicate_policy=args.duplicate_policy,
     )
     print(
         f"wrote {manifest['n_pairs']} rows from {manifest['n_scenarios']} scenarios "

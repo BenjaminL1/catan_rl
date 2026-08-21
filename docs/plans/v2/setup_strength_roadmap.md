@@ -117,6 +117,65 @@ Pip-count table inlined as `_DOTS_BY_TOKEN = {2:1, 3:2, 4:3, 5:4, 6:5, 8:5, 9:4,
 - `test_invariant_under_d6` — for every D6 element `g` (1..11), permuting the board's chips + resources through `g` and re-querying via the analytic scorer at `corner_perm(g)[v]` yields the same score (modulo float ε). **This is the unit-level pin** for symmetry consistency — a precondition for Phase B's port augmentation to be safe.
 - `test_known_top_vertex` — on a fixed seed, the analytic top-3 vertices match the hand-computed top-3 list.
 
+### A.1b — Fitted setup SCORER (successor to A.1, spec `setup-scorer-and-blind-reveal`, 2026-08)
+
+**AS BUILT.** `analytic_value.py` stays exactly what it is — a closed-form pip
+scorer, and now also the PINNED base the relational features are computed
+against (see below). The learned successor is:
+
+| File | Role |
+|---|---|
+| `src/catan_rl/setup_phase/scorer_features.py` | D1's 18 settlement features + 3 road features; `FEATURE_VERSION`; `SetupContext` |
+| `src/catan_rl/setup_phase/scorer.py` | `ScorerWeights` / `SetupScorer`, `score_vertices` / `score_edges`, `load_weights` |
+| `src/catan_rl/setup_phase/fit.py` | masked-softmax NLL fit, replay exclusion, the road NULL baseline |
+| `src/catan_rl/setup_phase/gate.py` | D4 **v2** exam vs u500 (paired mean log-prob primary), clarity bars, calibration, kill bar, gating anchoring control |
+| `src/catan_rl/setup_phase/wr_probe.py` | D5 forced-opening ΔWR probe driver |
+| `scripts/fit_setup_scorer.py` | → `data/setup_phase/scorer_weights_v1.json` |
+| `scripts/eval_scorer_vs_u500.py` | D4 gate CLI (arbitrary label subsets, NOT shard manifests) |
+| `scripts/run_forced_opening_probe.py` | D5 probe CLI (machine time; not run in the build slice) |
+| `scripts/report_label_consistency.py` | D0 labeler-noise ceiling (`--estimator linked\|free_replay\|same_position\|auto`) |
+| `scripts/dev/fit_scorer_pilot.py` | RECONSTRUCTION of the 2026-08-15 pilot fit (provenance, not authority) |
+
+Three things worth carrying forward:
+
+* **Circularity break.** The relational features ("the opponent's best remaining
+  vertex") are computed from `analytic_value.vertex_yield` under the PINNED
+  `CHARLESWORTH_V0` table, so the design matrix is a constant function of the
+  board rather than of the weights being fit.
+* **The road model is FIT, not asserted.** "Point at the expansion target" ships
+  as `ROAD_NULL_FEATURE`, a one-column null model the fitted head is REPORTED
+  against. A fit that loses to it is a finding, and no test asserts otherwise.
+* **Vehicle neutrality (D7).** The scorer needs a board, never a checkpoint. An
+  import-graph test pins that `catan_rl.bc` / `catan_rl.gui` / the trainer /
+  the league / search never enter its module graph, so it drops into either the
+  synthetic-corpus fine-tune or setup-node search priors unchanged.
+
+* **The exam grades DISTRIBUTIONS (D4 v2, owner-ratified 2026-08-21).** D0's
+  replay put the owner's own top-1 self-agreement at 7/20 = 35% (Wilson
+  [18, 57]) — a labeler ceiling the pilot scorer already sat at, so exact
+  agreement can no longer discriminate. That figure is the **`free_replay`**
+  estimator (session `553464b8` predates `replay_of`, so it is a free replay of
+  `4905bb4b` and the corpus holds no linked pairs); the narrower
+  `same_position` estimator reads 6/8 = 75% on the same rows and is biased
+  upward. `report_label_consistency.py` names its estimator and prints all
+  three, so the 40pp spread can never be mistaken for a disagreement about
+  arithmetic. The primary metric is the paired mean
+  **log-probability** of the owner's pick (a proper scoring rule: a genuine
+  k-way tie is best answered ~1/k each). Strictness is applied where the owner
+  says so — ≥70% top-1 on `clear`-tagged picks, top-3 containment reported on
+  `close` ones — and a calibration block reads the scorer's top-1 probability
+  margin against those tags to map missing features.
+
+The A.4 acceptance gate below is about the ANALYTIC table choice and is
+unchanged. The fitted scorer has its own pre-registered gate (D4 v2: ≥150 fresh
+blind-first picks AND D3's ≥20% no-reveal control satisfied AND overall paired
+log-prob CI lower bound > 0 AND picks-2-4 delta > 0 AND the `clear` top-1 bar,
+with a 300-pick kill bar on picks-2-4 paired log-prob) plus the D5 win-rate
+probe. The D5 probe forces **one seat's** opening at a time: forcing both seats
+and summing over agent seats makes each arm 0.5 by symmetry and ΔWR identically
+zero, which the spec's "ΔWR ≈ 0 is AMBIGUOUS" reading would have laundered as
+evidence.
+
 ### A.2 — Resource-weight calibration (dual-table approach, per §0.2 decision)
 
 **Calibration source decision** (recorded 2026-06-03): no champion ckpt available; ship two named tables and let §A.4 pick.

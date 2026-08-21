@@ -25,6 +25,30 @@ from catan_rl.labeling.store import (
     repair_jsonl,
 )
 
+_READ_TIME_DEFAULTS = {
+    # v2 (spec ``setup-labeling-and-champion-finetune`` D3).
+    "source": "tool",
+    "ruleset": "R0",
+    # v3 (spec ``setup-scorer-and-blind-reveal`` D0 + D3). All ``None``: the
+    # reveal fields mean "this pick was never graded", which is NOT the same
+    # statement as ``agree=False``.
+    "replay_of": None,
+    "scorer_version": None,
+    "scorer_top1": None,
+    "scorer_rank_of_pick": None,
+    "agree": None,
+    "reveal_mode": None,
+    # ...except ``pick_clarity``, whose legacy reading the spec fixes
+    # explicitly: an untagged row reads as ``close``, the conservative side —
+    # only ``clear`` picks are held to D4's >=70% top-1 bar.
+    "pick_clarity": "close",
+}
+"""What :func:`load_scenarios` adds in memory to a row that predates them.
+
+Named once here so the "old rows keep loading untouched" assertions below say
+which schema each default came from instead of hard-coding a literal dict that
+has to be re-read every bump."""
+
 
 def _example_row() -> dict:
     return {
@@ -93,7 +117,7 @@ class TestLoadScenarios:
         assert len(loaded) == 1
         # v2 (D3) fills the OPTIONAL provenance fields at READ time; the row on
         # disk is byte-identical to what was appended.
-        assert loaded[0] == {**original, "source": "tool", "ruleset": "R0"}
+        assert loaded[0] == {**original, **_READ_TIME_DEFAULTS}
 
     def test_loads_multiple_rows_in_order(self, tmp_path: Path) -> None:
         path = tmp_path / "scenarios.jsonl"
@@ -132,7 +156,7 @@ class TestLoadScenarios:
         assert [r["scenario_id"] for r in loaded] == ["legacy", "current"]
         assert loaded[0]["archetype"] == "balanced"
         assert "archetype" not in loaded[1]
-        assert loaded[1] == {**current, "source": "tool", "ruleset": "R0"}
+        assert loaded[1] == {**current, **_READ_TIME_DEFAULTS}
 
     def test_schema_version_field_present_on_every_row(self, tmp_path: Path) -> None:
         path = tmp_path / "scenarios.jsonl"

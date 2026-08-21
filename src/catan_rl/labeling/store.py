@@ -22,14 +22,21 @@ from typing import Any
 
 from catan_rl.env.ruleset import RULESET_R0
 
-SCHEMA_VERSION: int = 2
+SCHEMA_VERSION: int = 3
 """Current JSONL schema version. Bump on backward-incompatible changes.
 
 v2 (spec ``setup-labeling-and-champion-finetune`` D3) adds two OPTIONAL
 provenance fields — ``source`` (``"tool"`` | ``"game"``) and ``ruleset`` —
 populated at READ time for v1 rows by :func:`_migrate_row`.
 ``_REQUIRED_FIELDS`` is unchanged, so a v1 row written by the labeling tool
-keeps loading untouched and the file on disk is never rewritten."""
+keeps loading untouched and the file on disk is never rewritten.
+
+v3 (spec ``setup-scorer-and-blind-reveal`` D0 + D3) adds seven more OPTIONAL
+fields — ``replay_of`` (the self-consistency link), the five blind-then-reveal
+fields (all defaulting to ``None``), and ``pick_clarity`` (the owner's
+"clear best" / "close call" tag, defaulting to :data:`PICK_CLARITY_CLOSE`).
+``_REQUIRED_FIELDS`` is again unchanged and the file is again never rewritten,
+so every v1/v2 row on disk keeps loading byte-for-byte as it was written."""
 
 _V2_DEFAULTS: dict[str, Any] = {"source": "tool", "ruleset": RULESET_R0}
 """Read-time defaults for the fields v2 added.
@@ -40,6 +47,66 @@ writer. The ruleset default is :data:`~catan_rl.env.ruleset.RULESET_R0`
 IMPORTED, not the literal ``"R0"`` — it must mean the same epoch
 ``ScenarioGenerator`` pins (it builds every mask with ``RULESET_R0``), and a
 literal would keep saying "R0" if that constant were ever renamed."""
+
+PICK_CLARITY_CLEAR: str = "clear"
+PICK_CLARITY_CLOSE: str = "close"
+PICK_CLARITIES: tuple[str, ...] = (PICK_CLARITY_CLEAR, PICK_CLARITY_CLOSE)
+"""D3's two submit keys: was this the obvious best vertex, or a close call?
+
+The tag is the OWNER's, not the scorer's, so it is written in BOTH D3 arms —
+a ``--no-reveal`` row carries ``pick_clarity`` even though it carries none of
+the five scorer fields. D4's strictness bar (top-1 must match on ``clear``
+picks) is read on the control arm too, and a tag that only existed in the
+reveal arm would put the bar and the anchoring control in conflict."""
+
+PICK_CLARITY_FIELD: str = "pick_clarity"
+
+_V3_DEFAULTS: dict[str, Any] = {
+    "replay_of": None,
+    "scorer_version": None,
+    "scorer_top1": None,
+    "scorer_rank_of_pick": None,
+    "agree": None,
+    "reveal_mode": None,
+    PICK_CLARITY_FIELD: PICK_CLARITY_CLOSE,
+}
+"""Read-time defaults for the fields v3 added — every one of them ``None``.
+
+``None`` is load-bearing, not a stylistic choice. The five reveal fields mean
+"this pick was never graded" on a pre-v3 row and on a ``--no-reveal`` row, and
+that is NOT the same statement as ``agree=False`` — defaulting ``agree`` to
+``False`` would inject a phantom disagreement for every one of the pre-existing
+labels into the D4 gate. Likewise ``replay_of=None`` means "an original pick",
+which is what the fit's replay exclusion tests for; ``False`` or ``""`` would
+be a second falsy spelling of the same thing and invite an ``is not None``
+check to drift into a truthiness check.
+
+``pick_clarity`` is the ONE v3 default that is not ``None``, because the spec
+fixes its legacy reading explicitly: "untagged legacy rows read as ``close``".
+That is the conservative direction — ``close`` picks are graded by top-3
+containment, so a legacy row can never be pulled into the >=70% top-1
+strictness bar on the strength of a tag its labeler never gave.
+"""
+
+REVEAL_MODE_REVEAL: str = "reveal"
+REVEAL_MODE_NO_REVEAL: str = "no_reveal"
+"""The two D3 session modes. ``no_reveal`` is the anchoring CONTROL arm: the
+owner labels with no scorer overlay at all, and those rows carry none of the
+five reveal fields (the session manifest still records the mode and the live
+scorer version, so the gate can find the arm by ``session_id`` join)."""
+
+REVEAL_MODES: tuple[str, ...] = (REVEAL_MODE_REVEAL, REVEAL_MODE_NO_REVEAL)
+
+SCORER_ROW_FIELDS: tuple[str, ...] = (
+    "scorer_version",
+    "scorer_top1",
+    "scorer_rank_of_pick",
+    "agree",
+    "reveal_mode",
+)
+"""The five D3 reveal fields, named once so the writer, the reader and the
+"``--no-reveal`` rows carry none of them" invariant test cannot drift apart."""
+
 
 _REQUIRED_FIELDS: tuple[str, ...] = (
     "schema_version",
@@ -128,7 +195,9 @@ def load_scenarios(path: Path) -> list[dict[str, Any]]:
 def _migrate_row(row: dict[str, Any]) -> dict[str, Any]:
     """In-memory migration of older schema versions to the current.
 
-    v1 → v2 fills the OPTIONAL provenance fields from :data:`_V2_DEFAULTS`.
+    v1 → v2 fills the OPTIONAL provenance fields from :data:`_V2_DEFAULTS`;
+    v2 → v3 fills the replay/reveal fields from :data:`_V3_DEFAULTS` (all
+    ``None``).
     The returned dict keeps its original ``schema_version`` — the value records
     what was WRITTEN, and the file on disk is never rewritten (see the module
     docstring); only the in-memory view is completed.
@@ -138,6 +207,8 @@ def _migrate_row(row: dict[str, Any]) -> dict[str, Any]:
     ``KeyError`` on a field the schema calls optional.
     """
     for key, default in _V2_DEFAULTS.items():
+        row.setdefault(key, default)
+    for key, default in _V3_DEFAULTS.items():
         row.setdefault(key, default)
     return row
 

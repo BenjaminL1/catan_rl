@@ -109,6 +109,16 @@ def wilson_interval(
     return WilsonInterval(point=p, lower=lower, upper=upper, n=n, alpha=alpha)
 
 
+def normal_ppf(q: float) -> float:
+    """Public alias of the std-normal inverse CDF used by the Wilson interval.
+
+    Exposed so paired-difference CIs elsewhere (the setup-scorer gate) use the
+    SAME z as every Wilson bound in this repo, rather than each growing its own
+    approximation.
+    """
+    return _normal_ppf(q)
+
+
 # ---------------------------------------------------------------------------
 # Std-normal PPF — rational approximation per Beasley-Springer-Moro.
 # Avoids a scipy dependency for this single inverse.
