@@ -311,30 +311,79 @@ def _duplicate_last_row(labels: Path, tmp_path: Path) -> Path:
     """
     import json
 
+    from catan_rl.labeling.scenario_gen import Pick, ScenarioGenerator
     from catan_rl.labeling.store import load_scenarios
 
     rows = [dict(r) for r in load_scenarios(labels)]
     dup = dict(rows[-1])
     dup["scenario_id"] = "duplicate-of-the-last-position"
     dup["labeled_at"] = "2099-01-01T00:00:00Z"
-    # A different target — a re-label is only interesting when it disagrees, and
-    # that disagreement is exactly what must not be trained on twice.
-    legal = [v for v in range(54) if v != int(dup["settlement_vertex"])]
-    dup["settlement_vertex"] = legal[0]
+    # A different but LEGAL target — a re-label is only interesting when it
+    # disagrees, and that disagreement is exactly what must not be trained on
+    # twice. It has to be replayable, because the default policy now converts it
+    # rather than refusing the corpus outright.
+    gen = ScenarioGenerator(seed=int(dup["game_seed"]))
+    for pick in dup["prior_picks"]:
+        pk = Pick.from_dict(pick)
+        gen.apply(pk.settlement_vertex, pk.road_edge)
+    scenario = gen.current()
+    assert scenario is not None
+    other = next(
+        v
+        for v in np.flatnonzero(scenario.legal_settlement_corners)
+        if int(v) != int(dup["settlement_vertex"])
+    )
+    dup["settlement_vertex"] = int(other)
+    dup["road_edge"] = int(np.flatnonzero(scenario.compute_legal_road_edges(int(other)))[0])
     out = tmp_path / "scenarios.jsonl"
     out.write_text("\n".join(json.dumps(r) for r in [*rows, dup]) + "\n")
     return out
 
 
-def test_convert_refuses_an_unlinked_duplicate_position(labels: Path, tmp_path: Path) -> None:
-    """``setup_phase.fit.training_rows`` refuses this corpus; so must the shard.
+def test_the_default_keeps_every_row_and_warns_loudly(labels: Path, tmp_path: Path) -> None:
+    """The converter's historical default is intact: nothing is dropped.
 
-    Two consumers of one corpus disagreeing about what a duplicate means is how
-    a scorer and the network it teaches end up trained on different data.
+    A shard slice does not get to decide which of two contradictory labels for
+    one position teaches the network — that is the fine-tune slice's call. What
+    it OWES the caller is a loud, counted warning so the decision is not made by
+    silence.
     """
+    from catan_rl.labeling.dedup import DUPLICATE_POLICY_KEEP, DuplicateLabelWarning
+
     store = _duplicate_last_row(labels, tmp_path)
+    with pytest.warns(DuplicateLabelWarning, match="1 duplicated") as caught:
+        manifest = to_shard.convert(store, tmp_path / "out", held_out_frac=0.0)
+    message = str(caught[0].message)
+    assert "FINE-TUNE decision" in message
+    assert "setup-labeling-and-champion-finetune" in message
+    assert manifest["duplicate_policy"] == DUPLICATE_POLICY_KEEP
+    assert manifest["n_duplicate_rows_dropped"] == 0
+    # Five scenarios, not four: the duplicate is still in there.
+    assert manifest["n_scenarios"] == 5
+
+
+def test_a_clean_corpus_warns_about_nothing(labels: Path, tmp_path: Path) -> None:
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        manifest = to_shard.convert(labels, tmp_path / "clean", held_out_frac=0.0)
+    assert manifest["duplicate_policy"] == "keep"
+    assert manifest["n_duplicate_rows_dropped"] == 0
+    assert manifest["n_replay_rows"] == 0
+    assert manifest["n_scenarios"] == 4
+
+
+def test_refuse_is_opt_in_and_matches_the_fit_path(labels: Path, tmp_path: Path) -> None:
+    """Callers who want the scorer fit's rule can ask for it, by name."""
+    from catan_rl.labeling.store import load_scenarios
+    from catan_rl.setup_phase import fit
+
+    store = _duplicate_last_row(labels, tmp_path)
+    with pytest.raises(fit.FitError, match="two NON-replay rows"):
+        fit.training_rows(load_scenarios(store))
     with pytest.raises(to_shard.LabelConversionError, match="two NON-replay rows"):
-        to_shard.convert(store, tmp_path / "out", held_out_frac=0.0)
+        to_shard.convert(store, tmp_path / "out", held_out_frac=0.0, duplicate_policy="refuse")
 
 
 def test_first_labeled_is_the_sanctioned_escape_hatch_and_is_stamped(
@@ -351,15 +400,26 @@ def test_first_labeled_is_the_sanctioned_escape_hatch_and_is_stamped(
     assert manifest["n_scenarios"] == 4
 
 
-def test_the_default_policy_matches_the_fit_path(labels: Path, tmp_path: Path) -> None:
-    """The default is not merely permissive-by-accident: it is fit's default."""
-    from catan_rl.setup_phase import fit
+def test_an_unknown_policy_is_refused(labels: Path, tmp_path: Path) -> None:
+    with pytest.raises(to_shard.LabelConversionError, match="duplicate_policy"):
+        to_shard.convert(labels, tmp_path / "out3", duplicate_policy="whatever")
 
-    store = _duplicate_last_row(labels, tmp_path)
-    from catan_rl.labeling.store import load_scenarios
 
-    with pytest.raises(fit.FitError, match="two NON-replay rows"):
-        fit.training_rows(load_scenarios(store))
-    manifest = to_shard.convert(labels, tmp_path / "clean", held_out_frac=0.0)
-    assert manifest["duplicate_policy"] == "refuse"
-    assert manifest["n_duplicate_rows_dropped"] == 0
+def test_the_converter_does_not_import_the_scorer_package(labels: Path, tmp_path: Path) -> None:
+    """Dependency direction: ``bc`` consumes ``to_shard``, so ``to_shard`` must
+    not reach into ``setup_phase``. The shared duplicate logic lives in
+    ``catan_rl.labeling.dedup``, which both sides may import."""
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import catan_rl.labeling.to_shard; "
+        "print([m for m in sys.modules if m.startswith('catan_rl.setup_phase')])"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[3] / "src")
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True, env=env
+    )
+    assert out.stdout.strip().splitlines()[-1] == "[]", out.stdout
