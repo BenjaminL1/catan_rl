@@ -273,8 +273,20 @@ class LabelingUIState:
         self.reset_for_new_scenario()
 
     def _scorer_payload(self, scenario: Any, vertex: int, edge: int) -> dict[str, Any] | None:
-        """Grade the just-made pick. Returns ``None`` when no scorer is loaded."""
+        """Grade the just-made pick.
+
+        Returns ``None`` — no overlay, and no scorer fields on the row — when no
+        scorer is loaded, and also on a REPLAYED board (D0). The second case is
+        why the exclusive ``--replay-session`` mode refuses ``--scorer-weights``
+        outright: a reveal mid-replay anchors the owner on the scorer during the
+        one owner-vs-owner measurement every later bar is read against. Folding
+        replay boards into a scorer session (``--replay-boards``) must not
+        smuggle that back in, so the suppression is per BOARD rather than per
+        session, and it is the session that says which board is which.
+        """
         if self.scorer is None or scenario is None:
+            return None
+        if self.session.current_is_replay:
             return None
         board = scenario.game.board
         v_scores = self.scorer.score_vertices(
@@ -748,9 +760,23 @@ class LabelingUI:
             self.screen.blit(surf, (16, y))
             y += surf.get_height()
 
+    def _done_message(self) -> str:
+        """The end-of-session banner.
+
+        ``current_scenario()`` returns ``None`` for two very different reasons,
+        and a replay session hits the one the banner used to name wrongly: an
+        EXHAUSTED replay plan is the measurement finishing, not the owner
+        quitting, and telling them to "reopen to continue" invites a second
+        sitting that would re-label boards already re-labeled.
+        """
+        if self.session.exhausted:
+            n = self.session.replay_boards_presented
+            return f"Replay complete — {n} board{'' if n == 1 else 's'} re-presented. Q to close."
+        return "Session quit. Reopen scripts/label_setup.py to continue."
+
     def _render_done_message(self) -> None:
         surf = self.font_large.render(
-            "Session quit. Reopen scripts/label_setup.py to continue.",
+            self._done_message(),
             True,
             _TEXT_COLOR,
         )

@@ -70,7 +70,8 @@ _V3_DEFAULTS: dict[str, Any] = {
     "reveal_mode": None,
     PICK_CLARITY_FIELD: PICK_CLARITY_CLOSE,
 }
-"""Read-time defaults for the fields v3 added — every one of them ``None``.
+"""Read-time defaults for the fields v3 added — ``None`` for all but
+``pick_clarity``, whose legacy reading the spec fixes as ``close`` (below).
 
 ``None`` is load-bearing, not a stylistic choice. The five reveal fields mean
 "this pick was never graded" on a pre-v3 row and on a ``--no-reveal`` row, and
@@ -196,8 +197,8 @@ def _migrate_row(row: dict[str, Any]) -> dict[str, Any]:
     """In-memory migration of older schema versions to the current.
 
     v1 → v2 fills the OPTIONAL provenance fields from :data:`_V2_DEFAULTS`;
-    v2 → v3 fills the replay/reveal fields from :data:`_V3_DEFAULTS` (all
-    ``None``).
+    v2 → v3 fills the replay/reveal fields from :data:`_V3_DEFAULTS` (``None``
+    for all but ``pick_clarity``, which reads as ``close``).
     The returned dict keeps its original ``schema_version`` — the value records
     what was WRITTEN, and the file on disk is never rewritten (see the module
     docstring); only the in-memory view is completed.

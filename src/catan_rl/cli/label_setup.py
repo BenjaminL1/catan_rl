@@ -29,6 +29,15 @@ Modes (spec ``setup-scorer-and-blind-reveal``):
     ``replay_of`` and are excluded from scorer fitting. It REFUSES
     ``--scorer-weights``: D0 is an owner-vs-owner measurement, and a reveal
     overlay mid-replay anchors the owner on the scorer.
+  - ``--replay-boards N`` FOLDS N replayed boards into an otherwise normal
+    session — how D0's ceiling estimate is extended past its n=20 pilot without
+    spending a whole sitting on it. The folded boards come first and are
+    replayed exactly as above (forced-original, linked, never graded); the rest
+    of the session is fresh boards. Unlike ``--replay-session`` it DOES work
+    with ``--scorer-weights``, because the reveal is suppressed board-by-board
+    rather than session-wide. Add ``--replay-session <id>`` to name the source;
+    without it the most recent ENDED session holding N boards of original
+    labels is chosen.
   - ``--scorer-weights <path>`` loads a fitted scorer; after each SUBMIT an
     overlay shows its top-1 (plus top-3 dimmed) beside your pick.
   - ``--no-reveal`` is the D3 anchoring CONTROL: the scorer is not shown and the
@@ -87,6 +96,17 @@ def main() -> int:
         help="Re-present the boards of a past session id (D0 self-consistency replay).",
     )
     parser.add_argument(
+        "--replay-boards",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Fold N replayed boards into an otherwise normal session (D0 "
+            "ceiling estimate, extended). Source = --replay-session if given, "
+            "else the most recent ended session with N boards of original labels."
+        ),
+    )
+    parser.add_argument(
         "--scorer-weights",
         type=Path,
         default=None,
@@ -98,7 +118,10 @@ def main() -> int:
         help=(
             "D3 anchoring control: never show the scorer; write no scorer row "
             "fields. Still requires --scorer-weights (the manifest's version "
-            "stamp is what makes these picks count toward the 20% bar)."
+            # ``%%`` because argparse %-formats help strings: a bare "20%" makes
+            # --help itself raise (pre-existing), which is how --replay-boards
+            # would have stayed undiscoverable.
+            "stamp is what makes these picks count toward the 20%% bar)."
         ),
     )
     parser.add_argument(
@@ -126,17 +149,26 @@ def main() -> int:
             "stamp the scorer version live at label time or the control picks "
             "are invisible to the D4 gate."
         )
-    if args.replay_session is not None and args.scorer_weights is not None:
+    if args.replay_boards < 0:
+        parser.error("--replay-boards must be >= 0")
+    exclusive_replay = args.replay_session is not None and args.replay_boards == 0
+    if exclusive_replay and args.scorer_weights is not None:
         # D0's replay measures the owner against THEMSELVES — it is the
         # labeler-noise ceiling every later bar is read against. A scorer
         # overlay after each submit anchors the owner mid-replay, which is the
         # exact contamination D3's ``--no-reveal`` control exists to detect, and
         # it would corrupt the one number nothing downstream can be recalibrated
-        # without. The two modes are mutually exclusive, not merely inadvisable.
+        # without. In the EXCLUSIVE mode every board is part of that
+        # measurement, so the two flags are mutually exclusive, not merely
+        # inadvisable. A FOLD (--replay-boards) is the sanctioned way to have
+        # both: there the reveal is suppressed board-by-board, so the replayed
+        # boards stay owner-vs-owner while the fresh ones — which are not part
+        # of the measurement — reveal normally.
         parser.error(
             "--replay-session cannot be combined with --scorer-weights: the D0 "
             "self-consistency replay must be owner-vs-owner, and a post-submit "
-            "reveal anchors the owner on the scorer mid-measurement."
+            "reveal anchors the owner on the scorer mid-measurement. To do both "
+            "in one sitting, fold a few boards in with --replay-boards N instead."
         )
     scorer = load_weights(args.scorer_weights) if args.scorer_weights else None
     reveal_mode = REVEAL_MODE_NO_REVEAL if args.no_reveal else REVEAL_MODE_REVEAL
@@ -146,6 +178,7 @@ def main() -> int:
         labeler_id=args.labeler_id,
         session_seed=args.seed,
         replay_of_session=args.replay_session,
+        replay_boards=args.replay_boards,
         reveal_mode=reveal_mode,
         scorer_version=None if scorer is None else scorer.version,
     )
@@ -156,6 +189,16 @@ def main() -> int:
         f"Labels → {session.scenarios_path}",
         flush=True,
     )
+    if args.replay_boards > 0:
+        # The source may have been auto-chosen, so name the resolved id: it is
+        # the only place the owner can see WHICH sitting they are being measured
+        # against before the boards start coming.
+        print(
+            f"[label_setup] Folding {args.replay_boards} replayed board(s) from "
+            f"session {str(session.replay_of_session)[:8]}… first (never graded), "
+            f"then fresh boards.",
+            flush=True,
+        )
 
     ui = LabelingUI(
         session=session,
