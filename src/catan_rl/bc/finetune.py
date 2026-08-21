@@ -814,5 +814,11 @@ def setup_pick_grades(
         with torch.no_grad():
             head_out = policy.evaluate_actions(obs, action, mask)
         scores = head_out["log_dist/corner"][0].detach().cpu().numpy().astype(np.float64)
-        out.append(grade_scores(scores, int(label["settlement_vertex"])))
+        # Legality comes from the MASK, not from the score value. The head's
+        # masked log-distribution is produced by filling illegal slots with a
+        # large negative; ``-1e9`` is finite, so an ``isfinite`` reading of the
+        # same array would call an illegal vertex legal and could hand back an
+        # impossible top-1 as the baseline's answer.
+        corner_mask = np.asarray(settle_row.mask["corner_settlement"], dtype=bool)
+        out.append(grade_scores(scores, int(label["settlement_vertex"]), legal=corner_mask))
     return out

@@ -184,8 +184,8 @@ def load_weights(path: Path) -> SetupScorer:
     return SetupScorer.from_dict(json.loads(Path(path).read_text()))
 
 
-def rank_of(scores: np.ndarray, choice: int) -> int:
-    """1-based rank of ``choice`` under ``scores`` (ties broken by index).
+def rank_of(scores: np.ndarray, choice: int, *, legal: np.ndarray | None = None) -> int:
+    """1-based rank of ``choice`` among the LEGAL candidates (ties by index).
 
     Used for the D3 reveal's ``scorer_rank_of_pick``: rank 1 means the owner
     and the scorer agreed, and the rank distribution is what tells a near-miss
@@ -194,10 +194,11 @@ def rank_of(scores: np.ndarray, choice: int) -> int:
     s = np.asarray(scores, dtype=np.float64)
     if not 0 <= choice < s.shape[0]:
         raise ValueError(f"choice {choice} out of range for scores of shape {s.shape}")
-    if not np.isfinite(s[choice]):
+    mask = legal_mask(s, legal)
+    if not mask[choice]:
         raise ValueError(f"choice {choice} is not a legal candidate under these scores")
-    better = np.sum(s > s[choice])
-    ties_before = np.sum((s == s[choice]) & (np.arange(s.shape[0]) < choice))
+    better = np.sum(mask & (s > s[choice]))
+    ties_before = np.sum(mask & (s == s[choice]) & (np.arange(s.shape[0]) < choice))
     return int(better + ties_before) + 1
 
 
@@ -236,21 +237,49 @@ class PickGrade:
     """1-based rank of the owner's pick under the grader's scores."""
 
 
-def grade_scores(scores: np.ndarray, choice: int) -> PickGrade:
-    """Grade one pick against one grader's masked scores."""
-    top3 = top_k(scores, 3)
+def legal_mask(scores: np.ndarray, legal: np.ndarray | None = None) -> np.ndarray:
+    """Resolve which candidates count as legal for every grading helper here.
+
+    ``legal=None`` falls back to ``isfinite``, which is right for the scorer's
+    own heads: :meth:`SetupScorer.score_vertices` writes ``-inf`` into every
+    illegal slot itself.
+
+    It is NOT right for a grader whose mask is applied with a large finite
+    negative — ``-1e9`` is finite, so ``isfinite`` would call an illegal vertex
+    legal and let it win an argmax, silently reporting an impossible top-1 as
+    the baseline's answer. Any caller that HAS the mask should pass it: the
+    boolean mask is the statement of legality, the score value is not.
+    """
+    s = np.asarray(scores, dtype=np.float64)
+    finite = np.isfinite(s)
+    if legal is None:
+        return finite
+    m = np.asarray(legal, dtype=bool)
+    if m.shape != s.shape:
+        raise ValueError(f"legal mask must have shape {s.shape}, got {m.shape}")
+    return m & finite
+
+
+def grade_scores(scores: np.ndarray, choice: int, *, legal: np.ndarray | None = None) -> PickGrade:
+    """Grade one pick against one grader's scores.
+
+    ``legal`` is the explicit legality mask over ``scores``. Pass it whenever
+    the caller has one (see :func:`legal_mask`).
+    """
+    mask = legal_mask(scores, legal)
+    top3 = top_k(scores, 3, legal=mask)
     return PickGrade(
-        log_prob=log_prob_of(scores, choice),
+        log_prob=log_prob_of(scores, choice, legal=mask),
         top1=int(top3[0]) if top3 else -1,
         agree=bool(top3 and top3[0] == choice),
         in_top3=bool(choice in top3),
-        margin=top1_margin(scores),
-        rank=rank_of(scores, choice),
+        margin=top1_margin(scores, legal=mask),
+        rank=rank_of(scores, choice, legal=mask),
     )
 
 
-def probabilities(scores: np.ndarray) -> np.ndarray:
-    """Masked softmax over ``scores``; illegal (``-inf``) candidates get 0.0.
+def probabilities(scores: np.ndarray, *, legal: np.ndarray | None = None) -> np.ndarray:
+    """Masked softmax over ``scores``; illegal candidates get 0.0.
 
     The scorer's heads ARE masked-softmax models — that is what
     :mod:`catan_rl.setup_phase.fit` maximises — so the probability vector is the
@@ -259,17 +288,17 @@ def probabilities(scores: np.ndarray) -> np.ndarray:
     scorer's CONFIDENCE rather than a bare pick, so both need this.
     """
     s = np.asarray(scores, dtype=np.float64)
-    legal = np.isfinite(s)
+    mask = legal_mask(s, legal)
     out = np.zeros_like(s)
-    if not np.any(legal):
+    if not np.any(mask):
         return out
-    z = s[legal] - s[legal].max()
+    z = s[mask] - s[mask].max()
     e = np.exp(z)
-    out[legal] = e / e.sum()
+    out[mask] = e / e.sum()
     return out
 
 
-def log_prob_of(scores: np.ndarray, choice: int) -> float:
+def log_prob_of(scores: np.ndarray, choice: int, *, legal: np.ndarray | None = None) -> float:
     """Log of the masked-softmax probability the scorer puts on ``choice``.
 
     Computed in log space (log-sum-exp), not as ``log(probabilities(...))``, so
@@ -279,14 +308,14 @@ def log_prob_of(scores: np.ndarray, choice: int) -> float:
     s = np.asarray(scores, dtype=np.float64)
     if not 0 <= choice < s.shape[0]:
         raise ValueError(f"choice {choice} out of range for scores of shape {s.shape}")
-    if not np.isfinite(s[choice]):
+    mask = legal_mask(s, legal)
+    if not mask[choice]:
         raise ValueError(f"choice {choice} is not a legal candidate under these scores")
-    legal = np.isfinite(s)
-    m = s[legal].max()
-    return float(s[choice] - m - np.log(np.exp(s[legal] - m).sum()))
+    m = s[mask].max()
+    return float(s[choice] - m - np.log(np.exp(s[mask] - m).sum()))
 
 
-def top1_margin(scores: np.ndarray) -> float:
+def top1_margin(scores: np.ndarray, *, legal: np.ndarray | None = None) -> float:
     """Top-1 minus top-2 PROBABILITY: the scorer's confidence in its own pick.
 
     D4's calibration report reads this against the owner's ``pick_clarity``
@@ -294,21 +323,22 @@ def top1_margin(scores: np.ndarray) -> float:
     positions with different numbers of legal candidates. A position with a
     single legal candidate has margin 1.0.
     """
-    p = probabilities(scores)
-    legal = np.flatnonzero(np.asarray(np.isfinite(scores)))
-    if legal.size == 0:
+    mask = legal_mask(scores, legal)
+    p = probabilities(scores, legal=mask)
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
         return 0.0
-    if legal.size == 1:
+    if idx.size == 1:
         return 1.0
-    ordered = np.sort(p[legal])[::-1]
+    ordered = np.sort(p[idx])[::-1]
     return float(ordered[0] - ordered[1])
 
 
-def top_k(scores: np.ndarray, k: int) -> list[int]:
+def top_k(scores: np.ndarray, k: int, *, legal: np.ndarray | None = None) -> list[int]:
     """The ``k`` highest-scoring legal candidates, best first."""
     s = np.asarray(scores, dtype=np.float64)
-    legal = np.flatnonzero(np.isfinite(s))
-    order = legal[np.argsort(-s[legal], kind="stable")]
+    idx = np.flatnonzero(legal_mask(s, legal))
+    order = idx[np.argsort(-s[idx], kind="stable")]
     return [int(i) for i in order[:k]]
 
 
@@ -321,6 +351,7 @@ __all__ = [
     "ScorerWeights",
     "SetupScorer",
     "grade_scores",
+    "legal_mask",
     "load_weights",
     "log_prob_of",
     "probabilities",

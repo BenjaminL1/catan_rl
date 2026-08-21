@@ -14,10 +14,19 @@ import numpy as np
 import pytest
 
 from catan_rl.labeling.scenario_gen import ScenarioGenerator
-from catan_rl.setup_phase.scorer import ScorerVersionError, ScorerWeights, rank_of, top_k
+from catan_rl.setup_phase.scorer import (
+    ScorerVersionError,
+    ScorerWeights,
+    grade_scores,
+    log_prob_of,
+    probabilities,
+    rank_of,
+    top_k,
+)
 from catan_rl.setup_phase.scorer_features import (
     FEATURE_VERSION,
     N_SETTLEMENT_FEATURES,
+    NEW_RESOURCE_BONUS,
     PILOT_FEATURE_NAMES,
     SETTLEMENT_FEATURE_NAMES,
     SetupContext,
@@ -32,17 +41,50 @@ from catan_rl.setup_phase.scorer_features import (
 SEED = 42
 
 
-@pytest.fixture()
-def ctx() -> SetupContext:
-    gen = ScenarioGenerator(seed=SEED)
+def _first_edge(scenario, vertex: int) -> int:
+    return int(np.flatnonzero(scenario.compute_legal_road_edges(vertex))[0])
+
+
+def _context(gen: ScenarioGenerator, *, acting_player: int | None = None) -> SetupContext:
     scenario = gen.current()
     assert scenario is not None
+    seat = int(scenario.acting_player_idx) if acting_player is None else acting_player
     return SetupContext.build(
-        gen._board,
-        scenario.prior_picks,
-        int(scenario.acting_player_idx),
-        scenario.legal_settlement_corners,
+        gen._board, scenario.prior_picks, seat, scenario.legal_settlement_corners
     )
+
+
+@pytest.fixture()
+def ctx() -> SetupContext:
+    """Draft position 1 on the seed-42 board: no prior picks, all 54 legal."""
+    return _context(ScenarioGenerator(seed=SEED))
+
+
+@pytest.fixture()
+def pos4() -> SetupContext:
+    """Draft position 4 on the seed-42 board — the NON-DEGENERATE fixture.
+
+    Snake draft 1-2-2-1, so after ``v0`` (seat 0, pos 1), ``v18`` and ``v20``
+    (seat 1, pos 2 and 3) the acting seat is 0 again with:
+
+    * ``own_pips``  = v0  = WHEAT 4, ORE 3
+    * ``opp_pips``  = v18 + v20 = WOOD 3, BRICK 5, WHEAT 9, SHEEP 5, ORE 0
+
+    Both are non-zero and they are DIFFERENT, which is what a position-1 fixture
+    cannot give: there ``own_pips`` and ``opp_pips`` are both all-zero, so
+    ``n_new_resources``, ``opponent_new_resources`` and ``n_distinct_resources``
+    all collapse onto the same number and pinning them proves nothing.
+    """
+    gen = ScenarioGenerator(seed=SEED)
+    gen.apply(0, 0)
+    for vertex in (18, 20):
+        scenario = gen.current()
+        assert scenario is not None
+        gen.apply(vertex, _first_edge(scenario, vertex))
+    scenario = gen.current()
+    assert scenario is not None and scenario.draft_position == 4
+    assert int(scenario.acting_player_idx) == 0
+    return _context(gen)
 
 
 def _feat(ctx: SetupContext, vertex: int, name: str) -> float:
@@ -65,13 +107,92 @@ class TestSettlementArithmetic:
         # First settlement of the draft -> the starting-material term is off.
         assert _feat(ctx, 0, "n_hexes_x_second") == 0.0
 
-    def test_opponent_best_margin_is_zero_at_the_best_vertex(self, ctx: SetupContext) -> None:
-        # Vertex 18 = WHEAT(5)+BRICK(8)+WOOD(10) = 4+5+3 dots; under the PINNED
-        # Charlesworth weights that is the highest-value legal vertex on this board.
+    def test_opponent_best_margin_is_the_margin_over_what_is_LEFT(self, ctx: SetupContext) -> None:
+        """The v2 arithmetic: the reference is candidate-DEPENDENT (blocker 1a).
+
+        Seed-42 legal vertices by pinned Charlesworth value, best first:
+        v18 = 12.0, v17 = 10.5, v21 = 10.5, v16 = 10.4, v8 = 10.0.
+        v18's neighbours are (16, 17, 41), so settling v18 removes 18, 16, 17
+        and 41 from every seat's option set and the best the opponent is LEFT
+        with is v21 at 10.5.
+        """
         assert ctx.opponent_best_vertex == 18
-        assert _feat(ctx, 18, "opponent_best_margin") == 0.0
-        # Vertex 0's base value is 3*1.1 (ore) + 4*1.0 (wheat) = 7.3; 7.3 - 12.0.
+        assert [round(float(ctx.base_value[v]), 3) for v in ctx.legal_by_base_value[:4]] == [
+            12.0,
+            10.5,
+            10.5,
+            10.4,
+        ]
+        # 12.0 - 10.5. Under v1 this was base(18) - base(18) = 0.0 and denial
+        # was inexpressible: taking the board's best spot scored the same as
+        # taking a spot nobody wanted.
+        assert _feat(ctx, 18, "opponent_best_margin") == pytest.approx(1.5)
+        # Vertex 0 (base 4*1.0 wheat + 3*1.1 ore = 7.3) blocks 1, 5 and 15 —
+        # none of them the opponent's target — so v18 survives and the margin is
+        # 7.3 - 12.0, unchanged from v1.
         assert _feat(ctx, 0, "opponent_best_margin") == pytest.approx(-4.7)
+        # A NEIGHBOUR of the target also moves the reference: v16 (10.4) blocks
+        # v18, leaving 10.5.
+        assert _feat(ctx, 16, "opponent_best_margin") == pytest.approx(-0.1)
+
+    def test_opponent_best_margin_is_not_a_linear_function_of_the_pips_columns(self) -> None:
+        """Blocker 1a, verified NUMERICALLY rather than by reading the code.
+
+        ``base_value`` is ``sum(dots * charlesworth_weight)``, i.e. exactly a
+        linear combination of the five per-resource pips columns. So the v1
+        margin — ``base_value[v]`` minus a board-CONSTANT — was an exact linear
+        combination of columns already in the design matrix plus an intercept:
+        an unidentifiable column carrying no information the fit did not already
+        have. The v2 margin subtracts a per-candidate reference, which is a max
+        over an excluded set and therefore NOT in that span.
+
+        The check regresses each column on ``[pips_wood..pips_sheep, 1]`` and
+        reads the residual. ``pips_total`` and the reconstructed v1 column are
+        the CONTROLS: both are genuinely in the span, so a residual near machine
+        epsilon there is what proves the probe can detect collinearity at all.
+        """
+        i_margin = SETTLEMENT_FEATURE_NAMES.index("opponent_best_margin")
+        i_total = SETTLEMENT_FEATURE_NAMES.index("pips_total")
+
+        def residual_rms(values: np.ndarray, design: np.ndarray) -> float:
+            beta, *_ = np.linalg.lstsq(design, values, rcond=None)
+            return float(np.sqrt(np.mean((values - design @ beta) ** 2)))
+
+        seen = 0
+        for seed in (42, 7):
+            gen = ScenarioGenerator(seed=seed)
+            while (scenario := gen.current()) is not None:
+                ctx = _context(gen)
+                legal = np.flatnonzero(ctx.legal_settlements)
+                block = all_settlement_features(ctx)[legal]
+                design = np.column_stack([block[:, :5], np.ones(legal.size)])
+
+                collinear = residual_rms(block[:, i_total], design)
+                v1_column = ctx.base_value[legal] - float(
+                    ctx.base_value[ctx.opponent_best_vertex or 0]
+                )
+                v1_residual = residual_rms(v1_column, design)
+                v2_residual = residual_rms(block[:, i_margin], design)
+
+                if scenario.draft_position >= 2:
+                    assert collinear < 1e-9, f"seed {seed} pos {scenario.draft_position}"
+                    assert v1_residual < 1e-9, (
+                        f"seed {seed} pos {scenario.draft_position}: the REJECTED v1 column "
+                        f"should be exactly collinear, got {v1_residual}"
+                    )
+                    assert v2_residual > 0.02, (
+                        f"seed {seed} pos {scenario.draft_position}: opponent_best_margin "
+                        f"residual {v2_residual:.4f} is not materially nonzero — the column "
+                        f"has collapsed back into the pips span"
+                    )
+                    seen += 1
+
+                # Deterministic advance: the middle-ish legal corner, so the
+                # draft visits genuinely different positions rather than always
+                # the lowest-index one.
+                pick = int(legal[legal.size // 3])
+                gen.apply(pick, _first_edge(scenario, pick))
+        assert seen == 6  # two seeds x draft positions 2, 3, 4
 
     def test_adjacency_block_fires_only_next_to_the_opponent_target(
         self, ctx: SetupContext
@@ -124,11 +245,136 @@ class TestSettlementArithmetic:
         i_second = SETTLEMENT_FEATURE_NAMES.index("n_hexes_x_second")
         assert row[i_second] == row[i_hexes]
 
-    def test_illegal_rows_are_zero_and_never_compete(self, ctx: SetupContext) -> None:
-        block = all_settlement_features(ctx)
-        illegal = np.flatnonzero(~ctx.legal_settlements)
-        if illegal.size:
-            assert np.all(block[illegal] == 0.0)
+    def test_illegal_rows_are_zero_and_never_compete(self, pos4: SetupContext) -> None:
+        """Uses the POSITION-4 fixture on purpose.
+
+        At draft position 1 all 54 vertices are legal, so ``illegal`` is empty
+        and the assertion under it never runs — the test passed by describing an
+        empty set. Position 4 has three settlements down, so the distance rule
+        has genuinely forbidden vertices to check.
+        """
+        block = all_settlement_features(pos4)
+        illegal = np.flatnonzero(~pos4.legal_settlements)
+        assert illegal.size > 0, "fixture invariant: position 4 must have illegal vertices"
+        assert np.all(block[illegal] == 0.0)
+        assert np.any(block[np.flatnonzero(pos4.legal_settlements)] != 0.0)
+
+
+class TestExpansionValue:
+    """Blocker 1b: D1's "own-yield-scored" expansion target."""
+
+    def test_expansion_target_is_scored_with_the_acting_seat_need_profile(
+        self, pos4: SetupContext
+    ) -> None:
+        """The hand-computed fixture, and the one that shows the fix BITES.
+
+        At position 4 the acting seat is 0, holding v0 = WHEAT 4 + ORE 3. From
+        candidate v11 the legal vertices exactly 2 roads away include
+
+        * v6  = WOOD 4, BRICK 2, SHEEP 3 -> base 4*1.0 + 2*1.0 + 3*0.7 = 8.1,
+          and all three resources are NEW for seat 0 -> own 8.1 + 3*1.0 = 11.1;
+        * v14 = WHEAT 5, ORE 4 -> base 5*1.0 + 4*1.1 = 9.4, and NEITHER resource
+          is new -> own 9.4 + 0 = 9.4.
+
+        Seat-neutral scoring picks v14 (9.4 > 8.1) — more raw pips, nothing the
+        seat is missing. Own-yield scoring picks v6 at 11.1: that is the owner's
+        "building to a missing resource" in one number, and it is a DIFFERENT
+        target, not merely a different scale.
+        """
+        assert NEW_RESOURCE_BONUS == 1.0
+        assert _feat(pos4, 11, "expansion_value") == pytest.approx(11.1)
+        # The seat-neutral answer the rejected implementation would have given.
+        distance_2 = [
+            v
+            for v in range(54)
+            if pos4.legal_settlements[v]
+            and int(pos4.distances[11, v]) == 2
+            and v not in {11, *pos4.adjacency[11]}
+        ]
+        assert max(float(pos4.base_value[v]) for v in distance_2) == pytest.approx(9.4)
+
+    def test_expansion_value_differs_between_the_two_seats(self, pos4: SetupContext) -> None:
+        """The property the seat-neutral version could not have.
+
+        Same board, same prior picks, same legal mask — only the acting seat
+        changes. A feature that is identical here cannot express "this seat
+        needs sheep and that one does not".
+        """
+        gen = ScenarioGenerator(seed=SEED)
+        gen.apply(0, 0)
+        for vertex in (18, 20):
+            scenario = gen.current()
+            assert scenario is not None
+            gen.apply(vertex, _first_edge(scenario, vertex))
+        other = _context(gen, acting_player=1)
+        assert other.acting_player != pos4.acting_player
+
+        i_exp = SETTLEMENT_FEATURE_NAMES.index("expansion_value")
+        legal = np.flatnonzero(pos4.legal_settlements)
+        mine = all_settlement_features(pos4)[legal][:, i_exp]
+        theirs = all_settlement_features(other)[legal][:, i_exp]
+        assert not np.allclose(mine, theirs)
+        # Seat 0 holds WHEAT+ORE and seat 1 holds WOOD/BRICK/WHEAT/SHEEP, so
+        # v2's expansion reads 12.1 for seat 0 and 9.4 for seat 1.
+        assert _feat(pos4, 2, "expansion_value") == pytest.approx(12.1)
+        assert _feat(other, 2, "expansion_value") == pytest.approx(9.4)
+
+    def test_own_value_is_the_pinned_base_plus_the_new_resource_bonus(
+        self, pos4: SetupContext
+    ) -> None:
+        # v6 = WOOD 4, BRICK 2, SHEEP 3; seat 0 produces none of the three.
+        assert float(pos4.base_value[6]) == pytest.approx(8.1)
+        assert float(pos4.own_value[6]) == pytest.approx(8.1 + 3 * NEW_RESOURCE_BONUS)
+        # v14 = WHEAT 5, ORE 4; seat 0 already produces both.
+        assert float(pos4.base_value[14]) == pytest.approx(9.4)
+        assert float(pos4.own_value[14]) == pytest.approx(9.4)
+
+
+class TestNonDegenerateSettlementFixture:
+    """Pins the columns a position-1 fixture cannot separate (blocker 1c).
+
+    At draft position 1 ``own_pips`` and ``opp_pips`` are both all-zero, so
+    ``n_new_resources``, ``opponent_new_resources`` and ``n_distinct_resources``
+    are equal BY CONSTRUCTION and ``n_hexes_x_second`` is always 0. Every one of
+    them was previously pinned only in that collapsed state.
+    """
+
+    def test_the_fixture_really_is_asymmetric(self, pos4: SetupContext) -> None:
+        assert pos4.own_vertices == (0,)
+        assert pos4.opp_vertices == (18, 20)
+        assert list(pos4.own_pips) == [0.0, 0.0, 4.0, 3.0, 0.0]
+        assert list(pos4.opp_pips) == [3.0, 5.0, 9.0, 0.0, 5.0]
+
+    def test_vertex_11_pins_five_columns_that_do_not_collapse(self, pos4: SetupContext) -> None:
+        # v11 = WOOD 4, ORE 1, SHEEP 4 -> base 4*1.0 + 1*1.1 + 4*0.7 = 7.9.
+        assert list(settlement_features(pos4, 11)[:5]) == [4.0, 0.0, 0.0, 1.0, 4.0]
+        assert _feat(pos4, 11, "n_distinct_resources") == 3.0
+        # NEW for seat 0 (holds WHEAT+ORE): WOOD and SHEEP -> 2, not 3.
+        assert _feat(pos4, 11, "n_new_resources") == 2.0
+        # NEW for seat 1 (holds WOOD/BRICK/WHEAT/SHEEP): ORE alone -> 1.
+        assert _feat(pos4, 11, "opponent_new_resources") == 1.0
+        # Second settlement for seat 0 -> the starting-material term switches on.
+        assert _feat(pos4, 11, "n_adjacent_hexes") == 3.0
+        assert _feat(pos4, 11, "n_hexes_x_second") == 3.0
+        # ORE is the board's unique scarcest resource and seat 1 has none of it,
+        # so covering ORE starves them. At position 1 this fired for every
+        # ore-producing vertex regardless of the opponent, because there was no
+        # opponent yet.
+        assert list(pos4.scarce_mask) == [False, False, False, True, False]
+        assert _feat(pos4, 11, "scarcity_starve") == 1.0
+        # v6 = WOOD 4, BRICK 2, SHEEP 3 produces no ORE, so it starves nobody.
+        assert _feat(pos4, 6, "scarcity_starve") == 0.0
+        # base 7.9 minus the best REMAINING after v11 blocks 10, 12 and 30 —
+        # v8 at 10.0 survives.
+        assert _feat(pos4, 11, "opponent_best_margin") == pytest.approx(-2.1)
+
+    def test_taking_the_opponents_target_pays_at_position_4_too(self, pos4: SetupContext) -> None:
+        # v8 = WOOD 5 + BRICK 5 = 10.0 is the best legal vertex here; its
+        # neighbours are (7, 9, 27), so taking it leaves v13 at 9.7.
+        assert pos4.opponent_best_vertex == 8
+        assert _feat(pos4, 8, "opponent_best_margin") == pytest.approx(0.3)
+        assert _feat(pos4, 8, "adjacency_block") == 0.0
+        assert _feat(pos4, int(pos4.adjacency[8][0]), "adjacency_block") == 1.0
 
 
 class TestRoadArithmetic:
@@ -165,6 +411,17 @@ class TestScorerPlumbing:
         assert set(PILOT_FEATURE_NAMES) <= set(SETTLEMENT_FEATURE_NAMES)
         assert len(PILOT_FEATURE_NAMES) == 10
 
+    def test_feature_version_is_v2(self) -> None:
+        """The bump is part of the contract, not an implementation detail.
+
+        ``v1`` weights were fitted against a design matrix whose
+        ``opponent_best_margin`` column was exactly collinear with the pips
+        columns and whose ``expansion_value`` column was seat-neutral. Scoring
+        them against the v2 matrix would silently produce a wrong number, so the
+        artifact must refuse to load rather than warn.
+        """
+        assert FEATURE_VERSION == "v2"
+
     def test_feature_version_mismatch_refuses_to_load(self) -> None:
         payload = ScorerWeights(
             feature_names=("a",),
@@ -172,9 +429,10 @@ class TestScorerPlumbing:
             mean=np.zeros(1),
             scale=np.ones(1),
         ).to_dict()
-        payload["feature_version"] = "v0"
-        with pytest.raises(ScorerVersionError, match="feature_version"):
-            ScorerWeights.from_dict(payload)
+        for stale in ("v0", "v1"):
+            payload["feature_version"] = stale
+            with pytest.raises(ScorerVersionError, match="feature_version"):
+                ScorerWeights.from_dict(payload)
         payload["feature_version"] = FEATURE_VERSION
         assert ScorerWeights.from_dict(payload).feature_names == ("a",)
 
@@ -185,6 +443,28 @@ class TestScorerPlumbing:
         assert rank_of(scores, 0) == 3
         with pytest.raises(ValueError, match="not a legal candidate"):
             rank_of(scores, 1)
+
+    def test_legality_comes_from_the_mask_when_one_is_given(self) -> None:
+        """``-1e9`` is FINITE.
+
+        A policy head that masks with a large negative rather than ``-inf``
+        would have every slot pass an ``isfinite`` legality test, so an illegal
+        vertex could win the argmax and be reported as the grader's top-1. The
+        boolean mask is the statement of legality; the score value is not.
+        """
+        scores = np.asarray([1.0, 9.0, 3.0, 2.0])
+        mask = np.asarray([True, False, True, True])  # index 1 is masked out
+        assert top_k(scores, 3) == [1, 2, 3]  # isfinite fallback: the fake wins
+        assert top_k(scores, 3, legal=mask) == [2, 3, 0]
+        assert rank_of(scores, 2, legal=mask) == 1
+        assert probabilities(scores, legal=mask)[1] == 0.0
+        assert log_prob_of(scores, 2, legal=mask) == pytest.approx(
+            float(np.log(np.exp(3.0) / (np.exp(1.0) + np.exp(3.0) + np.exp(2.0))))
+        )
+        with pytest.raises(ValueError, match="not a legal candidate"):
+            log_prob_of(scores, 1, legal=mask)
+        grade = grade_scores(scores, 2, legal=mask)
+        assert grade.top1 == 2 and grade.agree is True and grade.rank == 1
 
     def test_scorer_module_pulls_in_no_training_stack(self) -> None:
         """D7 vehicle neutrality, enforced structurally.
