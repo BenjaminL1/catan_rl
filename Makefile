@@ -30,6 +30,7 @@ test-all:
 
 lint:
 	ruff check src tests scripts
+	cargo clippy --workspace --release -- -D warnings
 
 format:
 	ruff format src tests scripts

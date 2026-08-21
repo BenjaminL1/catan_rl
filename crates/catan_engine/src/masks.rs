@@ -140,9 +140,9 @@ pub(crate) fn resource_legality(state: &GameState) -> ResourceLegality {
     let mut res1_trade = res1_trade_vec(state);
     // A receive must be supplyable AND distinct from the give, so drop any
     // give left with no legal partner before deciding the type gate.
-    for i in 0..N_CW {
-        if res1_trade[i] && !(0..N_CW).any(|j| j != i && supplied[j]) {
-            res1_trade[i] = false;
+    for (i, give) in res1_trade.iter_mut().enumerate() {
+        if *give && !(0..N_CW).any(|j| j != i && supplied[j]) {
+            *give = false;
         }
     }
     let mut res2_trade = supplied;
