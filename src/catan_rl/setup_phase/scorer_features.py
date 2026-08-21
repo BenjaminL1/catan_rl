@@ -17,10 +17,12 @@ Feature design follows the owner's opening theory as captured 2026-08-20:
   hex-count effect has its own weights to live in and the port flags carry only
   the residual. The conditional part of port value is spelled separately as
   ``port_2to1_matched`` (a 2:1 port for a resource this seat actually produces).
-* **Denial is relational.** ``opponent_new_resources``, ``opponent_best_margin``,
-  ``adjacency_block`` and ``scarcity_starve`` describe the candidate in terms of
-  what it does to the OTHER seat, which is the only place picks 2-4 logic can be
-  expressed at all.
+* **Denial is relational.** ``opponent_new_resources``, ``opponent_best_margin``
+  and ``scarcity_starve`` describe the candidate in terms of what it does to the
+  OTHER seat, which is the only place picks 2-4 logic can be expressed at all.
+  Since v3, blocking is carried by ``opponent_best_margin`` ALONE: it rises
+  exactly when the candidate takes or neighbours the opponent's best remaining
+  spot, and unlike a flag it says by HOW MUCH.
 
 **Circularity break.** The relational features need "the opponent's best
 remaining vertex". That must NOT be the scorer being fit, or the features would
@@ -58,7 +60,7 @@ N_VERTICES = 54
 N_EDGES = 72
 N_HEXES = 19
 
-FEATURE_VERSION: str = "v2"
+FEATURE_VERSION: str = "v3"
 """Stamped into every fitted artifact. A scorer whose ``feature_version`` does
 not match this constant REFUSES to load (see
 :func:`catan_rl.setup_phase.scorer.load_weights`): silently scoring an old
@@ -72,7 +74,33 @@ candidate blocks it) and ``expansion_value`` became own-yield-scored. Under
 ``v1`` ``opponent_best_margin`` was ``base_value[v]`` minus a board-constant, so
 it was EXACTLY a linear combination of the five pips columns plus an intercept —
 an unidentifiable column that could carry no denial signal at all. That is why
-the bump is a hard refusal and not a warning."""
+the bump is a hard refusal and not a warning.
+
+``v2`` -> ``v3`` (amended spec D1, owner-ratified 2026-08-21 after an
+independent review) REMOVES two columns, 18 -> 16:
+
+* ``pips_total`` was byte-exactly ``pips_wood + ... + pips_sheep``, five columns
+  the matrix already carried (measured on the owner's 272-row fit corpus,
+  13119 pooled candidate rows: ``max|total - sum| == 0.0``). A rank-deficient
+  design does not break the fit — the L2 term keeps it solvable — but it makes
+  the per-resource weights ARBITRARY, since any constant can be shifted between
+  the total and the five parts at identical loss. Under v2 all six columns had
+  a variance-inflation factor of INFINITY (R^2 = 1.0 to machine precision);
+  under v3 the five survivors read 7.4 to 11.5. The published "ore is worth w"
+  number is a number about the board for the first time.
+* ``adjacency_block`` was a 0/1 flag for "distance 1 from the opponent's best
+  remaining vertex", and ``opponent_best_margin`` rises on exactly that event
+  already, with magnitude — the flag was a strict sub-case that threw the size
+  away. Merging leaves ONE identified denial weight for the D4 exam to publish.
+
+  Honesty about what the merge did NOT buy: on the same corpus the flag's own
+  VIF was 1.15 and its correlation with the margin +0.32, so the two were not
+  in fact near-duplicates numerically, and dropping it moved the margin's VIF
+  only 20.28 -> 19.44. The margin's remaining collinearity is with the PIPS
+  BLOCK (regressed on those five columns alone: R^2 = 0.937, VIF 15.98) —
+  structural, since ``base_value`` is a weighted pip sum. So the denial weight
+  is identified, but it is not cleanly separated from raw production value, and
+  a reader should not treat its magnitude as precise."""
 
 NEW_RESOURCE_BONUS: float = 1.0
 """Weighted-pip credit per resource an expansion target would ADD to the acting
@@ -92,7 +120,6 @@ SETTLEMENT_FEATURE_NAMES: tuple[str, ...] = (
     "pips_wheat",
     "pips_ore",
     "pips_sheep",
-    "pips_total",
     "n_distinct_resources",
     "n_new_resources",
     "n_adjacent_hexes",
@@ -103,16 +130,18 @@ SETTLEMENT_FEATURE_NAMES: tuple[str, ...] = (
     "expansion_value",
     "opponent_new_resources",
     "opponent_best_margin",
-    "adjacency_block",
     "scarcity_starve",
 )
-"""D1's settlement feature list, in design-matrix column order.
+"""D1's settlement feature list at ``FEATURE_VERSION`` v3, in design-matrix
+column order.
 
 D1 asks for "opponent value of the candidate (their pips + their missing
-resources)". The *pips* half is byte-for-byte ``pips_total`` — a vertex yields
-the same dots whoever settles it — so carrying it twice would be an exactly
-collinear column that makes the fit's weights unidentifiable while adding
-nothing. Only the missing-resources half gets its own column.
+resources)". The *pips* half is byte-for-byte the sum of the five per-resource
+pips columns — a vertex yields the same dots whoever settles it — so carrying it
+would be an exactly collinear column that makes the fit's weights unidentifiable
+while adding nothing. Only the missing-resources half gets its own column. The
+same argument retired D1's own ``total pips`` column in v3; every weight below
+is now identified.
 """
 
 ROAD_FEATURE_NAMES: tuple[str, ...] = (
@@ -130,18 +159,27 @@ PILOT_FEATURE_NAMES: tuple[str, ...] = (
     "pips_wheat",
     "pips_ore",
     "pips_sheep",
-    "pips_total",
     "n_distinct_resources",
     "n_new_resources",
     "opponent_new_resources",
     "port_any",
 )
-"""The 2026-08-15 pilot's 10 features, as a SUBSET of the current list.
+"""The 2026-08-15 pilot's features, as a SUBSET of the current list.
 
 Acceptance criterion 3 (regression continuity) refits exactly these on the
 pilot's 168-label split and reads the result against the pilot's reported
 34.1% held-out / 45.2% train. Expressing the pilot as a subset — rather than a
-second feature function — is what makes that comparison mean anything."""
+second feature function — is what makes that comparison mean anything, and it
+is also what ties this tuple to :data:`SETTLEMENT_FEATURE_NAMES`: v3 dropped
+``pips_total``, so the reconstruction is now NINE columns rather than the
+pilot's ten.
+
+Nothing is lost by that, and the claim is measured rather than argued. The
+pilot's tenth column was the row sum of five columns it also carried, so both
+designs span the same column space; on the owner's 168/44 split the two fits
+report the SAME numbers to four decimals — held-out 0.3636, train 0.4583 with
+or without it (2026-08-21). What the redundant column changed was not the
+prediction but the identifiability of the per-resource weights."""
 
 N_SETTLEMENT_FEATURES: int = len(SETTLEMENT_FEATURE_NAMES)
 N_ROAD_FEATURES: int = len(ROAD_FEATURE_NAMES)
@@ -329,7 +367,7 @@ class SetupContext:
 # Settlement features
 # ---------------------------------------------------------------------------
 def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
-    """The ``(18,)`` feature row for one candidate settlement vertex."""
+    """The ``(16,)`` feature row for one candidate settlement vertex."""
     if not 0 <= vertex < N_VERTICES:
         raise ValueError(f"vertex out of range: {vertex}")
     pips = ctx.pips[vertex]
@@ -373,12 +411,15 @@ def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
     # unidentifiable column that cannot express denial at all. Pinned
     # (Charlesworth) on BOTH sides of the subtraction, so the circularity break
     # holds: nothing here depends on the weights being fit.
+    #
+    # Since v3 this is the ONLY denial-blocking column. The retired
+    # ``adjacency_block`` flag fired on "distance 1 from the opponent's best
+    # remaining vertex", which is a strict sub-case of what moves this margin:
+    # blocking that vertex (by taking it or by neighbouring it) is exactly what
+    # replaces the subtracted reference with a worse one. The flag therefore
+    # duplicated the event and threw away its size, and the two columns split
+    # one weight between them.
     opp_margin = float(ctx.base_value[vertex] - _opponent_best_remaining(ctx, vertex))
-
-    if ctx.opponent_best_vertex is None:
-        block = 0.0
-    else:
-        block = 1.0 if int(ctx.distances[vertex, ctx.opponent_best_vertex]) == 1 else 0.0
 
     starve = 1.0 if bool(np.any(produces & ctx.scarce_mask & (ctx.opp_pips <= 0.0))) else 0.0
 
@@ -389,7 +430,6 @@ def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
             pips[2],
             pips[3],
             pips[4],
-            float(pips.sum()),
             float(np.count_nonzero(produces)),
             new_for_me,
             n_hexes,
@@ -400,7 +440,6 @@ def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
             expansion,
             new_for_opp,
             opp_margin,
-            block,
             starve,
         ],
         dtype=np.float64,
@@ -408,7 +447,7 @@ def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
 
 
 def all_settlement_features(ctx: SetupContext) -> np.ndarray:
-    """``(54, 18)``. Rows for ILLEGAL vertices are all-zero and must never be
+    """``(54, 16)``. Rows for ILLEGAL vertices are all-zero and must never be
     read — :func:`catan_rl.setup_phase.scorer.score_vertices` masks them to
     ``-inf`` rather than letting a zero row compete."""
     out = np.zeros((N_VERTICES, N_SETTLEMENT_FEATURES), dtype=np.float64)

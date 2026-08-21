@@ -95,10 +95,15 @@ class TestSettlementArithmetic:
     def test_vertex_0_is_desert_ore4_wheat5(self, ctx: SetupContext) -> None:
         # Seed-42 vertex 0 touches DESERT(-), ORE(4 -> 3 dots), WHEAT(5 -> 4 dots).
         row = settlement_features(ctx, 0)
-        assert row.shape == (N_SETTLEMENT_FEATURES,)
+        assert row.shape == (N_SETTLEMENT_FEATURES,) == (16,)
         # Charlesworth column order: WOOD, BRICK, WHEAT, ORE, SHEEP.
         assert list(row[:5]) == [0.0, 0.0, 4.0, 3.0, 0.0]
-        assert _feat(ctx, 0, "pips_total") == 7.0
+        # v3 carries NO ``pips_total`` column. The total is 0+0+4+3+0 = 7.0, and
+        # that identity — total == the sum of the five columns already here — is
+        # exactly why the column was retired: it was a rank deficiency, not a
+        # feature. It stays recoverable by anyone who wants it.
+        assert float(row[:5].sum()) == 7.0
+        assert "pips_total" not in SETTLEMENT_FEATURE_NAMES
         assert _feat(ctx, 0, "n_distinct_resources") == 2.0
         assert _feat(ctx, 0, "n_adjacent_hexes") == 3.0  # the desert still counts as a hex
         # No prior picks: every produced resource is new for both seats.
@@ -147,12 +152,14 @@ class TestSettlementArithmetic:
         over an excluded set and therefore NOT in that span.
 
         The check regresses each column on ``[pips_wood..pips_sheep, 1]`` and
-        reads the residual. ``pips_total`` and the reconstructed v1 column are
-        the CONTROLS: both are genuinely in the span, so a residual near machine
-        epsilon there is what proves the probe can detect collinearity at all.
+        reads the residual. The RETIRED ``pips_total`` column (rebuilt here as
+        the row-sum of the five pips columns) and the reconstructed v1 margin
+        are the CONTROLS: both are genuinely in the span, so a residual near
+        machine epsilon there is what proves the probe can detect collinearity
+        at all — and, for ``pips_total``, it is the byte-exactness the v3
+        amendment claims when it drops the column.
         """
         i_margin = SETTLEMENT_FEATURE_NAMES.index("opponent_best_margin")
-        i_total = SETTLEMENT_FEATURE_NAMES.index("pips_total")
 
         def residual_rms(values: np.ndarray, design: np.ndarray) -> float:
             beta, *_ = np.linalg.lstsq(design, values, rcond=None)
@@ -167,7 +174,10 @@ class TestSettlementArithmetic:
                 block = all_settlement_features(ctx)[legal]
                 design = np.column_stack([block[:, :5], np.ones(legal.size)])
 
-                collinear = residual_rms(block[:, i_total], design)
+                # The v3-retired ``pips_total``, rebuilt: it IS the row sum, so
+                # regressing it on the five parts is exact by construction.
+                retired_total = block[:, :5].sum(axis=1)
+                collinear = residual_rms(retired_total, design)
                 v1_column = ctx.base_value[legal] - float(
                     ctx.base_value[ctx.opponent_best_vertex or 0]
                 )
@@ -194,12 +204,45 @@ class TestSettlementArithmetic:
                 gen.apply(pick, _first_edge(scenario, pick))
         assert seen == 6  # two seeds x draft positions 2, 3, 4
 
-    def test_adjacency_block_fires_only_next_to_the_opponent_target(
-        self, ctx: SetupContext
-    ) -> None:
-        assert _feat(ctx, 0, "adjacency_block") == 0.0
-        neighbour = ctx.adjacency[18][0]
-        assert _feat(ctx, neighbour, "adjacency_block") == 1.0
+    def test_the_margin_absorbs_the_retired_adjacency_block_flag(self, ctx: SetupContext) -> None:
+        """v3's merge, checked as an IDENTITY rather than asserted.
+
+        ``adjacency_block`` was ``distance(v, opponent_best) == 1``. Blocking
+        that vertex — by taking it (distance 0) or by neighbouring it (distance
+        1) — is exactly what makes ``_opponent_best_remaining`` fall back to a
+        worse reference. The flag was therefore a strict SUB-CASE of an event
+        the margin already carries, and carries with magnitude.
+
+        Seed 42, position 1: the target is v18 at 12.0, its neighbours are
+        (16, 17, 41). Reading each candidate's implied reference back out of the
+        margin as ``base_value[v] - margin``:
+
+        * v0  (distance 3): 7.3 - (-4.7)  = 12.0 — the target survives;
+        * v21 (distance 2): 10.5 - (-1.5) = 12.0 — likewise;
+        * v18 (distance 0): 12.0 - (+1.5) = 10.5 — the target is TAKEN;
+        * v16 (distance 1): 10.4 - (-0.1) = 10.5 — the flag's own case;
+        * v41 (distance 1): 8.0  - (-2.5) = 10.5 — the same event, and the
+          margin separates it from v16 by 2.4 where the flag scored both 1.0.
+        """
+        i_margin = SETTLEMENT_FEATURE_NAMES.index("opponent_best_margin")
+        assert "adjacency_block" not in SETTLEMENT_FEATURE_NAMES
+        assert ctx.opponent_best_vertex == 18
+        assert ctx.adjacency[18] == (16, 17, 41)
+        board_best = float(ctx.base_value[18])
+        assert board_best == pytest.approx(12.0)
+        assert _feat(ctx, 41, "opponent_best_margin") == pytest.approx(-2.5)
+
+        legal = np.flatnonzero(ctx.legal_settlements)
+        block = all_settlement_features(ctx)[legal]
+        for row, vertex in zip(block, legal, strict=True):
+            reference = float(ctx.base_value[vertex]) - float(row[i_margin])
+            retired_flag = int(ctx.distances[vertex, 18]) == 1
+            moved = reference < board_best - 1e-9
+            # The flag fired only at distance 1; the margin moves at distance
+            # <= 1. Every flagged vertex is a moved one, so nothing the flag
+            # said is lost.
+            assert moved == (int(ctx.distances[vertex, 18]) <= 1)
+            assert not retired_flag or moved
 
     def test_scarcity_starve_needs_a_scarce_resource_the_opponent_lacks(
         self, ctx: SetupContext
@@ -373,8 +416,14 @@ class TestNonDegenerateSettlementFixture:
         # neighbours are (7, 9, 27), so taking it leaves v13 at 9.7.
         assert pos4.opponent_best_vertex == 8
         assert _feat(pos4, 8, "opponent_best_margin") == pytest.approx(0.3)
-        assert _feat(pos4, 8, "adjacency_block") == 0.0
-        assert _feat(pos4, int(pos4.adjacency[8][0]), "adjacency_block") == 1.0
+        # A NEIGHBOUR of the target — what ``adjacency_block`` used to flag —
+        # moves the same reference: v7 (base 9.1) blocks v8, leaving v13 at 9.7,
+        # so 9.1 - 9.7 = -0.6. A vertex FAR from the target keeps the 10.0
+        # reference: v11 (base 7.9) reads 7.9 - 10.0 = -2.1. One column now
+        # separates the blocker from the non-blocker AND says by how much.
+        assert pos4.adjacency[8][0] == 7
+        assert _feat(pos4, 7, "opponent_best_margin") == pytest.approx(-0.6)
+        assert _feat(pos4, 11, "opponent_best_margin") == pytest.approx(-2.1)
 
 
 class TestRoadArithmetic:
@@ -408,19 +457,29 @@ class TestRoadArithmetic:
 
 class TestScorerPlumbing:
     def test_pilot_subset_is_a_real_subset(self) -> None:
-        assert set(PILOT_FEATURE_NAMES) <= set(SETTLEMENT_FEATURE_NAMES)
-        assert len(PILOT_FEATURE_NAMES) == 10
+        """Nine columns since v3, not the pilot's ten.
 
-    def test_feature_version_is_v2(self) -> None:
+        ``pips_total`` went with the rest of the design matrix. Keeping it here
+        would make this tuple stop being a subset of the columns the feature
+        function emits — a "reconstruction" of a fit that cannot be run.
+        """
+        assert set(PILOT_FEATURE_NAMES) <= set(SETTLEMENT_FEATURE_NAMES)
+        assert len(PILOT_FEATURE_NAMES) == 9
+        assert "pips_total" not in PILOT_FEATURE_NAMES
+
+    def test_feature_version_is_v3(self) -> None:
         """The bump is part of the contract, not an implementation detail.
 
         ``v1`` weights were fitted against a design matrix whose
         ``opponent_best_margin`` column was exactly collinear with the pips
-        columns and whose ``expansion_value`` column was seat-neutral. Scoring
-        them against the v2 matrix would silently produce a wrong number, so the
-        artifact must refuse to load rather than warn.
+        columns and whose ``expansion_value`` column was seat-neutral. ``v2``
+        weights were fitted against 18 columns, two of which v3 removed
+        (``pips_total``, ``adjacency_block``) — a v2 vector scored against the
+        16-column v3 matrix would not even align, let alone mean anything. So
+        the artifact must refuse to load rather than warn.
         """
-        assert FEATURE_VERSION == "v2"
+        assert FEATURE_VERSION == "v3"
+        assert len(SETTLEMENT_FEATURE_NAMES) == N_SETTLEMENT_FEATURES == 16
 
     def test_feature_version_mismatch_refuses_to_load(self) -> None:
         payload = ScorerWeights(
@@ -429,7 +488,7 @@ class TestScorerPlumbing:
             mean=np.zeros(1),
             scale=np.ones(1),
         ).to_dict()
-        for stale in ("v0", "v1"):
+        for stale in ("v0", "v1", "v2"):
             payload["feature_version"] = stale
             with pytest.raises(ScorerVersionError, match="feature_version"):
                 ScorerWeights.from_dict(payload)

@@ -16,8 +16,15 @@ from catan_rl.setup_phase.fit import (
     fit_scorer,
     training_rows,
 )
-from catan_rl.setup_phase.scorer import load_weights, save_weights
-from catan_rl.setup_phase.scorer_features import PILOT_FEATURE_NAMES
+from catan_rl.setup_phase.scorer import (
+    ScorerOverwriteError,
+    load_weights,
+    save_weights,
+)
+from catan_rl.setup_phase.scorer_features import (
+    PILOT_FEATURE_NAMES,
+    SETTLEMENT_FEATURE_NAMES,
+)
 
 
 def _legal_pair(scenario, *, nth: int = 0) -> tuple[int, int]:
@@ -157,7 +164,7 @@ class TestFit:
         assert set(by_pos) == {"1", "2", "3", "4"}
         assert sum(v["n"] for v in by_pos.values()) == result.metrics["n_labels"]
 
-    def test_pilot_subset_fits_ten_columns(self, corpus: list[dict]) -> None:
+    def test_pilot_subset_fits_only_its_own_columns(self, corpus: list[dict]) -> None:
         result = fit_scorer(
             corpus,
             version="t",
@@ -166,7 +173,9 @@ class TestFit:
             settlement_feature_subset=list(PILOT_FEATURE_NAMES),
         )
         assert result.scorer.settlement.feature_names == PILOT_FEATURE_NAMES
-        assert result.scorer.settlement.weights.shape == (10,)
+        assert result.scorer.settlement.weights.shape == (len(PILOT_FEATURE_NAMES),)
+        # ...and strictly fewer than the full v3 block, or "subset" is a lie.
+        assert len(PILOT_FEATURE_NAMES) < len(SETTLEMENT_FEATURE_NAMES)
 
     def test_empty_corpus_raises(self) -> None:
         with pytest.raises(FitError, match="no non-replay"):
@@ -180,6 +189,59 @@ class TestFit:
         assert loaded.version == "v1"
         assert np.allclose(loaded.settlement.weights, result.scorer.settlement.weights)
         assert loaded.provenance["fit_metrics"]["n_labels"] == result.metrics["n_labels"]
+
+    def test_a_same_version_refit_refuses_to_overwrite(
+        self, corpus: list[dict], tmp_path: Path
+    ) -> None:
+        """D6: "each refit bumps the artifact version".
+
+        A label row stamps the ``scorer_version`` it was graded under, and D4
+        reports agreement "against the scorer version live at label time". An
+        artifact that changes its weights while keeping its version silently
+        rewrites what every already-labeled pick was graded by, and the exam
+        goes on quoting a stamp that no longer identifies anything. So the SAVE
+        refuses rather than the reader having to notice.
+        """
+        path = tmp_path / "weights.json"
+        first = fit_scorer(corpus, version="v1", seed=0, iters=50)
+        save_weights(first.scorer, path)
+
+        # A different fit (different seed -> different weights), same version.
+        second = fit_scorer(corpus, version="v1", seed=7, iters=200)
+        assert not np.allclose(second.scorer.settlement.weights, first.scorer.settlement.weights)
+        with pytest.raises(ScorerOverwriteError, match="bump the artifact version"):
+            save_weights(second.scorer, path)
+        # ...and the file on disk is untouched by the refusal.
+        assert np.allclose(load_weights(path).settlement.weights, first.scorer.settlement.weights)
+
+    def test_the_overwrite_escape_hatch_and_the_identical_re_save_both_pass(
+        self, corpus: list[dict], tmp_path: Path
+    ) -> None:
+        """Two paths the guard must NOT block.
+
+        Re-saving the same weights under the same version is a deterministic
+        re-run, not a refit — only ``provenance`` (``fit_date``, ``git_sha``)
+        differs, and that is why the comparison is on the model payload rather
+        than on the file. And ``--overwrite`` is the deliberate escape hatch,
+        recorded in provenance by the CLI.
+        """
+        path = tmp_path / "weights.json"
+        first = fit_scorer(corpus, version="v1", seed=0, iters=50)
+        save_weights(first.scorer, path)
+
+        identical = fit_scorer(corpus, version="v1", seed=0, iters=50)
+        save_weights(identical.scorer, path)  # same weights, same version: allowed
+
+        different = fit_scorer(corpus, version="v1", seed=7, iters=200)
+        save_weights(different.scorer, path, overwrite=True)
+        assert np.allclose(
+            load_weights(path).settlement.weights, different.scorer.settlement.weights
+        )
+
+        # A version BUMP is the sanctioned route, and needs no flag.
+        bumped = fit_scorer(corpus, version="v2", seed=11, iters=200)
+        save_weights(bumped.scorer, path)
+        assert load_weights(path).version == "v2"
 
     def test_scored_vertices_mask_the_illegal_ones(self, corpus: list[dict]) -> None:
         """Advanced past draft position 1 on purpose.

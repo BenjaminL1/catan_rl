@@ -88,21 +88,35 @@ CLEAR_TOP1_BAR: float = 0.70
 """D4 v2's strictness bar on picks the owner tagged ``clear``. "Revisable only
 upward" — a number that moves down is the bar following the result.
 
-Read against the subset rate's WILSON LOWER BOUND, not its point estimate. D4
-words the clause "bar: >=70% on clear picks" and reports the subset rate "with
-CI"; taking the point estimate would let 3 of 4 clear picks (75%, lower bound
-0.30) pass a gate whose whole purpose is to be harder than the primary
-metric."""
+Read against the subset rate's POINT ESTIMATE, as ONE OF TWO clauses (see
+:data:`CLEAR_TOP1_CI_FLOOR`). The estimator was ratified 2026-08-21 after the
+conformance review put three readings to the owner: point-only (too weak — 3 of
+4 clear picks is 75% and would pass), lower-bound-only (too strong — a lower
+bound of 0.70 demands a rate far above 70%: even a PERFECT 10 of 10 clears it by
+only 0.0225, and 9 of 10 misses it outright), and the middle bar taken here."""
+
+CLEAR_TOP1_CI_FLOOR: float = 0.50
+"""The second half of the ratified clear-bar estimator: the same subset rate's
+Wilson LOWER BOUND must clear this floor as well.
+
+The point estimate says "the scorer is at the bar"; the lower bound says "and
+the subset is large enough that the point estimate is not luck". 8 of 10 is the
+case the two clauses exist to separate — point 0.80 (over the bar) with a lower
+bound of 0.4902 (under the floor), a record that reads like a pass on ten picks
+while remaining indistinguishable from a coin-flip scorer."""
 
 MIN_CLEAR_PICKS: int = 10
 """How many ``clear``-tagged picks the strictness bar needs before it is
 MEASURED rather than merely unsatisfied.
 
 Below this the bar reports ``status = "unmeasured"``, is NEVER satisfied by
-default, and the gate fails closed. Ten is the point where a Wilson lower bound
-can reach 0.70 at all (10/10 gives ~0.72), so a smaller subset cannot clear the
-bar however well the scorer does on it — reporting "not yet measurable" is then
-the honest answer rather than an arithmetic accident.
+default, and the gate fails closed. Ten is a deliberately CONSERVATIVE
+measurability floor, and NOT a quantity derived from the bar's arithmetic: it is
+the smallest two-digit subset, and below it one pick moves the point estimate by
+more than 10 percentage points while the Wilson interval stays wider than 0.29
+even on a flawless record (9 of 9 reads [0.7009, 1.0]). "Not yet measurable" is
+then the honest report. Because the floor is independent of the estimator,
+re-ratifying the estimator — as happened on 2026-08-21 — leaves it untouched.
 
 It is also a trap worth naming: the owner tags via a submit key, so an exam in
 which nothing was tagged ``clear`` can never pass no matter how decisively the
@@ -336,7 +350,7 @@ def clarity_report(
     """D4 v2's clarity-conditioned bars: top-1 on ``clear``, top-3 on ``close``.
 
     Public because the ``clear`` bar is the one clause whose arithmetic is not
-    obvious from the report (a Wilson lower bound against a minimum subset
+    obvious from the report (two clauses over one rate, against a minimum subset
     size), and a clause that cannot be unit-tested on its own is a clause that
     drifts.
     """
@@ -346,10 +360,16 @@ def clarity_report(
     clear_rate = _rate([scorer[i].agree for i in clear], alpha=alpha)
     close_rate = _rate([scorer[i].in_top3 for i in close], alpha=alpha)
     measured = bool(clear_rate["n"] >= MIN_CLEAR_PICKS and clear_rate["ci_lower"] is not None)
-    # The LOWER BOUND, not the point estimate: D4 reports this subset rate "with
-    # CI", and a bar meant to be stricter than the primary metric cannot be
-    # cleared by 3 of 4 picks.
-    satisfied = bool(measured and clear_rate["ci_lower"] >= CLEAR_TOP1_BAR)
+    # BOTH clauses over the one rate (estimator ratified 2026-08-21): the point
+    # estimate carries D4's stated "70% on clear picks", and the Wilson lower
+    # bound against a 0.50 floor is what stops a small lucky subset reading as a
+    # pass. Either alone is a bar the owner rejected — point-only passes 3 of 4,
+    # lower-bound-only fails 9 of 10.
+    satisfied = bool(
+        measured
+        and clear_rate["rate"] >= CLEAR_TOP1_BAR
+        and clear_rate["ci_lower"] >= CLEAR_TOP1_CI_FLOOR
+    )
     # Fails CLOSED on a too-small subset — a bar with fewer than
     # ``MIN_CLEAR_PICKS`` picks under it has not been cleared, and is never
     # satisfied by default. But "unmeasured" and "measured and missed" are
@@ -367,7 +387,8 @@ def clarity_report(
             "scorer": clear_rate,
             "baseline": _rate([baseline[i].agree for i in clear], alpha=alpha),
             "bar": CLEAR_TOP1_BAR,
-            "bar_read_on": "wilson_lower_bound",
+            "ci_floor": CLEAR_TOP1_CI_FLOOR,
+            "bar_read_on": "point_estimate_and_wilson_lower_bound",
             "min_picks": MIN_CLEAR_PICKS,
             "status": status,
             "satisfied": satisfied,
@@ -539,6 +560,10 @@ def evaluate_gate(
         "gate_subset": gate_subset,
         "min_fresh_picks": min_fresh_picks,
         "enough_picks": enough,
+        # Top level, NOT a pass clause: it is a three-valued reason string, and
+        # ``pass_clauses`` holds booleans only so that a future ``all(...)`` over
+        # its values cannot be satisfied by the truthiness of ``"unmeasured"``.
+        "clear_top1_bar_status": clear_bar_status,
         "alpha": alpha,
         "overall": overall,
         "picks_2_4": p24,
@@ -562,11 +587,15 @@ def evaluate_gate(
                     scorers_by_version[version].settlement.weights,
                     strict=True,
                 )
+                # D4's "relational feature weights published per refit". Since
+                # feature_version v3 the blocking half of denial lives ENTIRELY
+                # in ``opponent_best_margin`` (``adjacency_block`` was merged
+                # into it), which is what makes the published weight a single
+                # identified number rather than one of two collinear halves.
                 if name
                 in (
                     "opponent_new_resources",
                     "opponent_best_margin",
-                    "adjacency_block",
                     "scarcity_starve",
                 )
             }
@@ -591,21 +620,18 @@ def evaluate_gate(
         },
         "scorer_wilson": asdict(_wilson_dict(sum(g.agree for g in g_scorer), len(g_scorer), alpha)),
         "passes": passes,
-        # EXACTLY the pre-registered D4 v2 clauses, and no others. Anything the
-        # gate reports but does not gate on lives elsewhere in the report (the
-        # picks-2-4 delta is under ``kill_bar``), so a reader cannot mistake a
-        # diagnostic for a bar.
+        # EXACTLY the pre-registered D4 v2 clauses, and no others — all BOOLEAN,
+        # so ``all(report["pass_clauses"].values())`` is a valid reading of the
+        # verdict. Anything the gate reports but does not gate on lives elsewhere
+        # in the report (the picks-2-4 delta is under ``kill_bar``; the clear
+        # bar's three-valued reason is the top-level ``clear_top1_bar_status``),
+        # so a reader cannot mistake a diagnostic for a bar — nor a non-empty
+        # reason string for a satisfied clause.
         "pass_clauses": {
             "enough_picks": enough,
             "anchoring_control": control_satisfied,
             "overall_log_prob_ci_lower_gt_0": overall_ci_positive,
             "clear_top1_bar": clear_bar_satisfied,
-            # Named separately so a NO-GO on this clause says which remedy it
-            # wants: ``unmeasured`` means the exam holds fewer than
-            # ``MIN_CLEAR_PICKS`` picks the owner tagged ``clear`` (tag some, or
-            # the strictness clause has nothing to bite on); ``below_bar`` means
-            # the scorer was measured on them and missed.
-            "clear_top1_bar_status": clear_bar_status,
         },
     }
 

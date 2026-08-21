@@ -49,6 +49,11 @@ class ScorerVersionError(ValueError):
     """Raised when a weights artifact does not match :data:`FEATURE_VERSION`."""
 
 
+class ScorerOverwriteError(ValueError):
+    """Raised when a save would replace an artifact carrying the SAME ``version``
+    with DIFFERENT weights (spec D6: "each refit bumps the artifact version")."""
+
+
 @dataclass(frozen=True)
 class ScorerWeights:
     """One head's fitted linear weights over a named, ordered feature block."""
@@ -172,10 +177,56 @@ class SetupScorer:
         )
 
 
-def save_weights(scorer: SetupScorer, path: Path) -> None:
+def _model_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """The parts of an artifact that ARE the model.
+
+    Provenance is excluded on purpose: it carries ``fit_date`` and ``git_sha``,
+    so comparing whole files would refuse a bit-identical re-run of the same fit
+    — which is precisely the harmless case. What D6 is protecting is the
+    weights, and the weights are here.
+    """
+    return {
+        "feature_version": payload.get("feature_version"),
+        "settlement": payload.get("settlement"),
+        "road": payload.get("road"),
+    }
+
+
+def save_weights(scorer: SetupScorer, path: Path, *, overwrite: bool = False) -> None:
+    """Write a fitted artifact, REFUSING a same-version content change (D6).
+
+    D6 makes the artifact version the identity of a fit: "each refit bumps the
+    artifact version; agreement is always reported against the scorer version
+    live at label time". A label row stamps ``scorer_version``, so an artifact
+    that changes its weights without changing its version retroactively rewrites
+    what every already-labeled pick was graded by — and the D4 exam would go on
+    reporting the stamp as if it still identified something.
+
+    Re-saving byte-identical weights under the same version is allowed (a
+    deterministic re-run is not a refit). ``overwrite=True`` is the escape hatch;
+    callers that use it are expected to record the fact in the artifact's
+    provenance, as ``scripts/fit_setup_scorer.py`` does.
+    """
     path = Path(path)
+    payload = scorer.to_dict()
+    if path.exists() and not overwrite:
+        try:
+            existing = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if (
+            isinstance(existing, dict)
+            and str(existing.get("version", "")) == scorer.version
+            and _model_payload(existing) != _model_payload(payload)
+        ):
+            raise ScorerOverwriteError(
+                f"{path} already holds DIFFERENT weights stamped version "
+                f"{scorer.version!r}. D6 requires each refit to bump the artifact "
+                f"version — pass --version <new> (and a new --out path), or "
+                f"--overwrite to replace it deliberately."
+            )
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(scorer.to_dict(), indent=2, sort_keys=True) + "\n")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
 def load_weights(path: Path) -> SetupScorer:
@@ -347,6 +398,7 @@ __all__ = [
     "ROAD_FEATURE_NAMES",
     "SETTLEMENT_FEATURE_NAMES",
     "PickGrade",
+    "ScorerOverwriteError",
     "ScorerVersionError",
     "ScorerWeights",
     "SetupScorer",

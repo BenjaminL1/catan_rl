@@ -25,11 +25,25 @@ untouched rather than generalised.
 scorer version that was LIVE WHEN IT WAS LABELED (D6); a pick whose stamp has no
 matching artifact makes the run fail rather than borrow another scorer.
 
-PASS requires ALL of: >=150 fresh picks, D3's >=20% no-reveal anchoring control
-satisfied, overall paired log-prob CI lower bound > 0, a positive picks-2-4
-paired log-prob delta, and >=70% scorer top-1 on the picks the owner tagged
-``clear``. The exit code follows ``report["passes"]``, and every clause is
-itemised under ``report["pass_clauses"]``.
+PASS is exactly FOUR clauses, and no others:
+
+1. ``>=150`` fresh picks;
+2. D3's ``>=20%`` no-reveal anchoring control satisfied;
+3. overall paired log-prob CI lower bound ``> 0``;
+4. the ``clear`` strictness bar — scorer top-1 on the picks the owner tagged
+   ``clear``, at a point estimate ``>= 0.70`` AND a Wilson lower bound
+   ``>= 0.50``, measurable only at ``>= 10`` such picks (below that it reports
+   ``unmeasured`` and is never satisfied).
+
+The picks-2-4 paired log-prob delta is the KILL BAR's metric and is NOT a PASS
+requirement: at 300 cumulative fresh picks, a delta that has still not gone
+positive declares the theory-feature approach dead. Requiring it to PASS as well
+would make the gate stricter than the one that was pre-registered.
+
+The exit code follows ``report["passes"]``; the four clauses are itemised as
+BOOLEANS under ``report["pass_clauses"]``, and the clear bar's three-valued
+reason (``satisfied`` / ``below_bar`` / ``unmeasured``) is reported one level up
+as ``report["clear_top1_bar_status"]``.
 
 Eval is pinned to CPU per the repo device policy.
 """

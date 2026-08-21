@@ -134,15 +134,16 @@ and filled at READ time. The six scorer/replay defaults are all `None`, never
 into the D4 gate, and a second falsy spelling of `replay_of` would invite an
 `is not None` check to drift into a truthiness check. `pick_clarity` is the one
 exception — the spec fixes its legacy reading as `close`, the conservative side,
-so a row whose labeler never gave a tag can never be pulled into D4's ≥70%
-top-1 bar on `clear` picks.)
+so a row whose labeler never gave a tag can never be pulled into D4's strictness
+bar on `clear` picks — top-1 at a point estimate ≥ 0.70 AND a Wilson lower bound
+≥ 0.50, over at least 10 tagged picks.)
 
 **The two submit keys.** `S` — the pre-existing submit key — submits tagging the
 pick "close call"; `B` submits tagging it "clear **best**". Two keys rather than
 a prompt because the tag is paid 150+ times and a modal question would be
 answered carelessly. `S` keeps the CONSERVATIVE tag deliberately: `close` is the
 reading the spec fixes for untagged rows, and only `clear` picks are held to
-D4's ≥70% top-1 bar, so a reflexive press of the key the owner already has in
+D4's two-clause top-1 bar, so a reflexive press of the key the owner already has in
 muscle memory from 292 labels must not silently populate the strict subset with
 close calls. Asserting "clear best" costs one deliberate, unfamiliar keystroke.
 
@@ -249,11 +250,13 @@ reported as `road_given_same_settlement`: a setup road must be incident to the
 settlement just placed, so a road compared across two different settlements is a
 comparison across two different legal sets, not a labeler-noise measurement.
 
-Replay rows are excluded from BOTH downstream consumers by identity — the scorer
-fit (`setup_phase.fit.training_rows`) and the BC shard converter
-(`labeling.to_shard.convert`). A replay is only informative when the owner picks
-differently, so keeping it would emit the same `(game_seed, draft_position)`
-twice with contradictory targets.
+Replay rows are IDENTIFIABLE to both downstream consumers by identity (the
+`replay_of` link), but only one of them excludes on it. The scorer fit
+(`setup_phase.fit.training_rows`) drops them outright: a replay is only
+informative when the owner picks differently, so keeping it would train on the
+same `(game_seed, draft_position)` twice with contradictory targets. The BC
+shard converter (`labeling.to_shard.convert`) does NOT — it defaults to `keep`
+and warns loudly instead. The next paragraph is why the two defaults differ.
 
 **Two consumers, two defaults, one implementation.** The shared arithmetic lives
 in `labeling/dedup.py` — what counts as a replay, which `(game_seed,

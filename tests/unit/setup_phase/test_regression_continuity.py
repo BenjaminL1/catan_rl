@@ -2,7 +2,7 @@
 
 Two claims, both SOFT and both reported rather than asserted tightly:
 
-(a) refitting the pilot's 10 features on the pilot's 168/44 split reproduces the
+(a) refitting the pilot's features on the pilot's 168/44 split reproduces the
     pilot's 34.1% held-out / 45.2% train to within a tolerance; and
 (b) the FULL-feature fit on the same split lands inside the Wilson CI of 34.1%
     at n=44.
@@ -32,21 +32,41 @@ RECONSTRUCTION, not the artifact). And one pick moves the held-out number by
   which points the two paths at a real checkout and runs this module.
 
 **RESULT, run out-of-band against the owner's 292-row corpus (2026-08-21, under
-FEATURE_VERSION v2)** — recorded here because the gate cannot record it:
+FEATURE_VERSION v3)** — recorded here because the gate cannot record it. The
+corpus holds 292 rows; 272 of them reach a fit, the other 20 being the free
+replay dropped by ``--on-duplicate first-labeled``. Both denominators appear
+below and each number says which one it is read on.
 
-* pilot-10-feature refit on the manifest's 168/44 split: held-out **0.3636**
-  (pilot 0.341, tol 0.06), train **0.4583** (pilot 0.452). Both inside
-  tolerance, and both UNCHANGED by the v2 feature fixes — the pilot's ten
-  columns do not include ``expansion_value`` or ``opponent_best_margin``.
-* full-feature fit, same split: held-out **0.3409** (v1 read: 0.3182), inside
-  the pilot's Wilson CI **[0.2188, 0.4886]** at n=44.
-* road head vs the ``opens_best_vertex_value`` null, now OUT OF SAMPLE (5-fold,
+*On the pilot's 168/44 split:*
+
+* pilot-subset refit: held-out **0.3636** (pilot 0.341, tol 0.06), train
+  **0.4583** (pilot 0.452). Both inside tolerance, and both UNCHANGED across
+  every feature revision so far — the pilot's columns do not include
+  ``expansion_value`` or ``opponent_best_margin``, and v3's removal of
+  ``pips_total`` from the subset moved neither number by so much as a
+  four-decimal digit (it was the row sum of five columns the subset already
+  carried).
+* full-feature fit, same split: held-out **0.3636** (v2 read: 0.3409; v1:
+  0.3182), train **0.4643** (v2: 0.4405) — inside the pilot's Wilson CI
+  **[0.2188, 0.4886]** at n=44.
+* road head vs the ``opens_best_vertex_value`` null, OUT OF SAMPLE (5-fold,
   grouped by ``game_seed``): fitted NLL **0.9707** vs null **0.9704** —
   ``beaten_by_fit`` is **False**, and top-1 is a dead heat at **0.5476** each.
   In sample the same fit reads 0.9344 vs 0.9524 (a "win"), which is the point:
   a 3-feature model nesting a 1-feature special case can hardly lose in sample.
-  D1 says the "point at the expansion target" rule is "the null hypothesis it
-  must beat"; on this corpus it does not beat it. Reported, not buried.
+
+*On the full 272-row fit corpus* (a different, larger denominator — these are
+NOT the numbers above at more precision):
+
+* road head vs the same null, out of sample: fitted NLL **0.9435** vs null
+  **0.9511** — ``beaten_by_fit`` is **True**, top-1 a dead heat at **0.5074**.
+
+So the road model's verdict DEPENDS ON THE CORPUS: it loses to "point at the
+expansion target" on the pilot's 168 rows and wins narrowly on all 272. D1 says
+that rule is "the null hypothesis it must beat"; a split-dependent margin this
+thin is not a beaten null, and no test asserts otherwise. Reported, not buried.
+(An earlier version of this docstring filed the 168-split road numbers under a
+292-corpus heading, which read as a stronger claim than the run supported.)
 
 Re-run and update these figures whenever the corpus grows; a stale number here
 is worse than none, because it reads as a verification that did not happen.
@@ -122,7 +142,7 @@ class TestContinuityArithmetic:
             train, version="acc3-synth-pilot", seed=0, iters=200, settlement_feature_subset=subset
         )
         full = fit_scorer(train, version="acc3-synth-full", seed=0, iters=200)
-        assert pilot.scorer.settlement.weights.shape == (10,)
+        assert pilot.scorer.settlement.weights.shape == (len(PILOT_FEATURE_NAMES),)
         assert full.scorer.settlement.weights.shape == (len(full.scorer.settlement.feature_names),)
 
         pilot_held = top1_agreement(pilot.scorer, held_out, settlement_feature_subset=subset)

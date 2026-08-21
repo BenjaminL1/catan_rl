@@ -18,6 +18,7 @@ from catan_rl.labeling.store import load_scenarios
 from catan_rl.setup_phase.fit import fit_scorer
 from catan_rl.setup_phase.gate import (
     CLEAR_TOP1_BAR,
+    CLEAR_TOP1_CI_FLOOR,
     KILL_BAR_PICKS,
     MIN_CLEAR_PICKS,
     GateError,
@@ -200,10 +201,12 @@ class TestGate:
         assert report["clarity"]["clear"]["bar"] == CLEAR_TOP1_BAR
         assert report["clarity"]["close"]["metric"] == "owner_pick_in_scorer_top3"
         assert set(report["calibration"]) >= {"clear", "close", "note"}
+        # feature_version v3 merged ``adjacency_block`` into the margin, so
+        # the published denial weight is one identified number, not two
+        # collinear halves.
         assert set(report["relational_weights"]["v1"]) == {
             "opponent_new_resources",
             "opponent_best_margin",
-            "adjacency_block",
             "scarcity_starve",
         }
         assert json.dumps(report)  # the report is JSON-serialisable
@@ -280,7 +283,10 @@ class TestGate:
         # UNMEASURED, not below_bar: the remedy is "tag some picks clear", not
         # "improve the scorer", and a bare False cannot say which.
         assert report["clarity"]["clear"]["status"] == "unmeasured"
-        assert report["pass_clauses"]["clear_top1_bar_status"] == "unmeasured"
+        # Reported at TOP LEVEL, not as a pass clause: it is a reason string,
+        # and ``pass_clauses`` must stay all-boolean.
+        assert report["clear_top1_bar_status"] == "unmeasured"
+        assert "clear_top1_bar_status" not in report["pass_clauses"]
 
     def test_a_measured_miss_is_distinguished_from_an_unmeasured_bar(self, exam) -> None:
         tmp_path, rows, scorer = exam
@@ -311,6 +317,11 @@ class TestGate:
         the gate stricter than the one that was pre-registered, which is the
         exact drift pre-registration exists to prevent — so the clause SET is
         pinned, not just the individual clauses.
+
+        The set is also pinned as ALL-BOOLEAN. The clear bar's three-valued
+        reason string used to live in here; ``"unmeasured"`` is truthy, so a
+        future reader summarising the verdict as ``all(pass_clauses.values())``
+        would have read a failed-closed bar as a satisfied one.
         """
         tmp_path, rows, scorer = exam
         meta = session_metadata(tmp_path)
@@ -327,8 +338,16 @@ class TestGate:
             "anchoring_control",
             "overall_log_prob_ci_lower_gt_0",
             "clear_top1_bar",
-            "clear_top1_bar_status",
         }
+        assert all(isinstance(v, bool) for v in report["pass_clauses"].values())
+        assert report["passes"] is all(report["pass_clauses"].values())
+        # The reason string is still reported — one level up, where a truthy
+        # non-boolean cannot be mistaken for a satisfied clause.
+        assert report["clear_top1_bar_status"] in (
+            "satisfied",
+            "below_bar",
+            "unmeasured",
+        )
         # The picks-2-4 delta is still REPORTED — under the kill bar, where it
         # belongs — so nothing was lost by dropping the clause.
         assert report["kill_bar"]["metric"] == "picks_2_4_paired_log_probability"
@@ -433,7 +452,15 @@ class TestGate:
 
 
 class TestClearStrictnessBar:
-    """The one PASS clause whose arithmetic is not obvious from the report."""
+    """The one PASS clause whose arithmetic is not obvious from the report.
+
+    Estimator ratified 2026-08-21: the subset rate must clear the bar on its
+    POINT ESTIMATE (>= 0.70) *and* on its Wilson LOWER BOUND (>= 0.50), at
+    >= ``MIN_CLEAR_PICKS`` picks. The four tests below are one fixture per
+    corner of that statement — pass, fail-on-the-lower-bound,
+    fail-on-the-point-estimate, and unmeasured — so no single clause can be
+    deleted without a red test.
+    """
 
     @staticmethod
     def _picks(n_clear: int) -> list[dict]:
@@ -453,28 +480,69 @@ class TestClearStrictnessBar:
             for i in range(n)
         ]
 
-    def test_the_bar_is_the_wilson_lower_bound_not_the_point_estimate(self) -> None:
-        """8/10 is a point estimate of 0.80 and a lower bound of ~0.49.
+    def test_a_high_point_estimate_still_fails_on_the_confidence_floor(self) -> None:
+        """8 of 10: point 0.80 (over the bar), lower bound 0.4902 (under 0.50).
 
-        Reading the point estimate would pass a bar whose stated job is to be
-        STRICTER than the primary metric on the picks the owner says are not
-        ties. The two readings genuinely disagree here, which is the whole
-        content of the fix.
+        The arithmetic, checkable by hand from the Wilson formula at
+        alpha=0.05: ``wilson_interval(wins=8, n=10)`` = point 0.8000,
+        [0.4902, 0.9433]. So the point-estimate clause passes and the
+        confidence clause does not — and the bar as a whole fails. This is the
+        case the two-clause estimator exists to catch: a rate that looks like a
+        pass on ten picks while still overlapping a coin-flip scorer.
         """
         ci = wilson_interval(wins=8, n=10)
-        assert ci.point >= CLEAR_TOP1_BAR
-        assert ci.lower < CLEAR_TOP1_BAR
+        assert ci.point == pytest.approx(0.80)
+        assert ci.lower == pytest.approx(0.4902, abs=5e-5)
+        assert ci.point >= CLEAR_TOP1_BAR  # clause 1 passes...
+        assert ci.lower < CLEAR_TOP1_CI_FLOOR  # ...clause 2 does not
 
         report = clarity_report(
             self._picks(10), self._grades(10, 8), self._grades(10, 0), alpha=0.05
         )
         clear = report["clear"]
-        assert clear["bar_read_on"] == "wilson_lower_bound"
+        assert clear["bar_read_on"] == "point_estimate_and_wilson_lower_bound"
+        assert clear["bar"] == CLEAR_TOP1_BAR
+        assert clear["ci_floor"] == CLEAR_TOP1_CI_FLOOR
         assert clear["scorer"]["rate"] == pytest.approx(ci.point)
         assert clear["status"] == "below_bar"
         assert clear["satisfied"] is False
 
+    def test_a_tight_confidence_interval_still_fails_on_the_point_estimate(self) -> None:
+        """65 of 100: lower bound 0.5525 (over the floor), point 0.65 (under
+        the bar).
+
+        The mirror image of the 8-of-10 case, and the reason the point estimate
+        cannot be dropped in favour of "a lower bound over 0.50": a scorer can
+        be measured precisely and still be measured BELOW 70%. Wilson at
+        alpha=0.05 gives [0.5525, 0.7364] here.
+        """
+        ci = wilson_interval(wins=65, n=100)
+        assert ci.point == pytest.approx(0.65)
+        assert ci.lower == pytest.approx(0.5525, abs=5e-5)
+        assert ci.lower >= CLEAR_TOP1_CI_FLOOR  # clause 2 passes...
+        assert ci.point < CLEAR_TOP1_BAR  # ...clause 1 does not
+
+        report = clarity_report(
+            self._picks(100), self._grades(100, 65), self._grades(100, 0), alpha=0.05
+        )
+        clear = report["clear"]
+        assert clear["scorer"]["rate"] == pytest.approx(ci.point)
+        assert clear["scorer"]["ci_lower"] == pytest.approx(ci.lower)
+        assert clear["status"] == "below_bar"
+        assert clear["satisfied"] is False
+
     def test_a_unanimous_measured_subset_clears_it(self) -> None:
+        """10 of 10: point 1.0000, Wilson [0.7225, 1.0]. Both clauses pass.
+
+        Worth pinning as the PASS fixture precisely because it is the tightest
+        one available at ``MIN_CLEAR_PICKS``: under the superseded
+        lower-bound-at-0.70 reading this was the ONLY passing record at n=10,
+        clearing by 0.0225 — which is what made that reading a bar on 100%
+        agreement rather than on 70%.
+        """
+        ci = wilson_interval(wins=10, n=10)
+        assert ci.point == pytest.approx(1.0)
+        assert ci.lower == pytest.approx(0.7225, abs=5e-5)
         report = clarity_report(
             self._picks(10), self._grades(10, 10), self._grades(10, 0), alpha=0.05
         )
@@ -484,15 +552,19 @@ class TestClearStrictnessBar:
     def test_below_the_minimum_it_is_unmeasured_and_never_satisfied(self) -> None:
         """A perfect record on too few picks is "not yet measurable", not a pass.
 
-        At n < 10 the Wilson lower bound cannot reach 0.70 at all, so calling a
-        small clean subset "satisfied" would be an arithmetic accident rather
-        than evidence.
+        9 of 9 would clear BOTH ratified clauses on their arithmetic alone —
+        point 1.0000 and a Wilson lower bound of 0.7009 — so nothing but the
+        subset-size floor stops it. That is the floor's whole job: at n < 10 one
+        pick moves the point estimate by more than 10 percentage points, and a
+        clean small subset is evidence of very little.
         """
         n = MIN_CLEAR_PICKS - 1
         report = clarity_report(self._picks(n), self._grades(n, n), self._grades(n, 0), alpha=0.05)
         clear = report["clear"]
         assert clear["scorer"]["n"] == n
         assert clear["scorer"]["rate"] == 1.0
+        ci = wilson_interval(wins=n, n=n)
+        assert ci.point >= CLEAR_TOP1_BAR and ci.lower >= CLEAR_TOP1_CI_FLOOR
         assert clear["status"] == "unmeasured"
         assert clear["satisfied"] is False
         assert clear["min_picks"] == MIN_CLEAR_PICKS == 10

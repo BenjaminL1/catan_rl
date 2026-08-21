@@ -15,6 +15,13 @@ REFUSES a corpus with duplicate ``(game_seed, draft_position)`` rows that carry
 no ``replay_of`` — pass ``--on-duplicate first-labeled`` to keep the earliest of
 each pair, a choice that is stamped into the artifact's provenance.
 
+The SAVE refuses too, for the same reason in a different place: D6 makes each
+refit bump the artifact version, so writing different weights over an existing
+file that carries the same ``--version`` would retroactively change what every
+already-stamped label row was graded by. Bump ``--version`` (and ``--out``), or
+pass ``--overwrite`` to replace deliberately — the flag is recorded in the
+artifact's provenance.
+
 FIRST RUN, on the corpus as it stands today::
 
     python scripts/fit_setup_scorer.py \\
@@ -89,6 +96,15 @@ def main() -> int:
         default="refuse",
         help="How to handle repeated (game_seed, draft_position) rows with no replay_of.",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help=(
+            "Replace an existing artifact stamped with the same --version but "
+            "holding different weights. D6 asks for a version BUMP instead; when "
+            "used, the flag is recorded in the artifact's provenance."
+        ),
+    )
     args = parser.parse_args()
 
     rows = load_scenarios(args.labels)
@@ -111,9 +127,10 @@ def main() -> int:
             "lr": args.lr,
             "duplicate_policy": args.on_duplicate,
             "pilot_features": bool(args.pilot_features),
+            "overwrite": bool(args.overwrite),
         },
     )
-    save_weights(result.scorer, args.out)
+    save_weights(result.scorer, args.out, overwrite=args.overwrite)
     print(json.dumps(result.metrics, indent=2, sort_keys=True))
     print(f"[fit_setup_scorer] wrote {args.out}")
     return 0
