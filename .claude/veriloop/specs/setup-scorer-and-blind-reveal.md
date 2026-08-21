@@ -31,6 +31,13 @@ relabels ~15–20 boards (~20 min). The owner-vs-owner agreement number is the L
 CEILING every later number is read against — if it is low, the bar structure is recalibrated
 before anything else is trusted. Replay rows are EXCLUDED from scorer fitting (dedup by
 `replay_of`), included only in consistency reporting.
+**D0 RESULT (2026-08-21, n=20, week gap, replay session 553464b8):** settlement top-1
+self-agreement 7/20 = 35% (Wilson [18, 57]); board-level SET overlap 15/20 = 75%; pos1 4/5
+degrading to pos4 0/5; road-given-same-settlement 3/7. Reading: the owner's per-position policy
+has ~3 effective near-tie choices on picks 2–4 (two samples of a ~3-way-tie policy agree ~33%);
+values are stable, sequencing is not. The recalibration clause FIRED → exam v2 (D4, amended
+2026-08-21, owner-ratified). Ceiling estimate is extended by folding ~5 replay boards into future
+sessions; all replay rows stay excluded from fitting.
 
 ### D1 — Scorer module: theory-shaped features, settlements AND roads
 `src/catan_rl/setup_phase/scorer.py`. Settlement features per candidate vertex: per-resource pips
@@ -56,22 +63,36 @@ scratchpad script is committed into the repo as part of this slice (provenance, 
 After the owner SUBMITS (row durably written), an overlay shows the scorer's top-1 settlement
 (+top-3 dimmed) and its road pick beside the owner's. Reveal NEVER precedes submit; skip shows no
 reveal; undo disabled after reveal. Additive row fields (store schema v3, read-time defaults):
-`scorer_version`, `scorer_top1`, `scorer_rank_of_pick`, `agree`, `reveal_mode`. **Anchoring
+`scorer_version`, `scorer_top1`, `scorer_rank_of_pick`, `agree`, `reveal_mode`, and
+**`pick_clarity` ∈ {clear, close}** — the owner tags each submit via two submit keys ("clear
+best" vs "close call"; zero extra friction); untagged legacy rows read as `close`. The reveal
+shows the scorer's PROBABILITIES (its confidence), not bare picks. **Anchoring
 control:** sessions carry a `--no-reveal` flag and ≥20% of all fresh exam picks must come from
 no-reveal sessions; the gate report compares reveal vs no-reveal agreement — divergence = the
 reveals are training the owner, and only no-reveal picks count for the gate until understood.
 The scorer never writes or suggests a pick.
 
-### D4 — Pre-registered forward exam: PAIRED, per-position, with a kill bar
+### D4 — Pre-registered forward exam v2: tie-aware, paired, per-position, with a kill bar
+(Amended 2026-08-21 after D0's result; owner-ratified. Rationale: top-1 exact agreement has a
+measured ~35% labeler ceiling the pilot scorer already sits at — it can no longer discriminate.)
 The rolling exam = fresh blind-first picks created after the scorer ships (`scorer_version`
-stamps which scorer was live; refits legitimate per D6). Gate to unlock synthetic generation, on
-≥150 fresh picks: **paired comparison** — scorer vs u500 evaluated on the IDENTICAL picks, gate =
-paired agreement difference with CI (the u500-baseline evaluator is extended to run on arbitrary
-label subsets, not shard manifests), reported **per draft position** with the relational features'
-fitted weights published at each refit. PASS requires the paired difference CI lower bound > 0
-overall AND scorer > u500 on the picks-2–4 subset (point estimate, CI reported). **Kill bar:** if
-after 300 cumulative fresh picks the scorer's picks-2–4 agreement has not exceeded u500's, the
-theory-feature approach is declared DEAD and the program re-plans — no unbounded iteration.
+stamped; refits legitimate per D6). Both models emit masked-softmax distributions, so the exam
+grades distributions:
+- **Primary: paired mean log-probability of the owner's pick** — scorer vs u500 on IDENTICAL
+  picks (the proper scoring rule: a genuine k-way tie is best answered by ~1/k each, confident
+  wrongness is punished, honesty about ties is the winning strategy). PASS = paired difference
+  CI lower bound > 0 on ≥150 fresh picks.
+- **Strictness where the owner says so:** on picks tagged `clear`, scorer top-1 must equal the
+  owner's pick (subset rate reported with CI; bar: ≥70% on clear picks, revisable only upward);
+  on `close` picks, top-3 containment is the reported rate.
+- **Per draft position** reporting throughout; relational feature weights published per refit.
+- **Calibration report:** scorer confidence (top-1 margin) vs owner clarity tags — confident
+  where the owner says close, or unsure where the owner says clear, maps missing features.
+- **Kill bar (unchanged in spirit):** if after 300 cumulative fresh picks the scorer's picks-2–4
+  paired log-prob does not beat u500's, the theory-feature approach is declared DEAD and the
+  program re-plans — no unbounded iteration.
+- The u500-baseline evaluator runs on arbitrary label subsets (not shard manifests). ≥20% of
+  fresh picks from no-reveal sessions (D3) still gate.
 
 ### D5 — Forced-opening win-rate probe (machine-time, parallel arm, required)
 Before synthetic generation unlocks, run the ExIt-STEP-2-shaped probe: paired seeds, u500 plays
