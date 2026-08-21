@@ -294,6 +294,13 @@ personas — extend them via the `.overrides.md` siblings, which are never overw
 
 *(Legacy phrase: if the user says "the review-and-resolve loop", run `/dev-loop`.)*
 
+**Overnight mode** (`/overnight`, owner-ratified 2026-08-21): a queue of **ratified**
+specs runs through the dev-loop unattended — one bounded SHOULD-FIX pass per slice
+(gate re-run; only verified tips proceed), then **auto-merge to main on 0 blockers**;
+any FAIL/blocker/conflict stops the queue with the branch left for morning review.
+Orchestrator: `.claude/workflows/catan-rl-v2-overnight.js` (additive; the generated
+dev-loop is untouched and interactive runs still stop before merge).
+
 **With a long-running training run in the loop:** launch the run as early as a
 *correct* config allows (it is usually the long pole), then do the review/resolve
 work while it trains. A review BLOCKER that **invalidates the running config**
