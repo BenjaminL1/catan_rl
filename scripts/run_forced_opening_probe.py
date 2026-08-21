@@ -52,13 +52,18 @@ def main() -> int:
     from catan_rl.replay.player_factory import PlayerSpec, _PolicyActor, build_actor
     from catan_rl.selfplay.snapshot_opponent import FrozenSnapshotOpponent
 
-    actor = cast(
-        _PolicyActor,
-        build_actor(PlayerSpec(kind="policy", ckpt_path=str(args.ckpt)), seed=0, device="cpu"),
-    )
+    spec = PlayerSpec(kind="policy", ckpt_path=str(args.ckpt))
+    actor = cast(_PolicyActor, build_actor(spec, seed=0, device="cpu"))
+    # The opponent seat is a SECOND load of the same checkpoint, not the agent's
+    # own module wrapped in a snapshot adapter. "u500 plays both sides" means
+    # two independent copies of one weight set; sharing the module would leave
+    # one live object — and one RNG-bearing module — driving both seats, so an
+    # opponent advertised as frozen would silently track the agent.
+    frozen = cast(_PolicyActor, build_actor(spec, seed=1, device="cpu"))
     policy = actor.policy
     policy.eval()
-    opponent = FrozenSnapshotOpponent(policy, device=actor.device, seed=0)
+    frozen.policy.eval()
+    opponent = FrozenSnapshotOpponent(frozen.policy, device=frozen.device, seed=0)
 
     result = run_probe(
         scorer=load_weights(args.scorer),

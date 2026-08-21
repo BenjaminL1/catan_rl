@@ -27,9 +27,55 @@ from catan_rl.setup_phase.wr_probe import (
     scorer_opening,
 )
 
+# Which sub-head each action type actually reads, and from which mask. A stub
+# that samples a legal TYPE but leaves the sub-heads at 0 is not a stand-in for
+# a policy: it emits e.g. ``BuildCity`` on corner 0 whenever the type is legal
+# at all, and the engine raises deep inside ``updateBoardGraph_city``. Which
+# board states it happens to survive then depends on the openings under test —
+# i.e. the fixture breaks when the thing being measured changes, which is the
+# opposite of what a fixture is for.
+_TYPE_HEADS: dict[int, tuple[tuple[int, str], ...]] = {
+    0: ((1, "corner_settlement"),),
+    1: ((1, "corner_city"),),
+    2: ((2, "edge"),),
+    4: ((3, "tile"),),
+    6: ((3, "tile"),),
+    7: ((4, "resource1_yop"),),
+    8: ((4, "resource1_default"),),
+    10: ((4, "resource1_trade"),),
+    11: ((4, "resource1_discard"),),
+}
+
+
+def _legal_action(masks, rng: np.random.Generator, i: int) -> np.ndarray:
+    """One mask-respecting action row: a legal type plus legal sub-heads."""
+    action = np.zeros(6, dtype=np.int64)
+
+    def legal_of(key: str) -> np.ndarray:
+        return np.flatnonzero(np.asarray(masks[key][i].cpu().numpy(), dtype=bool))
+
+    types = legal_of("type")
+    if types.size == 0:
+        action[0] = 3  # EndTurn
+        return action
+    action[0] = int(rng.choice(types))
+    for head, key in _TYPE_HEADS.get(int(action[0]), ()):
+        options = legal_of(key)
+        if options.size == 0:  # pragma: no cover - the type mask forbids this
+            return np.array([3, 0, 0, 0, 0, 0], dtype=np.int64)
+        action[head] = int(rng.choice(options))
+    if int(action[0]) == 7:  # Year of Plenty needs a second resource too
+        same = legal_of("resource2_yop_same")
+        others = [j for j in legal_of("resource2_yop") if j != action[4]]
+        action[5] = int(action[4]) if action[4] in same else int(others[0])
+    elif int(action[0]) == 10:  # BankTrade receives something it did not give
+        others = [j for j in legal_of("resource2_trade") if j != action[4]]
+        action[5] = int(others[0]) if others else int(legal_of("resource2_trade")[0])
+    return action
+
 
 class _StubPolicy(nn.Module):
-    """Random legal action type; head distributions are index-descending."""
+    """Random legal action; head distributions are index-descending."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -38,11 +84,7 @@ class _StubPolicy(nn.Module):
 
     def sample(self, obs, masks):
         batch = next(iter(obs.values())).shape[0]
-        type_mask = masks["type"].cpu().numpy()
-        action = np.zeros((batch, 6), dtype=np.int64)
-        for i in range(batch):
-            legal = np.flatnonzero(type_mask[i])
-            action[i, 0] = int(self._rng.choice(legal)) if legal.size else 3
+        action = np.stack([_legal_action(masks, self._rng, i) for i in range(batch)])
         device = next(iter(obs.values())).device
         return {"action": torch.as_tensor(action, device=device)}
 
@@ -68,12 +110,7 @@ class _StubOpponent:
 
     def sample(self, obs, masks) -> torch.Tensor:
         batch = next(iter(obs.values())).shape[0]
-        type_mask = masks["type"].cpu().numpy()
-        action = np.zeros((batch, 6), dtype=np.int64)
-        for i in range(batch):
-            legal = np.flatnonzero(type_mask[i])
-            action[i, 0] = int(self._rng.choice(legal)) if legal.size else 3
-        return torch.as_tensor(action)
+        return torch.as_tensor(np.stack([_legal_action(masks, self._rng, i) for i in range(batch)]))
 
 
 @pytest.fixture(scope="module")
@@ -137,6 +174,34 @@ class TestOpeningDerivation:
 
         with pytest.raises(ProbeError, match="illegal"):
             policy_opening(_MaskBlindPolicy(), 42)
+
+
+class TestProbeHygiene:
+    def test_an_opponent_that_wraps_the_agent_module_is_refused(self, scorer: SetupScorer) -> None:
+        """The "frozen snapshot" claim is enforced, not documented."""
+        policy = _StubPolicy()
+
+        class _Wrapper:
+            def __init__(self, inner: _StubPolicy) -> None:
+                self.policy = inner
+
+        with pytest.raises(ProbeError, match="frozen snapshot"):
+            run_probe(scorer=scorer, policy=policy, opponent=_Wrapper(policy), seeds=[42])
+        with pytest.raises(ProbeError, match="frozen snapshot"):
+            run_probe(scorer=scorer, policy=policy, opponent=policy, seeds=[42])
+
+    def test_the_driver_puts_the_policy_in_eval_mode_itself(self, scorer: SetupScorer) -> None:
+        policy = _StubPolicy()
+        policy.train()
+        assert policy.training
+        run_probe(
+            scorer=scorer,
+            policy=policy,
+            opponent=_StubOpponent(),
+            seeds=[42],
+            max_turns=2,
+        )
+        assert not policy.training
 
 
 class TestProbeRound:

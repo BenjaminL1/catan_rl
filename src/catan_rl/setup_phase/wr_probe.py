@@ -382,6 +382,22 @@ class ProbeResult:
     report: dict[str, Any]
 
 
+def _freeze_for_inference(model: Any, what: str) -> None:
+    """Put ``model`` in eval mode, or refuse if it insists on training mode.
+
+    The probe reads argmax picks and plays games; a policy left in train mode
+    runs dropout / batch-norm updates through both arms and adds variance to a
+    paired delta that exists to be small. The driver does it itself rather than
+    trusting every caller to remember — and a model with no ``eval`` (the stubs)
+    is fine, but one that has ``training`` still set after ``eval()`` is not.
+    """
+    evaluate = getattr(model, "eval", None)
+    if callable(evaluate):
+        evaluate()
+    if getattr(model, "training", False):
+        raise ProbeError(f"{what} is still in training mode after eval(); refusing to probe")
+
+
 def run_probe(
     *,
     scorer: SetupScorer,
@@ -399,6 +415,14 @@ def run_probe(
     SAME checkpoint, for the spec's "u500 plays both sides") the other. Pairing
     is by ``(seed, agent_seat)``.
 
+    "Frozen snapshot" is CHECKED, not assumed: the opponent must not be the same
+    live object as ``policy``, directly or through an ``opponent.policy``
+    attribute. Wrapping the agent's own module in a snapshot adapter leaves one
+    set of parameters (and one RNG-bearing module) driving both seats, so a
+    "frozen" opponent would silently track the agent. Build the opponent from a
+    SECOND load of the checkpoint (or a ``deepcopy``) —
+    ``scripts/run_forced_opening_probe.py`` does the former.
+
     **The contrast is within the game, not between two symmetric worlds.** In
     the treatment arm ONLY the agent seat's four picks are forced to the
     scorer's; the other seat drafts with the policy and responds to them. In the
@@ -409,6 +433,15 @@ def run_probe(
     a mechanical artifact the spec's "ΔWR ~ 0 is AMBIGUOUS" clause would then
     have recorded as a finding.
     """
+    if opponent is policy or getattr(opponent, "policy", None) is policy:
+        raise ProbeError(
+            "the probe opponent wraps the very module playing the agent seat, so it "
+            "is not a frozen snapshot of anything. Load the checkpoint a second time "
+            "(or deepcopy the policy) and pass that."
+        )
+    _freeze_for_inference(policy, "policy")
+    _freeze_for_inference(opponent, "opponent")
+
     torch_device = torch.device(device)
     np_state = np.random.get_state()
     py_state = random.getstate()
