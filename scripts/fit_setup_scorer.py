@@ -14,6 +14,21 @@ Replay rows (``replay_of``) are excluded from the fit by construction. The fit
 REFUSES a corpus with duplicate ``(game_seed, draft_position)`` rows that carry
 no ``replay_of`` — pass ``--on-duplicate first-labeled`` to keep the earliest of
 each pair, a choice that is stamped into the artifact's provenance.
+
+FIRST RUN, on the corpus as it stands today::
+
+    python scripts/fit_setup_scorer.py \\
+        --labels data/labels/setup/v1/scenarios.jsonl \\
+        --out data/setup_phase/scorer_weights_v1.json \\
+        --version v1 \\
+        --on-duplicate first-labeled
+
+The flag is REQUIRED today and the default refusal is not a bug: the owner ran a
+free replay before ``replay_of`` existed, so those rows re-label positions
+already in the corpus with no link to say so. Run it once WITHOUT the flag —
+the refusal names the offending positions, and seeing them is how you decide
+whether ``first-labeled`` is the right answer. Once a ``--replay-session`` run
+has happened its rows carry ``replay_of`` and are excluded by identity.
 """
 
 from __future__ import annotations

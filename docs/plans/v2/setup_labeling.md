@@ -158,7 +158,8 @@ bar and the anchoring control in conflict.
 | Normal | (default) | no v3 fields unless a scorer is loaded | `reveal_mode: "reveal"`, `scorer_version: null` |
 | Blind-then-reveal | `--scorer-weights <path>` | all five scorer fields (+ `pick_clarity`) | `reveal_mode: "reveal"`, `scorer_version: "<v>"` |
 | Anchoring control | `--no-reveal --scorer-weights <path>` | **none** of the five (but `pick_clarity` yes) | `reveal_mode: "no_reveal"`, `scorer_version: "<v>"` |
-| Self-consistency replay | `--replay-session <id>` | `replay_of: "<scenario_id>"` | `replay_of_session: "<id>"` |
+| Self-consistency replay (EXCLUSIVE) | `--replay-session <id>` | `replay_of: "<scenario_id>"` | `replay_of_session: "<id>"`, `replay_boards: 0` |
+| Folded replay (MIXED) | `--replay-boards N [--replay-session <id>]` | `replay_of` on the folded boards ONLY | `replay_of_session: "<resolved id>"`, `replay_boards: N` |
 
 `--no-reveal` REQUIRES `--scorer-weights`. Without one there is no version to
 stamp, `gate.fresh_exam_picks` cannot resolve `scorer_version` and drops every
@@ -170,6 +171,38 @@ an owner-vs-**owner** measurement; a post-submit reveal during a replay anchors
 the owner on the scorer mid-measurement, which is the exact contamination D3's
 `--no-reveal` control exists to detect, applied to the one number every later bar
 is read against. The CLI refuses that combination up front too.
+
+**`--replay-boards N` is the MIXED mode D0's last clause asks for** — "the
+ceiling estimate is extended by folding ~5 replay boards into future sessions".
+N boards from a past session are re-presented inside an otherwise NORMAL
+sitting; the rest of the session is fresh boards from the usual master-seed
+sequence. It is compatible with `--scorer-weights`, unlike the exclusive mode,
+because the reveal is suppressed per-board rather than per-session:
+
+- **Folded boards come FIRST**, then the fresh sequence. Nothing later in the
+  sitting — a reveal above all — can then anchor the measurement, and the
+  owner's knowledge state on those boards matches the exclusive sessions the
+  banked 35% was measured in, so the folded number extends that estimate instead
+  of being a differently-conditioned second one. Folding burns no seed offsets:
+  the fresh sequence still starts at `master_seed + 0`.
+- Folded boards are **FORCED-ORIGINAL**, exactly as the exclusive mode is, so
+  all four of their positions are identical to the first sitting.
+- Folded rows carry `replay_of` and therefore **carry no scorer fields, get no
+  overlay, and reach neither `fit.training_rows` nor `gate.fresh_exam_picks`**.
+  `session.submit` raises if a caller passes `scorer_fields` for one. Fresh rows
+  in the same session reveal and count normally.
+- **Auto-choice** when `--replay-session` is omitted: the most recent session
+  whose manifest has an `end_time` and which holds at least N boards of ORIGINAL
+  (non-`replay_of`) rows, ties broken by higher `session_id`. `end_time` skips a
+  session still being appended to; the originals-only filter stops folding from
+  chaining a re-label onto a re-label once folding is routine.
+- It refuses up front (before pygame boots) when N exceeds the source's board
+  count, when no eligible past session exists, and when N is negative.
+- Known, unavoidable caveat: suppressing the reveal is a post-submit tell, so on
+  a folded board the owner learns it was a replay after their first pick. The
+  front-loaded ordering is what keeps that from contaminating the comparison
+  with the banked number; worth a line in the consistency report once the folded
+  n starts accumulating.
 
 **The reveal shows probabilities, on the board it graded.** The overlay prints
 the scorer's masked-softmax top-3 with their probabilities plus the probability
@@ -222,16 +255,50 @@ fit (`setup_phase.fit.training_rows`) and the BC shard converter
 differently, so keeping it would emit the same `(game_seed, draft_position)`
 twice with contradictory targets.
 
-**One rule, one corpus.** `convert` does not merely filter `replay_of`; it calls
-`training_rows` and so applies the SAME `duplicate_policy` the fit does,
-defaulting to `refuse`. Filtering on `replay_of` alone is not enough on the only
-corpus that exists: the pre-`replay_of` free replay carries no link, so its 20
-duplicate positions would sail into the BC shard as a second, contradictory
-target for 20 positions already in it — the very hazard the filter is written to
-prevent. `--duplicate-policy first-labeled` is the sanctioned escape hatch and is
-stamped into the shard manifest (`duplicate_policy`, `n_duplicate_rows_dropped`)
-alongside the fit's own provenance. A scorer and the network it teaches must not
-disagree about what a duplicate means.
+**Two consumers, two defaults, one implementation.** The shared arithmetic lives
+in `labeling/dedup.py` — what counts as a replay, which `(game_seed,
+draft_position)` pairs repeat, and how `keep` / `refuse` / `first-labeled`
+resolve them. It is in `labeling/` and not in `setup_phase/` on purpose: `bc`
+consumes `to_shard`, so putting the shared rule in the scorer package would make
+`bc` depend on the scorer to find out what a duplicate row is.
+
+The two consumers then choose differently, and both choices are deliberate:
+
+- The **scorer fit** (`setup_phase.fit.training_rows`) keeps D0's STRICT
+  exclusion — replay rows never train, and an un-annotated duplicate is
+  `refuse`d unless the caller passes `--on-duplicate first-labeled`, which is
+  stamped into the artifact's provenance. `keep` is not even an accepted fit
+  policy.
+- The **BC shard converter** (`labeling.to_shard.convert`) defaults to `keep`,
+  which is what it has always done: every row reaches the shard. When replays or
+  duplicates are present it emits a LOUD `DuplicateLabelWarning` naming the
+  counts and pointing at the fine-tune slice, because which of two contradictory
+  labels for one position should teach the network is a **fine-tune** decision
+  (spec `setup-labeling-and-champion-finetune`), not a scorer slice's. Callers
+  who want the fit's rule opt in with `--duplicate-policy refuse` /
+  `first-labeled`. Either way the manifest records `duplicate_policy`,
+  `n_duplicate_rows_dropped` and `n_replay_rows`, so a shard can always say what
+  it did.
+
+**Fitting the scorer for the first time.** The live corpus contains that
+pre-`replay_of` free replay, so the default `refuse` fires on it — that is the
+guard working, not a bug. The first run is therefore:
+
+```bash
+python scripts/fit_setup_scorer.py \
+    --labels data/labels/setup/v1/scenarios.jsonl \
+    --out data/setup_phase/scorer_weights_v1.json \
+    --version v1 \
+    --on-duplicate first-labeled
+```
+
+`--on-duplicate first-labeled` keeps the earliest label for each repeated
+position and is recorded in the artifact's provenance, so the choice is
+auditable rather than implicit. Run it WITHOUT the flag first: the refusal names
+the offending positions, and seeing them is how you decide whether
+`first-labeled` is the right answer this time. Once a `--replay-session` run has
+happened, its rows carry `replay_of` and are excluded by identity, so the flag
+stops being needed for them.
 
 **AS BUILT** — the `"archetype"` field is gone (owner decision, 2026-08). It was never read by `to_shard.py` or by `bc/**`; it was UI/store metadata only. New rows simply omit the key and it is no longer in `store._REQUIRED_FIELDS`. Rows already on disk still carry it and still load — the file is never rewritten and `load_scenarios` passes the extra key through verbatim (pinned by `test_store.py::test_legacy_archetype_row_still_loads_and_new_row_omits_it`). No `schema_version` bump: a field that stopped being WRITTEN is not a field whose meaning changed, and every consumer already ignored it.
 
