@@ -51,6 +51,12 @@ asserted**: a second masked-softmax over legal edges (features: value of the bes
 opens at distance 1–2, blocks-opponent-target flag, toward-port flag) trained on the owner's 212
 road labels — the "point at the expansion target" rule becomes the null hypothesis it must beat.
 Exact arithmetic pinned by hand-computed fixtures; `FEATURE_VERSION` stamped.
+**Features v3 (amended 2026-08-21, owner-ratified after independent review):** `total pips` is
+DROPPED (verified byte-exact linear combination of the five per-resource pip columns — a
+rank-deficient design makes the per-resource weights arbitrary), and `adjacency-block` is MERGED
+into the gap-weighted opponent-best margin (the two near-duplicate encodings of the same
+blocking event carried a 257 VIF; the merged feature is the single identified denial weight the
+D4 exam publishes).
 
 ### D2 — Fit script + weights artifact
 `scripts/fit_setup_scorer.py`: masked-softmax likelihood over legal vertices + legal edges, light
@@ -83,8 +89,10 @@ grades distributions:
   wrongness is punished, honesty about ties is the winning strategy). PASS = paired difference
   CI lower bound > 0 on ≥150 fresh picks.
 - **Strictness where the owner says so:** on picks tagged `clear`, scorer top-1 must equal the
-  owner's pick (subset rate reported with CI; bar: ≥70% on clear picks, revisable only upward);
-  on `close` picks, top-3 containment is the reported rate.
+  owner's pick; bar (estimator ratified 2026-08-21 after the conformance review put three
+  readings to the owner): **point estimate ≥ 0.70 AND Wilson lower bound ≥ 0.50**, measurable
+  only at ≥10 clear picks (below that: reported "unmeasured", never satisfied-by-default);
+  revisable only upward. On `close` picks, top-3 containment is the reported rate.
 - **Per draft position** reporting throughout; relational feature weights published per refit.
 - **Calibration report:** scorer confidence (top-1 margin) vs owner clarity tags — confident
   where the owner says close, or unsure where the owner says clear, maps missing features.
