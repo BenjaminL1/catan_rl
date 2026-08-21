@@ -54,9 +54,13 @@ Exact arithmetic pinned by hand-computed fixtures; `FEATURE_VERSION` stamped.
 **Features v3 (amended 2026-08-21, owner-ratified after independent review):** `total pips` is
 DROPPED (verified byte-exact linear combination of the five per-resource pip columns — a
 rank-deficient design makes the per-resource weights arbitrary), and `adjacency-block` is MERGED
-into the gap-weighted opponent-best margin (the two near-duplicate encodings of the same
-blocking event carried a 257 VIF; the merged feature is the single identified denial weight the
-D4 exam publishes).
+into the gap-weighted opponent-best margin (two encodings of the same blocking event; the
+merged feature is the single denial weight the D4 exam publishes). Post-implementation
+correction of the cited justification: the review's "257 VIF" did not reproduce — the flag's own
+VIF was 1.15, and the margin's residual collinearity is STRUCTURAL against the pip columns
+(R² 0.937, VIF ~16-20), because its reference is itself a pip-weighted sum. The merge stands as
+ratified; the published denial weight is identified but its magnitude is not cleanly separable
+from raw production value and must be read accordingly.
 
 ### D2 — Fit script + weights artifact
 `scripts/fit_setup_scorer.py`: masked-softmax likelihood over legal vertices + legal edges, light
