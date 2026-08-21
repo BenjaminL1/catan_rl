@@ -102,4 +102,20 @@ def test_derive_reproduces_committed(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert cs.derive() == 0  # also runs the internal _assert_non_overlap
     regenerated = json.loads(out_json.read_text())
     committed = json.loads(_SURVEY.read_text())
+
+    # The ``measured`` leaves are trig-derived floats (circular means) that sit on
+    # rounding knife-edges across libm/numpy builds — CI flipped 63.4 vs 63.5 on the
+    # same data (runs 31897728985, 32523954896). Compare those to a 0.15 tolerance;
+    # everything else (identities, ranges, collision structure) stays byte-exact.
+    def _split_measured(ident: dict) -> dict:
+        return {k: v.pop("measured", {}) for k, v in ident.items()}
+
+    regen_meas = _split_measured(regenerated["identities"])
+    comm_meas = _split_measured(committed["identities"])
     assert regenerated["identities"] == committed["identities"]
+    assert set(regen_meas) == set(comm_meas)
+    for color, comm_vals in comm_meas.items():
+        regen_vals = regen_meas[color]
+        assert set(regen_vals) == set(comm_vals), color
+        for key, comm_v in comm_vals.items():
+            assert regen_vals[key] == pytest.approx(comm_v, abs=0.15), (color, key)
