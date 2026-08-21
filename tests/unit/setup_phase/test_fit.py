@@ -109,6 +109,48 @@ class TestFit:
         # finding, so nothing here may assert beaten_by_fit is True.
         assert isinstance(null["beaten_by_fit"], bool)
 
+    def test_the_null_comparison_is_out_of_sample_and_grouped_by_board(
+        self, corpus: list[dict]
+    ) -> None:
+        """A 3-feature model nests the 1-feature null, so IN-SAMPLE it can
+        hardly lose — that comparison is arithmetic, not evidence.
+
+        The fold numbers are recorded in provenance so the reported verdict can
+        be re-derived rather than trusted, and folds are grouped by
+        ``game_seed`` because the four picks of one board share a layout.
+        """
+        result = fit_scorer(corpus, version="t", seed=0, iters=100)
+        null = result.metrics["road_null_baseline"]
+        assert null["evaluation"] == "out_of_sample_kfold_grouped_by_game_seed"
+        assert null["k"] == len({r["game_seed"] for r in corpus if r["replay_of"] is None})
+        assert len(null["folds"]) == null["k"]
+        held_out_seeds = [s for f in null["folds"] for s in f["game_seeds_held_out"]]
+        assert len(held_out_seeds) == len(set(held_out_seeds))  # no board in two folds
+        assert sum(f["n_held_out"] for f in null["folds"]) == result.metrics["n_labels"]
+        for fold in null["folds"]:
+            assert fold["n_train"] + fold["n_held_out"] == result.metrics["n_labels"]
+        # ``beaten_by_fit`` keys on the NLL both heads optimise; the top-1 read
+        # is reported next to it, not instead of it.
+        assert null["beaten_by_fit"] is (null["nll"] < null["null_nll"])
+        assert null["beaten_by_fit_top1"] is (null["agreement"] > null["null_agreement"])
+        # The in-sample numbers survive as a separate, clearly-labelled block.
+        assert set(null["in_sample"]) == {
+            "road_nll",
+            "null_nll",
+            "road_agreement",
+            "null_agreement",
+        }
+
+    def test_a_single_board_corpus_says_the_comparison_is_in_sample(
+        self, corpus: list[dict]
+    ) -> None:
+        one_board = [r for r in corpus if r["game_seed"] == corpus[0]["game_seed"]]
+        result = fit_scorer(one_board, version="t", seed=0, iters=50)
+        null = result.metrics["road_null_baseline"]
+        assert null["evaluation"] == "in_sample_only"
+        assert null["k"] == 0 and null["folds"] == []
+        assert "smoke test" in null["why"]
+
     def test_metrics_break_out_by_draft_position(self, corpus: list[dict]) -> None:
         result = fit_scorer(corpus, version="t", seed=0, iters=50)
         by_pos = result.metrics["settlement"]["by_position"]
@@ -140,12 +182,25 @@ class TestFit:
         assert loaded.provenance["fit_metrics"]["n_labels"] == result.metrics["n_labels"]
 
     def test_scored_vertices_mask_the_illegal_ones(self, corpus: list[dict]) -> None:
+        """Advanced past draft position 1 on purpose.
+
+        At position 1 all 54 vertices are legal, so ``~legal`` selects nothing
+        and the ``isneginf`` assertion below describes an empty array — the test
+        passed without ever exercising the mask.
+        """
         from catan_rl.labeling.scenario_gen import ScenarioGenerator
 
         result = fit_scorer(corpus, version="v1", seed=0, iters=50)
         gen = ScenarioGenerator(seed=5)
+        first = gen.current()
+        assert first is not None
+        pick = _legal_pair(first)
+        gen.apply(pick[0], pick[1])
         scenario = gen.current()
-        assert scenario is not None
+        assert scenario is not None and scenario.draft_position == 2
+
+        illegal = np.flatnonzero(~scenario.legal_settlement_corners)
+        assert illegal.size > 0, "fixture invariant: position 2 must forbid some vertices"
         scores = result.scorer.score_vertices(
             gen._board,
             scenario.prior_picks,
@@ -153,4 +208,4 @@ class TestFit:
             scenario.legal_settlement_corners,
         )
         assert np.all(np.isfinite(scores[scenario.legal_settlement_corners]))
-        assert np.all(np.isneginf(scores[~scenario.legal_settlement_corners]))
+        assert np.all(np.isneginf(scores[illegal]))

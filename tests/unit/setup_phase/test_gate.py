@@ -12,13 +12,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from catan_rl.eval.wilson import wilson_interval
 from catan_rl.labeling.session import LabelingSession
 from catan_rl.labeling.store import load_scenarios
 from catan_rl.setup_phase.fit import fit_scorer
 from catan_rl.setup_phase.gate import (
     CLEAR_TOP1_BAR,
     KILL_BAR_PICKS,
+    MIN_CLEAR_PICKS,
     GateError,
+    clarity_report,
     evaluate_gate,
     fresh_exam_picks,
     paired_binary_difference,
@@ -86,6 +89,13 @@ class TestPairedArithmetic:
             paired_binary_difference([True], [False])
 
 
+PICKS_PER_ARM = 12
+"""Boards x 4 per arm. Deliberately > ``MIN_CLEAR_PICKS`` so the ``clear``
+strictness bar is MEASURED in the fixture — a fixture below that threshold can
+only ever exercise the "unmeasured" branch, which is how a bar stops being
+tested."""
+
+
 @pytest.fixture()
 def exam(tmp_path: Path):
     """A reveal session and a no-reveal session over the same scorer version."""
@@ -110,7 +120,7 @@ def exam(tmp_path: Path):
             scorer_version="v1",
         )
         session.start()
-        for idx in range(4):
+        for idx in range(PICKS_PER_ARM):
             scenario = session.current_scenario()
             assert scenario is not None
             pick = _legal_pair(scenario)
@@ -146,7 +156,7 @@ class TestFreshPickSelection:
         picks = fresh_exam_picks(rows, meta)
         # The seed session predates any scorer: it carries the DEFAULT reveal
         # mode but no scorer_version, so it must not enter the exam.
-        assert len(picks) == 8
+        assert len(picks) == 2 * PICKS_PER_ARM
         assert all(reveal_arm(p, meta) in ("reveal", "no_reveal") for p in picks)
         assert all(scorer_version_of(p, meta) == "v1" for p in picks)
 
@@ -154,7 +164,7 @@ class TestFreshPickSelection:
         tmp_path, rows, _scorer = exam
         meta = session_metadata(tmp_path)
         no_reveal = [p for p in fresh_exam_picks(rows, meta) if reveal_arm(p, meta) == "no_reveal"]
-        assert len(no_reveal) == 4
+        assert len(no_reveal) == PICKS_PER_ARM
         # ...even though the ROWS carry no reveal fields at all. The version
         # comes back from the manifest join, so D6 grading still works.
         raw = json.loads((tmp_path / "scenarios.jsonl").read_text().splitlines()[-1])
@@ -291,13 +301,111 @@ class TestGate:
         assert clear["status"] in ("satisfied", "below_bar")
         assert clear["satisfied"] is (clear["status"] == "satisfied")
 
+    def test_the_pass_clauses_are_exactly_the_pre_registered_ones(self, exam) -> None:
+        """D4 v2 names four PASS clauses. Picks-2-4 is NOT one of them.
+
+        The amended spec lists one primary metric (overall paired
+        log-probability, CI lower bound > 0 on >=150 fresh picks), the ``clear``
+        strictness bar, and D3's >=20% no-reveal control; the picks-2-4
+        comparison is the KILL bar's metric. Carrying it as a PASS clause makes
+        the gate stricter than the one that was pre-registered, which is the
+        exact drift pre-registration exists to prevent — so the clause SET is
+        pinned, not just the individual clauses.
+        """
+        tmp_path, rows, scorer = exam
+        meta = session_metadata(tmp_path)
+        n = len(fresh_exam_picks(rows, meta))
+        report = evaluate_gate(
+            rows,
+            scorers_by_version={"v1": scorer},
+            baseline_grades=_flat_grades(n, log_prob=-50.0),
+            session_meta=meta,
+            min_fresh_picks=4,
+        )
+        assert set(report["pass_clauses"]) == {
+            "enough_picks",
+            "anchoring_control",
+            "overall_log_prob_ci_lower_gt_0",
+            "clear_top1_bar",
+            "clear_top1_bar_status",
+        }
+        # The picks-2-4 delta is still REPORTED — under the kill bar, where it
+        # belongs — so nothing was lost by dropping the clause.
+        assert report["kill_bar"]["metric"] == "picks_2_4_paired_log_probability"
+        assert isinstance(report["kill_bar"]["delta_gt_0"], bool)
+        assert report["picks_2_4"]["paired"] is not None
+
+    def test_the_kill_bar_counter_and_metric_share_one_denominator(self, exam) -> None:
+        """The mixed-denominator bug: counting all fresh picks while grading the
+        gate subset would fire the kill bar off picks the metric never saw."""
+        tmp_path, rows, scorer = exam
+        meta = session_metadata(tmp_path)
+        n = len(fresh_exam_picks(rows, meta))
+        report = evaluate_gate(
+            rows,
+            scorers_by_version={"v1": scorer},
+            baseline_grades=_flat_grades(n),
+            session_meta=meta,
+            min_fresh_picks=4,
+        )
+        kill = report["kill_bar"]
+        assert kill["subset"] == report["gate_subset"]
+        assert kill["cumulative_fresh_picks"] == report["n_gate_picks"]
+        assert kill["n_all_fresh_picks"] == report["n_fresh_picks"]
+        # Both n's are reported explicitly, and the picks-2-4 n is the subset
+        # the metric is actually computed over.
+        assert kill["n_picks_2_4"] == report["picks_2_4"]["n"]
+        assert kill["n_picks_2_4"] < kill["cumulative_fresh_picks"]
+        assert kill["reached"] is (kill["cumulative_fresh_picks"] >= KILL_BAR_PICKS)
+
+    def test_divergent_arms_fall_back_to_the_no_reveal_picks_alone(self, exam) -> None:
+        """D3: "only no-reveal picks count for the gate until understood".
+
+        Disjoint per-arm CIs mean the reveals may simply be training the owner,
+        so the verdict is recomputed on the control arm rather than annotated.
+        The baseline is rigged per ARM — decisively beaten in the reveal arm,
+        decisively beating in the no-reveal arm — which is what makes the two
+        arms' paired intervals disjoint.
+        """
+        tmp_path, rows, scorer = exam
+        meta = session_metadata(tmp_path)
+        picks = fresh_exam_picks(rows, meta)
+        baseline = [
+            PickGrade(
+                log_prob=(-40.0 if reveal_arm(p, meta) == "reveal" else -0.001),
+                top1=-1,
+                agree=False,
+                in_top3=False,
+                margin=0.0,
+                rank=99,
+            )
+            for p in picks
+        ]
+        report = evaluate_gate(
+            rows,
+            scorers_by_version={"v1": scorer},
+            baseline_grades=baseline,
+            session_meta=meta,
+            min_fresh_picks=1,
+        )
+        assert report["anchoring_control"]["arms_divergent"] is True
+        assert report["gate_subset"] == "no_reveal_only"
+        assert report["anchoring_control"]["gate_subset"] == "no_reveal_only"
+        assert report["n_gate_picks"] == report["arms"]["no_reveal"]["n"] == PICKS_PER_ARM
+        assert report["n_fresh_picks"] == 2 * PICKS_PER_ARM
+        # ...and the verdict is now read on the control arm, where the rigged
+        # baseline WINS, so the reveal arm's blowout cannot carry the gate.
+        assert report["overall"]["paired"]["delta"] < 0.0
+        assert report["pass_clauses"]["overall_log_prob_ci_lower_gt_0"] is False
+        assert report["passes"] is False
+
     def test_unknown_scorer_version_raises(self, exam) -> None:
         tmp_path, rows, scorer = exam
         with pytest.raises(GateError, match="scorer_version"):
             evaluate_gate(
                 rows,
                 scorers_by_version={"v9": scorer},
-                baseline_grades=_flat_grades(8),
+                baseline_grades=_flat_grades(2 * PICKS_PER_ARM),
                 session_meta=session_metadata(tmp_path),
                 min_fresh_picks=4,
             )
@@ -322,3 +430,69 @@ class TestGate:
                 session_meta=session_metadata(tmp_path),
                 min_fresh_picks=4,
             )
+
+
+class TestClearStrictnessBar:
+    """The one PASS clause whose arithmetic is not obvious from the report."""
+
+    @staticmethod
+    def _picks(n_clear: int) -> list[dict]:
+        return [{"scenario_id": f"s{i}", "pick_clarity": "clear"} for i in range(n_clear)]
+
+    @staticmethod
+    def _grades(n: int, n_agree: int) -> list[PickGrade]:
+        return [
+            PickGrade(
+                log_prob=-1.0,
+                top1=0,
+                agree=i < n_agree,
+                in_top3=True,
+                margin=0.1,
+                rank=1 if i < n_agree else 2,
+            )
+            for i in range(n)
+        ]
+
+    def test_the_bar_is_the_wilson_lower_bound_not_the_point_estimate(self) -> None:
+        """8/10 is a point estimate of 0.80 and a lower bound of ~0.49.
+
+        Reading the point estimate would pass a bar whose stated job is to be
+        STRICTER than the primary metric on the picks the owner says are not
+        ties. The two readings genuinely disagree here, which is the whole
+        content of the fix.
+        """
+        ci = wilson_interval(wins=8, n=10)
+        assert ci.point >= CLEAR_TOP1_BAR
+        assert ci.lower < CLEAR_TOP1_BAR
+
+        report = clarity_report(
+            self._picks(10), self._grades(10, 8), self._grades(10, 0), alpha=0.05
+        )
+        clear = report["clear"]
+        assert clear["bar_read_on"] == "wilson_lower_bound"
+        assert clear["scorer"]["rate"] == pytest.approx(ci.point)
+        assert clear["status"] == "below_bar"
+        assert clear["satisfied"] is False
+
+    def test_a_unanimous_measured_subset_clears_it(self) -> None:
+        report = clarity_report(
+            self._picks(10), self._grades(10, 10), self._grades(10, 0), alpha=0.05
+        )
+        assert report["clear"]["status"] == "satisfied"
+        assert report["clear"]["satisfied"] is True
+
+    def test_below_the_minimum_it_is_unmeasured_and_never_satisfied(self) -> None:
+        """A perfect record on too few picks is "not yet measurable", not a pass.
+
+        At n < 10 the Wilson lower bound cannot reach 0.70 at all, so calling a
+        small clean subset "satisfied" would be an arithmetic accident rather
+        than evidence.
+        """
+        n = MIN_CLEAR_PICKS - 1
+        report = clarity_report(self._picks(n), self._grades(n, n), self._grades(n, 0), alpha=0.05)
+        clear = report["clear"]
+        assert clear["scorer"]["n"] == n
+        assert clear["scorer"]["rate"] == 1.0
+        assert clear["status"] == "unmeasured"
+        assert clear["satisfied"] is False
+        assert clear["min_picks"] == MIN_CLEAR_PICKS == 10

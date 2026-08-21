@@ -34,6 +34,12 @@ from typing import Any
 
 import numpy as np
 
+from catan_rl.labeling.dedup import (
+    FIT_DUPLICATE_POLICIES,
+    DuplicateLabelError,
+    apply_duplicate_policy,
+    exclude_replays,
+)
 from catan_rl.labeling.scenario_gen import Pick, Scenario, ScenarioGenerator
 from catan_rl.setup_phase.scorer import (
     PickGrade,
@@ -53,6 +59,18 @@ from catan_rl.setup_phase.scorer_features import (
 ROAD_NULL_FEATURE: str = "opens_best_vertex_value"
 """The single road feature that encodes "point at the expansion target". The
 fitted road head is reported against a model that uses only this column."""
+
+ROAD_NULL_FOLDS: int = 5
+"""Folds in the OUT-OF-SAMPLE comparison of the fitted road head against the
+null.
+
+In-sample, a 3-feature model essentially cannot lose to a 1-feature nested
+special case of itself — the extra columns can always be driven to zero — so an
+in-sample "the fit beats the null" is close to arithmetic rather than evidence.
+D1 says the "point at the expansion target" rule is "the null hypothesis it must
+beat", which only means something held out. Folds are grouped by ``game_seed``:
+the four picks of one board share a board layout, so splitting them across
+train and held-out would leak the very thing the road features read."""
 
 
 class FitError(ValueError):
@@ -86,7 +104,9 @@ class FitResult:
 # ---------------------------------------------------------------------------
 # Corpus preparation
 # ---------------------------------------------------------------------------
-DUPLICATE_POLICIES: tuple[str, ...] = ("refuse", "first-labeled")
+DUPLICATE_POLICIES: tuple[str, ...] = FIT_DUPLICATE_POLICIES
+"""What the FIT accepts. ``keep`` is deliberately absent — see
+:data:`catan_rl.labeling.dedup.FIT_DUPLICATE_POLICIES`."""
 
 
 def training_rows(
@@ -99,36 +119,19 @@ def training_rows(
     ``labeled_at`` row for each and drops the rest — the ONLY sanctioned way to
     fit over the pre-``replay_of`` free replay, and the caller is expected to
     record that it did so.
+
+    The arithmetic lives in :mod:`catan_rl.labeling.dedup`, which is where the
+    BC shard converter reads it from too. It is NOT shared by importing this
+    module from there: ``bc`` consumes ``to_shard``, and a scorer package on
+    that import path would invert the dependency direction.
     """
-    if duplicate_policy not in DUPLICATE_POLICIES:
-        raise FitError(
-            f"duplicate_policy must be one of {DUPLICATE_POLICIES}, got {duplicate_policy!r}"
+    try:
+        kept, _dropped = apply_duplicate_policy(
+            exclude_replays(rows), policy=duplicate_policy, allowed=DUPLICATE_POLICIES
         )
-    kept = [r for r in rows if r.get("replay_of") is None]
-    seen: dict[tuple[int, int], dict[str, Any]] = {}
-    dropped: list[str] = []
-    for row in kept:
-        key = (int(row["game_seed"]), int(row["draft_position"]))
-        prior = seen.get(key)
-        if prior is None:
-            seen[key] = row
-            continue
-        if duplicate_policy == "refuse":
-            raise FitError(
-                f"corpus holds two NON-replay rows for game_seed={key[0]} "
-                f"draft_position={key[1]} ({prior['scenario_id']!r} and "
-                f"{row['scenario_id']!r}). A re-labeled position must carry "
-                f"``replay_of`` so the fit can exclude it and the consistency report "
-                f"can pair it; fitting on both would double-count the position. Pass "
-                f"duplicate_policy='first-labeled' to keep the earliest of each pair."
-            )
-        earlier, later = sorted(
-            (prior, row), key=lambda r: (str(r["labeled_at"]), str(r["scenario_id"]))
-        )
-        seen[key] = earlier
-        dropped.append(str(later["scenario_id"]))
-    ordered = [r for r in kept if r["scenario_id"] not in set(dropped)]
-    return ordered
+    except DuplicateLabelError as exc:
+        raise FitError(str(exc)) from exc
+    return kept
 
 
 def replay_scenario(row: dict[str, Any]) -> tuple[ScenarioGenerator, Scenario]:
@@ -289,6 +292,142 @@ def _nll_and_agreement(
     return nll / max(1, len(blocks)), agree
 
 
+def _seed_folds(examples: Sequence[Example], k: int) -> list[list[int]]:
+    """Example indices split into ``k`` folds, grouped by ``game_seed``.
+
+    Deterministic: seeds are sorted and dealt round-robin, so the same corpus
+    always produces the same folds and a re-fit is comparable to the last one.
+    Returns fewer than ``k`` folds when the corpus has fewer distinct boards,
+    and an empty list when it has only one (there is nothing to hold out).
+    """
+    by_seed: dict[int, list[int]] = {}
+    for i, ex in enumerate(examples):
+        by_seed.setdefault(int(ex.game_seed), []).append(i)
+    seeds = sorted(by_seed)
+    if len(seeds) < 2:
+        return []
+    n_folds = min(k, len(seeds))
+    folds: list[list[int]] = [[] for _ in range(n_folds)]
+    for position, seed in enumerate(seeds):
+        folds[position % n_folds].extend(by_seed[seed])
+    return [f for f in folds if f]
+
+
+def _road_null_baseline(
+    examples: Sequence[Example],
+    road_blocks: Sequence[np.ndarray],
+    null_blocks: Sequence[np.ndarray],
+    road_targets: Sequence[int],
+    in_sample: dict[str, float],
+    *,
+    l2: float,
+    iters: int,
+    lr: float,
+    seed: int,
+    k: int,
+) -> dict[str, Any]:
+    """Fitted road head vs the one-feature null, held OUT of sample.
+
+    ``beaten_by_fit`` keys on the NLL, which is the quantity both heads are
+    fitted to minimise. Top-1 agreement is reported alongside it but does not
+    decide: a setup road usually has two or three legal edges, so top-1 moves in
+    coarse jumps and a model can win it while being worse calibrated.
+    """
+    folds = _seed_folds(examples, k)
+    if not folds:
+        return {
+            "feature": ROAD_NULL_FEATURE,
+            "evaluation": "in_sample_only",
+            "why": (
+                "the corpus has fewer than two distinct game_seeds, so there is no "
+                "leakage-free way to hold a board out. The comparison below is "
+                "IN-SAMPLE and a 3-feature model nesting the 1-feature null can "
+                "hardly lose it — read it as a smoke test, not as evidence."
+            ),
+            "k": 0,
+            "folds": [],
+            "nll": in_sample["road_nll"],
+            "null_nll": in_sample["null_nll"],
+            "agreement": in_sample["road_agreement"],
+            "null_agreement": in_sample["null_agreement"],
+            "beaten_by_fit": in_sample["road_nll"] < in_sample["null_nll"],
+            "beaten_by_fit_top1": in_sample["road_agreement"] > in_sample["null_agreement"],
+            "in_sample": dict(in_sample),
+        }
+
+    reports: list[dict[str, Any]] = []
+    totals = {"road_nll": 0.0, "null_nll": 0.0, "road_hits": 0.0, "null_hits": 0.0}
+    n_total = 0
+    for fold_idx, held_out in enumerate(folds):
+        train = [i for i in range(len(examples)) if i not in set(held_out)]
+        rw, rmean, rscale = _fit_head(
+            [road_blocks[i] for i in train],
+            [road_targets[i] for i in train],
+            l2=l2,
+            iters=iters,
+            lr=lr,
+            seed=seed + 1,
+        )
+        nw, nmean, nscale = _fit_head(
+            [null_blocks[i] for i in train],
+            [road_targets[i] for i in train],
+            l2=l2,
+            iters=iters,
+            lr=lr,
+            seed=seed + 2,
+        )
+        road_w = ScorerWeights(
+            feature_names=ROAD_FEATURE_NAMES, weights=rw, mean=rmean, scale=rscale
+        )
+        null_w = ScorerWeights(
+            feature_names=(ROAD_NULL_FEATURE,), weights=nw, mean=nmean, scale=nscale
+        )
+        held_targets = [road_targets[i] for i in held_out]
+        road_nll, road_agree = _nll_and_agreement(
+            road_w, [road_blocks[i] for i in held_out], held_targets
+        )
+        null_nll, null_agree = _nll_and_agreement(
+            null_w, [null_blocks[i] for i in held_out], held_targets
+        )
+        reports.append(
+            {
+                "fold": fold_idx,
+                "n_train": len(train),
+                "n_held_out": len(held_out),
+                "game_seeds_held_out": sorted({int(examples[i].game_seed) for i in held_out}),
+                "road_nll": road_nll,
+                "null_nll": null_nll,
+                "road_agreement": float(np.mean(road_agree)),
+                "null_agreement": float(np.mean(null_agree)),
+            }
+        )
+        n_total += len(held_out)
+        totals["road_nll"] += road_nll * len(held_out)
+        totals["null_nll"] += null_nll * len(held_out)
+        totals["road_hits"] += float(np.sum(road_agree))
+        totals["null_hits"] += float(np.sum(null_agree))
+
+    oos_road_nll = totals["road_nll"] / n_total
+    oos_null_nll = totals["null_nll"] / n_total
+    oos_road_agreement = totals["road_hits"] / n_total
+    oos_null_agreement = totals["null_hits"] / n_total
+    return {
+        "feature": ROAD_NULL_FEATURE,
+        "evaluation": "out_of_sample_kfold_grouped_by_game_seed",
+        "k": len(folds),
+        "folds": reports,
+        "nll": oos_road_nll,
+        "null_nll": oos_null_nll,
+        "agreement": oos_road_agreement,
+        "null_agreement": oos_null_agreement,
+        # The NLL is what both heads optimise, so it is what the comparison
+        # keys on. Top-1 is reported, never decisive.
+        "beaten_by_fit": bool(oos_road_nll < oos_null_nll),
+        "beaten_by_fit_top1": bool(oos_road_agreement > oos_null_agreement),
+        "in_sample": dict(in_sample),
+    }
+
+
 def _by_position(examples: Sequence[Example], agree: Sequence[bool]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for pos in (1, 2, 3, 4):
@@ -310,6 +449,7 @@ def fit_scorer(
     lr: float = 0.05,
     settlement_feature_subset: Sequence[str] | None = None,
     duplicate_policy: str = "refuse",
+    road_null_folds: int = ROAD_NULL_FOLDS,
     provenance: dict[str, Any] | None = None,
 ) -> FitResult:
     """Fit both heads on the non-replay labels in ``rows``.
@@ -366,12 +506,23 @@ def fit_scorer(
             "by_position": _by_position(examples, road_agree),
             "weights": dict(zip(ROAD_FEATURE_NAMES, [float(x) for x in rw], strict=True)),
         },
-        "road_null_baseline": {
-            "feature": ROAD_NULL_FEATURE,
-            "nll": null_nll,
-            "agreement": float(np.mean(null_agree)),
-            "beaten_by_fit": float(np.mean(road_agree)) > float(np.mean(null_agree)),
-        },
+        "road_null_baseline": _road_null_baseline(
+            examples,
+            road_blocks,
+            null_blocks,
+            road_targets,
+            {
+                "road_nll": road_nll,
+                "null_nll": null_nll,
+                "road_agreement": float(np.mean(road_agree)),
+                "null_agreement": float(np.mean(null_agree)),
+            },
+            l2=l2,
+            iters=iters,
+            lr=lr,
+            seed=seed,
+            k=road_null_folds,
+        ),
     }
 
     scorer = SetupScorer(

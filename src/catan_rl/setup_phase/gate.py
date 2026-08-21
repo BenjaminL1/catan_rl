@@ -22,11 +22,17 @@ Design decisions carried straight from the spec:
   away the variance reduction and needs roughly four times the corpus.
 * **Per draft position, always.** u500 already matches the owner ~55% on pick 1
   and 0-18% on picks 2-4. An aggregate number is dominated by pick 1 — the one
-  position where there is nothing to learn — so PASS additionally requires the
-  scorer to beat u500 on the picks-2-4 subset.
+  position where there is nothing to learn — so every block is reported per
+  position. The picks-2-4 comparison belongs to the KILL BAR, and only there:
+  the amended D4 lists exactly one primary PASS metric (overall paired
+  log-probability) and hangs the 300-pick kill clause off picks 2-4. Promoting
+  picks 2-4 to a PASS clause would silently make the gate stricter than the
+  pre-registered one, which is the failure mode pre-registration exists to
+  prevent.
 * **Strictness where the owner says so.** Picks the owner tagged ``clear`` are
-  not ties, so there the scorer's top-1 MUST match, at a >=70% bar. Picks tagged
-  ``close`` are reported by top-3 containment.
+  not ties, so there the scorer's top-1 MUST match, at a >=70% bar read on the
+  WILSON LOWER BOUND — 3/4 clears a point-estimate bar and evidences nothing.
+  Picks tagged ``close`` are reported by top-3 containment.
 * **Agreement is measured against the scorer version LIVE AT LABEL TIME** (D6).
   Refitting on blind-first labels is legitimate; grading an old pick with a
   scorer fitted after it was made is not.
@@ -80,21 +86,31 @@ and the gate is reading its own tail."""
 
 CLEAR_TOP1_BAR: float = 0.70
 """D4 v2's strictness bar on picks the owner tagged ``clear``. "Revisable only
-upward" — a number that moves down is the bar following the result."""
+upward" — a number that moves down is the bar following the result.
 
-MIN_CLEAR_PICKS: int = 2
+Read against the subset rate's WILSON LOWER BOUND, not its point estimate. D4
+words the clause "bar: >=70% on clear picks" and reports the subset rate "with
+CI"; taking the point estimate would let 3 of 4 clear picks (75%, lower bound
+0.30) pass a gate whose whole purpose is to be harder than the primary
+metric."""
+
+MIN_CLEAR_PICKS: int = 10
 """How many ``clear``-tagged picks the strictness bar needs before it is
 MEASURED rather than merely unsatisfied.
 
-Below this the bar reports ``status = "unmeasured"`` and the gate still fails
-closed. That is deliberate but it is also a trap worth naming: the owner tags
-via a submit key, so an exam in which nothing was tagged ``clear`` can never
-pass no matter how decisively the primary metric clears its bar. The
-``clear_top1_bar_status`` reason exists so that NO-GO reads "tag some picks"
-instead of "the scorer is bad". The submit keys are bound accordingly — ``S``,
-the reflexive one, writes ``close``; asserting ``clear`` costs a deliberate
-``B`` — so the ``clear`` subset stays the owner's statement rather than their
-habit."""
+Below this the bar reports ``status = "unmeasured"``, is NEVER satisfied by
+default, and the gate fails closed. Ten is the point where a Wilson lower bound
+can reach 0.70 at all (10/10 gives ~0.72), so a smaller subset cannot clear the
+bar however well the scorer does on it — reporting "not yet measurable" is then
+the honest answer rather than an arithmetic accident.
+
+It is also a trap worth naming: the owner tags via a submit key, so an exam in
+which nothing was tagged ``clear`` can never pass no matter how decisively the
+primary metric clears its bar. The ``clear_top1_bar_status`` reason exists so
+that NO-GO reads "tag some picks" instead of "the scorer is bad". The submit
+keys are bound accordingly — ``S``, the reflexive one, writes ``close``;
+asserting ``clear`` costs a deliberate ``B`` — so the ``clear`` subset stays the
+owner's statement rather than their habit."""
 
 CLEAR_BAR_SATISFIED: str = "satisfied"
 CLEAR_BAR_BELOW_BAR: str = "below_bar"
@@ -310,26 +326,36 @@ def _rate(flags: Sequence[bool], *, alpha: float) -> dict[str, Any]:
     }
 
 
-def _clarity_report(
+def clarity_report(
     picks: Sequence[Mapping[str, Any]],
     scorer: Sequence[PickGrade],
     baseline: Sequence[PickGrade],
     *,
     alpha: float,
 ) -> dict[str, Any]:
-    """D4 v2's clarity-conditioned bars: top-1 on ``clear``, top-3 on ``close``."""
+    """D4 v2's clarity-conditioned bars: top-1 on ``clear``, top-3 on ``close``.
+
+    Public because the ``clear`` bar is the one clause whose arithmetic is not
+    obvious from the report (a Wilson lower bound against a minimum subset
+    size), and a clause that cannot be unit-tested on its own is a clause that
+    drifts.
+    """
     tags = [pick_clarity_of(p) for p in picks]
     clear = [i for i, t in enumerate(tags) if t == PICK_CLARITY_CLEAR]
     close = [i for i, t in enumerate(tags) if t == PICK_CLARITY_CLOSE]
     clear_rate = _rate([scorer[i].agree for i in clear], alpha=alpha)
     close_rate = _rate([scorer[i].in_top3 for i in close], alpha=alpha)
-    measured = bool(clear_rate["n"] >= MIN_CLEAR_PICKS and clear_rate["rate"] is not None)
-    satisfied = bool(measured and clear_rate["rate"] >= CLEAR_TOP1_BAR)
-    # Fails CLOSED on an empty subset — a bar with no picks under it has not
-    # been cleared. But "unmeasured" and "measured and missed" are DIFFERENT
-    # failures with different remedies (tag some picks ``clear`` vs improve the
-    # scorer), and a bare ``satisfied: False`` cannot tell them apart. The
-    # status names which one it is, so a gate report can be acted on.
+    measured = bool(clear_rate["n"] >= MIN_CLEAR_PICKS and clear_rate["ci_lower"] is not None)
+    # The LOWER BOUND, not the point estimate: D4 reports this subset rate "with
+    # CI", and a bar meant to be stricter than the primary metric cannot be
+    # cleared by 3 of 4 picks.
+    satisfied = bool(measured and clear_rate["ci_lower"] >= CLEAR_TOP1_BAR)
+    # Fails CLOSED on a too-small subset — a bar with fewer than
+    # ``MIN_CLEAR_PICKS`` picks under it has not been cleared, and is never
+    # satisfied by default. But "unmeasured" and "measured and missed" are
+    # DIFFERENT failures with different remedies (tag some picks ``clear`` vs
+    # improve the scorer), and a bare ``satisfied: False`` cannot tell them
+    # apart. The status names which one it is, so a gate report can be acted on.
     status = (
         CLEAR_BAR_SATISFIED
         if satisfied
@@ -341,6 +367,7 @@ def _clarity_report(
             "scorer": clear_rate,
             "baseline": _rate([baseline[i].agree for i in clear], alpha=alpha),
             "bar": CLEAR_TOP1_BAR,
+            "bar_read_on": "wilson_lower_bound",
             "min_picks": MIN_CLEAR_PICKS,
             "status": status,
             "satisfied": satisfied,
@@ -489,23 +516,21 @@ def evaluate_gate(
         )
         for pos in (1, 2, 3, 4)
     }
-    clarity = _clarity_report(g_picks, g_scorer, g_baseline, alpha=alpha)
+    clarity = clarity_report(g_picks, g_scorer, g_baseline, alpha=alpha)
     calibration = _calibration_report(g_picks, g_scorer)
 
     overall_paired = overall["paired"]
     p24_paired = p24["paired"]
+    # The picks-2-4 comparison is the KILL BAR's metric and nothing else. D4 v2
+    # names exactly one PASS metric (overall paired log-probability) and hangs
+    # the 300-pick kill clause off picks 2-4; requiring it to PASS as well would
+    # be a gate stricter than the pre-registered one.
     scorer_beats_u500_on_2_4 = bool(p24_paired is not None and p24_paired["delta"] > 0.0)
     clear_bar_satisfied = bool(clarity[PICK_CLARITY_CLEAR]["satisfied"])
     clear_bar_status = str(clarity[PICK_CLARITY_CLEAR]["status"])
+    overall_ci_positive = bool(overall_paired is not None and overall_paired["ci_lower"] > 0.0)
     enough = len(gate_idx) >= min_fresh_picks
-    passes = bool(
-        enough
-        and control_satisfied
-        and overall_paired is not None
-        and overall_paired["ci_lower"] > 0.0
-        and scorer_beats_u500_on_2_4
-        and clear_bar_satisfied
-    )
+    passes = bool(enough and control_satisfied and overall_ci_positive and clear_bar_satisfied)
 
     return {
         "primary_metric": "paired_mean_log_probability_of_owner_pick",
@@ -549,20 +574,31 @@ def evaluate_gate(
         },
         "kill_bar": {
             "metric": "picks_2_4_paired_log_probability",
-            "cumulative_fresh_picks": n,
+            # ONE denominator basis. The counter and the metric must be read on
+            # the same subset: counting every fresh pick while evaluating the
+            # metric on the gate subset (which is no-reveal-only whenever the
+            # arms diverge) would fire the kill bar off picks the metric never
+            # saw. Both n's are reported so the reading is checkable rather
+            # than inferred.
+            "subset": gate_subset,
+            "cumulative_fresh_picks": len(gate_idx),
+            "n_picks_2_4": len(p24_idx),
+            "n_all_fresh_picks": n,
             "bar": KILL_BAR_PICKS,
-            "reached": n >= KILL_BAR_PICKS,
-            "dead": bool(n >= KILL_BAR_PICKS and not scorer_beats_u500_on_2_4),
+            "reached": len(gate_idx) >= KILL_BAR_PICKS,
+            "delta_gt_0": scorer_beats_u500_on_2_4,
+            "dead": bool(len(gate_idx) >= KILL_BAR_PICKS and not scorer_beats_u500_on_2_4),
         },
         "scorer_wilson": asdict(_wilson_dict(sum(g.agree for g in g_scorer), len(g_scorer), alpha)),
         "passes": passes,
+        # EXACTLY the pre-registered D4 v2 clauses, and no others. Anything the
+        # gate reports but does not gate on lives elsewhere in the report (the
+        # picks-2-4 delta is under ``kill_bar``), so a reader cannot mistake a
+        # diagnostic for a bar.
         "pass_clauses": {
             "enough_picks": enough,
             "anchoring_control": control_satisfied,
-            "overall_log_prob_ci_lower_gt_0": bool(
-                overall_paired is not None and overall_paired["ci_lower"] > 0.0
-            ),
-            "picks_2_4_log_prob_delta_gt_0": scorer_beats_u500_on_2_4,
+            "overall_log_prob_ci_lower_gt_0": overall_ci_positive,
             "clear_top1_bar": clear_bar_satisfied,
             # Named separately so a NO-GO on this clause says which remedy it
             # wants: ``unmeasured`` means the exam holds fewer than
