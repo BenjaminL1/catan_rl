@@ -434,8 +434,8 @@ class LabelingUI:
     def _handle_click(self, pos: tuple[int, int]) -> None:
         click_x, click_y = pos
         if self.state.phase == PHASE_REVEAL:
-            self.state.dismiss_reveal()
-            self._scenario_start_ms = self._now_ms()
+            # Clicks never dismiss the reveal — only SPACE does (see
+            # _handle_key). A screenshot drag or focus click must not advance.
             return
         scenario = self.session.current_scenario()
         if scenario is None:
@@ -483,8 +483,11 @@ class LabelingUI:
         if key == K:
             return False  # quit
         if self.state.phase == PHASE_REVEAL:
-            # Any other key dismisses. Undo is deliberately inert here.
-            if unicode != "u":
+            # SPACE alone dismisses (owner request 2026-08-22): a deliberate key
+            # means an accidental keystroke — or the modifier chords of a
+            # screenshot — can never blow past a reveal the owner wants to
+            # capture. Undo stays deliberately inert here.
+            if key == self._pygame.K_SPACE:
                 self.state.dismiss_reveal()
                 self._scenario_start_ms = self._now_ms()
             return True
@@ -734,7 +737,7 @@ class LabelingUI:
         own_prob = reveal.get("owner_settlement_prob")
         own_text = "—" if own_prob is None else f"{float(own_prob):.0%}"
         lines = [
-            f"scorer {reveal.get('scorer_version')} — {verdict}   [any key to continue]",
+            f"scorer {reveal.get('scorer_version')} — {verdict}   [SPACE to continue]",
             f"settlement p: {ranked}",
             (f"your pick {owner_vertex}: p={own_text}  (rank {reveal.get('scorer_rank_of_pick')})"),
         ]

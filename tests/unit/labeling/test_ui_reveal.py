@@ -306,3 +306,46 @@ class TestSubmitKeyBinding:
         # while ``S`` also meant "close" would make the retagging invisible to
         # anyone reading the key map.
         assert self._dispatch("c") == []
+
+
+class TestSpaceOnlyDismissal:
+    """The reveal overlay is dismissed by SPACE alone (owner request 2026-08-22):
+    an arbitrary keystroke — or a screenshot chord — must never advance past a
+    reveal the owner wants to capture. Clicks are equally inert in the reveal
+    phase (pinned at the handler level; ``dismiss_reveal`` itself stays a plain
+    state transition)."""
+
+    @staticmethod
+    def _reveal_ui() -> tuple[object, list[str]]:
+        from catan_rl.labeling.ui import PHASE_REVEAL, LabelingUI
+
+        dismissed: list[str] = []
+        ui = object.__new__(LabelingUI)
+        ui._pygame = type("P", (), {"K_q": -1, "K_SPACE": 32})()
+        state = type("S", (), {"phase": PHASE_REVEAL})()
+        state.dismiss_reveal = lambda: dismissed.append("dismissed")
+        ui.state = state
+        ui._now_ms = lambda: 0
+        return ui, dismissed
+
+    def test_random_keys_do_not_dismiss(self) -> None:
+        ui, dismissed = self._reveal_ui()
+        for key, char in ((0, "x"), (0, "u"), (0, "s"), (0, "b"), (13, "\r")):
+            assert ui._handle_keydown(type("E", (), {"key": key, "unicode": char})()) is True
+        assert dismissed == []
+
+    def test_space_dismisses(self) -> None:
+        ui, dismissed = self._reveal_ui()
+        assert ui._handle_keydown(type("E", (), {"key": 32, "unicode": " "})()) is True
+        assert dismissed == ["dismissed"]
+
+    def test_click_does_not_dismiss(self) -> None:
+        from catan_rl.labeling.ui import PHASE_REVEAL, LabelingUI
+
+        dismissed: list[str] = []
+        ui = object.__new__(LabelingUI)
+        state = type("S", (), {"phase": PHASE_REVEAL})()
+        state.dismiss_reveal = lambda: dismissed.append("dismissed")
+        ui.state = state
+        ui._handle_click((10, 10))
+        assert dismissed == []
