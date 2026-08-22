@@ -17,12 +17,15 @@ from catan_rl.labeling import from_record as fr
 from catan_rl.labeling.store import SCHEMA_VERSION, load_scenarios
 
 # ---------------------------------------------------------------------------
-# Store schema v2 — optional fields, old rows keep loading
+# Store schema v3 — optional fields, old rows keep loading
 # ---------------------------------------------------------------------------
 
 
-def test_schema_version_is_2() -> None:
-    assert SCHEMA_VERSION == 2
+def test_schema_version_is_3() -> None:
+    # Bumped by spec ``setup-scorer-and-blind-reveal`` (D0 ``replay_of`` + the
+    # five D3 reveal fields). Every addition is OPTIONAL and read-time
+    # defaulted, so v1/v2 rows keep loading — pinned just below.
+    assert SCHEMA_VERSION == 3
 
 
 def test_v1_rows_load_and_get_defaulted_provenance(tmp_path: Path) -> None:

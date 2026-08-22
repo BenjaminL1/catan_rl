@@ -1,0 +1,11 @@
+{
+  "held_out_frac": 0.25,
+  "held_out_game_seeds": [
+    20260827,
+    20260828
+  ],
+  "n_held_out_scenarios": 8,
+  "n_scenarios": 24,
+  "note": "SYNTHETIC pilot-shaped shard manifest for tests/unit/setup_phase/test_regression_continuity.py. Generated from a LabelingSession with session_seed=20260821 and a deterministic pick rule; contains NO owner labels. It exists so acceptance criterion 3's arithmetic runs in CI, where the owner's untracked corpus is absent.",
+  "split_seed": 0
+}

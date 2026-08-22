@@ -23,6 +23,7 @@ from pathlib import Path
 
 
 def main(argv: list[str] | None = None) -> int:
+    from catan_rl.labeling.dedup import DUPLICATE_POLICIES, DUPLICATE_POLICY_KEEP
     from catan_rl.labeling.to_shard import DEFAULT_OPPONENT_KINDS, convert
 
     parser = argparse.ArgumentParser(description=__doc__)
@@ -62,6 +63,19 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument("--split-seed", type=int, default=0)
+    parser.add_argument(
+        "--duplicate-policy",
+        choices=DUPLICATE_POLICIES,
+        default=DUPLICATE_POLICY_KEEP,
+        help=(
+            "How to handle D0 replay rows and repeated (game_seed, draft_position) "
+            "rows. 'keep' (default) converts them all and WARNS with counts — which "
+            "label should teach a repeated position is a fine-tune decision, not "
+            "this converter's. 'refuse' and 'first-labeled' apply the scorer fit's "
+            "rule (scripts/fit_setup_scorer.py) instead. The choice is stamped into "
+            "the manifest."
+        ),
+    )
     args = parser.parse_args(argv)
 
     manifest = convert(
@@ -70,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         opponent_kinds=tuple(args.opponent_kinds),
         held_out_frac=args.held_out_frac,
         split_seed=args.split_seed,
+        duplicate_policy=args.duplicate_policy,
     )
     print(
         f"wrote {manifest['n_pairs']} rows from {manifest['n_scenarios']} scenarios "

@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -55,6 +56,16 @@ from catan_rl.engine.player import player as EnginePlayer
 from catan_rl.env.hand_tracker import BroadcastHandTracker
 from catan_rl.env.masks import compute_action_masks
 from catan_rl.env.ruleset import RULESET_R0
+from catan_rl.labeling.dedup import (
+    DUPLICATE_POLICIES,
+    DUPLICATE_POLICY_KEEP,
+    DuplicateLabelError,
+    DuplicateLabelWarning,
+    apply_duplicate_policy,
+    duplicate_positions,
+    exclude_replays,
+    is_replay,
+)
 from catan_rl.labeling.scenario_gen import Pick, ScenarioGenerator
 from catan_rl.labeling.store import held_out_split, load_scenarios
 from catan_rl.policy.obs_encoder import EnvObsState, ObsEncoder, hidden_belief_target
@@ -159,7 +170,7 @@ def _replay_to_scenario(label: dict[str, Any]) -> tuple[ScenarioGenerator, Any, 
     return gen, scenario, tracker
 
 
-def _obs_and_mask(
+def obs_and_mask_for_scenario(
     *,
     gen: ScenarioGenerator,
     scenario: Any,
@@ -187,6 +198,15 @@ def _obs_and_mask(
         ruleset=RULESET_R0,
     )
     return obs, mask
+
+
+_obs_and_mask = obs_and_mask_for_scenario
+"""Backwards-compatible private alias.
+
+The public name exists because the D5 forced-opening probe has to derive u500's
+OWN setup picks through the very encoder + mask path the labels were converted
+with — a second copy of that wiring is how a probe silently starts asking the
+policy a differently-encoded question."""
 
 
 def rows_for_label(label: dict[str, Any], *, game_id: int) -> list[_Row]:
@@ -327,6 +347,51 @@ def _git_sha() -> str:
         return "unknown"
 
 
+def _resolve_duplicates(
+    rows: list[dict[str, Any]], *, duplicate_policy: str, labels_path: Path
+) -> tuple[list[dict[str, Any]], int, int]:
+    """Apply ``duplicate_policy`` and return ``(kept, n_dropped, n_replays)``.
+
+    Under the default ``keep`` nothing is dropped and a duplicated corpus is
+    WARNED about, loudly and with counts. That is deliberate: the converter's
+    job is to encode the store, and deciding which of two contradictory labels
+    for one position should teach the network is a fine-tune-slice call. Making
+    the converter refuse would change what every existing caller produces in
+    order to enforce a decision nobody has made yet.
+    """
+    if duplicate_policy not in DUPLICATE_POLICIES:
+        raise LabelConversionError(
+            f"duplicate_policy must be one of {DUPLICATE_POLICIES}, got {duplicate_policy!r}"
+        )
+    n_replays = sum(1 for r in rows if is_replay(r))
+    duplicates = duplicate_positions(rows)
+    if duplicate_policy == DUPLICATE_POLICY_KEEP:
+        if n_replays or duplicates:
+            n_dup_rows = sum(len(ids) for ids in duplicates.values()) - len(duplicates)
+            warnings.warn(
+                f"{labels_path}: converting {n_replays} D0 replay row(s) and "
+                f"{n_dup_rows} extra row(s) across {len(duplicates)} duplicated "
+                f"(game_seed, draft_position) position(s) INTO THE SHARD. Each of "
+                f"those positions therefore appears more than once, with targets "
+                f"that disagree wherever the owner re-picked. Nothing is dropped "
+                f"here: which label teaches a repeated position is a FINE-TUNE "
+                f"decision (spec setup-labeling-and-champion-finetune), not the "
+                f"converter's. Pass duplicate_policy='refuse' or 'first-labeled' "
+                f"to apply the scorer fit's rule instead.",
+                DuplicateLabelWarning,
+                stacklevel=3,
+            )
+        return list(rows), 0, n_replays
+    # The opt-in policies mirror ``setup_phase.fit.training_rows``: replays out,
+    # then the duplicate rule.
+    without_replays = exclude_replays(rows)
+    try:
+        kept, dropped = apply_duplicate_policy(without_replays, policy=duplicate_policy)
+    except DuplicateLabelError as exc:
+        raise LabelConversionError(str(exc)) from exc
+    return kept, len(dropped), n_replays
+
+
 def convert(
     labels_path: str | Path,
     out_dir: str | Path,
@@ -335,6 +400,7 @@ def convert(
     shard_name: str = "shard_00000.npz",
     held_out_frac: float = 0.2,
     split_seed: int = 0,
+    duplicate_policy: str = DUPLICATE_POLICY_KEEP,
 ) -> dict[str, Any]:
     """Convert a label store into a single BC shard + manifest in ``out_dir``.
 
@@ -372,9 +438,30 @@ def convert(
     worse than no shard. Pass ``held_out_frac=0.0`` explicitly to convert such a
     corpus whole.
 
+    Duplicated decision points are REPORTED, not silently resolved
+    -------------------------------------------------------------
+    ``duplicate_policy`` defaults to ``"keep"``: every row in the store reaches
+    the shard, which is what this converter has always done. Repeated
+    ``(game_seed, draft_position)`` rows and D0 ``replay_of`` rows are real —
+    the owner ran a free replay before ``replay_of`` existed — and both would
+    enter the shard as a second, contradictory target for a position already in
+    it. That is worth a LOUD warning, and it is worth naming; it is not worth
+    this slice changing what a shard contains. Which rows train the network is a
+    FINE-TUNE decision, and the fine-tune slice is where it belongs.
+
+    Callers who want the scorer fit's rule can opt in: ``"refuse"`` raises on
+    any un-annotated duplicate and ``"first-labeled"`` keeps the earliest of
+    each; both also drop ``replay_of`` rows, matching
+    :func:`catan_rl.setup_phase.fit.training_rows`. The choice is stamped into
+    the manifest either way, because a shard that cannot say how it handled
+    duplicates is not auditable.
+
     Returns the manifest dict (also written to ``out_dir/manifest.json``).
     """
-    all_labels = load_scenarios(Path(labels_path))
+    raw_labels = load_scenarios(Path(labels_path))
+    all_labels, n_duplicates_dropped, n_replay_rows = _resolve_duplicates(
+        raw_labels, duplicate_policy=duplicate_policy, labels_path=Path(labels_path)
+    )
     if not all_labels:
         raise LabelConversionError(f"no label rows found in {labels_path}")
 
@@ -438,6 +525,13 @@ def convert(
         # ``scripts/eval_setup_agreement.py`` fails closed on a missing key.
         "held_out_frac": float(held_out_frac),
         "split_seed": int(split_seed),
+        # How duplicate (game_seed, draft_position) rows and D0 replays were
+        # handled. Stamped because the non-default policies drop labels and the
+        # default carries contradictory ones through, and a shard that cannot
+        # say which it did is not auditable.
+        "duplicate_policy": duplicate_policy,
+        "n_duplicate_rows_dropped": int(n_duplicates_dropped),
+        "n_replay_rows": int(n_replay_rows),
         "held_out_game_seeds": held_out_seeds,
         "n_held_out_scenarios": len({str(r["scenario_id"]) for r in held}),
         "label_source_counts": source_counts,

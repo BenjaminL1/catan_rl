@@ -96,7 +96,7 @@ Side effect of (c): every "scenario" is one of the four snake-draft positions, a
 - NPZ is what `bc/loader.py` consumes. Going JSONL → NPZ at conversion time means the obs schema can change later (Step 4 might add an obs key) and we re-run the converter without re-labeling.
 - The cost of the indirection is one extra script (`scripts/convert_labels_to_bc_shard.py`); the benefit is decoupling label-time from training-time schema.
 
-**JSONL row schema (v2 — current)**:
+**JSONL row schema (v3 — current)**:
 
 ```json
 {
@@ -117,15 +117,195 @@ Side effect of (c): every "scenario" is one of the four snake-draft positions, a
   "notes": "",                            // optional, ≤ 200 chars
   "quality_flag": "",                     // "fast" when decision_time_ms < 15000
   "source": "tool",                       // v2: "tool" (labeling UI) | "game" (D3 record export)
-  "ruleset": "R0"                         // v2: the epoch the label is replayable under
+  "ruleset": "R0",                        // v2: the epoch the label is replayable under
+  "replay_of": null,                      // v3: scenario_id this row re-labels (D0 replay), else absent
+  "scorer_version": "v1",                 // v3: the scorer live at label time (reveal sessions only)
+  "scorer_top1": 23,                      // v3: the scorer's top-1 settlement vertex
+  "scorer_rank_of_pick": 1,               // v3: 1-based rank of the owner's pick under the scorer
+  "agree": true,                          // v3: scorer_top1 == settlement_vertex
+  "reveal_mode": "reveal",                // v3: "reveal" only; --no-reveal rows carry NONE of these five
+  "pick_clarity": "clear"                 // v3: the OWNER's tag, "clear" | "close"; written in BOTH arms
 }
 ```
 
-(`schema_version` is `2` on rows written today; the two v2 fields are OPTIONAL and are filled at READ time for v1 rows.)
+(`schema_version` is `3` on rows written today. Every v2 and v3 field is OPTIONAL
+and filled at READ time. The six scorer/replay defaults are all `None`, never
+`False`/`""`: `agree=False` on a pre-v3 row would inject a phantom disagreement
+into the D4 gate, and a second falsy spelling of `replay_of` would invite an
+`is not None` check to drift into a truthiness check. `pick_clarity` is the one
+exception — the spec fixes its legacy reading as `close`, the conservative side,
+so a row whose labeler never gave a tag can never be pulled into D4's strictness
+bar on `clear` picks — top-1 at a point estimate ≥ 0.70 AND a Wilson lower bound
+≥ 0.50, over at least 10 tagged picks.)
+
+**The two submit keys.** `S` — the pre-existing submit key — submits tagging the
+pick "close call"; `B` submits tagging it "clear **best**". Two keys rather than
+a prompt because the tag is paid 150+ times and a modal question would be
+answered carelessly. `S` keeps the CONSERVATIVE tag deliberately: `close` is the
+reading the spec fixes for untagged rows, and only `clear` picks are held to
+D4's two-clause top-1 bar, so a reflexive press of the key the owner already has in
+muscle memory from 292 labels must not silently populate the strict subset with
+close calls. Asserting "clear best" costs one deliberate, unfamiliar keystroke.
+
+The tag is the OWNER's statement about the position, not the scorer's about the pick, so it is
+written in the `--no-reveal` control arm too — D4 reads the `clear` strictness
+bar there as well, and a tag that only existed in the reveal arm would put that
+bar and the anchoring control in conflict.
+
+**v3 modes** (spec `setup-scorer-and-blind-reveal`):
+
+| Mode | CLI | Rows written | Manifest |
+|---|---|---|---|
+| Normal | (default) | no v3 fields unless a scorer is loaded | `reveal_mode: "reveal"`, `scorer_version: null` |
+| Blind-then-reveal | `--scorer-weights <path>` | all five scorer fields (+ `pick_clarity`) | `reveal_mode: "reveal"`, `scorer_version: "<v>"` |
+| Anchoring control | `--no-reveal --scorer-weights <path>` | **none** of the five (but `pick_clarity` yes) | `reveal_mode: "no_reveal"`, `scorer_version: "<v>"` |
+| Self-consistency replay (EXCLUSIVE) | `--replay-session <id>` | `replay_of: "<scenario_id>"` | `replay_of_session: "<id>"`, `replay_boards: 0` |
+| Folded replay (MIXED) | `--replay-boards N [--replay-session <id>]` | `replay_of` on the folded boards ONLY | `replay_of_session: "<resolved id>"`, `replay_boards: N` |
+
+`--no-reveal` REQUIRES `--scorer-weights`. Without one there is no version to
+stamp, `gate.fresh_exam_picks` cannot resolve `scorer_version` and drops every
+pick — a whole control session contributing 0% toward the ≥20% bar with no error
+anywhere. The CLI refuses the combination up front.
+
+`--replay-session` REFUSES `--scorer-weights`, for the mirror-image reason. D0 is
+an owner-vs-**owner** measurement; a post-submit reveal during a replay anchors
+the owner on the scorer mid-measurement, which is the exact contamination D3's
+`--no-reveal` control exists to detect, applied to the one number every later bar
+is read against. The CLI refuses that combination up front too.
+
+**`--replay-boards N` is the MIXED mode D0's last clause asks for** — "the
+ceiling estimate is extended by folding ~5 replay boards into future sessions".
+N boards from a past session are re-presented inside an otherwise NORMAL
+sitting; the rest of the session is fresh boards from the usual master-seed
+sequence. It is compatible with `--scorer-weights`, unlike the exclusive mode,
+because the reveal is suppressed per-board rather than per-session:
+
+- **Folded boards come FIRST**, then the fresh sequence. Nothing later in the
+  sitting — a reveal above all — can then anchor the measurement, and the
+  owner's knowledge state on those boards matches the exclusive sessions the
+  banked 35% was measured in, so the folded number extends that estimate instead
+  of being a differently-conditioned second one. Folding burns no seed offsets:
+  the fresh sequence still starts at `master_seed + 0`.
+- Folded boards are **FORCED-ORIGINAL**, exactly as the exclusive mode is, so
+  all four of their positions are identical to the first sitting.
+- Folded rows carry `replay_of` and therefore **carry no scorer fields, get no
+  overlay, and reach neither `fit.training_rows` nor `gate.fresh_exam_picks`**.
+  `session.submit` raises if a caller passes `scorer_fields` for one. Fresh rows
+  in the same session reveal and count normally.
+- **Auto-choice** when `--replay-session` is omitted: the most recent session
+  whose manifest has an `end_time` and which holds at least N boards of ORIGINAL
+  (non-`replay_of`) rows, ties broken by higher `session_id`. `end_time` skips a
+  session still being appended to; the originals-only filter stops folding from
+  chaining a re-label onto a re-label once folding is routine.
+- It refuses up front (before pygame boots) when N exceeds the source's board
+  count, when no eligible past session exists, and when N is negative.
+- Known, unavoidable caveat: suppressing the reveal is a post-submit tell, so on
+  a folded board the owner learns it was a replay after their first pick. The
+  front-loaded ordering is what keeps that from contaminating the comparison
+  with the banked number; worth a line in the consistency report once the folded
+  n starts accumulating.
+
+**The reveal shows probabilities, on the board it graded.** The overlay prints
+the scorer's masked-softmax top-3 with their probabilities plus the probability
+it put on the owner's own pick — a distribution reads as the near-tie D0
+measured, where a bare top-1 reads as an assertion. It is painted against
+`LabelingUIState.reveal_scenario`, the scenario captured BEFORE `session.submit`
+advanced the snake draft; drawing it against the session's current scenario
+would put the scorer's rings on the position the owner is about to label, which
+is not a display bug but exactly the anchoring D3's control exists to detect.
+
+The control arm is deliberately identified by a `session_id` join against the
+manifest rather than by a row field, because "carries no scorer fields" is the
+invariant (acceptance criterion 4) — `setup_phase.gate.session_metadata` does
+that join and also recovers the scorer version the control picks must be graded
+against.
+
+**Replay is FORCED-ORIGINAL.** A replay session records the owner's NEW pick but
+advances the draft with the ORIGINAL pick, so all four decision points are the
+identical positions they were the first time. A free replay diverges after pick
+1, which silently makes picks 2-4 non-comparable — and picks 2-4 are exactly
+where the owner's edge over u500 lives.
+
+**Three named estimators, because the corpus holds two kinds of re-label.**
+`labeling/consistency.py` never publishes a bare rate; every report states the
+estimator that produced it, its bias direction, and all three overall rates side
+by side under `estimators`:
+
+| Estimator | Pairs on | Bias | On the shipped 292-row store |
+|---|---|---|---|
+| `linked` | `replay_of` | none — forced-original, every pick is the same position | **n = 0** (no forced-original replay run yet) |
+| `free_replay` | `(game_seed, draft_position)` alone | DOWNWARD on picks 2-4 (a free replay diverges after a disagreement) | **7/20 = 35%**, Wilson [18, 57] |
+| `same_position` | the above, filtered to identical `prior_picks` | UPWARD; cannot reach position 4 (selects on the outcome) | **6/8 = 75%** |
+
+`free_replay` is the estimator the **banked D0 RESULT** was computed with —
+session `553464b8` predates `replay_of`, so it is a free replay of `4905bb4b`,
+and `--estimator free_replay` reproduces 7/20 = 35% / pos1 4/5 → pos4 0/5 /
+road 3/7 exactly. `--estimator auto` (the default) picks `linked` when linked
+pairs exist and falls back to `free_replay` otherwise, so the CLI's headline is
+the banked number today and the unbiased one the moment a `--replay-session`
+run lands. It never falls back to `same_position`: a 75% headline where the
+ratified ceiling is 35% would invite exactly the wrong recalibration of the
+bar structure D0 exists to set. Road agreement is
+reported as `road_given_same_settlement`: a setup road must be incident to the
+settlement just placed, so a road compared across two different settlements is a
+comparison across two different legal sets, not a labeler-noise measurement.
+
+Replay rows are IDENTIFIABLE to both downstream consumers by identity (the
+`replay_of` link), but only one of them excludes on it. The scorer fit
+(`setup_phase.fit.training_rows`) drops them outright: a replay is only
+informative when the owner picks differently, so keeping it would train on the
+same `(game_seed, draft_position)` twice with contradictory targets. The BC
+shard converter (`labeling.to_shard.convert`) does NOT — it defaults to `keep`
+and warns loudly instead. The next paragraph is why the two defaults differ.
+
+**Two consumers, two defaults, one implementation.** The shared arithmetic lives
+in `labeling/dedup.py` — what counts as a replay, which `(game_seed,
+draft_position)` pairs repeat, and how `keep` / `refuse` / `first-labeled`
+resolve them. It is in `labeling/` and not in `setup_phase/` on purpose: `bc`
+consumes `to_shard`, so putting the shared rule in the scorer package would make
+`bc` depend on the scorer to find out what a duplicate row is.
+
+The two consumers then choose differently, and both choices are deliberate:
+
+- The **scorer fit** (`setup_phase.fit.training_rows`) keeps D0's STRICT
+  exclusion — replay rows never train, and an un-annotated duplicate is
+  `refuse`d unless the caller passes `--on-duplicate first-labeled`, which is
+  stamped into the artifact's provenance. `keep` is not even an accepted fit
+  policy.
+- The **BC shard converter** (`labeling.to_shard.convert`) defaults to `keep`,
+  which is what it has always done: every row reaches the shard. When replays or
+  duplicates are present it emits a LOUD `DuplicateLabelWarning` naming the
+  counts and pointing at the fine-tune slice, because which of two contradictory
+  labels for one position should teach the network is a **fine-tune** decision
+  (spec `setup-labeling-and-champion-finetune`), not a scorer slice's. Callers
+  who want the fit's rule opt in with `--duplicate-policy refuse` /
+  `first-labeled`. Either way the manifest records `duplicate_policy`,
+  `n_duplicate_rows_dropped` and `n_replay_rows`, so a shard can always say what
+  it did.
+
+**Fitting the scorer for the first time.** The live corpus contains that
+pre-`replay_of` free replay, so the default `refuse` fires on it — that is the
+guard working, not a bug. The first run is therefore:
+
+```bash
+python scripts/fit_setup_scorer.py \
+    --labels data/labels/setup/v1/scenarios.jsonl \
+    --out data/setup_phase/scorer_weights_v1.json \
+    --version v1 \
+    --on-duplicate first-labeled
+```
+
+`--on-duplicate first-labeled` keeps the earliest label for each repeated
+position and is recorded in the artifact's provenance, so the choice is
+auditable rather than implicit. Run it WITHOUT the flag first: the refusal names
+the offending positions, and seeing them is how you decide whether
+`first-labeled` is the right answer this time. Once a `--replay-session` run has
+happened, its rows carry `replay_of` and are excluded by identity, so the flag
+stops being needed for them.
 
 **AS BUILT** — the `"archetype"` field is gone (owner decision, 2026-08). It was never read by `to_shard.py` or by `bc/**`; it was UI/store metadata only. New rows simply omit the key and it is no longer in `store._REQUIRED_FIELDS`. Rows already on disk still carry it and still load — the file is never rewritten and `load_scenarios` passes the extra key through verbatim (pinned by `test_store.py::test_legacy_archetype_row_still_loads_and_new_row_omits_it`). No `schema_version` bump: a field that stopped being WRITTEN is not a field whose meaning changed, and every consumer already ignored it.
 
-Schema versioning: bumping `schema_version` triggers a migration step in `labeling/store.py:load_scenarios`. v1 → v2 was exactly that — append-only field additions (`source`, `ruleset`), no rewrite of the file on disk. Field removals require a major-version bump and an explicit migration script.
+Schema versioning: bumping `schema_version` triggers a migration step in `labeling/store.py:load_scenarios`. v1 → v2 was exactly that — append-only field additions (`source`, `ruleset`), no rewrite of the file on disk; v2 → v3 is the same shape again (`replay_of` + the five reveal fields). Field removals require a major-version bump and an explicit migration script.
 
 ---
 
@@ -314,7 +494,7 @@ def repair_jsonl(path: Path) -> int:
 
 Using append mode + a single `write()` for a < 1 KB row is atomic on POSIX (`write(2)` to an `O_APPEND` fd is atomic for writes ≤ PIPE_BUF, and ext4/HFS+/APFS honor this for small writes). Tested under simulated SIGKILL in `tests/unit/labeling/test_store.py::test_atomic_append_under_sigkill`. For paranoia, `repair_jsonl(...)` is called on every session start: if the last line doesn't parse as JSON, it's truncated.
 
-**Schema migration**: `load_scenarios` reads `schema_version` per row. **v2 is the current target** (`SCHEMA_VERSION = 2`, spec `setup-labeling-and-champion-finetune` D3): it adds two OPTIONAL provenance fields — `source` (`"tool"` | `"game"`) and `ruleset` (`"R0"`) — which `_migrate_row` fills at read time for v1 rows. `_REQUIRED_FIELDS` is unchanged, so every v1 row keeps loading. **The on-disk file is never rewritten by the migration** — JSONL stays in its as-written state forever, migrations happen in memory at read time. This is non-negotiable: the raw labels are the durable artefact.
+**Schema migration**: `load_scenarios` reads `schema_version` per row. **v3 is the current target** (`SCHEMA_VERSION = 3`, spec `setup-scorer-and-blind-reveal` D0+D3): on top of v2's `source` / `ruleset` it adds `replay_of` and the five `SCORER_ROW_FIELDS`, all defaulted to `None` by `_migrate_row`. (v2, spec `setup-labeling-and-champion-finetune` D3, added the two OPTIONAL provenance fields `source` (`"tool"` | `"game"`) and `ruleset` (`"R0"`).) `_REQUIRED_FIELDS` is unchanged, so every v1 row keeps loading. **The on-disk file is never rewritten by the migration** — JSONL stays in its as-written state forever, migrations happen in memory at read time. This is non-negotiable: the raw labels are the durable artefact.
 
 **Second writer (D3)**: `catan_rl/labeling/from_record.py` exports the owner's two setup decisions out of a `scripts/play_vs_model.py` replay into this same store with `source="game"`, so playtesting grows the corpus as a side effect. It REFUSES a record that is not `metadata.setup_observed`, is `partial`, has no `human` seat, or is not `metadata.human_authored` — a reconstructed placement is not a label, and neither is one a bot made.
 

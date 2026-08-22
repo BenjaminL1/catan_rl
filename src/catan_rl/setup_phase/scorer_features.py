@@ -1,0 +1,545 @@
+"""Theory-shaped setup-phase features for the fitted scorer (spec D1).
+
+Pure, vehicle-neutral (D7): a board plus the picks made so far in, a float
+matrix out. No ``bc``, no ``gui``, no checkpoint, no policy forward pass — so
+the same feature block feeds either downstream vehicle (synthetic-corpus
+fine-tune, or setup-node search priors) without dragging a training stack along.
+(The shared schema constants come from ``catan_rl.policy.obs_schema`` /
+``obs_encoder``, whose package ``__init__`` pulls torch transitively — the same
+route ``analytic_value`` already took. Nothing here calls a network.)
+
+Feature design follows the owner's opening theory as captured 2026-08-20:
+
+* **The port penalty is a confound.** A port corner is usually a 1-2-hex corner,
+  so a raw "has port" flag reads as "less production" and the fit learns to
+  avoid ports for the wrong reason. The confound is removed by carrying
+  ``n_adjacent_hexes`` and ``n_hexes_x_second`` alongside the port flags, so the
+  hex-count effect has its own weights to live in and the port flags carry only
+  the residual. The conditional part of port value is spelled separately as
+  ``port_2to1_matched`` (a 2:1 port for a resource this seat actually produces).
+* **Denial is relational.** ``opponent_new_resources``, ``opponent_best_margin``
+  and ``scarcity_starve`` describe the candidate in terms of what it does to the
+  OTHER seat, which is the only place picks 2-4 logic can be expressed at all.
+  Since v3, blocking is carried by ``opponent_best_margin`` ALONE: it rises
+  exactly when the candidate takes or neighbours the opponent's best remaining
+  spot, and unlike a flag it says by HOW MUCH.
+
+**Circularity break.** The relational features need "the opponent's best
+remaining vertex". That must NOT be the scorer being fit, or the features would
+be a function of the weights they are used to estimate. It is instead computed
+from a PINNED base: :func:`catan_rl.setup_phase.analytic_value.vertex_yield`
+under :data:`~catan_rl.setup_phase.resource_weights.CHARLESWORTH_V0`. The base is
+a constant function of the board, so the design matrix is fixed before the fit
+starts. Pinned by fixture.
+
+The break pins the OPPONENT-FACING reference and nothing else. ``own_value`` —
+the acting seat's own read of a vertex, which is what expansion targets are
+scored with — is the pinned base PLUS :data:`NEW_RESOURCE_BONUS` per resource
+the seat's prior picks do not already produce. It is still a fixed function of
+``(board, prior picks, acting seat)``, so the design matrix is just as
+pre-determined; it simply is not seat-NEUTRAL, which is the whole content of
+the owner's "building to a missing resource, usually sheep" theory.
+"""
+
+from __future__ import annotations
+
+from collections import deque
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+from catan_rl.labeling.scenario_gen import Pick, build_index_maps
+from catan_rl.policy.obs_encoder import DOTS_BY_TOKEN
+from catan_rl.policy.obs_schema import RESOURCES_CW
+from catan_rl.setup_phase.analytic_value import vertex_yield
+from catan_rl.setup_phase.resource_weights import CHARLESWORTH_V0
+
+N_VERTICES = 54
+N_EDGES = 72
+N_HEXES = 19
+
+FEATURE_VERSION: str = "v3"
+"""Stamped into every fitted artifact. A scorer whose ``feature_version`` does
+not match this constant REFUSES to load (see
+:func:`catan_rl.setup_phase.scorer.load_weights`): silently scoring an old
+weight vector against a re-ordered design matrix is a wrong number that looks
+like a right one.
+
+``v1`` -> ``v2`` changed the ARITHMETIC of two columns without changing the
+column order or count: ``opponent_best_margin`` became candidate-dependent (it
+now references the opponent's best REMAINING vertex, i.e. the board after this
+candidate blocks it) and ``expansion_value`` became own-yield-scored. Under
+``v1`` ``opponent_best_margin`` was ``base_value[v]`` minus a board-constant, so
+it was EXACTLY a linear combination of the five pips columns plus an intercept —
+an unidentifiable column that could carry no denial signal at all. That is why
+the bump is a hard refusal and not a warning.
+
+``v2`` -> ``v3`` (amended spec D1, owner-ratified 2026-08-21 after an
+independent review) REMOVES two columns, 18 -> 16:
+
+* ``pips_total`` was byte-exactly ``pips_wood + ... + pips_sheep``, five columns
+  the matrix already carried (measured on the owner's 272-row fit corpus,
+  13119 pooled candidate rows: ``max|total - sum| == 0.0``). A rank-deficient
+  design does not break the fit — the L2 term keeps it solvable — but it makes
+  the per-resource weights ARBITRARY, since any constant can be shifted between
+  the total and the five parts at identical loss. Under v2 all six columns had
+  a variance-inflation factor of INFINITY (R^2 = 1.0 to machine precision);
+  under v3 the five survivors read 7.4 to 11.5. The published "ore is worth w"
+  number is a number about the board for the first time.
+* ``adjacency_block`` was a 0/1 flag for "distance 1 from the opponent's best
+  remaining vertex", and ``opponent_best_margin`` rises on exactly that event
+  already, with magnitude — the flag was a strict sub-case that threw the size
+  away. Merging leaves ONE identified denial weight for the D4 exam to publish.
+
+  Honesty about what the merge did NOT buy: on the same corpus the flag's own
+  VIF was 1.15 and its correlation with the margin +0.32, so the two were not
+  in fact near-duplicates numerically, and dropping it moved the margin's VIF
+  only 20.28 -> 19.44. The margin's remaining collinearity is with the PIPS
+  BLOCK (regressed on those five columns alone: R^2 = 0.937, VIF 15.98) —
+  structural, since ``base_value`` is a weighted pip sum. So the denial weight
+  is identified, but it is not cleanly separated from raw production value, and
+  a reader should not treat its magnitude as precise."""
+
+NEW_RESOURCE_BONUS: float = 1.0
+"""Weighted-pip credit per resource an expansion target would ADD to the acting
+seat's production, on top of the pinned base yield.
+
+Pinned, not fitted, and deliberately so: ``expansion_value`` is an INPUT column,
+and a free parameter living inside an input column is a parameter outside the
+fit's likelihood — the fit could not see it, the L2 penalty could not reach it,
+and the artifact's ``weights`` block would stop describing the model. One
+weighted pip is roughly a third of a typical single-hex contribution, so the
+bonus reorders near-ties toward a missing resource without letting a 1-hex
+sheep corner outrank a 3-hex engine."""
+
+SETTLEMENT_FEATURE_NAMES: tuple[str, ...] = (
+    "pips_wood",
+    "pips_brick",
+    "pips_wheat",
+    "pips_ore",
+    "pips_sheep",
+    "n_distinct_resources",
+    "n_new_resources",
+    "n_adjacent_hexes",
+    "n_hexes_x_second",
+    "port_any",
+    "port_2to1_matched",
+    "port_3to1",
+    "expansion_value",
+    "opponent_new_resources",
+    "opponent_best_margin",
+    "scarcity_starve",
+)
+"""D1's settlement feature list at ``FEATURE_VERSION`` v3, in design-matrix
+column order.
+
+D1 asks for "opponent value of the candidate (their pips + their missing
+resources)". The *pips* half is byte-for-byte the sum of the five per-resource
+pips columns — a vertex yields the same dots whoever settles it — so carrying it
+would be an exactly collinear column that makes the fit's weights unidentifiable
+while adding nothing. Only the missing-resources half gets its own column. The
+same argument retired D1's own ``total pips`` column in v3; every weight below
+is now identified.
+"""
+
+ROAD_FEATURE_NAMES: tuple[str, ...] = (
+    "opens_best_vertex_value",
+    "blocks_opponent_target",
+    "toward_port",
+)
+"""D1's road feature list. The road model is FIT over these; the
+"point at the expansion target" rule is reported as a null baseline it must
+beat, never asserted (see :mod:`catan_rl.setup_phase.fit`)."""
+
+PILOT_FEATURE_NAMES: tuple[str, ...] = (
+    "pips_wood",
+    "pips_brick",
+    "pips_wheat",
+    "pips_ore",
+    "pips_sheep",
+    "n_distinct_resources",
+    "n_new_resources",
+    "opponent_new_resources",
+    "port_any",
+)
+"""The 2026-08-15 pilot's features, as a SUBSET of the current list.
+
+Acceptance criterion 3 (regression continuity) refits exactly these on the
+pilot's 168-label split and reads the result against the pilot's reported
+34.1% held-out / 45.2% train. Expressing the pilot as a subset — rather than a
+second feature function — is what makes that comparison mean anything, and it
+is also what ties this tuple to :data:`SETTLEMENT_FEATURE_NAMES`: v3 dropped
+``pips_total``, so the reconstruction is now NINE columns rather than the
+pilot's ten.
+
+Nothing is lost by that, and the claim is measured rather than argued. The
+pilot's tenth column was the row sum of five columns it also carried, so both
+designs span the same column space; on the owner's 168/44 split the two fits
+report the SAME numbers to four decimals — held-out 0.3636, train 0.4583 with
+or without it (2026-08-21). What the redundant column changed was not the
+prediction but the identifiability of the per-resource weights."""
+
+N_SETTLEMENT_FEATURES: int = len(SETTLEMENT_FEATURE_NAMES)
+N_ROAD_FEATURES: int = len(ROAD_FEATURE_NAMES)
+
+_BASE_WEIGHTS: Mapping[str, float] = CHARLESWORTH_V0
+"""The PINNED resource weighting behind every "value of a vertex" the relational
+features reference. Deliberately not configurable: a caller who could swap it
+could make the design matrix depend on a tuned quantity again."""
+
+
+# ---------------------------------------------------------------------------
+# Board adapters
+# ---------------------------------------------------------------------------
+def edge_vertex_pairs(board: Any) -> dict[int, tuple[int, int]]:
+    """``edge_index -> (vertex_index, vertex_index)`` in the canonical order.
+
+    Derived from :func:`catan_rl.labeling.scenario_gen.build_index_maps`, which
+    is the same ordering the labels were written in.
+    """
+    vertex_to_idx, edge_to_idx = build_index_maps(board)
+    by_str = {str(px): idx for px, idx in vertex_to_idx.items()}
+    return {idx: (by_str[a], by_str[b]) for (a, b), idx in edge_to_idx.items()}
+
+
+def _vertex_object(board: Any, vertex_idx: int) -> Any:
+    return board.boardGraph[board.vertex_index_to_pixel_dict[vertex_idx]]
+
+
+def vertex_resource_pips(board: Any) -> np.ndarray:
+    """``(54, 5)`` dot-count per vertex per resource, in Charlesworth order."""
+    out = np.zeros((N_VERTICES, len(RESOURCES_CW)), dtype=np.float64)
+    res_col = {r: i for i, r in enumerate(RESOURCES_CW)}
+    for v in range(N_VERTICES):
+        for h_idx in _vertex_object(board, v).adjacent_hex_indices:
+            tile = board.hexTileDict[h_idx]
+            col = res_col.get(str(tile.resource_type))
+            if col is None:  # DESERT
+                continue
+            out[v, col] += float(DOTS_BY_TOKEN.get(tile.number_token, 0))
+    return out
+
+
+def board_resource_pips(board: Any) -> np.ndarray:
+    """``(5,)`` total dot-count on the board per resource (scarcity source)."""
+    out = np.zeros(len(RESOURCES_CW), dtype=np.float64)
+    res_col = {r: i for i, r in enumerate(RESOURCES_CW)}
+    for h_idx in range(N_HEXES):
+        tile = board.hexTileDict[h_idx]
+        col = res_col.get(str(tile.resource_type))
+        if col is None:
+            continue
+        out[col] += float(DOTS_BY_TOKEN.get(tile.number_token, 0))
+    return out
+
+
+def vertex_adjacency(board: Any) -> list[list[int]]:
+    """``vertex_index -> [neighbouring vertex_index, ...]``."""
+    return [
+        sorted(board.boardGraph[px].vertex_index for px in _vertex_object(board, v).neighbors)
+        for v in range(N_VERTICES)
+    ]
+
+
+def _hop_distances(adjacency: Sequence[Sequence[int]]) -> np.ndarray:
+    """All-pairs road-hop distance over the vertex graph (``(54, 54)`` int)."""
+    n = len(adjacency)
+    dist = np.full((n, n), -1, dtype=np.int64)
+    for src in range(n):
+        dist[src, src] = 0
+        q = deque([src])
+        while q:
+            cur = q.popleft()
+            for nb in adjacency[cur]:
+                if dist[src, nb] == -1:
+                    dist[src, nb] = dist[src, cur] + 1
+                    q.append(nb)
+    return dist
+
+
+def _port_of(board: Any, vertex_idx: int) -> str | None:
+    port = getattr(_vertex_object(board, vertex_idx), "port", False)
+    return str(port) if port else None
+
+
+# ---------------------------------------------------------------------------
+# Context
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SetupContext:
+    """Everything a candidate's features are computed against, precomputed once.
+
+    Built per decision point (board + prior picks + acting seat + the legal
+    settlement mask). Holding it explicitly is what lets the relational features
+    reference the opponent's best remaining spot without recomputing a 54-vertex
+    scan per candidate.
+    """
+
+    board: Any
+    acting_player: int
+    legal_settlements: np.ndarray
+    pips: np.ndarray
+    base_value: np.ndarray
+    own_value: np.ndarray
+    adjacency: tuple[tuple[int, ...], ...]
+    distances: np.ndarray
+    own_vertices: tuple[int, ...]
+    opp_vertices: tuple[int, ...]
+    own_pips: np.ndarray
+    opp_pips: np.ndarray
+    scarce_mask: np.ndarray
+    opponent_best_vertex: int | None
+    legal_by_base_value: tuple[int, ...]
+    is_second_settlement: bool
+    edge_vertices: dict[int, tuple[int, int]]
+
+    @classmethod
+    def build(
+        cls,
+        board: Any,
+        prior_picks: Sequence[Pick],
+        acting_player: int,
+        legal_settlements: np.ndarray,
+    ) -> SetupContext:
+        legal = np.asarray(legal_settlements, dtype=bool)
+        if legal.shape != (N_VERTICES,):
+            raise ValueError(f"legal_settlements must be shape (54,), got {legal.shape}")
+        if acting_player not in (0, 1):
+            raise ValueError(f"acting_player must be 0 or 1, got {acting_player}")
+
+        pips = vertex_resource_pips(board)
+        base_value = np.asarray(
+            [vertex_yield(board, v, _BASE_WEIGHTS) for v in range(N_VERTICES)],
+            dtype=np.float64,
+        )
+        adjacency = vertex_adjacency(board)
+        distances = _hop_distances(adjacency)
+
+        own = tuple(p.settlement_vertex for p in prior_picks if p.player == acting_player)
+        opp = tuple(p.settlement_vertex for p in prior_picks if p.player != acting_player)
+        own_pips = pips[list(own)].sum(axis=0) if own else np.zeros(len(RESOURCES_CW))
+        opp_pips = pips[list(opp)].sum(axis=0) if opp else np.zeros(len(RESOURCES_CW))
+
+        board_pips = board_resource_pips(board)
+        scarce = board_pips == board_pips.min()
+
+        # The acting seat's OWN read of every vertex: pinned base yield plus a
+        # fixed bonus per resource this seat's prior picks do not produce. Same
+        # convention as the ``n_new_resources`` column (``own_pips <= 0``), so
+        # "new for me" means one thing in this module.
+        new_for_own = ((pips > 0.0) & (own_pips <= 0.0)).sum(axis=1).astype(np.float64)
+        own_value = base_value + NEW_RESOURCE_BONUS * new_for_own
+
+        legal_idx = np.flatnonzero(legal)
+        opponent_best: int | None = (
+            int(legal_idx[int(np.argmax(base_value[legal_idx]))]) if legal_idx.size else None
+        )
+        # Legal vertices, best pinned-base value first (ties by vertex index).
+        # ``_opponent_best_remaining`` walks this once per candidate instead of
+        # re-scanning 54 vertices, and the deterministic tie-break is what keeps
+        # the design matrix reproducible.
+        order = sorted(legal_idx.tolist(), key=lambda v: (-float(base_value[v]), int(v)))
+
+        return cls(
+            board=board,
+            acting_player=acting_player,
+            legal_settlements=legal,
+            pips=pips,
+            base_value=base_value,
+            own_value=own_value,
+            adjacency=tuple(tuple(nb) for nb in adjacency),
+            distances=distances,
+            own_vertices=own,
+            opp_vertices=opp,
+            own_pips=own_pips,
+            opp_pips=opp_pips,
+            scarce_mask=scarce,
+            opponent_best_vertex=opponent_best,
+            legal_by_base_value=tuple(int(v) for v in order),
+            is_second_settlement=len(own) >= 1,
+            edge_vertices=edge_vertex_pairs(board),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Settlement features
+# ---------------------------------------------------------------------------
+def settlement_features(ctx: SetupContext, vertex: int) -> np.ndarray:
+    """The ``(16,)`` feature row for one candidate settlement vertex."""
+    if not 0 <= vertex < N_VERTICES:
+        raise ValueError(f"vertex out of range: {vertex}")
+    pips = ctx.pips[vertex]
+    n_hexes = float(len(_vertex_object(ctx.board, vertex).adjacent_hex_indices))
+    produces = pips > 0.0
+    new_for_me = float(np.count_nonzero(produces & (ctx.own_pips <= 0.0)))
+    new_for_opp = float(np.count_nonzero(produces & (ctx.opp_pips <= 0.0)))
+
+    port = _port_of(ctx.board, vertex)
+    port_any = 1.0 if port else 0.0
+    port_3to1 = 1.0 if port == "3:1 PORT" else 0.0
+    port_matched = 0.0
+    if port is not None and port.startswith("2:1 "):
+        res = port.split(" ", 1)[1]
+        if res in RESOURCES_CW:
+            col = RESOURCES_CW.index(res)
+            port_matched = 1.0 if (pips[col] > 0.0 or ctx.own_pips[col] > 0.0) else 0.0
+
+    # ``hops=(2,)`` is D1's "within road distance 1-2" with the redundant half
+    # dropped, not a narrowing: ``exclude=(vertex,)`` already forbids every
+    # distance-1 vertex (the placement's own neighbours are un-settleable), so
+    # hop 1 can contribute no candidate. Written explicitly to stop a future
+    # reader "restoring" a hop that would only ever be empty.
+    #
+    # Scored with ``ctx.own_value``, D1's "own-yield-scored": the target is
+    # worth what it is worth TO THIS SEAT, so a corner that would finally give
+    # the seat sheep outranks an equally-productive corner that repeats what it
+    # already has. Seat-neutral scoring here made the column identical for both
+    # seats at the same decision point and left the owner's "building to a
+    # missing resource" theory with nowhere to live.
+    expansion = _best_value_at_hops(
+        ctx, origin=vertex, hops=(2,), exclude=(vertex,), values=ctx.own_value
+    )
+
+    # D1's "opponent-best-spot margin", read against what the opponent would
+    # actually be LEFT with. Taking a spot removes it AND its distance-1
+    # neighbours from the opponent's option set, so the reference has to be
+    # computed per candidate; referencing the board-wide best instead made this
+    # column ``base_value[v]`` minus a constant, i.e. exactly a linear
+    # combination of the five pips columns plus an intercept, which is an
+    # unidentifiable column that cannot express denial at all. Pinned
+    # (Charlesworth) on BOTH sides of the subtraction, so the circularity break
+    # holds: nothing here depends on the weights being fit.
+    #
+    # Since v3 this is the ONLY denial-blocking column. The retired
+    # ``adjacency_block`` flag fired on "distance 1 from the opponent's best
+    # remaining vertex", which is a strict sub-case of what moves this margin:
+    # blocking that vertex (by taking it or by neighbouring it) is exactly what
+    # replaces the subtracted reference with a worse one. The flag therefore
+    # duplicated the event and threw away its size, and the two columns split
+    # one weight between them.
+    opp_margin = float(ctx.base_value[vertex] - _opponent_best_remaining(ctx, vertex))
+
+    starve = 1.0 if bool(np.any(produces & ctx.scarce_mask & (ctx.opp_pips <= 0.0))) else 0.0
+
+    return np.asarray(
+        [
+            pips[0],
+            pips[1],
+            pips[2],
+            pips[3],
+            pips[4],
+            float(np.count_nonzero(produces)),
+            new_for_me,
+            n_hexes,
+            n_hexes if ctx.is_second_settlement else 0.0,
+            port_any,
+            port_matched,
+            port_3to1,
+            expansion,
+            new_for_opp,
+            opp_margin,
+            starve,
+        ],
+        dtype=np.float64,
+    )
+
+
+def all_settlement_features(ctx: SetupContext) -> np.ndarray:
+    """``(54, 16)``. Rows for ILLEGAL vertices are all-zero and must never be
+    read — :func:`catan_rl.setup_phase.scorer.score_vertices` masks them to
+    ``-inf`` rather than letting a zero row compete."""
+    out = np.zeros((N_VERTICES, N_SETTLEMENT_FEATURES), dtype=np.float64)
+    for v in np.flatnonzero(ctx.legal_settlements):
+        out[v] = settlement_features(ctx, int(v))
+    return out
+
+
+def _best_value_at_hops(
+    ctx: SetupContext,
+    *,
+    origin: int,
+    hops: tuple[int, ...],
+    exclude: tuple[int, ...],
+    values: np.ndarray,
+) -> float:
+    """Best ``values`` entry among legal vertices ``hops`` roads from ``origin``.
+
+    ``exclude`` drops the origin settlement and anything the distance rule will
+    forbid once it is placed (its direct neighbours), so an "expansion target"
+    can never be a vertex the placement itself just killed.
+
+    ``values`` is passed in rather than read off the context because the two
+    callers ask different questions: ``expansion_value`` wants the target's
+    worth TO THE ACTING SEAT (``ctx.own_value``), while the road head's
+    ``opens_best_vertex_value`` is D1's seat-neutral "value of the best vertex
+    the edge opens" (``ctx.base_value``).
+    """
+    forbidden = set(exclude)
+    for v in exclude:
+        forbidden.update(ctx.adjacency[v])
+    best = 0.0
+    for cand in range(N_VERTICES):
+        if cand in forbidden or not ctx.legal_settlements[cand]:
+            continue
+        if int(ctx.distances[origin, cand]) not in hops:
+            continue
+        best = max(best, float(values[cand]))
+    return best
+
+
+def _opponent_best_remaining(ctx: SetupContext, vertex: int) -> float:
+    """Pinned base value of the opponent's best spot AFTER ``vertex`` is taken.
+
+    Settling ``vertex`` removes it and its distance-1 neighbours from every
+    seat's option set (the Catan distance rule), so the opponent's best
+    REMAINING vertex is the highest-base-value legal vertex outside that
+    blocked set. Returns ``0.0`` when the candidate blocks everything left,
+    which is the degenerate end-of-board case, not a signal.
+    """
+    blocked = {vertex, *ctx.adjacency[vertex]}
+    for cand in ctx.legal_by_base_value:
+        if cand not in blocked:
+            return float(ctx.base_value[cand])
+    return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Road features
+# ---------------------------------------------------------------------------
+def road_far_endpoint(ctx: SetupContext, settlement: int, edge: int) -> int:
+    """The endpoint of ``edge`` that is not ``settlement``."""
+    if edge not in ctx.edge_vertices:
+        raise ValueError(f"edge out of range: {edge}")
+    v1, v2 = ctx.edge_vertices[edge]
+    if settlement == v1:
+        return v2
+    if settlement == v2:
+        return v1
+    raise ValueError(f"edge {edge} is not incident to settlement vertex {settlement}")
+
+
+def road_features(ctx: SetupContext, settlement: int, edge: int) -> np.ndarray:
+    """The ``(3,)`` feature row for one candidate setup road."""
+    far = road_far_endpoint(ctx, settlement, edge)
+    opens = _best_value_at_hops(
+        ctx, origin=far, hops=(1, 2), exclude=(settlement,), values=ctx.base_value
+    )
+    if ctx.opponent_best_vertex is None:
+        blocks = 0.0
+    else:
+        blocks = 1.0 if int(ctx.distances[far, ctx.opponent_best_vertex]) <= 1 else 0.0
+    toward_port = 1.0 if _port_of(ctx.board, far) else 0.0
+    return np.asarray([opens, blocks, toward_port], dtype=np.float64)
+
+
+def all_road_features(ctx: SetupContext, settlement: int, legal_edges: np.ndarray) -> np.ndarray:
+    """``(72, 3)``; rows for illegal edges are all-zero (masked by the scorer)."""
+    legal = np.asarray(legal_edges, dtype=bool)
+    if legal.shape != (N_EDGES,):
+        raise ValueError(f"legal_edges must be shape (72,), got {legal.shape}")
+    out = np.zeros((N_EDGES, N_ROAD_FEATURES), dtype=np.float64)
+    for e in np.flatnonzero(legal):
+        out[e] = road_features(ctx, settlement, int(e))
+    return out

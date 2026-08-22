@@ -117,6 +117,125 @@ Pip-count table inlined as `_DOTS_BY_TOKEN = {2:1, 3:2, 4:3, 5:4, 6:5, 8:5, 9:4,
 - `test_invariant_under_d6` — for every D6 element `g` (1..11), permuting the board's chips + resources through `g` and re-querying via the analytic scorer at `corner_perm(g)[v]` yields the same score (modulo float ε). **This is the unit-level pin** for symmetry consistency — a precondition for Phase B's port augmentation to be safe.
 - `test_known_top_vertex` — on a fixed seed, the analytic top-3 vertices match the hand-computed top-3 list.
 
+### A.1b — Fitted setup SCORER (successor to A.1, spec `setup-scorer-and-blind-reveal`, 2026-08)
+
+**AS BUILT.** `analytic_value.py` stays exactly what it is — a closed-form pip
+scorer, and now also the PINNED base the relational features are computed
+against (see below). The learned successor is:
+
+| File | Role |
+|---|---|
+| `src/catan_rl/setup_phase/scorer_features.py` | D1's 16 settlement features + 3 road features (`FEATURE_VERSION` **v3**); `SetupContext` |
+| `src/catan_rl/setup_phase/scorer.py` | `ScorerWeights` / `SetupScorer`, `score_vertices` / `score_edges`, `load_weights` |
+| `src/catan_rl/setup_phase/fit.py` | masked-softmax NLL fit, replay exclusion, the road NULL baseline (5-fold, out of sample) |
+| `src/catan_rl/labeling/dedup.py` | the shared replay/duplicate policy the fit and the BC shard converter both read |
+| `src/catan_rl/setup_phase/gate.py` | D4 **v2** exam vs u500 (paired mean log-prob primary), clarity bars, calibration, kill bar, gating anchoring control |
+| `src/catan_rl/setup_phase/wr_probe.py` | D5 forced-opening ΔWR probe driver |
+| `scripts/fit_setup_scorer.py` | → `data/setup_phase/scorer_weights_v1.json` |
+| `scripts/eval_scorer_vs_u500.py` | D4 gate CLI (arbitrary label subsets, NOT shard manifests) |
+| `scripts/run_forced_opening_probe.py` | D5 probe CLI (machine time; not run in the build slice) |
+| `scripts/report_label_consistency.py` | D0 labeler-noise ceiling (`--estimator linked\|free_replay\|same_position\|auto`) |
+| `scripts/dev/fit_scorer_pilot.py` | RECONSTRUCTION of the 2026-08-15 pilot fit (provenance, not authority) |
+
+Three things worth carrying forward:
+
+* **Circularity break, and only where it is needed.** The OPPONENT-facing
+  reference ("the opponent's best remaining vertex") is computed from
+  `analytic_value.vertex_yield` under the PINNED `CHARLESWORTH_V0` table, so the
+  design matrix is a constant function of the board rather than of the weights
+  being fit. It is a per-CANDIDATE reference: settling a vertex removes it and
+  its distance-1 neighbours from the opponent's option set, so
+  `opponent_best_margin` reads the candidate against what the opponent would be
+  LEFT with. Referencing the board-wide best instead made the column
+  `base_value[v]` minus a constant — exactly a linear combination of the five
+  pips columns plus an intercept, i.e. an unidentifiable column that could carry
+  no denial signal at all (pinned numerically by
+  `test_scorer_features.py::test_opponent_best_margin_is_not_a_linear_function_of_the_pips_columns`,
+  which regresses the column on the pips block and requires a materially
+  non-zero residual, with the rejected v1 column as the near-zero control).
+  `expansion_value` is deliberately NOT pinned that way: D1 words it
+  "own-yield-scored", so the target is worth pinned base yield plus
+  `NEW_RESOURCE_BONUS` per resource the acting seat's prior picks do not
+  produce. That is what makes "building to sheep" expressible, and it is why the
+  feature differs between the two seats at the same decision point.
+  `FEATURE_VERSION` is **v3**; a v1 or v2 artifact refuses to load rather than
+  being scored against re-derived columns. **v3** (spec D1 as amended
+  2026-08-21, owner-ratified) took the block from 18 columns to 16: it dropped
+  `pips_total`, which was byte-exactly the sum of the five per-resource pips
+  columns (`max|total - sum| == 0.0` over 13119 pooled candidate rows) and made
+  the whole pips block infinitely collinear (VIF = inf, R^2 = 1.0; v3 reads
+  7.4-11.5), and it merged `adjacency_block` into `opponent_best_margin`, which
+  already rises on the same blocking event and says by how much. The merge
+  leaves one identified denial weight rather than two halves; measured, it
+  bought little numerically (the flag's own VIF was 1.15, its correlation with
+  the margin +0.32, and the margin went 20.28 -> 19.44). The margin's residual
+  collinearity is STRUCTURAL, against the pips block itself (R^2 = 0.937,
+  VIF 15.98), so the denial weight is identified but not cleanly separated from
+  raw production value.
+* **The road model is FIT, not asserted — and the comparison is OUT OF SAMPLE.**
+  "Point at the expansion target" ships as `ROAD_NULL_FEATURE`, a one-column null
+  model the fitted head is REPORTED against, over 5 folds grouped by
+  `game_seed` (the four picks of one board share a layout, so a row-wise split
+  would leak). `beaten_by_fit` keys on the NLL both heads optimise; top-1 is
+  reported alongside. In sample a 3-feature model nesting a 1-feature special
+  case can hardly lose, so the in-sample read is kept in a separate
+  `in_sample` block and never decides. A fit that loses to the null is a
+  finding, and no test asserts otherwise — and the verdict DEPENDS ON THE
+  CORPUS. On the pilot's **168-row split** the fit loses: NLL **0.9707** vs
+  null **0.9704**, `beaten_by_fit` **False**, top-1 a dead heat at 0.5476. On
+  the full **272-row fit corpus** it wins narrowly: **0.9435** vs **0.9511**,
+  `beaten_by_fit` **True**, top-1 again a dead heat (0.5074). A margin that
+  thin and that split-dependent is not a beaten null. (Both figures are
+  re-derived under v3, which does not touch the road columns; an earlier
+  revision of this bullet and of the test docstring filed the 168-split pair
+  under the larger corpus's heading.)
+* **Vehicle neutrality (D7).** The scorer needs a board, never a checkpoint. An
+  import-graph test pins that `catan_rl.bc` / `catan_rl.gui` / the trainer /
+  the league / search never enter its module graph, so it drops into either the
+  synthetic-corpus fine-tune or setup-node search priors unchanged.
+
+* **The exam grades DISTRIBUTIONS (D4 v2, owner-ratified 2026-08-21).** D0's
+  replay put the owner's own top-1 self-agreement at 7/20 = 35% (Wilson
+  [18, 57]) — a labeler ceiling the pilot scorer already sat at, so exact
+  agreement can no longer discriminate. That figure is the **`free_replay`**
+  estimator (session `553464b8` predates `replay_of`, so it is a free replay of
+  `4905bb4b` and the corpus holds no linked pairs); the narrower
+  `same_position` estimator reads 6/8 = 75% on the same rows and is biased
+  upward. `report_label_consistency.py` names its estimator and prints all
+  three, so the 40pp spread can never be mistaken for a disagreement about
+  arithmetic. The primary metric is the paired mean
+  **log-probability** of the owner's pick (a proper scoring rule: a genuine
+  k-way tie is best answered ~1/k each). Strictness is applied where the owner
+  says so — top-1 on `clear`-tagged picks against a TWO-CLAUSE bar (estimator
+  ratified 2026-08-21 after the conformance review): **point estimate ≥ 0.70
+  AND Wilson lower bound ≥ 0.50**, and only once at least
+  `MIN_CLEAR_PICKS = 10` picks carry the tag (below that the bar is
+  `unmeasured`, never satisfied-by-default, and the gate still fails closed).
+  Neither clause alone was acceptable: point-only passes 3 of 4 clear picks,
+  while a lower bound at 0.70 fails even 9 of 10 and so is a bar on ~100%
+  agreement rather than on 70%. Top-3 containment reported on `close` ones — and a
+  calibration block reads the scorer's top-1 probability margin against those
+  tags to map missing features.
+
+The A.4 acceptance gate below is about the ANALYTIC table choice and is
+unchanged. The fitted scorer has its own pre-registered gate. **PASS is exactly
+four clauses**, all BOOLEAN (`report["pass_clauses"]`, and the set itself is
+pinned by a test): ≥150 fresh blind-first picks, D3's ≥20% no-reveal control
+satisfied, overall paired log-prob CI lower bound > 0, and the `clear` top-1
+bar. That bar's three-valued reason (`satisfied` / `below_bar` / `unmeasured`)
+is reported one level up as `report["clear_top1_bar_status"]`, deliberately
+OUTSIDE the clause dict: `"unmeasured"` is truthy, and a reader summarising the
+verdict as `all(pass_clauses.values())` must not read a failed-closed bar as a
+satisfied one. The
+**picks-2-4** comparison is the KILL bar's metric and appears nowhere in PASS —
+promoting it would make the gate stricter than the one that was pre-registered.
+The kill bar fires at 300 cumulative picks **counted on the same subset the
+metric is evaluated on** (`no_reveal_only` whenever the two arms diverge), with
+both n's reported explicitly. Then the D5 win-rate probe. The D5 probe forces **one seat's** opening at a time: forcing both seats
+and summing over agent seats makes each arm 0.5 by symmetry and ΔWR identically
+zero, which the spec's "ΔWR ≈ 0 is AMBIGUOUS" reading would have laundered as
+evidence.
+
 ### A.2 — Resource-weight calibration (dual-table approach, per §0.2 decision)
 
 **Calibration source decision** (recorded 2026-06-03): no champion ckpt available; ship two named tables and let §A.4 pick.

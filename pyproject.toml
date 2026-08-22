@@ -143,7 +143,17 @@ ignore = ["E741", "RUF012"]
 "src/catan_rl/viz/**" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
 "src/catan_rl/models/**" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
 "src/catan_rl/env/**" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
-"src/catan_rl/setup_phase/**" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
+# ``catan_rl.setup_phase`` is HALF legacy. The transition-period exemption is
+# spelled as an explicit FILE LIST rather than a ``src/catan_rl/setup_phase/**``
+# glob because ruff UNIONS per-file-ignores across every matching pattern: a
+# narrower entry with ``[]`` (or a ``!``-negated one) adds nothing and cannot
+# subtract, so the only way the new setup-SCORER modules get linted for real is
+# for the blanket never to match them. The scorer modules (spec
+# ``setup-scorer-and-blind-reveal``: scorer, scorer_features, fit, gate,
+# wr_probe) are deliberately absent below and are linted normally.
+"src/catan_rl/setup_phase/__init__.py" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
+"src/catan_rl/setup_phase/analytic_value.py" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
+"src/catan_rl/setup_phase/resource_weights.py" = ["E", "F", "B", "I", "SIM", "UP", "RUF"]
 # Restructure-scope modules: keep stricter, but ignore the few pre-existing
 # violations that only became visible because we drew the boundary here.
 "src/catan_rl/algorithms/common/rollout_buffer.py" = ["RUF013"]
@@ -201,6 +211,20 @@ module = [
   "catan_rl.eval.exploitability",
 ]
 ignore_errors = true
+
+# The setup-SCORER modules (spec ``setup-scorer-and-blind-reveal``) are new
+# code inside the legacy ``catan_rl.setup_phase.*`` namespace. This more
+# specific override wins, so they are type-checked for real rather than
+# inheriting the package's transition-period exemption.
+[[tool.mypy.overrides]]
+module = [
+  "catan_rl.setup_phase.scorer",
+  "catan_rl.setup_phase.scorer_features",
+  "catan_rl.setup_phase.fit",
+  "catan_rl.setup_phase.gate",
+  "catan_rl.setup_phase.wr_probe",
+]
+ignore_errors = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

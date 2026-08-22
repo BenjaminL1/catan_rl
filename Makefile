@@ -1,4 +1,4 @@
-.PHONY: check-env install install-gui install-all test test-unit test-integration test-all lint format typecheck train bench clean smoke-train rust-setup rust-build rust-test rust-bench rust-clean
+.PHONY: check-env install install-gui install-all test test-unit test-integration test-all ac3-continuity lint format typecheck train bench clean smoke-train rust-setup rust-build rust-test rust-bench rust-clean
 
 PYTHON ?= python
 
@@ -21,6 +21,16 @@ test: test-unit
 
 test-unit:
 	pytest tests/unit -v
+
+# Acceptance criterion 3 (spec setup-scorer-and-blind-reveal): the pilot
+# regression-continuity read. The label corpus and the pilot shard manifest are
+# UNTRACKED, so these tests skip in CI and in a /dev-loop worktree; point
+# CATAN_LABELS_DIR at a checkout that has data/labels/** to actually run them.
+#   make ac3-continuity CATAN_LABELS_DIR=$(HOME)/my_projects/catan_rl_v2
+CATAN_LABELS_DIR ?= .
+
+ac3-continuity:
+	CATAN_LABELS_DIR=$(CATAN_LABELS_DIR) pytest tests/unit/setup_phase/test_regression_continuity.py -v
 
 test-integration:
 	pytest tests/integration -v -m integration
